@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::models::Tool;
-use crate::tools::spec::{ToolError, ToolResult, required_str};
+use crate::tools::spec::{ToolError, ToolResult, optional_u64, required_str};
 use crate::tui::app::AppMode;
 
 pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
@@ -20,10 +20,12 @@ pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
 pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
 const CODE_EXECUTION_TOOL_TYPE: &str = "code_execution_20250825";
 pub(super) use crate::tools::js_execution::JS_EXECUTION_TOOL_NAME;
-const TOOL_SEARCH_REGEX_NAME: &str = "tool_search_tool_regex";
+pub(super) const TOOL_SEARCH_REGEX_NAME: &str = "tool_search_tool_regex";
 const TOOL_SEARCH_REGEX_TYPE: &str = "tool_search_tool_regex_20251119";
 pub(super) const TOOL_SEARCH_BM25_NAME: &str = "tool_search_tool_bm25";
 const TOOL_SEARCH_BM25_TYPE: &str = "tool_search_tool_bm25_20251119";
+const TOOL_SEARCH_DEFAULT_MAX_RESULTS: usize = 20;
+const TOOL_SEARCH_MAX_RESULTS_LIMIT: usize = 100;
 
 pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
@@ -34,7 +36,11 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "apply_patch",
     "checklist_write",
     "edit_file",
+    "exec_interact",
     "exec_shell",
+    "exec_shell_interact",
+    "exec_shell_wait",
+    "exec_wait",
     "fetch_url",
     "file_search",
     "git_diff",
@@ -46,6 +52,8 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "task_create",
     "task_list",
     "task_read",
+    "task_shell_start",
+    "task_shell_wait",
     "update_plan",
     "web_search",
     "write_file",
@@ -178,7 +186,14 @@ pub(super) fn ensure_advanced_tooling(
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Regex pattern to search tool names/descriptions/schema." }
+                    "query": { "type": "string", "description": "Regex pattern to search tool names/descriptions/schema." },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": TOOL_SEARCH_MAX_RESULTS_LIMIT,
+                        "default": TOOL_SEARCH_DEFAULT_MAX_RESULTS,
+                        "description": "Maximum number of matching tool references to return."
+                    }
                 },
                 "required": ["query"]
             }),
@@ -198,7 +213,14 @@ pub(super) fn ensure_advanced_tooling(
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Natural language query for tool discovery." }
+                    "query": { "type": "string", "description": "Natural language query for tool discovery." },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": TOOL_SEARCH_MAX_RESULTS_LIMIT,
+                        "default": TOOL_SEARCH_DEFAULT_MAX_RESULTS,
+                        "description": "Maximum number of matching tool references to return."
+                    }
                 },
                 "required": ["query"]
             }),
@@ -280,7 +302,11 @@ fn tool_search_haystack(tool: &Tool) -> String {
     )
 }
 
-fn discover_tools_with_regex(catalog: &[Tool], query: &str) -> Result<Vec<String>, ToolError> {
+fn discover_tools_with_regex(
+    catalog: &[Tool],
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<String>, ToolError> {
     let regex = regex::Regex::new(query)
         .map_err(|err| ToolError::invalid_input(format!("Invalid regex query: {err}")))?;
 
@@ -293,14 +319,14 @@ fn discover_tools_with_regex(catalog: &[Tool], query: &str) -> Result<Vec<String
         if regex.is_match(&hay) {
             matches.push(tool.name.clone());
         }
-        if matches.len() >= 5 {
+        if matches.len() >= max_results {
             break;
         }
     }
     Ok(matches)
 }
 
-fn discover_tools_with_bm25_like(catalog: &[Tool], query: &str) -> Vec<String> {
+fn discover_tools_with_bm25_like(catalog: &[Tool], query: &str, max_results: usize) -> Vec<String> {
     let terms: Vec<String> = query
         .split_whitespace()
         .map(|term| term.trim().to_lowercase())
@@ -330,7 +356,11 @@ fn discover_tools_with_bm25_like(catalog: &[Tool], query: &str) -> Vec<String> {
         }
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    scored.into_iter().take(5).map(|(_, name)| name).collect()
+    scored
+        .into_iter()
+        .take(max_results)
+        .map(|(_, name)| name)
+        .collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -645,10 +675,17 @@ pub(super) fn execute_tool_search(
     active_tools: &mut HashSet<String>,
 ) -> Result<ToolResult, ToolError> {
     let query = required_str(input, "query")?;
+    let max_results = usize::try_from(optional_u64(
+        input,
+        "max_results",
+        TOOL_SEARCH_DEFAULT_MAX_RESULTS as u64,
+    ))
+    .unwrap_or(TOOL_SEARCH_DEFAULT_MAX_RESULTS)
+    .clamp(1, TOOL_SEARCH_MAX_RESULTS_LIMIT);
     let discovered = if tool_name == TOOL_SEARCH_REGEX_NAME {
-        discover_tools_with_regex(catalog, query)?
+        discover_tools_with_regex(catalog, query, max_results)?
     } else {
-        discover_tools_with_bm25_like(catalog, query)
+        discover_tools_with_bm25_like(catalog, query, max_results)
     };
 
     for name in &discovered {

@@ -145,6 +145,9 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     if matches!(arg, Some("warmup")) {
         return CommandResult::action(AppAction::CacheWarmup);
     }
+    if matches!(arg, Some("stats")) {
+        return CommandResult::message(format_cache_stats(app));
+    }
 
     let want = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
     let cap = app.session.turn_cache_history.len();
@@ -231,6 +234,140 @@ fn format_cache_inspect(app: &mut App) -> String {
     }
     app.session.last_cache_inspection = Some(inspection);
     out
+}
+
+/// Render a prefix-cache stability and health summary for `/cache stats`.
+///
+/// Surfaces the current prefix fingerprint, stability ratio, change history,
+/// and an aggregated cache-hit summary from per-turn telemetry.  When the
+/// prefix has changed, a prominent warning is included so users can
+/// correlate cache misses with prefix drift.
+fn format_cache_stats(app: &App) -> String {
+    let mut out = String::new();
+    out.push_str("Cache Stats\n");
+
+    // ── Prefix stability ──────────────────────────────────────────────
+    out.push_str("\n── Prefix Stability\n");
+    match app.prefix_stability_pct {
+        Some(pct) => {
+            let checks = app.prefix_checks_total;
+            let changes = app.prefix_change_count;
+            let stable_checks = checks.saturating_sub(changes);
+
+            if changes == 0 {
+                out.push_str(&format!(
+                    "  Stability: {pct}% ({stable_checks}/{checks} checks)\n"
+                ));
+                out.push_str("  Status:    stable (no prefix changes this session)\n");
+            } else {
+                out.push_str(&format!(
+                    "  Stability: {pct}% ({stable_checks}/{checks} checks, {changes} change{})\n",
+                    if changes == 1 { "" } else { "s" }
+                ));
+                out.push_str("  Status:    WARNING — prefix has changed\n");
+                if let Some(ref desc) = app.last_prefix_change_desc {
+                    out.push_str(&format!("  Last change: {desc}\n"));
+                }
+            }
+        }
+        None => {
+            out.push_str("  Stability: unknown (no checks recorded yet)\n");
+            out.push_str("  Run a turn first to collect prefix stability data.\n");
+        }
+    }
+
+    // ── Prefix fingerprint ────────────────────────────────────────────
+    out.push_str("\n── Prefix Fingerprint\n");
+    match &app.last_pinned_prefix_hash {
+        Some(hash) => {
+            out.push_str(&format!("  Pinned hash: {hash}\n"));
+            let short = if hash.len() >= 12 { &hash[..12] } else { hash };
+            out.push_str(&format!("  Short id:    {short}\n"));
+            if app.prefix_change_count > 0 {
+                out.push_str("  Drift:       WARNING — hash has changed during this session\n");
+                out.push_str(&format!(
+                    "               ({change} change{plural} detected)\n",
+                    change = app.prefix_change_count,
+                    plural = if app.prefix_change_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ));
+            } else {
+                out.push_str("  Drift:       none (hash stable)\n");
+            }
+        }
+        None => {
+            out.push_str("  Pinned hash: unavailable\n");
+            out.push_str("  Run a turn first, or use /cache inspect.\n");
+        }
+    }
+
+    // ── Cache hit-rate summary ────────────────────────────────────────
+    out.push_str("\n── Cache Hit Rate\n");
+    let history = &app.session.turn_cache_history;
+    if history.is_empty() {
+        out.push_str("  No turn telemetry recorded yet.\n");
+    } else {
+        // Aggregate only cache-aware turns; skip turns where the provider
+        // did not report cache telemetry (cache_hit_tokens is None).
+        // When cache_miss_tokens is None, infer it as
+        //   input_tokens − cache_hit_tokens  (matches /cache table logic).
+        let mut turns = 0u64;
+        let (hit, miss, input) = app.session.turn_cache_history.iter().fold(
+            (0u64, 0u64, 0u64),
+            |(hit, miss, input), rec| {
+                let Some(hit_tokens) = rec.cache_hit_tokens else {
+                    return (hit, miss, input);
+                };
+                let h = u64::from(hit_tokens);
+                let m = u64::from(
+                    rec.cache_miss_tokens
+                        .unwrap_or(rec.input_tokens.saturating_sub(hit_tokens)),
+                );
+                turns += 1;
+                (hit + h, miss + m, input + u64::from(rec.input_tokens))
+            },
+        );
+        let total_cache = hit + miss;
+        let avg_pct = if total_cache > 0 {
+            (hit as f64 / total_cache as f64 * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        out.push_str(&format!("  Turns recorded: {turns}\n"));
+        out.push_str(&format!(
+            "  Cache hit tokens:  {hit} ({avg_pct:.1}% of {total_cache} cache-aware tokens)\n",
+            hit = format_tokens(hit),
+            total_cache = format_tokens(total_cache),
+        ));
+        out.push_str(&format!(
+            "  Cache miss tokens: {miss}\n",
+            miss = format_tokens(miss),
+        ));
+        out.push_str(&format!(
+            "  Total input tokens: {input}\n",
+            input = format_tokens(input),
+        ));
+        if avg_pct < 80.0 {
+            out.push_str("  NOTE: cache hit rate is low (< 80%). Check prefix stability above or consider /compact.\n");
+        }
+    }
+
+    out
+}
+
+/// Formats a u64 token count with a compact suffix: K for thousands,
+/// M for millions. Never returns scientific notation.
+fn format_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }
 
 fn format_static_prefix_status(
@@ -1401,6 +1538,136 @@ mod tests {
             &app.api_messages[2].content[0],
             ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call-a"
         ));
+    }
+
+    // ── /cache stats tests ──────────────────────────────────────────────
+
+    #[test]
+    fn cache_stats_no_data_before_first_turn() {
+        let mut app = create_test_app();
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats produces a message");
+        assert!(msg.contains("Cache Stats"), "got: {msg}");
+        assert!(
+            msg.contains("unknown (no checks recorded yet)"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("Pinned hash: unavailable"), "got: {msg}");
+        assert!(msg.contains("No turn telemetry recorded yet"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_stats_shows_stable_prefix_with_hash() {
+        let mut app = create_test_app();
+        app.prefix_stability_pct = Some(100);
+        app.prefix_checks_total = 5;
+        app.prefix_change_count = 0;
+        app.last_pinned_prefix_hash =
+            Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string());
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats produces a message");
+
+        assert!(msg.contains("Stability: 100%"), "got: {msg}");
+        assert!(msg.contains("stable (no prefix changes"), "got: {msg}");
+        assert!(msg.contains("Pinned hash: a1b2c3d4e5f6"), "got: {msg}");
+        assert!(
+            msg.contains("Drift:       none (hash stable)"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cache_stats_warns_on_prefix_change() {
+        let mut app = create_test_app();
+        app.prefix_stability_pct = Some(67);
+        app.prefix_checks_total = 3;
+        app.prefix_change_count = 1;
+        app.last_prefix_change_desc =
+            Some("prefix cache invalidated: system prompt changed".to_string());
+        app.last_pinned_prefix_hash = Some(
+            "deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef".to_string(),
+        );
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats produces a message");
+
+        assert!(msg.contains("Stability: 67%"), "got: {msg}");
+        assert!(msg.contains("WARNING — prefix has changed"), "got: {msg}");
+        assert!(msg.contains("system prompt changed"), "got: {msg}");
+        assert!(msg.contains("Drift:       WARNING"), "got: {msg}");
+        assert!(msg.contains("1 change detected"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_stats_shows_cache_hit_summary() {
+        let mut app = create_test_app();
+        app.prefix_stability_pct = Some(100);
+        app.prefix_checks_total = 1;
+        app.last_pinned_prefix_hash =
+            Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
+
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            cache_hit_tokens: Some(8_000),
+            cache_miss_tokens: Some(2_000),
+            reasoning_replay_tokens: None,
+            recorded_at: Instant::now(),
+        });
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 5_000,
+            output_tokens: 500,
+            cache_hit_tokens: Some(4_500),
+            cache_miss_tokens: Some(500),
+            reasoning_replay_tokens: None,
+            recorded_at: Instant::now(),
+        });
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats produces a message");
+
+        assert!(msg.contains("Turns recorded: 2"), "got: {msg}");
+        // Total: 12,500 hit out of 15,000 cache-aware = 83.3%
+        assert!(msg.contains("83.3%"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_stats_low_hit_rate_shows_note() {
+        let mut app = create_test_app();
+        app.prefix_stability_pct = Some(100);
+        app.prefix_checks_total = 1;
+        app.last_pinned_prefix_hash =
+            Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
+
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            cache_hit_tokens: Some(1_000),
+            cache_miss_tokens: Some(9_000),
+            reasoning_replay_tokens: None,
+            recorded_at: Instant::now(),
+        });
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats produces a message");
+
+        // 10% hit rate → below 80% threshold
+        assert!(msg.contains("10.0%"), "got: {msg}");
+        assert!(
+            msg.contains("cache hit rate is low"),
+            "should show low-hit-rate advisory, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn format_tokens_handles_all_scales() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1_000), "1.0K");
+        assert_eq!(format_tokens(15_500), "15.5K");
+        assert_eq!(format_tokens(1_000_000), "1.0M");
+        assert_eq!(format_tokens(2_500_000), "2.5M");
     }
 }
 

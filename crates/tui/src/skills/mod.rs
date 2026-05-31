@@ -580,6 +580,10 @@ fn discover_for_workspace_dirs_and_dir(mut dirs: Vec<PathBuf>, skills_dir: &Path
         dirs.push(skills_dir.to_path_buf());
     }
 
+    discover_from_directories(dirs)
+}
+
+pub(crate) fn discover_from_directories(dirs: impl IntoIterator<Item = PathBuf>) -> SkillRegistry {
     let mut merged = SkillRegistry::default();
     for dir in dirs {
         let registry = SkillRegistry::discover(&dir);

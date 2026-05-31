@@ -261,10 +261,7 @@ impl SessionManager {
     pub fn save_session(&self, session: &SavedSession) -> std::io::Result<PathBuf> {
         let path = self.validated_session_path(&session.metadata.id)?;
 
-        let mut persisted = session.clone();
-        compact_session_tool_outputs(&mut persisted);
-
-        let content = serde_json::to_string_pretty(&persisted)
+        let content = serde_json::to_string_pretty(&session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Atomic write via write_atomic (NamedTempFile + fsync + persist)
@@ -281,9 +278,7 @@ impl SessionManager {
         let checkpoints = self.sessions_dir.join("checkpoints");
         fs::create_dir_all(&checkpoints)?;
         let path = checkpoints.join("latest.json");
-        let mut persisted = session.clone();
-        compact_session_tool_outputs(&mut persisted);
-        let content = serde_json::to_string_pretty(&persisted)
+        let content = serde_json::to_string_pretty(&session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_atomic(&path, content.as_bytes())?;
         Ok(path)
@@ -296,7 +291,7 @@ impl SessionManager {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let mut session: SavedSession = serde_json::from_str(&content)
+        let session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -307,7 +302,6 @@ impl SessionManager {
                 ),
             ));
         }
-        compact_session_tool_outputs(&mut session);
         Ok(Some(session))
     }
 
@@ -378,7 +372,7 @@ impl SessionManager {
         let path = self.validated_session_path(id)?;
 
         let content = fs::read_to_string(&path)?;
-        let mut session: SavedSession = serde_json::from_str(&content)
+        let session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -390,7 +384,6 @@ impl SessionManager {
             ));
         }
 
-        compact_session_tool_outputs(&mut session);
         Ok(session)
     }
 
@@ -767,17 +760,6 @@ pub fn update_session(
     session
 }
 
-pub(crate) fn compact_session_tool_outputs(
-    session: &mut SavedSession,
-) -> crate::tool_output_receipts::ToolOutputReceiptStats {
-    let (messages, stats) = crate::tool_output_receipts::compact_messages_for_persistence(
-        &session.messages,
-        &session.artifacts,
-    );
-    session.messages = messages;
-    stats
-}
-
 /// Cap messages to [`MAX_PERSISTED_MESSAGES`], keeping the most recent.
 /// Returns the capped slice and an optional truncation note.
 fn cap_messages(messages: &[Message]) -> (Vec<Message>, Option<String>) {
@@ -1138,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn save_session_compacts_large_tool_outputs_to_artifact_receipts() {
+    fn save_session_preserves_large_tool_outputs_for_cache_fidelity() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
         let raw = "RAW_SESSION_SENTINEL\n".repeat(2_000);
@@ -1177,20 +1159,20 @@ mod tests {
 
         let path = manager.save_session(&session).expect("save");
         let persisted_json = fs::read_to_string(path).expect("read persisted session");
-        assert!(!persisted_json.contains("RAW_SESSION_SENTINEL"));
+        // Raw output is preserved in-session so resume can hit the LLM cache.
+        assert!(persisted_json.contains("RAW_SESSION_SENTINEL"));
 
         let loaded = manager.load_session(&session.metadata.id).expect("load");
         let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
             panic!("expected loaded tool result");
         };
-        assert!(!content.contains("RAW_SESSION_SENTINEL"));
-        assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
-        assert!(content.contains("detail_handle: art_call-big"));
-        assert!(content.contains("retrieve: retrieve_tool_result ref=art_call-big"));
+        // Loaded session retains the original output for cache fidelity.
+        assert!(content.contains("RAW_SESSION_SENTINEL"));
+        assert!(!content.contains("[TOOL_OUTPUT_RECEIPT]"));
     }
 
     #[test]
-    fn load_session_compacts_legacy_large_tool_outputs_before_resume() {
+    fn load_session_preserves_legacy_large_tool_outputs_for_cache_fidelity() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
         let raw = "RAW_LEGACY_RESUME_SENTINEL\n".repeat(2_000);
@@ -1244,10 +1226,9 @@ mod tests {
         let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
             panic!("expected loaded tool result");
         };
-        assert!(!content.contains("RAW_LEGACY_RESUME_SENTINEL"));
-        assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
-        assert!(content.contains("detail_handle: art_call-legacy"));
-        assert!(content.contains("retrieve: retrieve_tool_result ref=art_call-legacy"));
+        // Loaded session preserves original output so resume can hit the LLM cache.
+        assert!(content.contains("RAW_LEGACY_RESUME_SENTINEL"));
+        assert!(!content.contains("[TOOL_OUTPUT_RECEIPT]"));
     }
 
     #[test]

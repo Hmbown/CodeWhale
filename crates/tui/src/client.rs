@@ -882,8 +882,11 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
-            | ApiProvider::Sglang => {
+            | ApiProvider::Siliconflow
+            | ApiProvider::Sglang
+            | ApiProvider::Volcengine => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
             ApiProvider::Fireworks => {}
@@ -914,7 +917,11 @@ pub(super) fn apply_reasoning_effort(
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
             // DeepSeek compatibility: low/medium both map to high
-            ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
+            ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::Siliconflow
+            | ApiProvider::Sglang
+            | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
@@ -928,6 +935,9 @@ pub(super) fn apply_reasoning_effort(
                     _ => "high",
                 };
                 body["reasoning_effort"] = json!(value);
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Fireworks => {
@@ -959,12 +969,19 @@ pub(super) fn apply_reasoning_effort(
             }
         },
         "xhigh" | "max" | "highest" => match provider {
-            ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
+            ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::Siliconflow
+            | ApiProvider::Sglang
+            | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Openrouter | ApiProvider::Novita => {
                 body["reasoning_effort"] = json!("xhigh");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Fireworks => {
@@ -2042,6 +2059,29 @@ mod tests {
                 Some("enabled")
             );
         }
+    }
+
+    #[test]
+    fn reasoning_effort_uses_xiaomi_mimo_thinking_parameter_only() {
+        for input in ["low", "medium", "max", "xhigh"] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(input), ApiProvider::XiaomiMimo);
+
+            assert_eq!(
+                body.pointer("/thinking/type").and_then(Value::as_str),
+                Some("enabled"),
+                "MiMo thinking mapping for {input}"
+            );
+            assert!(body.get("reasoning_effort").is_none());
+        }
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("disabled")
+        );
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]

@@ -156,6 +156,8 @@ impl ChatWidget {
                 &cell_revisions,
                 content_area.width.max(1),
                 render_options,
+                &app.folded_thinking,
+                None,
             );
         } else {
             // Slow path: clone non-collapsed cells into filtered vecs so
@@ -203,6 +205,8 @@ impl ChatWidget {
                 &filtered_revs,
                 content_area.width.max(1),
                 render_options,
+                &app.folded_thinking,
+                Some(&app.collapsed_cell_map),
             );
         }
 
@@ -1162,6 +1166,45 @@ impl Renderable for ApprovalWidget<'_> {
             ]));
         }
 
+        // Intent summary — the model's explanation of why this change is needed (#2381).
+        if let Some(ref summary) = self.request.intent_summary {
+            let max_width = card_area.width.saturating_sub(14) as usize;
+            if max_width > 0 {
+                lines.push(Line::from(""));
+                let intent_label = match locale {
+                    Locale::ZhHans => "意图：",
+                    _ => "Intent: ",
+                };
+                let summary_lines: Vec<&str> = summary.lines().collect();
+                for (i, sline) in summary_lines.iter().take(3).enumerate() {
+                    let prefix = if i == 0 { intent_label } else { "  " };
+                    let truncated = crate::utils::truncate_with_ellipsis(sline, max_width, "...");
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            prefix,
+                            if i == 0 {
+                                Style::default().fg(palette::TEXT_HINT)
+                            } else {
+                                Style::default()
+                            },
+                        ),
+                        Span::styled(truncated, Style::default().fg(palette::TEXT_SECONDARY)),
+                    ]));
+                }
+                if summary_lines.len() > 3 {
+                    let more = match locale {
+                        Locale::ZhHans => format!("  … (还有 {} 行)", summary_lines.len() - 3),
+                        _ => format!("  … (+{} lines)", summary_lines.len() - 3),
+                    };
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(more, Style::default().fg(palette::TEXT_HINT)),
+                    ]));
+                }
+            }
+        }
+
         lines.push(Line::from(""));
         let params_str = self.request.params_display();
         let params_width = card_area.width.saturating_sub(14) as usize;
@@ -1920,7 +1963,7 @@ fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>
 }
 
 fn should_render_empty_state(app: &App) -> bool {
-    app.history.is_empty() && !app.is_loading && !app.is_compacting
+    app.history.is_empty() && !app.is_loading && !app.is_compacting && !app.is_purging
 }
 
 fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
@@ -2080,14 +2123,26 @@ pub(crate) fn slash_completion_hints(
     let mut entries: Vec<SlashMenuEntry> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let prefix_lower = prefix.to_ascii_lowercase();
+    let user_commands = if completing_skill_arg.is_none() {
+        commands::user_commands::load_user_commands(workspace)
+    } else {
+        Vec::new()
+    };
 
     // ── Phase 1: prefix (starts_with) matches ─────────────────────────
     // Highest priority — preserves existing exact-prefix completion.
     if completing_skill_arg.is_none() {
-        for name in commands::all_command_names_matching(prefix, workspace) {
+        for name in all_command_names_matching_loaded(prefix, &user_commands) {
             seen.insert(name.clone());
             let command_key = name.trim_start_matches('/');
-            push_command_entry(&mut entries, &name, command_key, &prefix_lower, locale);
+            push_command_entry(
+                &mut entries,
+                &name,
+                command_key,
+                &prefix_lower,
+                locale,
+                &user_commands,
+            );
         }
     }
 
@@ -2106,7 +2161,14 @@ pub(crate) fn slash_completion_hints(
                 .any(|a| a.to_ascii_lowercase().contains(&prefix_lower));
             if cmd_lower.contains(&prefix_lower) || alias_match {
                 seen.insert(name.clone());
-                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+                push_command_entry(
+                    &mut entries,
+                    &name,
+                    cmd.name,
+                    &prefix_lower,
+                    locale,
+                    &user_commands,
+                );
             }
         }
     }
@@ -2126,7 +2188,14 @@ pub(crate) fn slash_completion_hints(
                 .any(|a| fuzzy_chars_in_order(&prefix_lower, &a.to_ascii_lowercase()));
             if fuzzy_chars_in_order(&prefix_lower, &cmd_lower) || alias_match {
                 seen.insert(name.clone());
-                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+                push_command_entry(
+                    &mut entries,
+                    &name,
+                    cmd.name,
+                    &prefix_lower,
+                    locale,
+                    &user_commands,
+                );
             }
         }
     }
@@ -2219,6 +2288,31 @@ pub(crate) fn slash_completion_hints(
     entries.into_iter().take(limit).collect()
 }
 
+fn all_command_names_matching_loaded(
+    prefix: &str,
+    user_commands: &[(String, String)],
+) -> Vec<String> {
+    let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
+    let mut result: Vec<String> = commands::COMMANDS
+        .iter()
+        .filter(|cmd| {
+            cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
+        })
+        .map(|cmd| format!("/{}", cmd.name))
+        .collect();
+
+    result.extend(
+        user_commands
+            .iter()
+            .filter(|(name, _)| name.starts_with(&prefix))
+            .map(|(name, _)| format!("/{name}")),
+    );
+
+    result.sort();
+    result.dedup();
+    result
+}
+
 /// Push a built-in command entry to the slash menu, resolving description
 /// and alias hints.
 fn push_command_entry(
@@ -2227,6 +2321,7 @@ fn push_command_entry(
     command_key: &str,
     prefix_lower: &str,
     locale: crate::localization::Locale,
+    user_commands: &[(String, String)],
 ) {
     let (description, alias_hint) = if let Some(info) = commands::get_command_info(command_key) {
         let hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
@@ -2256,7 +2351,25 @@ fn push_command_entry(
         };
         (desc, hint)
     } else {
-        (String::from("User-defined command"), None)
+        let mut description = String::from("User-defined command");
+        let mut argument_hint = None;
+        if let Some((_, content)) = user_commands.iter().find(|(key, _)| key == command_key) {
+            let (metadata, _) = commands::user_commands::parse_frontmatter(content);
+            for (key, value) in metadata {
+                match key.as_str() {
+                    "description" => description = value,
+                    "argument-hint" => argument_hint = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        if let Some(hint) = argument_hint
+            && !hint.trim().is_empty()
+        {
+            description.push_str("  ");
+            description.push_str(hint.trim());
+        }
+        (description, None)
     };
     entries.push(SlashMenuEntry {
         name: name.to_string(),
@@ -2501,7 +2614,8 @@ mod tests {
         SlashMenuEntry, apply_selection_to_line, build_empty_state_lines, composer_height,
         composer_max_height, composer_min_input_rows, composer_top_padding, compute_takeover_area,
         cursor_row_col, layout_input, pad_lines_to_bottom, placeholder_visual_lines,
-        should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
+        push_command_entry, should_render_empty_state, slash_completion_hints, wrap_input_lines,
+        wrap_text,
     };
     use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
@@ -2759,6 +2873,80 @@ mod tests {
         let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(!hints.iter().any(|hint| hint.name == "/set"));
         assert!(!hints.iter().any(|hint| hint.name == "/codewhale"));
+    }
+
+    #[test]
+    fn slash_completion_hints_use_user_command_frontmatter_description() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".deepseek").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("git-scan.md"),
+            "---\ndescription: Scan nested git repositories\n---\nscan",
+        )
+        .unwrap();
+
+        let hints = slash_completion_hints(
+            "/git",
+            128,
+            &[],
+            Locale::En,
+            Some(tmp.path()),
+            ApiProvider::Deepseek,
+        );
+        let entry = hints
+            .iter()
+            .find(|hint| hint.name == "/git-scan")
+            .expect("custom command should be present");
+        assert_eq!(entry.description, "Scan nested git repositories");
+    }
+
+    #[test]
+    fn slash_completion_hints_use_user_command_argument_hint() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".deepseek").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("deploy.md"),
+            "---\ndescription: Deploy target\nargument-hint: <env>\n---\ndeploy",
+        )
+        .unwrap();
+
+        let hints = slash_completion_hints(
+            "/deploy",
+            128,
+            &[],
+            Locale::En,
+            Some(tmp.path()),
+            ApiProvider::Deepseek,
+        );
+        let entry = hints
+            .iter()
+            .find(|hint| hint.name == "/deploy")
+            .expect("custom command should be present");
+        assert_eq!(entry.description, "Deploy target  <env>");
+    }
+
+    #[test]
+    fn review_regression_push_command_entry_uses_preloaded_user_command_frontmatter() {
+        let user_commands = vec![(
+            "deploy".to_string(),
+            "---\ndescription: Deploy target\nargument-hint: <env>\n---\ndeploy".to_string(),
+        )];
+        let mut entries = Vec::new();
+
+        push_command_entry(
+            &mut entries,
+            "/deploy",
+            "deploy",
+            "deploy",
+            Locale::En,
+            &user_commands,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "/deploy");
+        assert_eq!(entries[0].description, "Deploy target  <env>");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::coherence::CoherenceState;
+use crate::localization::MessageId;
 use crate::palette;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::app::App;
@@ -43,21 +44,12 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         None
     };
-    let toast = quit_prompt
-        .or_else(|| {
-            // Version-update hint takes precedence over ephemeral status toasts
-            // so the user sees it even when status traffic would hide it.
-            app.version_hint.as_ref().map(|hint| FooterToast {
-                text: hint.clone(),
-                color: palette::STATUS_INFO,
-            })
+    let toast = quit_prompt.or_else(|| {
+        app.active_status_toast().map(|toast| FooterToast {
+            text: toast.text,
+            color: status_color(toast.level),
         })
-        .or_else(|| {
-            app.active_status_toast().map(|toast| FooterToast {
-                text: toast.text,
-                color: status_color(toast.level),
-            })
-        });
+    });
 
     // Drive every cluster from the user's configured `status_items`. Mode
     // and Model are always rendered by `FooterProps` itself (their position
@@ -88,15 +80,8 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
             .unwrap_or_else(|| {
-                // Show a more specific label when the model is still loading
-                // or compacting, not just a generic "working…".
-                let base = if app.is_loading {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                } else if app.is_compacting {
-                    "compacting".to_string()
-                } else {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                };
+                // Show the working label during active turns (loading, compacting, etc.).
+                let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
                 if elapsed_secs > 0 {
                     format!("{base} ({elapsed_secs}s)")
                 } else {
@@ -183,7 +168,11 @@ pub(crate) fn stall_reason(app: &App) -> Option<&'static str> {
 /// though the agent is still working.
 pub(crate) fn footer_working_strip_active(app: &App) -> bool {
     let turn_in_progress = app.runtime_turn_status.as_deref() == Some("in_progress");
-    app.is_loading || app.is_compacting || running_agent_count(app) > 0 || turn_in_progress
+    app.is_loading
+        || app.is_compacting
+        || app.is_purging
+        || running_agent_count(app) > 0
+        || turn_in_progress
 }
 
 pub(crate) fn footer_working_label_frame(now_ms: u64, fancy_animations: bool) -> u64 {
@@ -473,6 +462,11 @@ pub(crate) fn render_footer_from(
     } else {
         Vec::new()
     };
+    let balance = if has(S::Balance) {
+        footer_balance_spans(app)
+    } else {
+        Vec::new()
+    };
 
     // Build the props; `Mode` and `Model` toggles modulate downstream by
     // blanking the rendered text rather than restructuring the widget — the
@@ -487,6 +481,7 @@ pub(crate) fn render_footer_from(
         reasoning_replay,
         cache,
         cost,
+        balance,
     );
     if !has(S::Mode) {
         props.mode_label = "";
@@ -538,11 +533,15 @@ pub(crate) fn render_footer_from(
 }
 
 pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
-    let Some(branch) = workspace_context::branch(&app.workspace) else {
+    let Some(branch) = app
+        .workspace_context
+        .as_deref()
+        .and_then(workspace_context::branch_from_context)
+    else {
         return Vec::new();
     };
     vec![Span::styled(
-        branch,
+        branch.to_string(),
         Style::default().fg(app.ui_theme.text_muted),
     )]
 }
@@ -593,6 +592,37 @@ pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
         ));
     }
     spans
+}
+
+pub(crate) fn footer_balance_spans(app: &App) -> Vec<Span<'static>> {
+    let balance = match app.balance_cell.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    let info = match balance.as_ref() {
+        Some(info) => info,
+        None => return Vec::new(),
+    };
+    let total = match info.total_balance_f64() {
+        Some(total) if total > 0.0 => total,
+        _ => return Vec::new(),
+    };
+    let currency = match info.currency.as_str() {
+        "CNY" | "cny" => "¥",
+        _ => "$",
+    };
+    let prefix = app.tr(MessageId::FooterBalancePrefix);
+    let label = if total >= 1000.0 {
+        format!("{prefix} {currency}{total:.0}")
+    } else if total >= 10.0 {
+        format!("{prefix} {currency}{total:.1}")
+    } else {
+        format!("{prefix} {currency}{total:.2}")
+    };
+    vec![Span::styled(
+        label,
+        Style::default().fg(palette::TEXT_MUTED),
+    )]
 }
 
 pub(crate) fn should_show_footer_cost(displayed_cost: f64) -> bool {
@@ -822,6 +852,9 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
 pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Color) {
     if app.is_compacting {
         return ("compacting \u{238B}", app.ui_theme.status_warning);
+    }
+    if app.is_purging {
+        return ("purging \u{238B}", app.ui_theme.status_warning);
     }
     // Note: we deliberately do NOT show a "thinking" label for `is_loading`.
     // The animated water-spout strip in the footer's spacer is the visual

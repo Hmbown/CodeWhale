@@ -101,6 +101,7 @@ pub fn change(app: &mut App, version: Option<&str>) -> CommandResult {
             Locale::Ja => "Japanese (日本語)",
             Locale::PtBr => "Brazilian Portuguese (Português)",
             Locale::Es419 => "Latin American Spanish (Español latinoamericano)",
+            Locale::Vi => "Vietnamese (Tiếng Việt)",
             // Fallback — should never reach here since we check En above.
             Locale::En => "English",
         };

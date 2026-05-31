@@ -79,29 +79,44 @@ pub fn append_history(entry: &str) {
 /// write if the channel send fails) so callers never block on disk I/O.
 fn append_history_dispatched(path: &Path, entry: &str) {
     let entry = entry.to_string();
-    if writer_sender()
-        .send((path.to_path_buf(), entry.clone()))
-        .is_err()
-    {
-        append_history_to(path, &entry);
+    if let Err(err) = writer_sender().send(HistoryWrite::Append(path.to_path_buf(), entry)) {
+        match err.0 {
+            HistoryWrite::Append(path, entry) => append_history_to(&path, &entry),
+            #[cfg(test)]
+            HistoryWrite::Flush(_) => unreachable!("flush messages are only sent by tests"),
+        }
     }
+}
+
+enum HistoryWrite {
+    Append(PathBuf, String),
+    #[cfg(test)]
+    Flush(Sender<()>),
 }
 
 /// Lazy singleton sender for the dedicated composer-history writer
 /// thread. Initialised on first use; the thread runs for the lifetime
 /// of the process and drains queued writes in arrival order.
-fn writer_sender() -> &'static Sender<(PathBuf, String)> {
-    static SENDER: OnceLock<Sender<(PathBuf, String)>> = OnceLock::new();
+fn writer_sender() -> &'static Sender<HistoryWrite> {
+    static SENDER: OnceLock<Sender<HistoryWrite>> = OnceLock::new();
     SENDER.get_or_init(|| {
-        let (tx, rx) = channel::<(PathBuf, String)>();
+        let (tx, rx) = channel::<HistoryWrite>();
         let spawn_result = std::thread::Builder::new()
             .name("composer-history-writer".to_string())
             .spawn(move || {
                 // recv() returns Err when all senders have dropped, which
                 // only happens at process shutdown because the singleton
                 // sender lives in a static for the lifetime of the process.
-                while let Ok(first) = rx.recv() {
-                    append_history_batch(&rx, first);
+                while let Ok(message) = rx.recv() {
+                    match message {
+                        HistoryWrite::Append(path, entry) => {
+                            append_history_batch(&rx, (path, entry));
+                        }
+                        #[cfg(test)]
+                        HistoryWrite::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
                 }
             });
         if let Err(err) = spawn_result {
@@ -111,12 +126,19 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
     })
 }
 
-fn append_history_batch(rx: &Receiver<(PathBuf, String)>, first: (PathBuf, String)) {
+fn append_history_batch(rx: &Receiver<HistoryWrite>, first: (PathBuf, String)) {
     let mut pending = vec![first];
+    #[cfg(test)]
+    let mut flush = None;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(2)) {
-            Ok(next) => pending.push(next),
+            Ok(HistoryWrite::Append(path, entry)) => pending.push((path, entry)),
+            #[cfg(test)]
+            Ok(HistoryWrite::Flush(done)) => {
+                flush = Some(done);
+                break;
+            }
             Err(RecvTimeoutError::Timeout) => break,
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -124,6 +146,11 @@ fn append_history_batch(rx: &Receiver<(PathBuf, String)>, first: (PathBuf, Strin
 
     for (path, entries) in group_history_writes_by_path(pending) {
         append_history_entries_to(&path, entries.iter().map(String::as_str));
+    }
+
+    #[cfg(test)]
+    if let Some(done) = flush {
+        let _ = done.send(());
     }
 }
 
@@ -190,7 +217,7 @@ fn append_history_entries_to<'a>(
     }
 
     let payload = entries.join("\n") + "\n";
-    if let Err(err) = crate::utils::write_atomic(path, payload.as_bytes()) {
+    if let Err(err) = write_history_atomic(path, payload.as_bytes()) {
         tracing::warn!(
             "Failed to persist composer history at {}: {err}",
             path.display()
@@ -198,9 +225,44 @@ fn append_history_entries_to<'a>(
     }
 }
 
+fn write_history_atomic(path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    const RETRY_DELAYS: &[Duration] = &[
+        Duration::from_millis(5),
+        Duration::from_millis(10),
+        Duration::from_millis(25),
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        Duration::from_millis(200),
+        Duration::from_millis(400),
+    ];
+
+    for (attempt, delay) in RETRY_DELAYS
+        .iter()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .enumerate()
+    {
+        match crate::utils::write_atomic(path, payload) {
+            Ok(()) => return Ok(()),
+            Err(err) if delay.is_some() => {
+                tracing::debug!(
+                    "Retrying composer history write to {} after attempt {} failed: {err}",
+                    path.display(),
+                    attempt + 1
+                );
+                std::thread::sleep(*delay.expect("delay checked"));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    unreachable!("retry iterator always ends with a final write attempt")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     /// Tests use the path-injecting `*_from` / `*_to` helpers so they
     /// don't have to mutate `HOME` (which is not honored by
@@ -211,6 +273,16 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join(HISTORY_FILE_NAME);
         (tmp, path)
+    }
+
+    fn flush_history_writer_for_tests(timeout: Duration) {
+        let (done_tx, done_rx) = channel();
+        writer_sender()
+            .send(HistoryWrite::Flush(done_tx))
+            .expect("history writer accepts flush");
+        done_rx
+            .recv_timeout(timeout)
+            .expect("history writer flush timed out");
     }
 
     #[test]
@@ -283,8 +355,6 @@ mod tests {
     /// stall the user reports.
     #[test]
     fn append_history_dispatched_does_not_block_the_caller() {
-        use std::time::{Duration, Instant};
-
         let (_tmp, path) = temp_history_path();
         // Seed close to the cap so a synchronous rewrite is non-trivial.
         let seed = (0..(MAX_HISTORY_ENTRIES - 50))
@@ -311,26 +381,16 @@ mod tests {
              (likely re-introduced #1927: caller blocked on disk write)"
         );
 
-        // Give the writer thread time to drain the queue, then verify the
-        // new entries landed.
-        // Use 10s on Windows (slow CI I/O) vs 5s on other platforms.
-        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 10 } else { 5 });
-        loop {
-            let loaded = load_history_from(&path);
-            if loaded.iter().any(|line| line == "new entry 49") {
-                // Last dispatched entry observed; queue is drained.
-                assert!(loaded.iter().any(|line| line == "new entry 0"));
-                break;
-            }
-            if Instant::now() >= deadline {
-                panic!(
-                    "writer thread did not persist the dispatched entries; \
-                     loaded {} entries, last = {:?}",
-                    loaded.len(),
-                    loaded.last()
-                );
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
+        flush_history_writer_for_tests(Duration::from_secs(if cfg!(windows) { 10 } else { 5 }));
+
+        let loaded = load_history_from(&path);
+        assert!(
+            loaded.iter().any(|line| line == "new entry 49"),
+            "writer thread did not persist the dispatched entries; \
+             loaded {} entries, last = {:?}",
+            loaded.len(),
+            loaded.last()
+        );
+        assert!(loaded.iter().any(|line| line == "new entry 0"));
     }
 }

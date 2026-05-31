@@ -833,6 +833,30 @@ impl RuntimeThreadManager {
         }
     }
 
+    pub async fn submit_user_input(
+        &self,
+        thread_id: &str,
+        input_id: &str,
+        response: crate::tools::user_input::UserInputResponse,
+    ) -> Result<bool> {
+        let active = self.active.lock().await;
+        let Some(state) = active.engines.get(thread_id) else {
+            bail!("thread '{thread_id}' not found");
+        };
+        state.engine.submit_user_input(input_id, response).await?;
+        Ok(true)
+    }
+
+    #[allow(dead_code)]
+    pub async fn cancel_user_input(&self, thread_id: &str, input_id: &str) -> Result<bool> {
+        let active = self.active.lock().await;
+        let Some(state) = active.engines.get(thread_id) else {
+            bail!("thread '{thread_id}' not found");
+        };
+        state.engine.cancel_user_input(input_id).await?;
+        Ok(true)
+    }
+
     #[allow(dead_code)]
     pub fn pending_approvals_count(&self) -> usize {
         self.pending_approvals
@@ -1629,6 +1653,7 @@ impl RuntimeThreadManager {
                 auto_approve,
                 translation_enabled: false,
                 show_thinking,
+                allowed_tools: None,
                 approval_mode: if auto_approve {
                     crate::tui::approval::ApprovalMode::Auto
                 } else {
@@ -1944,7 +1969,12 @@ impl RuntimeThreadManager {
             notes_path: self.config.notes_path(),
             mcp_config_path: self.config.mcp_config_path(),
             skills_dir: self.config.skills_dir(),
-            instructions: self.config.instructions_paths(),
+            instructions: self
+                .config
+                .instructions_paths()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             project_context_pack_enabled: self.config.project_context_pack_enabled(),
             translation_enabled: false,
             show_thinking: settings.show_thinking,
@@ -1989,6 +2019,7 @@ impl RuntimeThreadManager {
             vision_config: self.config.vision_model_config(),
             strict_tool_mode: self.config.strict_tool_mode.unwrap_or(false),
             goal_objective: None,
+            allowed_tools: None,
             locale_tag: crate::localization::resolve_locale(&settings.locale)
                 .tag()
                 .to_string(),
@@ -2652,6 +2683,7 @@ impl RuntimeThreadManager {
                     id,
                     tool_name,
                     description,
+                    intent_summary,
                     ..
                 } => {
                     self.emit_event(
@@ -2664,6 +2696,7 @@ impl RuntimeThreadManager {
                             "approval_id": id,
                             "tool_name": tool_name,
                             "description": description,
+                            "intent_summary": intent_summary,
                         }),
                     )
                     .await?;
@@ -2783,6 +2816,19 @@ impl RuntimeThreadManager {
                             let _ = engine.deny_tool_call(tool_id).await;
                         }
                     }
+                }
+                EngineEvent::UserInputRequired { id, request } => {
+                    self.emit_event(
+                        &thread_id,
+                        Some(&turn_id),
+                        None,
+                        "user_input.required",
+                        json!({
+                            "id": id,
+                            "request": request,
+                        }),
+                    )
+                    .await?;
                 }
                 EngineEvent::Status { message } => {
                     let item = TurnItemRecord {
@@ -4172,6 +4218,8 @@ mod tests {
                 id: "tool_stale".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "stale approval".to_string(),
+                input: serde_json::json!({}),
+                intent_summary: None,
             })
             .await?;
 
@@ -4245,6 +4293,8 @@ mod tests {
                 id: "tool_external_allow".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external allow".to_string(),
+                input: serde_json::json!({}),
+                intent_summary: Some("I will update the config file.".to_string()),
             })
             .await?;
 
@@ -4253,6 +4303,20 @@ mod tests {
             sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(manager.pending_approvals_count(), 1);
+
+        let events = manager.events_since(&thread.id, None)?;
+        let approval_event = events
+            .iter()
+            .rev()
+            .find(|event| event.event == "approval.required")
+            .context("missing approval.required event")?;
+        assert_eq!(
+            approval_event
+                .payload
+                .get("intent_summary")
+                .and_then(Value::as_str),
+            Some("I will update the config file.")
+        );
 
         assert!(manager.deliver_external_approval(
             "tool_external_allow",
@@ -4322,6 +4386,8 @@ mod tests {
                 id: "tool_external_deny".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external deny".to_string(),
+                input: serde_json::json!({}),
+                intent_summary: None,
             })
             .await?;
 
@@ -4508,6 +4574,8 @@ mod tests {
                 id: "tool_remember".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "remember=true".to_string(),
+                input: serde_json::json!({}),
+                intent_summary: None,
             })
             .await?;
 

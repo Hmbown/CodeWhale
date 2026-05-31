@@ -7,6 +7,7 @@ const ASSET_MATRIX = {
   linux: {
     x64: ["codewhale-linux-x64", "codewhale-tui-linux-x64"],
     arm64: ["codewhale-linux-arm64", "codewhale-tui-linux-arm64"],
+    riscv64: ["codewhale-linux-riscv64", "codewhale-tui-linux-riscv64"],
   },
   darwin: {
     x64: ["codewhale-macos-x64", "codewhale-tui-macos-x64"],

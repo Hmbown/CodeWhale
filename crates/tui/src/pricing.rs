@@ -55,6 +55,39 @@ impl CostEstimate {
     }
 }
 
+// === DeepSeek Account Balance ===
+
+/// Response from `GET https://api.deepseek.com/user/balance`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct BalanceResponse {
+    #[allow(dead_code)]
+    pub is_available: bool,
+    pub balance_infos: Vec<BalanceInfo>,
+}
+
+/// Per-currency balance entry from the balance API.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct BalanceInfo {
+    pub currency: String,
+    #[serde(default)]
+    pub total_balance: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub topped_up_balance: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub granted_balance: String,
+}
+
+impl BalanceInfo {
+    /// Parse the `total_balance` field as an f64. Returns `None` on parse
+    /// failure or empty string.
+    #[must_use]
+    pub fn total_balance_f64(&self) -> Option<f64> {
+        self.total_balance.parse::<f64>().ok()
+    }
+}
+
 /// Per-million-token pricing for a model.
 #[derive(Debug, Clone, Copy)]
 struct CurrencyPricing {
@@ -356,5 +389,78 @@ mod tests {
             format_cost_amount_precise(0.1234, CostCurrency::Cny),
             "¥0.1234"
         );
+    }
+
+    // ── BalanceResponse / BalanceInfo ──────────────────────────────
+
+    #[test]
+    fn balance_response_deserializes_from_json() {
+        let json = r#"{
+            "is_available": true,
+            "balance_infos": [
+                {
+                    "currency": "CNY",
+                    "total_balance": "123.45",
+                    "topped_up_balance": "100.00",
+                    "granted_balance": "23.45"
+                }
+            ]
+        }"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(resp.is_available);
+        assert_eq!(resp.balance_infos.len(), 1);
+        let info = &resp.balance_infos[0];
+        assert_eq!(info.currency, "CNY");
+        assert_eq!(info.total_balance, "123.45");
+        assert_eq!(info.topped_up_balance, "100.00");
+        assert_eq!(info.granted_balance, "23.45");
+    }
+
+    #[test]
+    fn balance_response_defaults_empty_balance_infos_when_unavailable() {
+        let json = r#"{"is_available": false, "balance_infos": []}"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(!resp.is_available);
+        assert!(resp.balance_infos.is_empty());
+    }
+
+    #[test]
+    fn balance_response_empty_list_is_valid() {
+        let json = r#"{"is_available": true, "balance_infos": []}"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(resp.is_available);
+        assert!(resp.balance_infos.is_empty());
+    }
+
+    // ── BalanceInfo::total_balance_f64 ─────────────────────────────
+
+    #[test]
+    fn total_balance_f64_parses_decimal() {
+        let info = BalanceInfo {
+            currency: "CNY".into(),
+            total_balance: "123.45".into(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), Some(123.45));
+    }
+
+    #[test]
+    fn total_balance_f64_returns_none_on_empty() {
+        let info = BalanceInfo {
+            currency: "USD".into(),
+            total_balance: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), None);
+    }
+
+    #[test]
+    fn total_balance_f64_returns_none_on_invalid() {
+        let info = BalanceInfo {
+            currency: "USD".into(),
+            total_balance: "not-a-number".into(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), None);
     }
 }

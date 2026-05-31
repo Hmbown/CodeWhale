@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use futures_util::StreamExt;
@@ -41,6 +41,7 @@ use crate::models::{
     MessageRequest, StreamEvent, SystemPrompt, Tool, Usage,
 };
 use crate::prompts;
+use crate::purge::{emit_purge_completed, emit_purge_failed, emit_purge_started, run_purge};
 use crate::seam_manager::{SeamConfig, SeamManager};
 use crate::tools::goal::{SharedGoalState, new_shared_goal_state};
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
@@ -91,11 +92,15 @@ pub struct EngineConfig {
     pub mcp_config_path: PathBuf,
     /// Directory containing discoverable skills.
     pub skills_dir: PathBuf,
-    /// Additional instruction files concatenated into the system
-    /// prompt (#454). Loaded in declared order from the user's
-    /// `instructions = [...]` config (or the per-project override).
-    /// Resolved via `expand_path` so `~` works.
-    pub instructions: Vec<PathBuf>,
+    /// Sources injected as `<instructions source="…">` blocks in the system
+    /// prompt (#454). Each entry is either a disk path (read at render time)
+    /// or an inline string. Loaded in declared order from the user's
+    /// `instructions = [...]` config or constructed by embedders.
+    ///
+    /// Generalized from `Vec<PathBuf>` so embedders can inject inline content
+    /// without staging a disk file. `From<PathBuf>` impl keeps existing callers
+    /// working with `.into()` at the call site.
+    pub instructions: Vec<crate::prompts::InstructionSource>,
     pub project_context_pack_enabled: bool,
     /// When true, the model is instructed to respond in the current locale
     /// and a post-hoc translation layer replaces remaining English output.
@@ -158,6 +163,9 @@ pub struct EngineConfig {
     pub memory_path: PathBuf,
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub goal_objective: Option<String>,
+    /// Tool restriction from custom slash command frontmatter.
+    /// `None` means the current turn may use the normal tool set.
+    pub allowed_tools: Option<Vec<String>>,
     /// Resolved BCP-47 locale tag (e.g. `"en"`, `"zh-Hans"`, `"ja"`)
     /// for the `## Environment` block in the system prompt. The
     /// caller resolves this from `Settings` once at engine
@@ -170,8 +178,9 @@ pub struct EngineConfig {
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
     /// Which search backend `web_search` should use. Default: DuckDuckGo.
     pub search_provider: crate::config::SearchProvider,
-    /// API key for Tavily, Bocha, or Metaso. `None` for Bing or DuckDuckGo.
+    /// API key for Tavily, Bocha, Metaso, or Baidu. `None` for Bing or DuckDuckGo.
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in key.
+    /// Baidu also falls back to `BAIDU_SEARCH_API_KEY`.
     pub search_api_key: Option<String>,
     /// Per-step DeepSeek API timeout for sub-agent `create_message` requests.
     /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800)
@@ -223,6 +232,7 @@ impl Default for EngineConfig {
             vision_config: None,
             strict_tool_mode: false,
             goal_objective: None,
+            allowed_tools: None,
             locale_tag: "en".to_string(),
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
@@ -349,6 +359,10 @@ pub struct Engine {
     /// Diagnostics collected during the current step's tool calls. Drained
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
+    /// Cached SlopLedger gate block keyed by the ledger file's modified time.
+    /// This keeps prompt refreshes cheap while still noticing append/update
+    /// writes from slop ledger tools during the same session.
+    slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
 }
 
 // === Internal tool helpers ===
@@ -386,9 +400,12 @@ impl Engine {
             ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
             ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY",
+            ApiProvider::Volcengine => "VOLCENGINE_API_KEY/VOLCENGINE_ARK_API_KEY/ARK_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
+            ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY/MIMO_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
@@ -589,6 +606,7 @@ impl Engine {
             turn_counter: 0,
             lsp_manager,
             pending_lsp_blocks: Vec::new(),
+            slop_ledger_gate_cache: None,
             workshop_vars,
             sandbox_backend,
         };
@@ -626,6 +644,7 @@ impl Engine {
                     approval_mode,
                     translation_enabled,
                     show_thinking,
+                    allowed_tools,
                 } => {
                     self.handle_send_message(
                         content,
@@ -641,6 +660,7 @@ impl Engine {
                         approval_mode,
                         translation_enabled,
                         show_thinking,
+                        allowed_tools,
                     )
                     .await;
                 }
@@ -815,6 +835,9 @@ impl Engine {
                 Op::CompactContext => {
                     self.handle_manual_compaction().await;
                 }
+                Op::PurgeContext => {
+                    self.handle_purge().await;
+                }
                 Op::EditLastTurn { new_message } => {
                     // #383: /edit — remove the last user+assistant exchange
                     // from the session, then re-send with the new content.
@@ -848,6 +871,7 @@ impl Engine {
                         self.session.approval_mode,
                         self.config.translation_enabled,
                         self.config.show_thinking,
+                        self.config.allowed_tools.clone(),
                     )
                     .await;
                 }
@@ -937,6 +961,7 @@ impl Engine {
         approval_mode: crate::tui::approval::ApprovalMode,
         translation_enabled: bool,
         show_thinking: bool,
+        allowed_tools: Option<Vec<String>>,
     ) {
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
@@ -1034,6 +1059,7 @@ impl Engine {
                 false,
             );
         }
+        self.config.allowed_tools = allowed_tools;
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;
         self.session.auto_model = auto_model;
@@ -1329,6 +1355,83 @@ impl Engine {
                 usage: zero_usage,
                 status: turn_status,
                 error: turn_error,
+            })
+            .await;
+    }
+
+    async fn handle_purge(&mut self) {
+        let zero_usage = Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            ..Usage::default()
+        };
+        let Some(client) = self.deepseek_client.clone() else {
+            let message = "Purge unavailable: API client not configured".to_string();
+            emit_purge_failed(&self.tx_event, message.clone()).await;
+            let _ = self
+                .tx_event
+                .send(Event::error(ErrorEnvelope::fatal_auth(message.clone())))
+                .await;
+            let _ = self
+                .tx_event
+                .send(Event::TurnComplete {
+                    usage: zero_usage,
+                    status: TurnOutcomeStatus::Failed,
+                    error: Some(message),
+                })
+                .await;
+            return;
+        };
+
+        emit_purge_started(
+            &self.tx_event,
+            "Agent context purge in progress\u{2026}".to_string(),
+        )
+        .await;
+        let messages_before = self.session.messages.len();
+
+        let (status, error) = match run_purge(
+            &client,
+            &self.session.messages,
+            &self.session.model,
+            self.session.reasoning_effort.clone(),
+            effective_max_output_tokens(&self.session.model),
+        )
+        .await
+        {
+            Ok(result) => {
+                let messages_after = result.messages.len();
+                self.session.messages = result.messages;
+                self.emit_session_updated().await;
+
+                let summary = format!(
+                    "Purge complete: {messages_before} → {messages_after} messages \
+                         ({} removed, {} condensed)",
+                    result.removed_count, result.replaced_count,
+                );
+                emit_purge_completed(
+                    &self.tx_event,
+                    messages_before,
+                    messages_after,
+                    result.removed_count,
+                    result.replaced_count,
+                    summary,
+                )
+                .await;
+                (TurnOutcomeStatus::Completed, None)
+            }
+            Err(e) => {
+                emit_purge_failed(&self.tx_event, e.clone()).await;
+                (TurnOutcomeStatus::Failed, Some(e))
+            }
+        };
+
+        let _ = self
+            .tx_event
+            .send(Event::TurnComplete {
+                usage: zero_usage,
+                status,
+                error,
             })
             .await;
     }
@@ -1892,8 +1995,20 @@ impl Engine {
             },
             self.session.approval_mode,
         );
-        let stable_prompt =
+        let mut stable_prompt =
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
+
+        // SlopLedger completion-gate: inject unresolved slop entries into the
+        // system prompt so the agent can autonomously review them before
+        // claiming the task is done (#2127).
+        let gate_block = self.slop_ledger_gate_block();
+        if let Some(ref block) = gate_block
+            && let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt
+        {
+            prompt_text.push_str("\n\n");
+            prompt_text.push_str(block);
+        }
+
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
             self.session.last_system_prompt_hash = Some(stable_hash);
@@ -1903,6 +2018,31 @@ impl Engine {
             self.session.system_prompt = stable_prompt;
             self.session.last_system_prompt_hash = Some(stable_hash);
         }
+    }
+
+    fn slop_ledger_gate_block(&mut self) -> Option<String> {
+        let modified = crate::slop_ledger::SlopLedger::default_path()
+            .ok()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|metadata| metadata.modified().ok());
+
+        if let Some((cached_modified, cached_block)) = &self.slop_ledger_gate_cache
+            && *cached_modified == modified
+        {
+            return cached_block.clone();
+        }
+
+        let loaded = crate::slop_ledger::SlopLedger::load()
+            .ok()
+            .and_then(|ledger| {
+                if ledger.has_open_entries() {
+                    ledger.completion_gate_summary()
+                } else {
+                    None
+                }
+            });
+        self.slop_ledger_gate_cache = Some((modified, loaded.clone()));
+        loaded
     }
 
     fn merge_compaction_summary(&mut self, summary_prompt: Option<SystemPrompt>) {
@@ -2085,6 +2225,10 @@ mod tool_execution;
 mod tool_setup;
 mod turn_loop;
 
+pub(crate) fn default_active_native_tool_names() -> &'static [&'static str] {
+    tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS
+}
+
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
 #[cfg(test)]
 use self::dispatch::should_parallelize_tool_batch;
@@ -2115,7 +2259,7 @@ use self::tool_catalog::{
 };
 #[cfg(test)]
 use self::tool_catalog::{
-    TOOL_SEARCH_BM25_NAME, maybe_activate_requested_deferred_tool,
+    TOOL_SEARCH_BM25_NAME, TOOL_SEARCH_REGEX_NAME, maybe_activate_requested_deferred_tool,
     preflight_requested_deferred_tool, should_default_defer_tool,
 };
 use self::tool_execution::emit_tool_audit;

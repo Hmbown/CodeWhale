@@ -4,6 +4,8 @@ use std::fs;
 
 #[path = "../src/eval.rs"]
 mod eval;
+#[path = "../src/shell_dispatcher.rs"]
+mod shell_dispatcher;
 
 use eval::{EvalHarness, EvalHarnessConfig, ScenarioStepKind};
 use tempfile::tempdir;
