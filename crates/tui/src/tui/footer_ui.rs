@@ -631,22 +631,16 @@ pub(crate) fn should_show_footer_cost(displayed_cost: f64) -> bool {
 
 /// Session token-usage chip for the footer right cluster.
 ///
-/// Renders the accumulated input / cache-hit / output token breakdown
-/// since the current runtime session started (not persisted across
-/// restarts). Returns empty when no tokens have been recorded yet.
+/// Renders a compact accumulated token count for the current runtime session.
+/// Detailed cache stats live in the separate `cache` chip.
 pub(crate) fn footer_session_tokens_spans(app: &App) -> Vec<Span<'static>> {
     let session = &app.session;
     if session.total_input_tokens == 0 && session.total_output_tokens == 0 {
         return Vec::new();
     }
-    let in_str = format_token_count_compact(u64::from(session.total_input_tokens));
-    let out_str = format_token_count_compact(u64::from(session.total_output_tokens));
-    let text = if session.total_cache_hit_tokens == 0 && session.total_cache_miss_tokens == 0 {
-        format!("{in_str} in · {out_str} out")
-    } else {
-        let cache_str = format_token_count_compact(u64::from(session.total_cache_hit_tokens));
-        format!("{in_str} in · {cache_str} cch · {out_str} out")
-    };
+    let total = u64::from(session.total_input_tokens)
+        .saturating_add(u64::from(session.total_output_tokens));
+    let text = format!("tok {}", format_token_count_compact(total));
     vec![Span::styled(text, Style::default().fg(palette::TEXT_MUTED))]
 }
 
