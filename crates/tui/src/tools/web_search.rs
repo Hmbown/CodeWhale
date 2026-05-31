@@ -1010,10 +1010,10 @@ fn extract_json_block(text: &str) -> Option<&str> {
             return Some(inner[..end].trim());
         }
     }
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return Some(&text[start..=end]);
-        }
+    if let Some(start) = text.find('{')
+        && let Some(end) = text.rfind('}')
+    {
+        return Some(&text[start..=end]);
     }
     None
 }
