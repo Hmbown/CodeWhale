@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use super::CommandResult;
-use crate::client::{PromptInspection, inspect_prompt_for_request};
+use crate::client::{CacheWarmupKey, PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
@@ -189,6 +189,12 @@ fn format_cache_inspect(app: &mut App, verbose: bool, json_mode: bool) -> String
     };
     let inspection = inspect_prompt_for_request(&request);
     let previous = app.session.last_cache_inspection.as_ref();
+    let current_warmup_key = CacheWarmupKey::from_inspection(
+        &format!("{:?}", app.api_provider),
+        &app.model,
+        app.session.last_base_url.as_deref().unwrap_or_default(),
+        &inspection,
+    );
     if json_mode {
         let output = serde_json::to_string_pretty(&inspection).unwrap_or_else(|_| {
             "{\"error\":\"cache inspection serialization failed\"}".to_string()
@@ -218,6 +224,10 @@ fn format_cache_inspect(app: &mut App, verbose: bool, json_mode: bool) -> String
     ));
     out.push_str(&format_static_prefix_status(previous, &inspection));
     out.push_str(&format_first_divergence(previous, &inspection));
+    out.push_str(&format_warmup_status(
+        app.session.last_warmup_key.as_ref(),
+        &current_warmup_key,
+    ));
     let total_tokens: usize = inspection
         .layers
         .iter()
@@ -268,6 +278,45 @@ fn format_cache_inspect(app: &mut App, verbose: bool, json_mode: bool) -> String
     }
     app.session.last_cache_inspection = Some(inspection);
     out
+}
+
+fn format_warmup_status(last_warmup: Option<&CacheWarmupKey>, current: &CacheWarmupKey) -> String {
+    match last_warmup {
+        None => format!(
+            "Warmup status: no previous warmup (current key: {})\n",
+            current.hash_short()
+        ),
+        Some(previous) if previous == current => {
+            format!(
+                "Warmup status: valid (key {} matches)\n",
+                current.hash_short()
+            )
+        }
+        Some(previous) => {
+            let mut reasons = Vec::new();
+            if previous.provider != current.provider {
+                reasons.push("provider changed");
+            }
+            if previous.model != current.model {
+                reasons.push("model changed");
+            }
+            if previous.base_url != current.base_url {
+                reasons.push("base URL changed");
+            }
+            if previous.static_prefix_hash != current.static_prefix_hash {
+                reasons.push("static prefix changed");
+            }
+            if previous.tool_catalog_hash != current.tool_catalog_hash {
+                reasons.push("tool catalog changed");
+            }
+            format!(
+                "Warmup status: invalid ({} -> {}; {})\n",
+                previous.hash_short(),
+                current.hash_short(),
+                reasons.join(", ")
+            )
+        }
+    }
 }
 
 fn format_verbose_diff(previous: &PromptInspection, current: &PromptInspection) -> String {
@@ -892,6 +941,35 @@ mod tests {
             .expect("tool catalog layer");
         assert!(tool_layer["byte_len"].as_u64().unwrap() > 0);
         assert!(tool_layer["token_estimate"].as_u64().unwrap() > 0);
+    }
+
+    fn warmup_key(model: &str, static_hash: &str) -> CacheWarmupKey {
+        CacheWarmupKey {
+            provider: "Deepseek".to_string(),
+            model: model.to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            static_prefix_hash: static_hash.to_string(),
+            tool_catalog_hash: "tool".to_string(),
+            project_pack_hash: "project".to_string(),
+            skills_hash: "skills".to_string(),
+        }
+    }
+
+    #[test]
+    fn warmup_status_reports_valid_matching_key() {
+        let key = warmup_key("deepseek-v4-pro", "static-a");
+        let result = format_warmup_status(Some(&key), &key);
+        assert!(result.contains("Warmup status: valid"), "got: {result}");
+    }
+
+    #[test]
+    fn warmup_status_reports_invalidation_reason() {
+        let previous = warmup_key("deepseek-v4-pro", "static-a");
+        let current = warmup_key("deepseek-v4-flash", "static-b");
+        let result = format_warmup_status(Some(&previous), &current);
+        assert!(result.contains("Warmup status: invalid"), "got: {result}");
+        assert!(result.contains("model changed"), "got: {result}");
+        assert!(result.contains("static prefix changed"), "got: {result}");
     }
 
     #[test]

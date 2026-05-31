@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
@@ -3015,6 +3015,7 @@ fn local_cancel_marks_late_stream_events_for_suppression() {
             status: crate::core::events::TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
+            base_url: None,
         }
     ));
     assert!(!suppress_engine_event_after_local_cancel(

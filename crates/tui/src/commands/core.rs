@@ -100,7 +100,9 @@ pub(crate) fn reset_conversation_state(app: &mut App) -> bool {
     app.session.last_reasoning_replay_tokens = None;
     app.session.turn_cache_history.clear();
     app.session.last_cache_inspection = None;
+    app.session.last_warmup_key = None;
     app.session.last_tool_catalog = None;
+    app.session.last_base_url = None;
     todos_cleared
 }
 
@@ -547,7 +549,9 @@ mod tests {
         app.session.last_prompt_cache_hit_tokens = Some(70);
         app.session.last_prompt_cache_miss_tokens = Some(30);
         app.session.last_reasoning_replay_tokens = Some(12);
+        app.session.last_warmup_key = None;
         app.session.last_tool_catalog = Some(Vec::new());
+        app.session.last_base_url = Some("https://api.deepseek.com".to_string());
         app.session.last_cache_inspection = Some(PromptInspection {
             base_static_prefix_hash: "base".to_string(),
             full_request_prefix_hash: "full".to_string(),
@@ -579,7 +583,9 @@ mod tests {
         assert_eq!(app.session.last_reasoning_replay_tokens, None);
         assert!(app.session.turn_cache_history.is_empty());
         assert_eq!(app.session.last_cache_inspection, None);
+        assert_eq!(app.session.last_warmup_key, None);
         assert_eq!(app.session.last_tool_catalog, None);
+        assert_eq!(app.session.last_base_url, None);
     }
 
     #[test]
