@@ -1443,6 +1443,32 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
 }
 
 #[test]
+fn turn_metadata_includes_auto_model_route() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let user_msg = engine.user_text_message_with_turn_metadata_for_route(
+        "debug this regression".to_string(),
+        "deepseek-v4-pro",
+        true,
+        Some("max"),
+        true,
+    );
+    let first_block = user_msg.content.first().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = first_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains("Auto model route: deepseek-v4-pro"));
+    assert!(text.contains("Auto reasoning effort: max"));
+    assert!(!text.contains("debug this regression"));
+}
+
+#[test]
 fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {

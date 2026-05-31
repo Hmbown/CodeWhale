@@ -910,7 +910,13 @@ impl Engine {
         self.emit_session_updated().await;
     }
 
-    fn turn_metadata_block(&self) -> ContentBlock {
+    fn turn_metadata_block(
+        &self,
+        routed_model: &str,
+        auto_model: bool,
+        reasoning_effort: Option<&str>,
+        reasoning_effort_auto: bool,
+    ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
             .session
@@ -919,11 +925,17 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let summary = if let Some(working_set_summary) = working_set_summary {
-            format!("Current local date: {today}\n{working_set_summary}")
-        } else {
-            format!("Current local date: {today}")
-        };
+        let mut lines = vec![format!("Current local date: {today}")];
+        if auto_model {
+            lines.push(format!("Auto model route: {routed_model}"));
+        }
+        if reasoning_effort_auto && let Some(reasoning_effort) = reasoning_effort {
+            lines.push(format!("Auto reasoning effort: {reasoning_effort}"));
+        }
+        if let Some(working_set_summary) = working_set_summary {
+            lines.push(working_set_summary);
+        }
+        let summary = lines.join("\n");
 
         ContentBlock::Text {
             text: format!("<turn_meta>\n{summary}\n</turn_meta>"),
@@ -932,10 +944,32 @@ impl Engine {
     }
 
     fn user_text_message_with_turn_metadata(&self, text: String) -> Message {
+        self.user_text_message_with_turn_metadata_for_route(
+            text,
+            &self.session.model,
+            self.session.auto_model,
+            self.session.reasoning_effort.as_deref(),
+            self.session.reasoning_effort_auto,
+        )
+    }
+
+    fn user_text_message_with_turn_metadata_for_route(
+        &self,
+        text: String,
+        routed_model: &str,
+        auto_model: bool,
+        reasoning_effort: Option<&str>,
+        reasoning_effort_auto: bool,
+    ) -> Message {
         Message {
             role: "user".to_string(),
             content: vec![
-                self.turn_metadata_block(),
+                self.turn_metadata_block(
+                    routed_model,
+                    auto_model,
+                    reasoning_effort,
+                    reasoning_effort_auto,
+                ),
                 ContentBlock::Text {
                     text,
                     cache_control: None,
@@ -1041,7 +1075,13 @@ impl Engine {
         let force_update_plan_first = should_force_update_plan_first(mode, &content);
 
         // Add user message to session
-        let user_msg = self.user_text_message_with_turn_metadata(content);
+        let user_msg = self.user_text_message_with_turn_metadata_for_route(
+            content,
+            &model,
+            auto_model,
+            reasoning_effort.as_deref(),
+            reasoning_effort_auto,
+        );
         self.session.add_message(user_msg);
 
         let previous_goal_objective = self.config.goal_objective.clone();
