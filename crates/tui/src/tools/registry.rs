@@ -425,11 +425,24 @@ impl ToolRegistry {
                 _ => {
                     // Script and Command overrides create replacement tools.
                     use crate::tools::plugin::tool_from_override;
-                    if let Some(replacement) =
-                        tool_from_override(tool_name, override_cfg, plugin_dir)
-                    {
-                        self.register(replacement);
-                        tracing::info!("Tool '{}' replaced via config override", tool_name);
+                    match tool_from_override(tool_name, override_cfg, plugin_dir) {
+                        Some(replacement) => {
+                            self.register(replacement);
+                            tracing::info!("Tool '{}' replaced via config override", tool_name);
+                        }
+                        None => {
+                            if self.remove_tool(tool_name) {
+                                tracing::warn!(
+                                    "Tool '{}' override did not create a replacement; removed the original tool to avoid override fallthrough",
+                                    tool_name
+                                );
+                            } else {
+                                tracing::warn!(
+                                    "Tool '{}' override did not create a replacement and no registered tool existed",
+                                    tool_name
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1082,11 +1095,13 @@ impl ToolSpec for McpToolAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use serde_json::{Value, json};
     use tempfile::tempdir;
 
+    use crate::config::ToolOverride;
     use crate::tools::ToolRegistryBuilder;
     use crate::tools::spec::{
         ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, required_str,
@@ -1153,6 +1168,32 @@ mod tests {
         assert!(registry.contains("test_tool"));
         assert!(!registry.contains("nonexistent"));
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn apply_overrides_removes_original_when_replacement_is_missing() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let mut registry = ToolRegistryBuilder::new()
+            .with_read_only_file_tools()
+            .build(ctx);
+
+        assert!(registry.contains("read_file"));
+        assert!(registry.contains("list_dir"));
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "read_file".to_string(),
+            ToolOverride::Script {
+                path: "missing-wrapper.sh".to_string(),
+                args: None,
+            },
+        );
+
+        registry.apply_overrides(&overrides, tmp.path());
+
+        assert!(!registry.contains("read_file"));
+        assert!(registry.contains("list_dir"));
     }
 
     #[test]
