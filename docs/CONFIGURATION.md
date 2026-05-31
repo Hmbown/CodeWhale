@@ -308,7 +308,9 @@ Remaining variables:
   legacy directory exists)
 - `DEEPSEEK_ALLOW_INSECURE_HTTP` (`1`/`true` allows non-local `http://` base URLs; default is reject)
 - `DEEPSEEK_FORCE_HTTP1` (`1|true|yes|on` pins the HTTP client to HTTP/1.1, disabling HTTP/2; useful on Windows or behind proxies that mishandle long-lived H2 streams)
-- `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`)
+- `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`).
+  If you previously exported `DEEPSEEK_HOME`, rename it to `CODEWHALE_HOME`;
+  the old env var is not used for new CodeWhale state paths.
 - `DEEPSEEK_AUTOMATIONS_DIR` (override the automations storage directory; uses
   `~/.codewhale/automations` when that directory exists, otherwise the legacy
   `~/.deepseek/automations` path)
@@ -819,8 +821,11 @@ configure reasoning effort.
   from a skill, hook, or MCP wrapper when you want them active.
 - `--all` now scaffolds MCP + skills + tools + plugins together.
 - `--clean` — list `~/.codewhale/sessions/checkpoints/latest.json` and
-  `offline_queue.json` if they exist. Pass `--force` to actually remove them.
-  This never touches real session history or the task queue.
+  `offline_queue.json` if they exist. Legacy
+  `~/.deepseek/sessions/checkpoints/` files are not scanned automatically; set
+  `CODEWHALE_HOME=~/.deepseek` for a one-off legacy cleanup. Pass `--force` to
+  actually remove matched files. This never touches real session history or the
+  task queue.
 
 `--status` and `--clean` are mutually exclusive with the scaffold flags.
 
