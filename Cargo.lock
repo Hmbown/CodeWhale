@@ -1014,6 +1014,7 @@ dependencies = [
  "pdf-extract",
  "portable-pty",
  "pretty_assertions",
+ "qrcode",
  "ratatui",
  "regex",
  "reqwest",
@@ -3706,6 +3707,12 @@ checksum = "7186d3822593aa4393561d186d1393b3923e9d6163d3fbfd6e825e3e6cf3e6a8"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

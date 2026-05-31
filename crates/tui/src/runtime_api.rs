@@ -81,6 +81,8 @@ pub struct RuntimeApiOptions {
     pub insecure_no_auth: bool,
     /// Enables the built-in mobile control page at `/mobile`.
     pub mobile: bool,
+    /// Show a QR code for the mobile URL in the terminal.
+    pub show_qr: bool,
 }
 
 impl Default for RuntimeApiOptions {
@@ -93,6 +95,7 @@ impl Default for RuntimeApiOptions {
             auth_token: None,
             insecure_no_auth: false,
             mobile: false,
+            show_qr: false,
         }
     }
 }
@@ -472,7 +475,12 @@ pub async fn run_http_server(
         println!("Runtime API auth: disabled by explicit insecure mode.");
     }
     if options.mobile {
-        print_mobile_urls(addr, runtime_token.as_deref(), auth_enabled);
+        print_mobile_urls(
+            addr,
+            runtime_token.as_deref(),
+            auth_enabled,
+            options.show_qr,
+        );
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
     if is_loopback {
@@ -668,7 +676,7 @@ async fn mobile_page(State(state): State<RuntimeApiState>, req: Request) -> Resp
     Html(MOBILE_HTML).into_response()
 }
 
-fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool) {
+fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool, show_qr: bool) {
     println!("Mobile control page enabled.");
     let token_query = if auth_enabled {
         token
@@ -680,19 +688,36 @@ fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool) 
     };
 
     let port = addr.port();
-    if addr.ip().is_unspecified() {
+    let qr_url = if addr.ip().is_unspecified() {
         println!("  Local: http://127.0.0.1:{port}/mobile{token_query}");
         if let Some(ip) = detect_lan_ip() {
-            println!("  LAN:   http://{ip}:{port}/mobile{token_query}");
+            let lan_url = format!("http://{ip}:{port}/mobile{token_query}");
+            println!("  LAN:   {lan_url}");
+            lan_url
         } else {
             println!(
                 "  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{port}/mobile{token_query}"
             );
+            format!("http://127.0.0.1:{port}/mobile{token_query}")
         }
     } else {
-        println!("  URL:   http://{addr}/mobile{token_query}");
-    }
+        let url = format!("http://{addr}/mobile{token_query}");
+        println!("  URL:   {url}");
+        url
+    };
     println!("Mobile security: use only on a trusted LAN/VPN; this server does not provide TLS.");
+
+    if show_qr {
+        match qrcode::QrCode::new(qr_url.as_bytes()) {
+            Ok(qr) => {
+                let qr_str = qr.render::<char>().module_dimensions(2, 1).build();
+                println!("\n{qr_str}");
+            }
+            Err(e) => {
+                eprintln!("Warning: could not generate QR code: {e}");
+            }
+        }
+    }
 }
 
 fn url_query_component(value: &str) -> String {
