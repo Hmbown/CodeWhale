@@ -38,13 +38,28 @@ const DEFAULT_CORS_ORIGINS: &[&str] = &[
     "tauri://localhost",
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppServerOptions {
     pub listen: SocketAddr,
     pub config_path: Option<PathBuf>,
     pub auth_token: Option<String>,
     pub insecure_no_auth: bool,
     pub cors_origins: Vec<String>,
+}
+
+impl std::fmt::Debug for AppServerOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppServerOptions")
+            .field("listen", &self.listen)
+            .field("config_path", &self.config_path)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("insecure_no_auth", &self.insecure_no_auth)
+            .field("cors_origins", &self.cors_origins)
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -1207,7 +1222,8 @@ mod tests {
             cors_origins: vec!["https://example.com".to_string()],
         };
         let debug = format!("{options:?}");
-        assert!(debug.contains("secret-token")); // Debug shows it since it's not redacted
+        assert!(!debug.contains("secret-token"));
+        assert!(debug.contains("<redacted>"));
         assert!(debug.contains("8080"));
     }
 
