@@ -2853,8 +2853,12 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn request_builder_deduplicates_large_identical_tool_results_with_retrieval_hint() {
+    fn request_builder_deduplicates_medium_identical_tool_results_with_retrieval_hint() {
         with_tool_result_sha_spillover_root(|| {
+            // 2,000 chars is intentionally above TOOL_RESULT_DEDUP_MIN_CHARS
+            // (1,024) but below TOOL_RESULT_SENT_CHAR_BUDGET (12,000). This
+            // verifies the cache-saving path for repeated medium outputs that
+            // do not otherwise need truncation.
             let output = "A".repeat(2_000);
             let messages = vec![
                 tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
@@ -2868,6 +2872,7 @@ mod stream_decoder_tests {
             let second = tool_message_content(&built, 1);
 
             assert_eq!(first, output);
+            assert!(!first.contains("[TOOL_RESULT_TRUNCATED]"), "got: {first}");
             assert!(
                 second.starts_with("<TOOL_RESULT_REF sha=\""),
                 "got: {second}"
