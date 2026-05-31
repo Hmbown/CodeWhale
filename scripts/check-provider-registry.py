@@ -149,7 +149,10 @@ def default_strings(tui_config_rs: str) -> set[str]:
 
 
 def missing_default_strings(providers_md: str, defaults: set[str]) -> list[str]:
-    code_spans = set(re.findall(r"`([^`]+)`", providers_md))
+    # Inline-code validation should not let fenced TOML/bash examples pair a
+    # stray backtick with later prose; strip fenced blocks before scanning.
+    inline_source = re.sub(r"```.*?```", "", providers_md, flags=re.DOTALL)
+    code_spans = set(re.findall(r"`([^`]+)`", inline_source))
     return sorted(defaults - code_spans)
 
 

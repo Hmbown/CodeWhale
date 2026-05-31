@@ -71,6 +71,7 @@ mod ui_text;
 pub mod user_input;
 pub mod views;
 pub mod vim_mode;
+pub mod whale_routes;
 pub mod widgets;
 pub mod workspace_context;
 

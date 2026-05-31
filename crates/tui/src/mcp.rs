@@ -1832,10 +1832,10 @@ impl McpConnection {
             // IDs, but accept numeric echoes for compatibility with older
             // servers and tests.
             if response_id_matches(value.get("id"), &expected_id) {
-                if let Some(error) = value.get("error") {
-                    if is_mcp_stale_session_body(&error.to_string()) {
-                        anyhow::bail!("MCP session expired: {error}");
-                    }
+                if let Some(error) = value.get("error")
+                    && is_mcp_stale_session_body(&error.to_string())
+                {
+                    anyhow::bail!("MCP session expired: {error}");
                 }
                 return Ok(value);
             }
@@ -2883,7 +2883,14 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    async fn lock_mcp_loopback_tests() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
 
     #[test]
     fn test_mcp_config_defaults() {
@@ -3803,6 +3810,7 @@ mod tests {
             socket.write_all(response.as_bytes()).await.unwrap();
         }
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -4081,6 +4089,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let post_seen = Arc::new(AtomicBool::new(false));
@@ -4172,6 +4181,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let post_seen = Arc::new(AtomicBool::new(false));
@@ -4262,6 +4272,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let get_header_seen = Arc::new(AtomicBool::new(false));
@@ -4363,6 +4374,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -4448,6 +4460,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let get_count = Arc::new(AtomicUsize::new(0));
@@ -4586,8 +4599,8 @@ mod tests {
                 env: HashMap::new(),
                 url: Some(format!("http://{addr}/mcp")),
                 transport: None,
-                connect_timeout: Some(2),
-                execute_timeout: Some(2),
+                connect_timeout: Some(10),
+                execute_timeout: Some(10),
                 read_timeout: None,
                 disabled: false,
                 enabled: true,
@@ -4621,6 +4634,7 @@ mod tests {
         use tokio::net::TcpListener;
         use tokio::sync::mpsc;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -4717,6 +4731,7 @@ mod tests {
             (headers, json)
         }
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let active_sse = Arc::new(Mutex::new(None::<mpsc::UnboundedSender<Option<String>>>));
@@ -4838,8 +4853,8 @@ mod tests {
                 env: HashMap::new(),
                 url: Some(format!("http://{addr}/sse")),
                 transport: Some("sse".to_string()),
-                connect_timeout: Some(2),
-                execute_timeout: Some(2),
+                connect_timeout: Some(10),
+                execute_timeout: Some(10),
                 read_timeout: None,
                 disabled: false,
                 enabled: true,
@@ -4883,6 +4898,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -4958,6 +4974,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         // The test signals success by writing to this flag — the GET handler

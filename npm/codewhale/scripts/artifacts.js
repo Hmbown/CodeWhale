@@ -7,13 +7,14 @@ const ASSET_MATRIX = {
   linux: {
     x64: ["codewhale-linux-x64", "codewhale-tui-linux-x64"],
     arm64: ["codewhale-linux-arm64", "codewhale-tui-linux-arm64"],
+    riscv64: ["codewhale-linux-riscv64", "codewhale-tui-linux-riscv64"],
   },
   darwin: {
     x64: ["codewhale-macos-x64", "codewhale-tui-macos-x64"],
     arm64: ["codewhale-macos-arm64", "codewhale-tui-macos-arm64"],
   },
   win32: {
-    x64: ["codewhale-windows-x64.exe", "codewhale-tui-windows-x64.exe"],
+    x64: ["codewhale-windows-x64.exe", "codewhale-tui-windows-x64.exe", "codewhale.bat"],
   },
 };
 
@@ -111,8 +112,8 @@ function releaseBinaryDirectory() {
 function allAssetNames() {
   const names = [];
   for (const platformAssets of Object.values(ASSET_MATRIX)) {
-    for (const pair of Object.values(platformAssets)) {
-      names.push(pair[0], pair[1]);
+    for (const assets of Object.values(platformAssets)) {
+      names.push(...assets);
     }
   }
   return Array.from(new Set(names));

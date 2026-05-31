@@ -13,11 +13,13 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider fireworks`, `/provider sglang`, `/provider vllm`, `/provider ollama`)
-# toggle without having to re-enter keys. Top-level `api_key` / `base_url` are
+# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
+# `--provider siliconflow`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -37,7 +39,10 @@ base_url = "https://api.deepseek.com/beta"
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
+#   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
+#   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
@@ -178,16 +183,18 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `--provider wanjie-ark` / `/provider fireworks` switches between them without
-# having to re-enter keys. Env vars override anything set here:
+# `--provider wanjie-ark` / `/provider fireworks` / `--provider siliconflow`
+# switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 #   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
+#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
@@ -238,11 +245,23 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://maas-openapi.wanjiedata.com/api/v1"
 # model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
 
+# Volcengine / Volcano Engine Ark Coding API
+[providers.volcengine]
+# api_key = "YOUR_VOLCENGINE_API_KEY"
+# base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+# model = "DeepSeek-V4-Pro"                  # or DeepSeek-V4-Flash
+
 # OpenRouter — multi-provider gateway (https://openrouter.ai)
 [providers.openrouter]
 # api_key = "YOUR_OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
 # model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+
+# Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
+[providers.xiaomi_mimo]
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
+# model = "mimo-v2.5-pro"
 
 # Novita AI-hosted inference (https://novita.ai)
 [providers.novita]
@@ -255,6 +274,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_FIREWORKS_API_KEY"
 # base_url = "https://api.fireworks.ai/inference/v1"
 # model = "accounts/fireworks/models/deepseek-v4-pro"
+
+# SiliconFlow-hosted DeepSeek V4 (https://siliconflow.com)
+[providers.siliconflow]
+# api_key = "YOUR_SILICONFLOW_API_KEY"
+# base_url = "https://api.siliconflow.com/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]
@@ -277,25 +302,29 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
 # ─────────────────────────────────────────────────────────────────────────────────
-# Choose which backend `web_search` uses. Default is Bing HTML scraping — no
-# API key needed. DuckDuckGo remains selectable and still falls back to Bing
-# when its HTML endpoint returns a bot challenge or no parseable results.
-# Switch to Tavily or Bocha for reliable search in mainland China.
+# Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
+# with Bing fallback — no API key needed. Bing remains selectable for users who
+# explicitly prefer it. Switch to Tavily, Bocha, Metaso, or Baidu for
+# API-backed search.
 #
 # [search]
-# provider = "bing"         # bing | duckduckgo | tavily | bocha | metaso
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu
 #                            # duckduckgo: HTML scrape with Bing fallback
-#                            # tavily: https://tavily.com — AI search, needs api_key
-#                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
-#                            # metaso: https://metaso.cn — 秘塔AI搜索，每天 100 次免费
-#                            #         设置 METASO_API_KEY 或 [search] api_key 可提升额度
-# api_key = "tvly-YOUR_KEY"  # required for tavily, bocha, and metaso (optional for metaso)
-#                            # WARNING: treat config.toml like a secret file when
-#                            # storing API keys. Use env vars or `auth set` instead.
+#                            # bing:       HTML scrape, no API key
+#                            # tavily:     https://tavily.com — AI search, needs api_key
+#                            # bocha:      https://bochaai.com — 博查AI搜索，国内友好，需api_key
+#                            # metaso:     https://metaso.cn — 秘塔AI搜索，每天 100 次免费
+#                            #             设置 METASO_API_KEY 或 [search] api_key 可提升额度
+#                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, and baidu; optional for metaso
+#                             # WARNING: treat config.toml like a secret file when
+#                             # storing API keys. Prefer env vars for local smoke tests.
 #
 # Env-var overrides:
 #   DEEPSEEK_SEARCH_PROVIDER → search.provider
 #   DEEPSEEK_SEARCH_API_KEY  → search.api_key
+#   METASO_API_KEY           → metaso key fallback
+#   BAIDU_SEARCH_API_KEY     → baidu key fallback
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
@@ -380,6 +409,11 @@ exec_policy = true
 # model = "gemini-3.1-flash-lite-preview"  # Required: vision-capable model ID
 # api_key = "YOUR_API_KEY"                 # Optional: defaults to main api_key
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
+#
+# Xiaomi MiMo image understanding can be configured through the same tool:
+# model = "mimo-v2.5"
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration

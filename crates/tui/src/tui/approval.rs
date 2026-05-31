@@ -134,15 +134,31 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
+    /// The model's explanation of intent before invoking write tools (#2381).
+    /// Displayed in the approval view so users understand *why* the change
+    /// is being made before reviewing *what* will change.
+    pub intent_summary: Option<String>,
 }
 
 impl ApprovalRequest {
+    #[cfg(test)]
     pub fn new(
         id: &str,
         tool_name: &str,
         description: &str,
         params: &Value,
         approval_key: &str,
+    ) -> Self {
+        Self::new_with_intent(id, tool_name, description, params, approval_key, None)
+    }
+
+    pub fn new_with_intent(
+        id: &str,
+        tool_name: &str,
+        description: &str,
+        params: &Value,
+        approval_key: &str,
+        intent_summary: Option<&str>,
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
@@ -159,6 +175,14 @@ impl ApprovalRequest {
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
+            intent_summary: intent_summary.and_then(|summary| {
+                let summary = summary.trim();
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some(summary.to_string())
+                }
+            }),
         }
     }
 

@@ -71,9 +71,15 @@ jobs:
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             tag="v${{ inputs.version }}"
-            git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
-            sha="$(git rev-list -n 1 "${tag}")"
-            source_ref="${tag}"
+            if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+              sha="$(git rev-list -n 1 "${tag}")"
+              source_ref="${tag}"
+            else
+              # Tag doesn't exist yet — build from HEAD
+              sha="${GITHUB_SHA}"
+              source_ref="${GITHUB_SHA}"
+              echo "Tag ${tag} not found; building from ${source_ref} @ ${sha}"
+            fi
           else
             tag="${GITHUB_REF_NAME}"
             sha="${GITHUB_SHA}"
@@ -109,6 +115,10 @@ jobs:
             target: aarch64-unknown-linux-gnu
             binary: codewhale
             artifact_name: codewhale-linux-arm64
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-riscv64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary: codewhale
@@ -130,6 +140,10 @@ jobs:
             target: aarch64-unknown-linux-gnu
             binary: codewhale-tui
             artifact_name: codewhale-tui-linux-arm64
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-riscv64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary: codewhale-tui
@@ -204,10 +218,34 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install RISC-V cross-compilation toolchain
+        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
+        run: |
+          # Install cross-compiler (available in standard repos)
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+
+          # Add Ubuntu ports for riscv64 packages
+          . /etc/os-release
+          sudo tee /etc/apt/sources.list.d/riscv64.sources <<SRC
+          Types: deb
+          URIs: http://ports.ubuntu.com/
+          Suites: ${UBUNTU_CODENAME} ${UBUNTU_CODENAME}-updates
+          Components: main universe
+          Architectures: riscv64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SRC
+          sudo dpkg --add-architecture riscv64
+          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/riscv64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+          sudo apt-get install -y libdbus-1-dev:riscv64
       - name: Build
         shell: bash
         env:
           DEEPSEEK_BUILD_SHA: ${{ needs.resolve.outputs.sha }}
+          CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: 1
+          PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Rename binary
         shell: bash
@@ -295,6 +333,10 @@ jobs:
           # Platform: linux-arm64
           bundle linux-arm64 \
             codewhale-linux-arm64 codewhale-tui-linux-arm64 tar.gz ""
+
+          # Platform: linux-riscv64
+          bundle linux-riscv64 \
+            codewhale-linux-riscv64 codewhale-tui-linux-riscv64 tar.gz ""
 
           # Platform: macos-x64
           bundle macos-x64 \
@@ -471,6 +513,7 @@ jobs:
             |---|---|---|
             | Linux x64 | `codewhale-linux-x64.tar.gz` | `install.sh` |
             | Linux ARM64 | `codewhale-linux-arm64.tar.gz` | `install.sh` |
+            | Linux RISC-V | `codewhale-linux-riscv64.tar.gz` | `install.sh` |
             | macOS x64 | `codewhale-macos-x64.tar.gz` | `install.sh` |
             | macOS ARM | `codewhale-macos-arm64.tar.gz` | `install.sh` |
             | Windows x64 | `codewhale-windows-x64.zip` | `install.bat` |

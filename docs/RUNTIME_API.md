@@ -117,6 +117,7 @@ codewhale doctor --json
 
 ```bash
 codewhale serve --http [--host 127.0.0.1] [--port 7878] [--workers 2] [--auth-token TOKEN]
+codewhale serve --mobile [--host 0.0.0.0] [--port 7878] [--auth-token TOKEN]
 ```
 
 Defaults: host `127.0.0.1`, port `7878`, 2 workers (clamped 1–8).
@@ -124,15 +125,34 @@ Defaults: host `127.0.0.1`, port `7878`, 2 workers (clamped 1–8).
 The server binds to `localhost` by default. Configuration is via CLI flags —
 there is no `[app_server]` config section.
 
-By default, existing local behavior is unchanged and `/v1/*` routes are not
-authenticated. To require a bearer token for `/v1/*` routes, pass
-`--auth-token TOKEN` or set `DEEPSEEK_RUNTIME_TOKEN=TOKEN` before starting the
-server. `/health` remains public for local process supervision and readiness
-checks.
+`/v1/*` routes require a bearer token unless `--insecure` is explicitly set.
+Pass `--auth-token TOKEN` or set `DEEPSEEK_RUNTIME_TOKEN=TOKEN` before starting
+the server. If neither is set, the process generates a one-time token and prints
+it at startup. `/health` and `/v1/runtime/info` remain public for local
+supervision and bootstrap. `/mobile` returns 404 when mobile mode is disabled;
+when mobile mode is enabled and auth is enabled, `/mobile` returns 401 unless
+the request supplies the runtime token.
 
 Authenticated clients can provide the token as `Authorization: Bearer TOKEN`,
 `X-DeepSeek-Runtime-Token: TOKEN`, or `?token=TOKEN` for EventSource-style
 clients that cannot set custom headers.
+
+### Mobile control page
+
+`codewhale serve --mobile` starts the same HTTP/SSE runtime API and serves a
+phone-friendly control page at `/mobile`. When the bind host is left at the
+default, mobile mode binds to `0.0.0.0`, prints a warning, and prints local/LAN
+URLs. Pass `--host 127.0.0.1` to keep the mobile page loopback-only. If a
+runtime token is generated or supplied, the printed mobile URL includes it as a
+query parameter; the page stores it locally and removes it from the address bar.
+The static HTML page contains no secrets, but it is still token-gated when auth
+is enabled so unauthenticated LAN clients cannot fingerprint the mobile surface.
+
+The mobile page can list/create threads, send prompts, follow live SSE events,
+steer or interrupt an active turn, and resolve normal tool approvals through
+`POST /v1/approvals/{approval_id}`. It is still a local/LAN convenience surface:
+do not expose it directly to the public internet without TLS and a trusted
+fronting layer.
 
 ### Endpoints
 
@@ -187,6 +207,10 @@ accept an empty string to clear a previously-set value. Added in v0.8.10 (#562):
 - `POST /v1/threads/{id}/turns/{turn_id}/steer`
 - `POST /v1/threads/{id}/turns/{turn_id}/interrupt`
 - `POST /v1/threads/{id}/compact` (manual compaction)
+
+**Approvals**
+- `POST /v1/approvals/{approval_id}` with body
+  `{ "decision": "allow" | "deny", "remember": false }`
 
 **Events** (SSE replay + live stream)
 - `GET /v1/threads/{id}/events?since_seq=<u64>`
@@ -286,16 +310,19 @@ Events are append-only with a global monotonic `seq` for replay/resume.
 
 ### SSE event stream
 
-The SSE event payload shape:
+The SSE event payload shape for `/v1/threads/{id}/events`:
 
 ```json
 {
+  "schema_version": 1,
   "seq": 42,
-  "timestamp": "2026-02-11T20:18:49.123Z",
+  "event": "item.delta",
+  "kind": "item.delta",
   "thread_id": "thr_1234abcd",
   "turn_id": "turn_5678efgh",
   "item_id": "item_90ab12cd",
-  "event": "item.delta",
+  "timestamp": "2026-02-11T20:18:49.123Z",
+  "created_at": "2026-02-11T20:18:49.123Z",
   "payload": {
     "delta": "partial output",
     "kind": "agent_message"
@@ -303,16 +330,31 @@ The SSE event payload shape:
 }
 ```
 
+Compatibility notes:
+
+- `schema_version` is the HTTP/SSE envelope schema version. It is independent of
+  the runtime store schema used for persisted thread/turn/event records.
+- `event` remains the SSE event name in existing clients; it is preserved as-is.
+- `kind` mirrors `event` in the stable envelope for typed clients.
+- `thread.started`, `turn.started`, and `turn.completed` are emitted as SSE event
+  names exactly as before.
+- `timestamp` remains the canonical event time for schema version 1. `created_at`
+  is an equivalent alias for clients that use `created_at` naming elsewhere; do
+  not require both fields to be present.
+
 Common event names: `thread.started`, `thread.forked`, `turn.started`,
 `turn.lifecycle`, `turn.steered`, `turn.interrupt_requested`,
 `turn.completed`, `item.started`, `item.delta`, `item.completed`,
-`item.failed`, `item.interrupted`, `approval.required`, `sandbox.denied`,
-`coherence.state`.
+`item.failed`, `item.interrupted`, `approval.required`, `approval.decided`,
+`approval.timeout`, `sandbox.denied`, `coherence.state`.
 
 ## Security boundary
 
-- **Localhost only**. The server binds to `127.0.0.1` by default. Set
-  `--host 0.0.0.0` only when you have a reverse-proxy / VPN that
+- **Localhost by default**. The server binds to `127.0.0.1` by default.
+  `--mobile` binds to `0.0.0.0` when no host is supplied so phones on the same
+  LAN can reach it, and the CLI prints a warning for that rebind. Pass
+  `--host 127.0.0.1` for a loopback-only mobile page. Set a non-loopback host
+  only when you trust the network path or have a reverse-proxy / VPN that
   authenticates. The runtime does not provide user isolation or TLS.
 - **Optional token guard**. `--auth-token` or `DEEPSEEK_RUNTIME_TOKEN`
   requires a matching bearer token for `/v1/*` routes. This is a local

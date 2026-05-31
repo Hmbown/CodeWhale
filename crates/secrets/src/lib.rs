@@ -525,6 +525,9 @@ pub fn env_for(name: &str) -> Option<String> {
     let candidates: &[&str] = match name.to_ascii_lowercase().as_str() {
         "deepseek" => &["DEEPSEEK_API_KEY"],
         "openrouter" => &["OPENROUTER_API_KEY"],
+        "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => {
+            &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"]
+        }
         "novita" => &["NOVITA_API_KEY"],
         // NVIDIA NIM falls back to `DEEPSEEK_API_KEY` last because the
         // catalog endpoint accepts the same DeepSeek-issued key when no
@@ -533,12 +536,19 @@ pub fn env_for(name: &str) -> Option<String> {
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
         }
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
+        "siliconflow" | "silicon-flow" | "silicon_flow" => &["SILICONFLOW_API_KEY"],
         "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
         "openai" => &["OPENAI_API_KEY"],
         "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
+        "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark"
+        | "volcengineark" => &[
+            "VOLCENGINE_API_KEY",
+            "VOLCENGINE_ARK_API_KEY",
+            "ARK_API_KEY",
+        ],
         "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
         | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => &[
             "WANJIE_ARK_API_KEY",
@@ -579,6 +589,7 @@ mod tests {
             "NVIDIA_API_KEY",
             "NVIDIA_NIM_API_KEY",
             "FIREWORKS_API_KEY",
+            "SILICONFLOW_API_KEY",
             "SGLANG_API_KEY",
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
@@ -587,6 +598,8 @@ mod tests {
             "WANJIE_ARK_API_KEY",
             "WANJIE_API_KEY",
             "WANJIE_MAAS_API_KEY",
+            "XIAOMI_MIMO_API_KEY",
+            "MIMO_API_KEY",
             SECRET_BACKEND_ENV,
         ] {
             // Safety: tests serialise on env_lock(); the broader
@@ -765,6 +778,20 @@ mod tests {
     }
 
     #[test]
+    fn xiaomi_mimo_env_aliases_resolve() {
+        let _guard = env_lock();
+        clear_known_envs();
+        unsafe { std::env::set_var("MIMO_API_KEY", "mimo-key") };
+
+        assert_eq!(env_for("xiaomi-mimo").as_deref(), Some("mimo-key"));
+        assert_eq!(env_for("xiaomimimo").as_deref(), Some("mimo-key"));
+        assert_eq!(env_for("mimo").as_deref(), Some("mimo-key"));
+        assert_eq!(env_for("xiaomi").as_deref(), Some("mimo-key"));
+
+        clear_known_envs();
+    }
+
+    #[test]
     fn fireworks_env_aliases_resolve() {
         let _lock = env_lock();
         clear_known_envs();
@@ -775,6 +802,20 @@ mod tests {
         assert_eq!(env_for("fireworks-ai").as_deref(), Some("fw-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("FIREWORKS_API_KEY") };
+    }
+
+    #[test]
+    fn siliconflow_env_aliases_resolve() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("SILICONFLOW_API_KEY", "sf-key") };
+
+        assert_eq!(env_for("siliconflow").as_deref(), Some("sf-key"));
+        assert_eq!(env_for("silicon-flow").as_deref(), Some("sf-key"));
+        assert_eq!(env_for("silicon_flow").as_deref(), Some("sf-key"));
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::remove_var("SILICONFLOW_API_KEY") };
     }
 
     #[test]

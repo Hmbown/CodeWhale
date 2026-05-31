@@ -803,7 +803,7 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
 name = "codewhale-agent"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "codewhale-config",
  "serde",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-app-server"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "axum",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-cli"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "chrono",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-config"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "codewhale-secrets",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-core"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "chrono",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-execpolicy"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "codewhale-protocol",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-hooks"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-mcp"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "serde",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-protocol"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "serde",
  "serde_json",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-secrets"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "dirs",
  "keyring",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-state"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "chrono",
@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-tools"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-tui"
-version = "0.8.47"
+version = "0.8.46"
 dependencies = [
  "anyhow",
  "arboard",
@@ -995,6 +995,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-config",
+ "codewhale-protocol",
  "codewhale-release",
  "codewhale-secrets",
  "codewhale-tools",
@@ -1050,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "codewhale-tui-core"
-version = "0.8.47"
+version = "0.8.46"
 
 [[package]]
 name = "colorchoice"

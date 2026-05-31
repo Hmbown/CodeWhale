@@ -28,6 +28,7 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 anyhow = "1.0.100"
 arboard = "3.4"
 codewhale-config = { path = "../config", version = "0.8.46" }
+codewhale-protocol = { path = "../protocol", version = "0.8.46" }
 codewhale-release = { path = "../release", version = "0.8.46" }
 codewhale-secrets = { path = "../secrets", version = "0.8.46" }
 codewhale-tools = { path = "../tools", version = "0.8.46" }

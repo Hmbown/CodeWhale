@@ -93,6 +93,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             crate::localization::Locale::Ja => "ja",
             crate::localization::Locale::PtBr => "pt-BR",
             crate::localization::Locale::Es419 => "es-419",
+            crate::localization::Locale::Vi => "vi",
         }
     }
     fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
@@ -740,6 +741,47 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => CommandResult::action(AppAction::OpenThemePicker),
         Some(name) => set_config_value(app, "theme", name, true),
+    }
+}
+
+/// `/slop [query|export]` — inspect or export the slop ledger (#2127).
+/// With no arguments, prints a summary. `query` shows filtered results;
+/// `export` outputs the full ledger as Markdown.
+pub fn slop(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let arg = arg.map(str::trim).unwrap_or("");
+    let ledger = match crate::slop_ledger::SlopLedger::load() {
+        Ok(l) => l,
+        Err(e) => return CommandResult::error(format!("Failed to load slop ledger: {e}")),
+    };
+
+    match arg {
+        "" => CommandResult::message(ledger.summary()),
+        "query" | "q" => {
+            if ledger.is_empty() {
+                return CommandResult::message("Slop ledger is empty.");
+            }
+            let mut out = String::new();
+            for entry in &ledger.query(&Default::default()) {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    out,
+                    "[{}] {} ({:?} | {:?}) — {}",
+                    crate::slop_ledger::short_id(&entry.id),
+                    entry.bucket.as_str(),
+                    entry.severity,
+                    entry.status,
+                    entry.title
+                );
+            }
+            CommandResult::message(out)
+        }
+        "export" | "e" => {
+            let md = ledger.export_markdown(None, None);
+            CommandResult::message(md)
+        }
+        _ => CommandResult::error(format!(
+            "Unknown /slop action '{arg}'. Use /slop, /slop query, or /slop export."
+        )),
     }
 }
 

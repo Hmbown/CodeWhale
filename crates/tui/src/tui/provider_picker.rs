@@ -101,9 +101,12 @@ impl ProviderPickerView {
             ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
             ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
+            ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
+            ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY / MIMO_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY / KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
@@ -472,9 +475,12 @@ mod tests {
                 "OpenAI-compatible",
                 "AtlasCloud",
                 "Wanjie Ark",
+                "Volcengine Ark",
                 "OpenRouter",
+                "Xiaomi MiMo",
                 "Novita AI",
                 "Fireworks AI",
+                "SiliconFlow",
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
@@ -635,7 +641,7 @@ mod tests {
         let config = Config::default();
         let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
-        let rendered = render_text(&picker, 80, 20);
+        let rendered = render_text(&picker, 80, 21);
 
         assert!(rendered.contains("DeepSeek *"));
         assert!(rendered.contains("Ollama"));

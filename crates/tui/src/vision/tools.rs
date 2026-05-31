@@ -13,6 +13,8 @@ use crate::tools::spec::{
     ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, required_str,
 };
 
+const DEFAULT_VISION_MAX_OUTPUT_TOKENS: u32 = 4096;
+
 pub struct ImageAnalyzeTool {
     config: VisionModelConfig,
     client: reqwest::Client,
@@ -66,6 +68,59 @@ impl ImageAnalyzeTool {
 
     fn api_key(&self) -> String {
         self.config.api_key.clone().unwrap_or_default()
+    }
+
+    fn is_xiaomi_mimo_model(model: &str) -> bool {
+        let normalized = model.trim().to_ascii_lowercase();
+        let normalized = normalized.strip_prefix("xiaomi/").unwrap_or(&normalized);
+        normalized.starts_with("mimo-")
+    }
+
+    fn uses_max_completion_tokens(config: &VisionModelConfig) -> bool {
+        if Self::is_xiaomi_mimo_model(&config.model) {
+            return true;
+        }
+
+        let base_url = config.base_url.as_deref().unwrap_or_default();
+        let Ok(url) = reqwest::Url::parse(base_url) else {
+            return false;
+        };
+        let Some(domain) = url.domain() else {
+            return false;
+        };
+
+        domain.eq_ignore_ascii_case("xiaomimimo.com")
+            || domain.to_ascii_lowercase().ends_with(".xiaomimimo.com")
+    }
+
+    fn request_payload(&self, prompt: &str, image_data: &str, mime_type: &str) -> Value {
+        let mut payload = json!({
+            "model": self.config.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", mime_type, image_data)
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.7
+        });
+
+        let token_limit_field = if Self::uses_max_completion_tokens(&self.config) {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        payload[token_limit_field] = json!(DEFAULT_VISION_MAX_OUTPUT_TOKENS);
+
+        payload
     }
 }
 
@@ -122,25 +177,7 @@ impl ToolSpec for ImageAnalyzeTool {
         let resolved_path = context.workspace.join(image_path_buf);
         let (image_data, mime_type) = Self::read_image_file(&resolved_path).await?;
 
-        let payload = json!({
-            "model": self.config.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!("data:{};base64,{}", mime_type, image_data)
-                            }
-                        }
-                    ]
-                }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.7
-        });
+        let payload = self.request_payload(prompt, &image_data, &mime_type);
 
         let url = format!("{}/chat/completions", self.base_url());
         let api_key = self.api_key();
@@ -260,6 +297,51 @@ mod tests {
         let err = ImageAnalyzeTool::detect_mime_type(&path)
             .expect_err("svg is intentionally out of scope for vision tool");
         assert!(err.to_string().contains("Unsupported image format"));
+    }
+
+    #[test]
+    fn generic_vision_payload_uses_max_tokens() {
+        let tool = ImageAnalyzeTool::new(fake_config());
+
+        let payload = tool.request_payload("describe", "abc123", "image/png");
+
+        assert_eq!(
+            payload.get("max_tokens").and_then(Value::as_u64),
+            Some(u64::from(DEFAULT_VISION_MAX_OUTPUT_TOKENS))
+        );
+        assert!(payload.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn xiaomi_mimo_vision_payload_uses_max_completion_tokens() {
+        let mut config = fake_config();
+        config.model = "mimo-v2.5".to_string();
+        config.base_url = Some("https://api.xiaomimimo.com/v1".to_string());
+        let tool = ImageAnalyzeTool::new(config);
+
+        let payload = tool.request_payload("describe", "abc123", "image/png");
+
+        assert_eq!(
+            payload.get("max_completion_tokens").and_then(Value::as_u64),
+            Some(u64::from(DEFAULT_VISION_MAX_OUTPUT_TOKENS))
+        );
+        assert!(payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn xiaomi_mimo_vision_payload_uses_max_completion_tokens_with_custom_proxy() {
+        let mut config = fake_config();
+        config.model = "mimo-v2.5".to_string();
+        config.base_url = Some("https://vision-proxy.example.invalid/v1".to_string());
+        let tool = ImageAnalyzeTool::new(config);
+
+        let payload = tool.request_payload("describe", "abc123", "image/png");
+
+        assert_eq!(
+            payload.get("max_completion_tokens").and_then(Value::as_u64),
+            Some(u64::from(DEFAULT_VISION_MAX_OUTPUT_TOKENS))
+        );
+        assert!(payload.get("max_tokens").is_none());
     }
 
     #[tokio::test]

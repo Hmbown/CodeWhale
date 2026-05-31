@@ -39,6 +39,7 @@ pub enum Locale {
     ZhHant,
     PtBr,
     Es419,
+    Vi,
 }
 
 impl Locale {
@@ -50,6 +51,7 @@ impl Locale {
             Self::ZhHant => "zh-Hant",
             Self::PtBr => "pt-BR",
             Self::Es419 => "es-419",
+            Self::Vi => "vi",
         }
     }
 
@@ -61,6 +63,7 @@ impl Locale {
             Self::ZhHant => "Traditional Chinese (繁體中文)",
             Self::PtBr => "Brazilian Portuguese (Português do Brasil)",
             Self::Es419 => "Latin American Spanish (Español latinoamericano)",
+            Self::Vi => "Vietnamese (Tiếng Việt)",
         }
     }
 
@@ -115,6 +118,14 @@ impl Locale {
                 fallback: "en",
                 coverage: LocaleCoverage::V076Core,
             },
+            Self::Vi => LocaleSpec {
+                tag: "vi",
+                display_name: "Vietnamese",
+                script: "Latin",
+                direction: TextDirection::Ltr,
+                fallback: "en",
+                coverage: LocaleCoverage::V076Core,
+            },
         }
     }
 
@@ -127,6 +138,7 @@ impl Locale {
             Self::ZhHant,
             Self::PtBr,
             Self::Es419,
+            Self::Vi,
         ]
     }
 }
@@ -160,14 +172,6 @@ pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
     LocaleSpec {
         tag: "id",
         display_name: "Indonesian",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "vi",
-        display_name: "Vietnamese",
         script: "Latin",
         direction: TextDirection::Ltr,
         fallback: "en",
@@ -255,6 +259,7 @@ pub enum MessageId {
     CmdBalanceDescription,
     CmdClearDescription,
     CmdCompactDescription,
+    CmdPurgeDescription,
     CmdConfigDescription,
     CmdContextDescription,
     CmdCostDescription,
@@ -299,6 +304,7 @@ pub enum MessageId {
     CmdSettingsDescription,
     CmdSkillDescription,
     CmdSkillsDescription,
+    CmdSlopDescription,
     CmdStashDescription,
     CmdStatusDescription,
     CmdStatuslineDescription,
@@ -336,6 +342,7 @@ pub enum MessageId {
     FooterAgentsPlural,
     FooterPressCtrlCAgain,
     FooterWorking,
+    FooterBalancePrefix,
     HelpSectionActions,
     HelpSectionClipboard,
     HelpSectionEditing,
@@ -518,6 +525,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCacheDescription,
     MessageId::CmdClearDescription,
     MessageId::CmdCompactDescription,
+    MessageId::CmdPurgeDescription,
     MessageId::CmdConfigDescription,
     MessageId::CmdContextDescription,
     MessageId::CmdCostDescription,
@@ -559,6 +567,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdSettingsDescription,
     MessageId::CmdSkillDescription,
     MessageId::CmdSkillsDescription,
+    MessageId::CmdSlopDescription,
     MessageId::CmdStashDescription,
     MessageId::CmdStatusDescription,
     MessageId::CmdStatuslineDescription,
@@ -601,6 +610,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::FooterAgentsPlural,
     MessageId::FooterPressCtrlCAgain,
     MessageId::FooterWorking,
+    MessageId::FooterBalancePrefix,
     MessageId::HelpSectionActions,
     MessageId::HelpSectionClipboard,
     MessageId::HelpSectionEditing,
@@ -756,6 +766,7 @@ pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {
         Locale::ZhHant => "正在思考，完成後翻譯為繁體中文...",
         Locale::PtBr => "Pensando; traduzindo ao concluir...",
         Locale::Es419 => "Pensando; traduciendo al finalizar...",
+        Locale::Vi => "Đang suy nghĩ; sẽ dịch sau khi hoàn thành...",
     }
 }
 
@@ -767,6 +778,7 @@ pub fn thinking_translation_in_progress(locale: Locale) -> &'static str {
         Locale::ZhHant => "正在翻譯思考內容...",
         Locale::PtBr => "Traduzindo o conteúdo de raciocínio...",
         Locale::Es419 => "Traduciendo el contenido de razonamiento...",
+        Locale::Vi => "Đang dịch nội dung suy nghĩ...",
     }
 }
 
@@ -778,6 +790,7 @@ pub fn thinking_translation_complete(locale: Locale) -> &'static str {
         Locale::ZhHant => "思考內容翻譯完成",
         Locale::PtBr => "Tradução do raciocínio concluída",
         Locale::Es419 => "Traducción del razonamiento completada",
+        Locale::Vi => "Đã dịch xong nội dung suy nghĩ",
     }
 }
 
@@ -789,6 +802,7 @@ pub fn thinking_translation_failed(locale: Locale) -> &'static str {
         Locale::ZhHant => "思考內容翻譯失敗",
         Locale::PtBr => "Falha ao traduzir o raciocínio",
         Locale::Es419 => "Falló la traducción del razonamiento",
+        Locale::Vi => "Dịch nội dung suy nghĩ thất bại",
     }
 }
 
@@ -800,6 +814,7 @@ pub fn hidden_translation_failed(locale: Locale) -> &'static str {
         Locale::ZhHant => "翻譯失敗，原文已隱藏。",
         Locale::PtBr => "A tradução falhou; o texto original está oculto.",
         Locale::Es419 => "La traducción falló; el texto original está oculto.",
+        Locale::Vi => "Dịch thất bại; văn bản gốc đã bị ẩn.",
     }
 }
 
@@ -909,6 +924,9 @@ fn parse_locale(value: &str) -> Option<Locale> {
     if value.starts_with("es") {
         return Some(Locale::Es419);
     }
+    if value.starts_with("vi") {
+        return Some(Locale::Vi);
+    }
     None
 }
 
@@ -976,6 +994,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdCompactDescription => {
             "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Let the agent surgically prune conversation history to free context space"
+        }
         MessageId::CmdConfigDescription => "Open interactive configuration editor",
         MessageId::CmdContextDescription => "Open compact session context inspector",
         MessageId::CmdCostDescription => "Show session cost breakdown",
@@ -1034,6 +1055,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdSkillsDescription => {
             "List local skills (filter by `/skills <prefix>`; --remote browses the curated registry)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Park or restore a composer draft (Ctrl+S to push, /stash list/pop)"
         }
@@ -1099,6 +1121,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::FooterAgentsPlural => "{count} agents",
         MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
         MessageId::FooterWorking => "working",
+        MessageId::FooterBalancePrefix => "bal",
         MessageId::HelpSectionActions => "Actions",
         MessageId::HelpSectionClipboard => "Clipboard",
         MessageId::HelpSectionEditing => "Input editing",
@@ -1224,7 +1247,7 @@ fn english(id: MessageId) -> &'static str {
             "Pick the UI language. You can change it any time with `/settings set locale <tag>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Press 1-6 to choose, or Enter to keep the current setting"
+            "Press 1-7 to choose, or Enter to keep the current setting"
         }
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "Connect your DeepSeek API key",
@@ -1307,7 +1330,431 @@ fn translation(locale: Locale, id: MessageId) -> Option<&'static str> {
         Locale::ZhHant => traditional_chinese(id),
         Locale::PtBr => portuguese_brazil(id),
         Locale::Es419 => spanish_latin_america(id),
+        Locale::Vi => vietnamese(id),
     }
+}
+
+fn vietnamese(id: MessageId) -> Option<&'static str> {
+    Some(match id {
+        MessageId::ComposerPlaceholder => "Nhập nhiệm vụ hoặc sử dụng /.",
+        MessageId::HistorySearchPlaceholder => "Tìm kiếm lịch sử câu lệnh...",
+        MessageId::HistorySearchTitle => "Tìm kiếm lịch sử",
+        MessageId::HistoryHintMove => "Lên/Xuống để di chuyển",
+        MessageId::HistoryHintAccept => "Enter để chấp nhận",
+        MessageId::HistoryHintRestore => "Esc để khôi phục",
+        MessageId::HistoryNoMatches => "  Không tìm thấy kết quả",
+        MessageId::ConfigTitle => "Cấu hình phiên làm việc",
+        MessageId::ConfigModalTitle => " Cấu hình ",
+        MessageId::ConfigSearchPlaceholder => "Nhập để lọc kết quả",
+        MessageId::ConfigNoSettings => "  Không có cài đặt nào khả dụng.",
+        MessageId::ConfigNoMatchesPrefix => "  Không có cài đặt nào khớp với ",
+        MessageId::ConfigFilteredSettings => "  Cài đặt đã lọc",
+        MessageId::ConfigShowing => "  Đang hiển thị",
+        MessageId::ConfigFooterDefault => " gõ=lọc, Lên/Xuống=chọn, Enter/e=sửa, Esc/q=đóng ",
+        MessageId::ConfigFooterScrollable => {
+            " gõ=lọc, Lên/Xuống=chọn, Enter/e=sửa, PgUp/PgDn=cuộn, Esc/q=đóng "
+        }
+        MessageId::ConfigFooterFiltered => {
+            " gõ=lọc, Backspace=xóa, Ctrl+U/Esc=xóa sạch, Enter=sửa "
+        }
+        MessageId::HelpTitle => "Trợ giúp",
+        MessageId::HelpFilterPlaceholder => "Nhập để lọc",
+        MessageId::HelpFilterPrefix => "Bộ lọc: ",
+        MessageId::HelpNoMatches => "  Không tìm thấy kết quả.",
+        MessageId::HelpSlashCommands => "Các lệnh bắt đầu bằng dấu gạch chéo (/)",
+        MessageId::HelpKeybindings => "Phím tắt",
+        MessageId::HelpFooterTypeFilter => " nhập để lọc ",
+        MessageId::HelpFooterMove => "  Lên/Xuống để di chuyển ",
+        MessageId::HelpFooterJump => " PgUp/PgDn để nhảy trang ",
+        MessageId::HelpFooterClose => " Esc để đóng ",
+        MessageId::CmdAnchorDescription => {
+            "Ghim một dữ kiện không bị ảnh hưởng khi nén (tự động đưa vào ngữ cảnh)"
+        }
+        MessageId::CmdAttachDescription => {
+            "Đính kèm hình ảnh/video; sử dụng @path cho tệp văn bản hoặc thư mục"
+        }
+        MessageId::CmdCacheDescription => {
+            "Hiển thị thống kê hit/miss của bộ nhớ đệm tiền tố DeepSeek trong N lượt gần nhất"
+        }
+        MessageId::CmdChangeDescription => "Hiển thị thông tin nhật ký thay đổi mới nhất",
+        MessageId::CmdChangeHeader => "Nhật Ký Thay Đổi Mới Nhất",
+        MessageId::CmdChangeTranslationQueued => {
+            "Ghi chú phát hành bằng tiếng Anh hiển thị bên dưới. Bản dịch sẽ được yêu cầu tiếp theo; nếu nhà cung cấp không khả dụng, văn bản tiếng Anh này sẽ được dùng làm dự phòng."
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "Ghi chú phát hành bằng tiếng Anh hiển thị bên dưới. Bản dịch không khả dụng vì phiên hiện tại không có mã khóa API hoặc đang ngoại tuyến."
+        }
+        MessageId::CmdChangePreviousVersion => {
+            "Phiên bản trước: {version} — chạy `/change {version}` để xem"
+        }
+        MessageId::CmdBalanceDescription => {
+            "Kiểm tra số dư tài khoản của nhà cung cấp dịch vụ đang hoạt động"
+        }
+        MessageId::CmdClearDescription => "Xóa lịch sử trò chuyện",
+        MessageId::CmdCompactDescription => {
+            "Kích hoạt nén ngữ cảnh để giải phóng không gian (cũ; v0.6.6 ưu tiên khởi động lại chu kỳ)"
+        }
+        MessageId::CmdPurgeDescription => {
+            "Cho agent cắt gọn lịch sử trò chuyện để giải phóng ngữ cảnh"
+        }
+        MessageId::CmdConfigDescription => "Mở trình chỉnh sửa cấu hình tương tác",
+        MessageId::CmdContextDescription => "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
+        MessageId::CmdCostDescription => "Hiển thị chi tiết chi phí của phiên làm việc",
+        MessageId::CmdCycleDescription => "Hiển thị báo cáo chuyển tiếp cho một chu kỳ cụ thể",
+        MessageId::CmdCyclesDescription => {
+            "Liệt kê các lần bàn giao chu kỳ checkpoint-restart trong phiên này"
+        }
+        MessageId::CmdDiffDescription => "Hiển thị các thay đổi của tệp kể từ khi bắt đầu phiên",
+        MessageId::CmdEditDescription => "Chỉnh sửa và gửi lại tin nhắn gần nhất",
+        MessageId::CmdExitDescription => "Thoát ứng dụng",
+        MessageId::CmdExportDescription => "Xuất cuộc trò chuyện sang định dạng Markdown",
+        MessageId::CmdFeedbackDescription => "Tạo một URL để gửi phản hồi trên GitHub",
+        MessageId::CmdHelpDescription => "Hiển thị thông tin trợ giúp",
+        MessageId::CmdHomeDescription => {
+            "Hiển thị bảng điều khiển trang chủ với số liệu thống kê và hành động nhanh"
+        }
+        MessageId::CmdHooksDescription => "Liệt kê các lifecycle hook đã cấu hình (chỉ đọc)",
+        MessageId::CmdAgentDescription => "Mở một phiên sub-agent nền: /agent [0-3] <nhiệm_vụ>",
+        MessageId::CmdGoalDescription => "Đặt mục tiêu cho phiên với giới hạn token tùy chọn",
+        MessageId::CmdInitDescription => "Tạo tệp AGENTS.md cho dự án",
+        MessageId::CmdLspDescription => "Bật hoặc tắt tính năng chẩn đoán LSP",
+        MessageId::CmdShareDescription => {
+            "Xuất phiên hiện tại thành một liên kết web có thể chia sẻ"
+        }
+        MessageId::CmdJobsDescription => "Kiểm tra và kiểm soát các lệnh chạy ngầm",
+        MessageId::CmdLinksDescription => {
+            "Hiển thị các liên kết đến bảng điều khiển và tài liệu của DeepSeek"
+        }
+        MessageId::CmdLoadDescription => "Tải phiên làm việc từ tệp",
+        MessageId::CmdLogoutDescription => "Xóa khóa API và quay lại bước thiết lập",
+        MessageId::CmdMcpDescription => "Mở hoặc quản lý các máy chủ MCP",
+        MessageId::CmdMemoryDescription => "Kiểm tra hoặc quản lý tệp bộ nhớ người dùng liên tục",
+        MessageId::CmdModeDescription => {
+            "Chuyển đổi chế độ hoặc mở bảng chọn: /mode [agent|plan|yolo|1|2|3]"
+        }
+        MessageId::CmdModelDescription => "Chuyển đổi hoặc xem mô hình AI hiện tại",
+        MessageId::CmdModelsDescription => "Liệt kê các mô hình khả dụng từ API",
+        MessageId::CmdNetworkDescription => "Quản lý các quy tắc cho phép và từ chối mạng",
+        MessageId::CmdNoteDescription => {
+            "Thêm, liệt kê, sửa hoặc xóa ghi chú trong không gian làm việc"
+        }
+        MessageId::CmdThemeDescription => "Chuyển đổi giao diện hoặc mở bảng chọn giao diện",
+        MessageId::CmdProviderDescription => {
+            "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)"
+        }
+        MessageId::CmdQueueDescription => "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
+        MessageId::CmdRecallDescription => {
+            "Tìm kiếm kho lưu trữ chu kỳ trước (BM25 trên văn bản tin nhắn)"
+        }
+        MessageId::CmdRelayDescription => "Tạo một phiên tiếp sức cho một luồng mới",
+        MessageId::CmdRenameDescription => "Đổi tên phiên làm việc hiện tại",
+        MessageId::CmdRestoreDescription => {
+            "Khôi phục không gian làm việc về bản chụp trước/sau lượt. Nếu không có đối số, hiển thị các bản chụp gần đây."
+        }
+        MessageId::CmdRetryDescription => "Thử lại yêu cầu gần nhất",
+        MessageId::CmdReviewDescription => {
+            "Chạy một quy trình xem xét mã nguồn có cấu trúc trên tệp, diff hoặc PR"
+        }
+        MessageId::CmdRlmDescription => {
+            "Mở một ngữ cảnh RLM liên tục: /rlm [0-3] <tệp_hoặc_văn_bản>"
+        }
+        MessageId::CmdSaveDescription => "Lưu phiên làm việc vào tệp",
+        MessageId::CmdForkDescription => {
+            "Rẽ nhánh (fork) cuộc hội thoại hiện tại thành một phiên song song"
+        }
+        MessageId::CmdNewDescription => "Bắt đầu một phiên lưu mới",
+        MessageId::CmdSessionsDescription => "Mở bảng chọn lịch sử phiên làm việc",
+        MessageId::CmdSettingsDescription => "Hiển thị các cài đặt liên tục",
+        MessageId::CmdSkillDescription => {
+            "Kích hoạt một kỹ năng, hoặc cài đặt/cập nhật/gỡ bỏ/tin cậy một kỹ năng cộng đồng"
+        }
+        MessageId::CmdSkillsDescription => {
+            "Liệt kê các kỹ năng cục bộ (lọc bằng `/skills <tiền_tố>`; --remote để duyệt kho lưu trữ được kiểm duyệt)"
+        }
+        MessageId::CmdSlopDescription => "Kiểm tra hoặc xuất SlopLedger",
+        MessageId::CmdStashDescription => {
+            "Tạm cất hoặc khôi phục bản nháp (Ctrl+S để cất, /stash list/pop để xem/lấy ra)"
+        }
+        MessageId::CmdStatusDescription => "Hiển thị trạng thái thời gian chạy của phiên",
+        MessageId::CmdStatuslineDescription => {
+            "Cấu hình các mục hiển thị ở thanh trạng thái dưới cùng"
+        }
+        MessageId::CmdSubagentsDescription => "Liệt kê trạng thái của các sub-agent",
+        MessageId::CmdSwarmDescription => {
+            "Khởi chạy chế độ đa agent (sequential | mixture | distill | deliberate)"
+        }
+        MessageId::CmdSystemDescription => "Hiển thị prompt hệ thống hiện tại",
+        MessageId::CmdTaskDescription => "Quản lý các nhiệm vụ chạy ngầm",
+        MessageId::CmdTokensDescription => "Hiển thị lượng token đã sử dụng cho phiên",
+        MessageId::CmdTranslateDescription => {
+            "Bật/Tắt chế độ dịch đầu ra sang ngôn ngữ hệ thống hiện tại"
+        }
+        MessageId::CmdTranslateOff => {
+            "Đã tắt chế độ dịch đầu ra (hiển thị câu trả lời gốc của mô hình)"
+        }
+        MessageId::CmdTranslateOn => {
+            "Đã bật chế độ dịch đầu ra: câu trả lời của mô hình sẽ được hiển thị bằng tiếng Việt"
+        }
+        MessageId::TranslationInProgress => "Đang dịch câu trả lời của trợ lý...",
+        MessageId::TranslationComplete => "Đã dịch xong",
+        MessageId::TranslationFailed => "Dịch thất bại",
+        MessageId::CmdTrustDescription => {
+            "Quản lý quyền tin cậy không gian làm việc và danh sách trắng theo đường dẫn (`/trust add <path>`, `/trust list`, `/trust on|off`)"
+        }
+        MessageId::CmdWorkspaceDescription => {
+            "Hiển thị hoặc chuyển đổi không gian làm việc hiện tại"
+        }
+        MessageId::CmdUndoDescription => "Xóa cặp tin nhắn gần nhất",
+        MessageId::CmdVerboseDescription => {
+            "Bật/Tắt chế độ hiển thị đầy đủ quá trình suy nghĩ trực tiếp"
+        }
+        MessageId::CmdCacheAdvice => {
+            "Tỷ lệ hit/miss trên ~70% sau lượt thứ ba cho thấy tiền tố bộ nhớ đệm ổn định; \nthấp hơn mức đó trong các phiên dài cho thấy có sự biến động tiền tố cần kiểm tra (#263)."
+        }
+        MessageId::CmdCacheFootnote => {
+            "* miss được suy ra từ đầu vào − hit khi nhà cung cấp không báo cáo rõ ràng.\n"
+        }
+        MessageId::CmdCacheHeader => {
+            "Thông tin cache — {count} lượt gần nhất trong tổng số {total} lượt (mô hình: {model})\n"
+        }
+        MessageId::CmdCacheNoData => {
+            "Lịch sử bộ nhớ đệm: chưa có lượt nào được ghi nhận.\n\n\
+             DeepSeek cung cấp `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` \
+             trên mỗi lượt API mà mô hình hỗ trợ (dòng V4). Hãy chạy một lượt \
+             và thử lại lệnh /cache."
+        }
+        MessageId::CmdCacheTotals => {
+            "Σ vào: {sum_in}   Σ hit: {sum_hit}   Σ miss: {sum_miss}   tỷ lệ hit trung bình: {avg}\n"
+        }
+        MessageId::CmdCostReport => {
+            "Chi Phí Phiên Làm Việc:\n\
+             ─────────────────────────────\n\
+             Tổng chi tiêu ước tính: {cost}\n\n\
+             Các ước tính chi phí mang tính xấp xỉ và sử dụng dữ liệu viễn trắc từ nhà cung cấp nếu có.\n\n\
+             Bảng Giá API DeepSeek:\n\
+             ─────────────────────────────\n\
+             Thông tin chi tiết về giá chưa được cấu hình trong CLI này."
+        }
+        MessageId::CmdTokensCacheBoth => "{hit} hit / {miss} miss",
+        MessageId::CmdTokensCacheHitOnly => "{hit} hit / không báo cáo miss",
+        MessageId::CmdTokensCacheMissOnly => "không báo cáo hit / {miss} miss",
+        MessageId::CmdTokensContextUnknownWindow => "~{estimated} / không rõ cửa sổ ngữ cảnh",
+        MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::FooterAgentSingular => "1 tác nhân",
+        MessageId::FooterAgentsPlural => "{count} tác nhân",
+        MessageId::FooterPressCtrlCAgain => "Nhấn Ctrl+C một lần nữa để thoát",
+        MessageId::FooterWorking => "đang xử lý",
+        MessageId::FooterBalancePrefix => "số dư",
+        MessageId::HelpSectionActions => "Hành động",
+        MessageId::HelpSectionClipboard => "Bộ nhớ tạm",
+        MessageId::HelpSectionEditing => "Chỉnh sửa đầu vào",
+        MessageId::HelpSectionHelp => "Trợ giúp",
+        MessageId::HelpSectionModes => "Chế độ",
+        MessageId::HelpSectionNavigation => "Điều hướng",
+        MessageId::HelpSectionSessions => "Phiên",
+        MessageId::CmdTokensNotReported => "không được báo cáo",
+        MessageId::CmdTokensReport => {
+            "Lượng Token Sử Dụng:\n\
+             ─────────────────────────────\n\
+             Ngữ cảnh hoạt động:        {active}\n\
+             Đầu vào API gần nhất:       {input} (viễn trắc theo lượt; có thể đếm lặp lại tiền tố qua các vòng công cụ)\n\
+             Đầu ra API gần nhất:       {output}\n\
+             Hit/miss bộ nhớ đệm:        {cache} (chỉ dành cho viễn trắc/chi phí)\n\
+             Token tích lũy:             {total} (dữ liệu viễn trắc sử dụng của phiên)\n\
+             Chi phí phiên xấp xỉ:       {cost}\n\
+             Tin nhắn API:               {api_messages}\n\
+             Tin nhắn trò chuyện:        {chat_messages}\n\
+             Mô hình:                    {model}"
+        }
+        MessageId::KbScrollTranscript => {
+            "Cuộn bản ghi trò chuyện, điều hướng lịch sử nhập hoặc chọn tệp đính kèm"
+        }
+        MessageId::KbNavigateHistory => "Điều hướng lịch sử nhập",
+        MessageId::KbBrowseHistory => "Duyệt lịch sử cuộc trò chuyện",
+        MessageId::KbScrollTranscriptAlt => "Cuộn bản ghi trò chuyện",
+        MessageId::KbScrollPage => "Cuộn bản ghi trò chuyện theo trang",
+        MessageId::KbJumpTopBottom => "Nhảy lên đầu / xuống cuối bản ghi trò chuyện",
+        MessageId::KbJumpTopBottomEmpty => "Nhảy lên đầu / xuống cuối (khi khung nhập trống)",
+        MessageId::KbJumpToolBlocks => "Nhảy giữa các khối đầu ra của công cụ",
+        MessageId::KbMoveCursor => "Di chuyển con trỏ trong khung soạn thảo",
+        MessageId::KbJumpLineStartEnd => "Nhảy về đầu / cuối dòng",
+        MessageId::KbDeleteChar => "Xóa ký tự trước / sau con trỏ, hoặc xóa tệp đính kèm đã chọn",
+        MessageId::KbClearDraft => "Xóa bản nháp hiện tại",
+        MessageId::KbStashDraft => "Tạm cất bản nháp hiện tại (dùng `/stash pop` để khôi phục)",
+        MessageId::KbSearchHistory => "Tìm kiếm lịch sử câu lệnh và khôi phục các bản nháp cục bộ",
+        MessageId::KbInsertNewline => "Chèn một dòng mới trong khung soạn thảo",
+        MessageId::KbSendDraft => "Gửi bản nháp hiện tại",
+        MessageId::KbCloseMenu => "Đóng menu, hủy yêu cầu, hủy bản nháp hoặc xóa sạch đầu vào",
+        MessageId::KbCancelOrExit => "Hủy yêu cầu, hoặc thoát khi rảnh",
+        MessageId::KbShellControls => "Mở các điều khiển shell cho một lệnh đang chạy ở tiền cảnh",
+        MessageId::KbExitEmpty => "Thoát khi khung nhập trống",
+        MessageId::KbCommandPalette => "Mở bảng lệnh (command palette)",
+        MessageId::KbFuzzyFilePicker => {
+            "Mở trình tìm file nhanh (fuzzy) (chèn @path khi nhấn Enter)"
+        }
+        MessageId::KbCompactInspector => "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
+        MessageId::KbLastMessagePager => {
+            "Mở trang xem cho tin nhắn cuối cùng (khi khung nhập trống)"
+        }
+        MessageId::KbSelectedDetails => {
+            "Mở chi tiết cho công cụ hoặc tin nhắn được chọn (khi khung nhập trống)"
+        }
+        MessageId::KbToolDetailsPager => "Mở trang xem chi tiết công cụ",
+        MessageId::KbThinkingPager => "Mở Chi Tiết Hoạt Động (Activity Detail)",
+        MessageId::KbLiveTranscript => "Mở lớp phủ bản ghi trực tiếp (tự động cuộn theo đuôi)",
+        MessageId::KbBacktrackMessage => {
+            "Quay lại tin nhắn trước đó của người dùng (nhấn Trái/Phải để chuyển bước, Enter để lùi lại)"
+        }
+        MessageId::KbCompleteCycleModes => {
+            "Hoàn thành /command, xếp hàng theo dõi lượt đang chạy, chuyển đổi chế độ; Shift+Tab để chuyển đổi mức độ suy luận"
+        }
+        MessageId::KbJumpPlanAgentYolo => "Nhảy trực tiếp sang chế độ Plan / Agent / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => {
+            "Phím tắt thay thế để nhảy sang chế độ Plan / Agent / YOLO"
+        }
+        MessageId::KbFocusSidebar => {
+            "Focus vào thanh bên Work / Tasks / Agents / Context / Auto; Ctrl+Alt+0 để ẩn"
+        }
+        MessageId::KbTogglePlanAgent => "Chuyển đổi giữa chế độ Plan và Agent",
+        MessageId::KbSessionPicker => "Mở bảng chọn phiên làm việc",
+        MessageId::KbPasteAttach => "Dán văn bản hoặc đính kèm hình ảnh từ bộ nhớ tạm",
+        MessageId::KbCopySelection => "Sao chép vùng chọn hiện tại (Cmd+C trên macOS)",
+        MessageId::KbContextMenu => {
+            "Mở các hành động ngữ cảnh cho dán, vùng chọn, chi tiết tin nhắn, ngữ cảnh và trợ giúp"
+        }
+        MessageId::KbAttachPath => "Thêm một tệp văn bản cục bộ hoặc thư mục vào ngữ cảnh",
+        MessageId::KbHelpOverlay => "Mở lớp phủ trợ giúp này (khi khung nhập trống)",
+        MessageId::KbToggleHelp => "Bật/Tắt lớp phủ trợ giúp",
+        MessageId::KbToggleHelpSlash => "Bật/Tắt lớp phủ trợ giúp",
+        MessageId::HelpUsageLabel => "Sử dụng:",
+        MessageId::HelpAliasesLabel => "Bí danh:",
+        MessageId::SettingsTitle => "Cài đặt:",
+        MessageId::SettingsConfigFile => "Tệp cấu hình:",
+        MessageId::ClearConversation => "Đã xóa cuộc trò chuyện",
+        MessageId::ClearConversationBusy => {
+            "Đã xóa cuộc trò chuyện (trạng thái plan đang bận; chạy lại /clear nếu cần)"
+        }
+        MessageId::ModelChanged => "Đã thay đổi mô hình: {old} \u{2192} {new}",
+        MessageId::LinksTitle => "Liên kết DeepSeek:",
+        MessageId::LinksDashboard => "Bảng điều khiển:",
+        MessageId::LinksDocs => "Tài liệu:",
+        MessageId::LinksTip => "Mẹo: Mã khóa API có sẵn trong bảng điều khiển console.",
+        MessageId::SubagentsFetching => "Đang lấy trạng thái của các sub-agent...",
+        MessageId::HelpUnknownCommand => "Lệnh không xác định: {topic}",
+        MessageId::HomeDashboardTitle => "Bảng Điều Khiển Trang Chủ codewhale",
+        MessageId::HomeModel => "Mô hình:",
+        MessageId::HomeMode => "Chế độ:",
+        MessageId::HomeWorkspace => "Không gian làm việc:",
+        MessageId::HomeHistory => "Lịch sử:",
+        MessageId::HomeTokens => "Token:",
+        MessageId::HomeQueued => "Trong hàng đợi:",
+        MessageId::HomeSubagents => "Sub-agent:",
+        MessageId::HomeSkill => "Kỹ năng:",
+        MessageId::HomeQuickActions => "Hành động nhanh",
+        MessageId::HomeQuickLinks => "/links      - Các liên kết đến Dashboard & API",
+        MessageId::HomeQuickSkills => "/skills     - Liệt kê các kỹ năng khả dụng",
+        MessageId::HomeQuickConfig => "/config     - Mở trình chỉnh sửa cấu hình tương tác",
+        MessageId::HomeQuickSettings => "/settings    - Hiển thị các cài đặt liên tục",
+        MessageId::HomeQuickModel => "/model       - Xem hoặc chuyển đổi mô hình",
+        MessageId::HomeQuickSubagents => "/subagents   - Liệt kê trạng thái sub-agent",
+        MessageId::HomeQuickTaskList => "/task list   - Hiển thị hàng đợi nhiệm vụ ngầm",
+        MessageId::HomeQuickHelp => "/help        - Hiển thị trợ giúp",
+        MessageId::HomeModeTips => "Mẹo về Chế độ",
+        MessageId::HomeAgentModeTip => "Chế độ Agent - Sử dụng công cụ cho các nhiệm vụ tự chủ",
+        MessageId::HomeAgentModeReviewTip => {
+            "  Sử dụng Ctrl+X để xem xét ở chế độ Plan trước khi thực thi"
+        }
+        MessageId::HomeAgentModeYoloTip => "  Nhập /mode yolo để bật toàn quyền truy cập công cụ",
+        MessageId::HomeYoloModeTip => {
+            "Chế độ YOLO - Toàn quyền truy cập công cụ, không cần phê duyệt"
+        }
+        MessageId::HomeYoloModeCaution => "  Hãy cẩn thận với các thao tác mang tính phá hủy!",
+        MessageId::HomePlanModeTip => "Chế độ Plan - Thiết kế trước khi triển khai",
+        MessageId::HomePlanModeChecklistTip => {
+            "  Sử dụng /mode plan để tạo danh sách kiểm tra có cấu trúc"
+        }
+        MessageId::HomeGoalModeTip => {
+            "Theo dõi mục tiêu - Dùng /goal <mục_tiêu> để đặt mục tiêu làm việc"
+        }
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "Chọn ngôn ngữ của bạn",
+        MessageId::OnboardLanguageBlurb => {
+            "Chọn ngôn ngữ hiển thị. Bạn có thể thay đổi bất kỳ lúc nào bằng lệnh `/settings set locale <tag>`."
+        }
+        MessageId::OnboardLanguageFooter => {
+            "Nhấn phím từ 1-7 để chọn, hoặc Enter để giữ cài đặt hiện tại"
+        }
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "Kết nối khóa API DeepSeek của bạn",
+        MessageId::OnboardApiKeyStep1 => {
+            "Bước 1. Truy cập https://platform.deepseek.com/api_keys và tạo một khóa."
+        }
+        MessageId::OnboardApiKeyStep2 => "Bước 2. Dán khóa vào bên dưới và nhấn Enter.",
+        MessageId::OnboardApiKeySavedHint => {
+            "Được lưu vào ~/.codewhale/config.toml để có thể hoạt động từ mọi thư mục."
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "Dán chính xác toàn bộ khóa (không chứa khoảng trắng hoặc xuống dòng)."
+        }
+        MessageId::OnboardApiKeyPlaceholder => "(dán khóa vào đây)",
+        MessageId::OnboardApiKeyLabel => "Khóa: ",
+        MessageId::OnboardApiKeyFooter => "Nhấn Enter để lưu, Esc để quay lại.",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "Tin cậy không gian làm việc",
+        MessageId::OnboardTrustQuestion => "Bạn có tin cậy nội dung của thư mục này không?",
+        MessageId::OnboardTrustLocationPrefix => "Bạn đang ở ",
+        MessageId::OnboardTrustRiskHint => {
+            "Làm việc với các nội dung không tin cậy sẽ tăng nguy cơ bị tấn công prompt injection."
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "Tin cậy thư mục này sẽ lưu lại vào cấu hình toàn cục và bật chế độ không gian làm việc tin cậy."
+        }
+        MessageId::OnboardTrustFooterPrefix => "Nhấn ",
+        MessageId::OnboardTrustFooterMiddle => " để tin cậy và tiếp tục, ",
+        MessageId::OnboardTrustFooterSuffix => " để thoát",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "Bắt đầu đơn giản",
+        MessageId::OnboardTipsLine1 => {
+            "Viết nhiệm vụ bằng ngôn ngữ tự nhiên. Sử dụng /help hoặc Ctrl+K khi bạn muốn dùng lệnh."
+        }
+        MessageId::OnboardTipsLine2 => {
+            "Khung nhập văn bản bên dưới hỗ trợ viết nhiều dòng: Enter để gửi, Alt+Enter hoặc Ctrl+J để xuống dòng."
+        }
+        MessageId::OnboardTipsLine3 => {
+            "Chỉ chuyển đổi chế độ khi tính chất công việc thay đổi: Plan để lập kế hoạch trước khi làm, Agent để tự động thực hiện, YOLO khi bạn muốn tự động phê duyệt."
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R để khôi phục lại các phiên làm việc trước đó, và Esc để thoát khỏi bản nháp hoặc lớp phủ hiện tại."
+        }
+        MessageId::OnboardTipsFooterEnter => "Nhấn Enter",
+        MessageId::OnboardTipsFooterAction => " để mở không gian làm việc",
+        // Context menu.
+        MessageId::CtxMenuTitle => " Nhấp chuột phải ",
+        MessageId::CtxMenuCopySelection => "Sao chép vùng chọn",
+        MessageId::CtxMenuCopySelectionDesc => "ghi văn bản transcript đã chọn",
+        MessageId::CtxMenuOpenSelection => "Mở vùng chọn",
+        MessageId::CtxMenuOpenSelectionDesc => "hiển thị văn bản đã chọn trong trình xem",
+        MessageId::CtxMenuClearSelection => "Xóa vùng chọn",
+        MessageId::CtxMenuOpenDetails => "Mở chi tiết",
+        MessageId::CtxMenuCopyMessage => "Sao chép tin nhắn",
+        MessageId::CtxMenuCopyMessageDesc => "ghi ô transcript đã bấm",
+        MessageId::CtxMenuOpenInEditor => "Mở trong trình soạn thảo",
+        MessageId::CtxMenuOpenInEditorDesc => "mở file:line trong $EDITOR",
+        MessageId::CtxMenuShowCell => "Hiển thị ô",
+        MessageId::CtxMenuShowCellDesc => "hiển thị lại ô transcript này",
+        MessageId::CtxMenuHideCell => "Ẩn ô",
+        MessageId::CtxMenuHideCellDesc => "thu gọn ô transcript này",
+        MessageId::CtxMenuShowHidden => "Hiển thị mục ẩn",
+        MessageId::CtxMenuShowHiddenDesc => "hiển thị lại tất cả ô đã thu gọn",
+        MessageId::CtxMenuPaste => "Dán",
+        MessageId::CtxMenuPasteDesc => "chèn clipboard vào khung nhập",
+        MessageId::CtxMenuCmdPalette => "Bảng lệnh",
+        MessageId::CtxMenuCmdPaletteDesc => "lệnh, kỹ năng và công cụ",
+        MessageId::CtxMenuContextInspector => "Trình kiểm tra ngữ cảnh",
+        MessageId::CtxMenuContextInspectorDesc => "ngữ cảnh đang hoạt động và gợi ý bộ nhớ đệm",
+        MessageId::CtxMenuHelp => "Trợ giúp",
+        MessageId::CtxMenuHelpDesc => "phím tắt và lệnh",
+    })
 }
 
 fn traditional_chinese(id: MessageId) -> Option<&'static str> {
@@ -1319,6 +1766,7 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::TranslationInProgress => "正在翻譯助理輸出...",
         MessageId::TranslationComplete => "翻譯完成",
         MessageId::TranslationFailed => "翻譯失敗",
+        MessageId::FooterBalancePrefix => "餘額",
         other => chinese_simplified(other)?,
     })
 }
@@ -1382,6 +1830,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdClearDescription => "会話履歴をクリア",
         MessageId::CmdCompactDescription => {
             "コンテキスト圧縮で容量を確保（旧式：v0.6.6 以降はサイクル再起動を推奨）"
+        }
+        MessageId::CmdPurgeDescription => {
+            "エージェントに会話履歴を分析させ、不要なメッセージを削除・要約"
         }
         MessageId::CmdConfigDescription => "インタラクティブな設定エディタを開く",
         MessageId::CmdContextDescription => "コンパクトなセッションコンテキスト検査ツールを開く",
@@ -1449,6 +1900,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "ローカルスキルを一覧表示（`/skills <prefix>` で絞り込み、--remote で精選レジストリを参照）"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "コンポーザーの下書きを退避／復元（Ctrl+S で退避、/stash list|pop）"
         }
@@ -1511,6 +1963,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} エージェント",
         MessageId::FooterPressCtrlCAgain => "もう一度 Ctrl+C で終了",
         MessageId::FooterWorking => "処理中",
+        MessageId::FooterBalancePrefix => "残高",
         MessageId::HelpSectionActions => "操作",
         MessageId::HelpSectionClipboard => "クリップボード",
         MessageId::HelpSectionEditing => "入力編集",
@@ -1639,7 +2092,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardLanguageBlurb => {
             "UI 言語を選んでください。`/settings set locale <tag>` でいつでも変更できます。"
         }
-        MessageId::OnboardLanguageFooter => "1〜6 で選択、または Enter で現在の設定を維持",
+        MessageId::OnboardLanguageFooter => "1〜7 で選択、または Enter で現在の設定を維持",
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "DeepSeek API キーを設定",
         MessageId::OnboardApiKeyStep1 => {
@@ -1765,6 +2218,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
         }
+        MessageId::CmdPurgeDescription => "让 Agent 分析对话历史，精确保留有用信息并移除冗余内容",
         MessageId::CmdConfigDescription => "打开交互式配置编辑器",
         MessageId::CmdContextDescription => "打开紧凑会话上下文检查器",
         MessageId::CmdCostDescription => "显示本次会话的费用明细",
@@ -1817,6 +2271,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "列出本地技能（用 `/skills <prefix>` 按名称前缀过滤，--remote 浏览精选注册表）"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => "暂存或恢复输入草稿（Ctrl+S 暂存，/stash list|pop）",
         MessageId::CmdStatusDescription => "显示当前运行状态",
         MessageId::CmdStatuslineDescription => "配置底栏要显示哪些条目",
@@ -1871,6 +2326,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} 个子代理",
         MessageId::FooterPressCtrlCAgain => "再次按 Ctrl+C 退出",
         MessageId::FooterWorking => "工作中",
+        MessageId::FooterBalancePrefix => "余额",
         MessageId::HelpSectionActions => "操作",
         MessageId::HelpSectionClipboard => "剪贴板",
         MessageId::HelpSectionEditing => "输入编辑",
@@ -1983,7 +2439,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardLanguageBlurb => {
             "选择界面语言。可随时使用 `/settings set locale <tag>` 修改。"
         }
-        MessageId::OnboardLanguageFooter => "按 1-6 选择，或按 Enter 保留当前设置",
+        MessageId::OnboardLanguageFooter => "按 1-7 选择，或按 Enter 保留当前设置",
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "连接你的 DeepSeek API 密钥",
         MessageId::OnboardApiKeyStep1 => {
@@ -2107,6 +2563,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "Compactar o contexto para liberar espaço (legado; a v0.6.6 prefere o reinício de ciclo)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Deixe o agente podar cirurgicamente o histórico para liberar espaço de contexto"
+        }
         MessageId::CmdConfigDescription => "Abrir o editor interativo de configuração",
         MessageId::CmdContextDescription => "Abrir o inspetor compacto de contexto da sessão",
         MessageId::CmdCostDescription => "Exibir o detalhamento de custo da sessão",
@@ -2181,6 +2640,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "Listar skills locais (filtre com `/skills <prefixo>`; --remote navega pelo registro curado)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Estacionar ou restaurar rascunho do compositor (Ctrl+S estaciona, /stash list|pop)"
         }
@@ -2247,6 +2707,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} sub-agentes",
         MessageId::FooterPressCtrlCAgain => "Pressione Ctrl+C novamente para sair",
         MessageId::FooterWorking => "trabalhando",
+        MessageId::FooterBalancePrefix => "saldo",
         MessageId::HelpSectionActions => "Ações",
         MessageId::HelpSectionClipboard => "Área de transferência",
         MessageId::HelpSectionEditing => "Edição de entrada",
@@ -2386,7 +2847,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Escolha o idioma da interface. Você pode mudá-lo a qualquer momento com `/settings set locale <tag>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Pressione 1-6 para escolher, ou Enter para manter a configuração atual"
+            "Pressione 1-7 para escolher, ou Enter para manter a configuração atual"
         }
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "Conecte sua chave de API DeepSeek",
@@ -2521,6 +2982,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "Compactar el contexto para liberar espacio (heredado; v0.6.6 prefiere reinicio de ciclo)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Permite al agente eliminar quirúrgicamente historial innecesario para liberar espacio de contexto"
+        }
         MessageId::CmdConfigDescription => "Abrir el editor interactivo de configuración",
         MessageId::CmdContextDescription => "Abrir el inspector compacto de contexto de la sesión",
         MessageId::CmdCostDescription => "Mostrar el desglose de costo de la sesión",
@@ -2599,6 +3063,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "Listar skills locales (filtra con `/skills <prefijo>`; --remote navega el registro curado)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Estacionar o restaurar borrador del compositor (Ctrl+S estaciona, /stash list|pop)"
         }
@@ -2669,6 +3134,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} sub-agentes",
         MessageId::FooterPressCtrlCAgain => "Presiona Ctrl+C de nuevo para salir",
         MessageId::FooterWorking => "trabajando",
+        MessageId::FooterBalancePrefix => "saldo",
         MessageId::HelpSectionActions => "Acciones",
         MessageId::HelpSectionClipboard => "Portapapeles",
         MessageId::HelpSectionEditing => "Edición de entrada",
@@ -2809,7 +3275,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Elige el idioma de la interfaz. Puedes cambiarlo en cualquier momento con `/settings set locale <etiqueta>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Presiona 1-5 para elegir, o Enter para mantener la configuración actual"
+            "Presiona 1-7 para elegir, o Enter para mantener la configuración actual"
         }
         MessageId::OnboardApiKeyTitle => "Conecta tu clave de API DeepSeek",
         MessageId::OnboardApiKeyStep1 => {
