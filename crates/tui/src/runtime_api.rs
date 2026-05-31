@@ -21,6 +21,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
+use qrcode::QrCode;
+use qrcode::render::unicode::Dense1x2;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -82,6 +84,8 @@ pub struct RuntimeApiOptions {
     pub insecure_no_auth: bool,
     /// Enables the built-in mobile control page at `/mobile`.
     pub mobile: bool,
+    /// Print a terminal QR code for the mobile control URL when `/mobile` is enabled.
+    pub mobile_qr: bool,
 }
 
 impl Default for RuntimeApiOptions {
@@ -94,6 +98,7 @@ impl Default for RuntimeApiOptions {
             auth_token: None,
             insecure_no_auth: false,
             mobile: false,
+            mobile_qr: false,
         }
     }
 }
@@ -473,7 +478,12 @@ pub async fn run_http_server(
         println!("Runtime API auth: disabled by explicit insecure mode.");
     }
     if options.mobile {
-        print_mobile_urls(addr, runtime_token.as_deref(), auth_enabled);
+        print_mobile_urls(
+            addr,
+            runtime_token.as_deref(),
+            auth_enabled,
+            options.mobile_qr,
+        );
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
     if is_loopback {
@@ -669,7 +679,13 @@ async fn mobile_page(State(state): State<RuntimeApiState>, req: Request) -> Resp
     Html(MOBILE_HTML).into_response()
 }
 
-fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MobileUrlLine {
+    label: &'static str,
+    url: String,
+}
+
+fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool, mobile_qr: bool) {
     println!("Mobile control page enabled.");
     let token_query = if auth_enabled {
         token
@@ -680,20 +696,78 @@ fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool) 
         String::new()
     };
 
-    let port = addr.port();
-    if addr.ip().is_unspecified() {
-        println!("  Local: http://127.0.0.1:{port}/mobile{token_query}");
-        if let Some(ip) = detect_lan_ip() {
-            println!("  LAN:   http://{ip}:{port}/mobile{token_query}");
-        } else {
-            println!(
-                "  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{port}/mobile{token_query}"
-            );
-        }
+    let lan_ip = if addr.ip().is_unspecified() {
+        detect_lan_ip()
     } else {
-        println!("  URL:   http://{addr}/mobile{token_query}");
+        None
+    };
+    let (lines, qr_url) = mobile_url_lines(addr, &token_query, lan_ip);
+    for line in lines {
+        println!("  {:<6} {}", format!("{}:", line.label), line.url);
+    }
+    if addr.ip().is_unspecified() && qr_url.is_none() {
+        println!(
+            "  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{}{}",
+            addr.port(),
+            token_query
+        );
+    }
+    if mobile_qr {
+        match qr_url {
+            Some(url) => print_mobile_qr(&url),
+            None => println!(
+                "Mobile QR: skipped because no LAN IP was detected; pass --host <LAN-IP> to print a scannable URL."
+            ),
+        }
     }
     println!("Mobile security: use only on a trusted LAN/VPN; this server does not provide TLS.");
+}
+
+fn mobile_url_lines(
+    addr: SocketAddr,
+    token_query: &str,
+    lan_ip: Option<String>,
+) -> (Vec<MobileUrlLine>, Option<String>) {
+    let port = addr.port();
+    if addr.ip().is_unspecified() {
+        let local_url = format!("http://127.0.0.1:{port}/mobile{token_query}");
+        let mut lines = vec![MobileUrlLine {
+            label: "Local",
+            url: local_url,
+        }];
+        let qr_url = lan_ip.map(|ip| format!("http://{ip}:{port}/mobile{token_query}"));
+        if let Some(url) = qr_url.as_ref() {
+            lines.push(MobileUrlLine {
+                label: "LAN",
+                url: url.clone(),
+            });
+        }
+        (lines, qr_url)
+    } else {
+        let url = format!("http://{addr}/mobile{token_query}");
+        (
+            vec![MobileUrlLine {
+                label: "URL",
+                url: url.clone(),
+            }],
+            Some(url),
+        )
+    }
+}
+
+fn print_mobile_qr(url: &str) {
+    match QrCode::new(url.as_bytes()) {
+        Ok(code) => {
+            println!("Mobile QR: scan to open {url}");
+            let image = code.render::<Dense1x2>().module_dimensions(1, 1).build();
+            for line in image.lines() {
+                println!("  {line}");
+            }
+        }
+        Err(err) => {
+            eprintln!("Mobile QR: failed to encode URL: {err}");
+        }
+    }
 }
 
 fn url_query_component(value: &str) -> String {
@@ -2283,6 +2357,63 @@ mod tests {
         assert_eq!(
             url_query_component("abc ABC+/?:=&%"),
             "abc%20ABC%2B%2F%3F%3A%3D%26%25"
+        );
+    }
+
+    #[test]
+    fn mobile_url_lines_prefers_lan_qr_when_bound_to_all_interfaces() {
+        let addr: SocketAddr = "0.0.0.0:7878".parse().unwrap();
+        let (lines, qr_url) = mobile_url_lines(addr, "?token=abc", Some("192.168.1.42".into()));
+
+        assert_eq!(
+            lines,
+            vec![
+                MobileUrlLine {
+                    label: "Local",
+                    url: "http://127.0.0.1:7878/mobile?token=abc".to_string(),
+                },
+                MobileUrlLine {
+                    label: "LAN",
+                    url: "http://192.168.1.42:7878/mobile?token=abc".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            qr_url,
+            Some("http://192.168.1.42:7878/mobile?token=abc".to_string())
+        );
+    }
+
+    #[test]
+    fn mobile_url_lines_skips_qr_when_lan_ip_is_unknown() {
+        let addr: SocketAddr = "0.0.0.0:7878".parse().unwrap();
+        let (lines, qr_url) = mobile_url_lines(addr, "", None);
+
+        assert_eq!(
+            lines,
+            vec![MobileUrlLine {
+                label: "Local",
+                url: "http://127.0.0.1:7878/mobile".to_string(),
+            }]
+        );
+        assert_eq!(qr_url, None);
+    }
+
+    #[test]
+    fn mobile_url_lines_uses_explicit_host_for_qr() {
+        let addr: SocketAddr = "192.168.1.42:7878".parse().unwrap();
+        let (lines, qr_url) = mobile_url_lines(addr, "?token=abc", None);
+
+        assert_eq!(
+            lines,
+            vec![MobileUrlLine {
+                label: "URL",
+                url: "http://192.168.1.42:7878/mobile?token=abc".to_string(),
+            }]
+        );
+        assert_eq!(
+            qr_url,
+            Some("http://192.168.1.42:7878/mobile?token=abc".to_string())
         );
     }
 

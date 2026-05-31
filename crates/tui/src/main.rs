@@ -583,6 +583,9 @@ struct ServeArgs {
     /// Start runtime HTTP/SSE API server with the built-in mobile control page
     #[arg(long)]
     mobile: bool,
+    /// Print a terminal QR code for the mobile control URL
+    #[arg(long = "mobile-qr")]
+    mobile_qr: bool,
     /// Start ACP server over stdio for editor clients such as Zed
     #[arg(long)]
     acp: bool,
@@ -646,6 +649,13 @@ fn validate_serve_mode_selection(mcp: bool, http: bool, mobile: bool, acp: bool)
         bail!("Choose exactly one server mode: --mcp, --http/--mobile, or --acp");
     }
     Ok(http_selected)
+}
+
+fn validate_mobile_qr_selection(mobile: bool, mobile_qr: bool) -> Result<()> {
+    if mobile_qr && !mobile {
+        bail!("--mobile-qr requires --mobile");
+    }
+    Ok(())
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -980,6 +990,7 @@ async fn main() -> Result<()> {
                 });
                 let http_selected =
                     validate_serve_mode_selection(args.mcp, args.http, args.mobile, args.acp)?;
+                validate_mobile_qr_selection(args.mobile, args.mobile_qr)?;
                 if args.mcp {
                     tokio::task::block_in_place(|| mcp_server::run_mcp_server(workspace))
                 } else if http_selected {
@@ -1002,6 +1013,7 @@ async fn main() -> Result<()> {
                             auth_token: args.auth_token,
                             insecure_no_auth: args.insecure_no_auth,
                             mobile: args.mobile,
+                            mobile_qr: args.mobile_qr,
                         },
                     )
                     .await
@@ -5760,6 +5772,14 @@ mod serve_bind_host_tests {
             err.to_string()
                 .contains("--http and --mobile are mutually exclusive")
         );
+    }
+
+    #[test]
+    fn mobile_qr_requires_mobile_mode() {
+        let err = validate_mobile_qr_selection(false, true).unwrap_err();
+        assert!(err.to_string().contains("--mobile-qr requires --mobile"));
+
+        validate_mobile_qr_selection(true, true).unwrap();
     }
 }
 
