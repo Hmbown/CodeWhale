@@ -275,20 +275,31 @@ impl PythonRuntime {
 
     async fn read_until_ready(&mut self, ready_sentinel: &str) -> Result<(), String> {
         loop {
-            let mut line = String::new();
-            let n = self
-                .stdout
-                .read_line(&mut line)
-                .await
-                .map_err(|e| format!("stdout read: {e}"))?;
-            if n == 0 {
-                return Err("Python interpreter closed stdout before ready signal".to_string());
-            }
+            let line = match self.read_stdout_line_lossy().await? {
+                Some(line) => line,
+                None => {
+                    return Err("Python interpreter closed stdout before ready signal".to_string());
+                }
+            };
             let trimmed = line.trim_end_matches(['\n', '\r']);
             if trimmed == ready_sentinel {
                 return Ok(());
             }
             // Pre-ready output is rare; ignore it.
+        }
+    }
+
+    async fn read_stdout_line_lossy(&mut self) -> Result<Option<String>, String> {
+        let mut buf = Vec::new();
+        let n = self
+            .stdout
+            .read_until(b'\n', &mut buf)
+            .await
+            .map_err(|e| format!("stdout read: {e}"))?;
+        if n == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
         }
     }
 
@@ -339,15 +350,12 @@ impl PythonRuntime {
 
         let read_loop = async {
             loop {
-                let mut line = String::new();
-                let n = self
-                    .stdout
-                    .read_line(&mut line)
-                    .await
-                    .map_err(|e| format!("stdout read: {e}"))?;
-                if n == 0 {
-                    return Err("Python interpreter closed stdout mid-round".to_string());
-                }
+                let line = match self.read_stdout_line_lossy().await? {
+                    Some(line) => line,
+                    None => {
+                        return Err("Python interpreter closed stdout mid-round".to_string());
+                    }
+                };
                 let trimmed = line.trim_end_matches(['\n', '\r']);
 
                 if let Some(rest) = trimmed.strip_prefix(&done_prefix) {
@@ -1063,6 +1071,24 @@ mod tests {
         assert!(!round.has_error);
         assert!(round.final_value.is_none());
         assert_eq!(round.rpc_count, 0);
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn non_utf8_stdout_decodes_lossy_and_runtime_survives() {
+        let mut rt = PythonRuntime::new().await.expect("spawn");
+        let round = rt
+            .execute(
+                "import sys\n\
+                 sys.stdout.buffer.write(b'bad:\\xff\\n')\n\
+                 sys.stdout.buffer.flush()\n\
+                 print('after invalid')",
+            )
+            .await
+            .expect("execute");
+
+        assert!(round.stdout.contains("bad:\u{fffd}"), "{}", round.stdout);
+        assert!(round.stdout.contains("after invalid"), "{}", round.stdout);
         rt.shutdown().await;
     }
 
