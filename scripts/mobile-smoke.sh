@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BINARY="${REPO_ROOT}/target/release/codewhale-tui"
+BINARY="${BINARY:-${REPO_ROOT}/target/release/codewhale-tui}"
 PASS=0
 FAIL=0
 SERVER_PID=""
@@ -147,9 +147,12 @@ stop_server
 PORT=$(pick_port)
 
 log "=== Test Group 3: Binding warnings (0.0.0.0 default) ==="
-STDOUT=$("$BINARY" serve --port "$PORT" --mobile --insecure 2>&1 &
+STDOUT_FILE=$(mktemp)
+"$BINARY" serve --port "$PORT" --mobile --insecure > "$STDOUT_FILE" 2>&1 &
 SERVER_PID=$!
-sleep 2)
+sleep 2
+STDOUT=$(cat "$STDOUT_FILE")
+rm -f "$STDOUT_FILE"
 
 if echo "$STDOUT" | grep -q "0.0.0.0"; then
     pass "stdout/stderr contains 0.0.0.0 binding warning"
