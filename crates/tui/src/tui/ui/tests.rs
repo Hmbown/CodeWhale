@@ -1360,6 +1360,8 @@ fn create_test_options() -> TuiOptions {
 }
 
 #[tokio::test]
+// This test intentionally pins the process-global spillover root until the
+// async receipt path finishes.
 #[allow(clippy::await_holding_lock)]
 async fn tool_result_api_content_receipts_large_live_output() {
     let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD

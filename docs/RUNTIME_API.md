@@ -310,22 +310,37 @@ Events are append-only with a global monotonic `seq` for replay/resume.
 
 ### SSE event stream
 
-The SSE event payload shape:
+The SSE event payload shape for `/v1/threads/{id}/events`:
 
 ```json
 {
+  "schema_version": 1,
   "seq": 42,
-  "timestamp": "2026-02-11T20:18:49.123Z",
+  "event": "item.delta",
+  "kind": "item.delta",
   "thread_id": "thr_1234abcd",
   "turn_id": "turn_5678efgh",
   "item_id": "item_90ab12cd",
-  "event": "item.delta",
+  "timestamp": "2026-02-11T20:18:49.123Z",
+  "created_at": "2026-02-11T20:18:49.123Z",
   "payload": {
     "delta": "partial output",
     "kind": "agent_message"
   }
 }
 ```
+
+Compatibility notes:
+
+- `schema_version` is the HTTP/SSE envelope schema version. It is independent of
+  the runtime store schema used for persisted thread/turn/event records.
+- `event` remains the SSE event name in existing clients; it is preserved as-is.
+- `kind` mirrors `event` in the stable envelope for typed clients.
+- `thread.started`, `turn.started`, and `turn.completed` are emitted as SSE event
+  names exactly as before.
+- `timestamp` remains the canonical event time for schema version 1. `created_at`
+  is an equivalent alias for clients that use `created_at` naming elsewhere; do
+  not require both fields to be present.
 
 Common event names: `thread.started`, `thread.forked`, `turn.started`,
 `turn.lifecycle`, `turn.steered`, `turn.interrupt_requested`,

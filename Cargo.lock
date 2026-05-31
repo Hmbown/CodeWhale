@@ -995,6 +995,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-config",
+ "codewhale-protocol",
  "codewhale-release",
  "codewhale-secrets",
  "codewhale-tools",

@@ -4884,11 +4884,10 @@ pub enum McpUiAction {
 mod tests {
     use super::*;
     use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
-    use crate::test_support::lock_test_env;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
     use crate::tui::clipboard::PastedImage;
-    use std::ffi::OsString;
 
     fn test_options(yolo: bool) -> TuiOptions {
         TuiOptions {
@@ -5017,34 +5016,6 @@ mod tests {
         app.cursor_position = "abc\n".len(); // start of second line
         app.move_cursor_line_start();
         assert_eq!(app.cursor_position, "abc\n".len()); // unchanged
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::set_var(key, value) };
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::remove_var(key) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.as_ref() {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
     }
 
     #[test]
