@@ -48,6 +48,33 @@ pub const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com
 pub const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
+pub const OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL: &str = "arcee-ai/trinity-large-thinking";
+pub const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
+pub const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
+pub const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
+pub const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
+pub const OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL: &str =
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
+pub const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
+pub const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
+pub const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
+pub const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
+pub const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
+pub const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
+pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
+    OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+    OPENROUTER_QWEN_3_7_MAX_MODEL,
+    OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
+    OPENROUTER_XIAOMI_MIMO_V2_5_MODEL,
+    OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
+    OPENROUTER_QWEN_3_6_27B_MODEL,
+    OPENROUTER_KIMI_K2_6_MODEL,
+    OPENROUTER_GLM_5_1_MODEL,
+    OPENROUTER_TENCENT_HY3_PREVIEW_MODEL,
+    OPENROUTER_GEMMA_4_31B_MODEL,
+    OPENROUTER_GEMMA_4_26B_A4B_MODEL,
+    OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL,
+];
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 pub const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
@@ -339,12 +366,15 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     let max_output = if is_v4_pro || is_v4_flash {
         384_000
     } else {
-        4096
+        crate::models::max_output_tokens_for_model(resolved_model).unwrap_or(4096)
     };
 
     // Thinking support: V4 models support thinking on all providers, but
     // only when the model name matches the V4 family.
-    let thinking_supported = is_v4_pro || is_v4_flash || is_reasoner;
+    let thinking_supported = is_v4_pro
+        || is_v4_flash
+        || is_reasoner
+        || crate::models::model_supports_reasoning(resolved_model);
 
     // Cache telemetry: returned only by DeepSeek-native and NVIDIA NIM endpoints.
     let cache_telemetry_supported = matches!(
@@ -457,6 +487,57 @@ fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
     }
 }
 
+fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL
+        | "trinity"
+        | "trinity-large-thinking"
+        | "arcee-trinity"
+        | "arcee-trinity-large-thinking" => Some(OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL),
+        OPENROUTER_GEMMA_4_31B_MODEL | "gemma-4-31b" | "gemma-4-31b-it" => {
+            Some(OPENROUTER_GEMMA_4_31B_MODEL)
+        }
+        OPENROUTER_GEMMA_4_26B_A4B_MODEL | "gemma-4-26b-a4b" | "gemma-4-26b-a4b-it" => {
+            Some(OPENROUTER_GEMMA_4_26B_A4B_MODEL)
+        }
+        OPENROUTER_GLM_5_1_MODEL | "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => {
+            Some(OPENROUTER_GLM_5_1_MODEL)
+        }
+        OPENROUTER_KIMI_K2_6_MODEL | "kimi-k2.6" | "kimi-k2-6" | "moonshot-kimi-k2.6" => {
+            Some(OPENROUTER_KIMI_K2_6_MODEL)
+        }
+        OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL
+        | "nemotron-3-nano-omni"
+        | "nemotron-3-nano-omni-reasoning" => Some(OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL),
+        OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" | "qwen3-7-max" => {
+            Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
+        }
+        OPENROUTER_QWEN_3_6_35B_A3B_MODEL
+        | "qwen3.6-35b-a3b"
+        | "qwen-3.6-35b-a3b"
+        | "qwen3-6-35b-a3b" => Some(OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+        OPENROUTER_QWEN_3_6_27B_MODEL | "qwen3.6-27b" | "qwen-3.6-27b" | "qwen3-6-27b" => {
+            Some(OPENROUTER_QWEN_3_6_27B_MODEL)
+        }
+        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
+            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
+        }
+        OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL
+        | "mimo-v2.5-pro"
+        | "mimo-v2-5-pro"
+        | "xiaomi-mimo-v2.5-pro"
+        | "xiaomi-mimo-v2-5-pro" => Some(OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
+        OPENROUTER_XIAOMI_MIMO_V2_5_MODEL
+        | "mimo-v2.5"
+        | "mimo-v2-5"
+        | "xiaomi-mimo-v2.5"
+        | "xiaomi-mimo-v2-5" => Some(OPENROUTER_XIAOMI_MIMO_V2_5_MODEL),
+        _ => None,
+    }
+}
+
 /// Normalize a model selected through the TUI for the active provider.
 ///
 /// Official DeepSeek endpoints require bare model IDs. Provider-prefixed
@@ -469,6 +550,12 @@ fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
 /// aliases like `deepseek-v4pro` → `deepseek-v4-pro`.
 #[must_use]
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    if matches!(provider, ApiProvider::Openrouter)
+        && let Some(canonical) = canonical_openrouter_recent_model_id(model)
+    {
+        return Some(canonical.to_string());
+    }
+
     let normalized = normalize_model_name(model)?;
     if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
         && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)
@@ -500,7 +587,11 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
     match provider {
         ApiProvider::Deepseek | ApiProvider::DeepseekCN => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
         ApiProvider::NvidiaNim => vec![DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_NVIDIA_NIM_FLASH_MODEL],
-        ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
+        ApiProvider::Openrouter => {
+            let mut models = vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL];
+            models.extend_from_slice(RECENT_OPENROUTER_LARGE_MODELS);
+            models
+        }
         ApiProvider::XiaomiMimo => vec![DEFAULT_XIAOMI_MIMO_MODEL, "mimo-v2.5"],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
@@ -3368,6 +3459,11 @@ fn normalize_model_config(config: &mut Config) {
 }
 
 fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    if matches!(provider, ApiProvider::Openrouter)
+        && let Some(canonical) = canonical_openrouter_recent_model_id(model)
+    {
+        return Some(canonical.to_string());
+    }
     if provider_passes_model_through(provider) {
         return None;
     }
@@ -6100,11 +6196,49 @@ api_key = "old-openrouter-key"
     }
 
     #[test]
+    fn normalize_model_name_for_provider_maps_recent_openrouter_aliases() {
+        for (alias, expected) in [
+            (
+                "trinity-large-thinking",
+                OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+            ),
+            ("qwen3.7-max", OPENROUTER_QWEN_3_7_MAX_MODEL),
+            ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+            ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
+            ("kimi-k2.6", OPENROUTER_KIMI_K2_6_MODEL),
+            ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),
+            ("glm-5.1", OPENROUTER_GLM_5_1_MODEL),
+        ] {
+            assert_eq!(
+                normalize_model_name_for_provider(ApiProvider::Openrouter, alias).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
     fn model_completion_names_for_deepseek_api_are_deduplicated_bare_ids() {
         assert_eq!(
             model_completion_names_for_provider(ApiProvider::Deepseek),
             vec!["deepseek-v4-pro", "deepseek-v4-flash"]
         );
+    }
+
+    #[test]
+    fn model_completion_names_for_openrouter_include_recent_large_models() {
+        let models = model_completion_names_for_provider(ApiProvider::Openrouter);
+
+        for expected in [
+            DEFAULT_OPENROUTER_MODEL,
+            DEFAULT_OPENROUTER_FLASH_MODEL,
+            OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+            OPENROUTER_QWEN_3_7_MAX_MODEL,
+            OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
+            OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
+            OPENROUTER_GEMMA_4_31B_MODEL,
+        ] {
+            assert!(models.contains(&expected), "missing {expected}");
+        }
     }
 
     #[test]
@@ -8179,6 +8313,30 @@ model = "deepseek-ai/deepseek-v4-pro"
             cap.request_payload_mode,
             RequestPayloadMode::ChatCompletions
         );
+    }
+
+    #[test]
+    fn provider_capability_openrouter_recent_large_models_are_reasoning_aware() {
+        for (model, expected_window, expected_output) in [
+            (
+                OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+                262_144,
+                262_144,
+            ),
+            (OPENROUTER_QWEN_3_7_MAX_MODEL, 1_000_000, 65_536),
+            (OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL, 1_000_000, 131_072),
+        ] {
+            let cap = provider_capability(ApiProvider::Openrouter, model);
+
+            assert_eq!(cap.context_window, expected_window);
+            assert_eq!(cap.max_output, expected_output);
+            assert!(cap.thinking_supported);
+            assert!(!cap.cache_telemetry_supported);
+            assert_eq!(
+                cap.request_payload_mode,
+                RequestPayloadMode::ChatCompletions
+            );
+        }
     }
 
     #[test]

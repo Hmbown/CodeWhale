@@ -262,6 +262,8 @@ codewhale --provider wanjie-ark --model deepseek-reasoner
 # OpenRouter
 codewhale auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
 codewhale --provider openrouter --model deepseek/deepseek-v4-pro
+codewhale --provider openrouter --model arcee-ai/trinity-large-thinking
+codewhale --provider openrouter --model qwen/qwen3.7-max
 
 # Xiaomi MiMo
 codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_MIMO_API_KEY"

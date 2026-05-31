@@ -187,6 +187,109 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "arcee-ai/trinity-large-thinking".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "trinity".to_string(),
+                    "trinity-large-thinking".to_string(),
+                    "arcee-trinity-large-thinking".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "qwen/qwen3.7-max".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.7-max".to_string(), "qwen-3.7-max".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "xiaomi/mimo-v2.5-pro".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "openrouter-mimo-v2.5-pro".to_string(),
+                    "openrouter-xiaomi-mimo-v2.5-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "xiaomi/mimo-v2.5".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "openrouter-mimo-v2.5".to_string(),
+                    "openrouter-xiaomi-mimo-v2.5".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "qwen/qwen3.6-35b-a3b".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "qwen3.6-35b-a3b".to_string(),
+                    "qwen-3.6-35b-a3b".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "qwen/qwen3.6-27b".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.6-27b".to_string(), "qwen-3.6-27b".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "moonshotai/kimi-k2.6".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["openrouter-kimi-k2.6".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "z-ai/glm-5.1".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["glm-5.1".to_string(), "zai-glm-5.1".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "tencent/hy3-preview".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["hy3-preview".to_string(), "tencent-hy3-preview".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "google/gemma-4-31b-it".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["gemma-4-31b".to_string(), "gemma-4-31b-it".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "google/gemma-4-26b-a4b-it".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "gemma-4-26b-a4b".to_string(),
+                    "gemma-4-26b-a4b-it".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "nemotron-3-nano-omni".to_string(),
+                    "nemotron-3-nano-omni-reasoning".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "mimo-v2.5-pro".to_string(),
                 provider: ProviderKind::XiaomiMimo,
                 aliases: vec!["mimo".to_string()],
@@ -617,6 +720,28 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn recent_openrouter_large_model_aliases_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+
+        for (alias, expected) in [
+            ("trinity-large-thinking", "arcee-ai/trinity-large-thinking"),
+            ("qwen3.7-max", "qwen/qwen3.7-max"),
+            ("qwen3.6-35b-a3b", "qwen/qwen3.6-35b-a3b"),
+            ("gemma-4-31b-it", "google/gemma-4-31b-it"),
+            ("glm-5.1", "z-ai/glm-5.1"),
+            ("openrouter-mimo-v2.5-pro", "xiaomi/mimo-v2.5-pro"),
+            ("openrouter-kimi-k2.6", "moonshotai/kimi-k2.6"),
+        ] {
+            let resolved = registry.resolve(Some(alias), Some(ProviderKind::Openrouter));
+
+            assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
+            assert_eq!(resolved.resolved.id, expected);
+            assert!(resolved.resolved.supports_tools);
+            assert!(resolved.resolved.supports_reasoning);
+        }
     }
 
     #[test]

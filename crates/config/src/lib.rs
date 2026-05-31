@@ -29,6 +29,19 @@ const DEFAULT_VOLCENGINE_MODEL: &str = "DeepSeek-V4-Pro";
 const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3";
 const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
+const OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL: &str = "arcee-ai/trinity-large-thinking";
+const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
+const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
+const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
+const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
+const OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL: &str =
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
+const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
+const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
+const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
+const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
+const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
+const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
 const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
@@ -1426,6 +1439,11 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     }
 
     let normalized = model.trim().to_ascii_lowercase();
+    if provider == ProviderKind::Openrouter
+        && let Some(canonical) = canonical_openrouter_recent_model_id(&normalized)
+    {
+        return canonical.to_string();
+    }
     match (provider, normalized.as_str()) {
         (ProviderKind::NvidiaNim, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_NVIDIA_NIM_MODEL.to_string()
@@ -1480,6 +1498,57 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
         ) => DEFAULT_VLLM_FLASH_MODEL.to_string(),
         _ => model.to_string(),
+    }
+}
+
+fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL
+        | "trinity"
+        | "trinity-large-thinking"
+        | "arcee-trinity"
+        | "arcee-trinity-large-thinking" => Some(OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL),
+        OPENROUTER_GEMMA_4_31B_MODEL | "gemma-4-31b" | "gemma-4-31b-it" => {
+            Some(OPENROUTER_GEMMA_4_31B_MODEL)
+        }
+        OPENROUTER_GEMMA_4_26B_A4B_MODEL | "gemma-4-26b-a4b" | "gemma-4-26b-a4b-it" => {
+            Some(OPENROUTER_GEMMA_4_26B_A4B_MODEL)
+        }
+        OPENROUTER_GLM_5_1_MODEL | "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => {
+            Some(OPENROUTER_GLM_5_1_MODEL)
+        }
+        OPENROUTER_KIMI_K2_6_MODEL | "kimi-k2.6" | "kimi-k2-6" | "moonshot-kimi-k2.6" => {
+            Some(OPENROUTER_KIMI_K2_6_MODEL)
+        }
+        OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL
+        | "nemotron-3-nano-omni"
+        | "nemotron-3-nano-omni-reasoning" => Some(OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL),
+        OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" | "qwen3-7-max" => {
+            Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
+        }
+        OPENROUTER_QWEN_3_6_35B_A3B_MODEL
+        | "qwen3.6-35b-a3b"
+        | "qwen-3.6-35b-a3b"
+        | "qwen3-6-35b-a3b" => Some(OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+        OPENROUTER_QWEN_3_6_27B_MODEL | "qwen3.6-27b" | "qwen-3.6-27b" | "qwen3-6-27b" => {
+            Some(OPENROUTER_QWEN_3_6_27B_MODEL)
+        }
+        OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
+            Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
+        }
+        OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL
+        | "mimo-v2.5-pro"
+        | "mimo-v2-5-pro"
+        | "xiaomi-mimo-v2.5-pro"
+        | "xiaomi-mimo-v2-5-pro" => Some(OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
+        OPENROUTER_XIAOMI_MIMO_V2_5_MODEL
+        | "mimo-v2.5"
+        | "mimo-v2-5"
+        | "xiaomi-mimo-v2.5"
+        | "xiaomi-mimo-v2-5" => Some(OPENROUTER_XIAOMI_MIMO_V2_5_MODEL),
+        _ => None,
     }
 }
 
@@ -3756,6 +3825,36 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
         assert_eq!(resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.model, DEFAULT_OPENROUTER_FLASH_MODEL);
+    }
+
+    #[test]
+    fn openrouter_provider_normalizes_recent_large_model_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+        for (alias, expected) in [
+            (
+                "trinity-large-thinking",
+                OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+            ),
+            ("qwen3.7-max", OPENROUTER_QWEN_3_7_MAX_MODEL),
+            ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+            ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
+            ("kimi-k2.6", OPENROUTER_KIMI_K2_6_MODEL),
+            ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),
+            ("glm-5.1", OPENROUTER_GLM_5_1_MODEL),
+        ] {
+            let cli = CliRuntimeOverrides {
+                provider: Some(ProviderKind::Openrouter),
+                model: Some(alias.to_string()),
+                ..CliRuntimeOverrides::default()
+            };
+
+            let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+
+            assert_eq!(resolved.provider, ProviderKind::Openrouter);
+            assert_eq!(resolved.model, expected);
+        }
     }
 
     #[test]

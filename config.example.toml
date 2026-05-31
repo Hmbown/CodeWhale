@@ -36,6 +36,11 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-v4-flash           — fast, cost-efficient (legacy aliases: deepseek-chat, deepseek-reasoner)
 #   deepseek-ai/deepseek-v4-pro   — NVIDIA NIM-hosted Pro model ID
 #   deepseek-ai/deepseek-v4-flash — NVIDIA NIM-hosted Flash model ID
+#   deepseek/deepseek-v4-pro      — default OpenRouter DeepSeek model ID
+#   arcee-ai/trinity-large-thinking — OpenRouter Arcee Trinity Large Thinking
+#   qwen/qwen3.7-max              — OpenRouter Qwen 3.7 Max
+#   xiaomi/mimo-v2.5-pro          — OpenRouter Xiaomi MiMo 2.5 Pro
+#   xiaomi/mimo-v2.5              — OpenRouter Xiaomi MiMo 2.5
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
@@ -255,7 +260,11 @@ max_subagents = 10 # optional (1-20)
 [providers.openrouter]
 # api_key = "YOUR_OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
-# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+# model = "deepseek/deepseek-v4-pro"
+# Recent large model IDs also accepted here include arcee-ai/trinity-large-thinking,
+# qwen/qwen3.7-max, xiaomi/mimo-v2.5-pro, qwen/qwen3.6-35b-a3b,
+# google/gemma-4-31b-it, z-ai/glm-5.1, moonshotai/kimi-k2.6, and
+# nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free.
 
 # Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
 [providers.xiaomi_mimo]

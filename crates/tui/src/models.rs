@@ -229,10 +229,77 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
         }
         return Some(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
     }
+    if let Some(window) = known_context_window_for_model(&lower) {
+        return Some(window);
+    }
     if lower.contains("claude") {
         return Some(200_000);
     }
     None
+}
+
+fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
+    match model_lower {
+        "arcee-ai/trinity-large-thinking" => Some(262_144),
+        "google/gemma-4-31b-it"
+        | "google/gemma-4-31b-it:free"
+        | "google/gemma-4-26b-a4b-it"
+        | "google/gemma-4-26b-a4b-it:free"
+        | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        | "qwen/qwen3.6-35b-a3b"
+        | "qwen/qwen3.6-27b"
+        | "tencent/hy3-preview"
+        | "moonshotai/kimi-k2.6"
+        | "moonshotai/kimi-k2.6:free" => Some(262_144),
+        "z-ai/glm-5.1" | "z-ai/glm-5v-turbo" => Some(202_752),
+        "qwen/qwen3.7-max" | "xiaomi/mimo-v2.5-pro" | "xiaomi/mimo-v2.5" | "qwen/qwen3.6-plus" => {
+            Some(1_000_000)
+        }
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
+    let lower = model.to_lowercase();
+    if lower.contains("deepseek") && lower.contains("v4") {
+        return Some(384_000);
+    }
+    match lower.as_str() {
+        "arcee-ai/trinity-large-thinking" | "moonshotai/kimi-k2.6" => Some(262_144),
+        "qwen/qwen3.6-35b-a3b" | "qwen/qwen3.6-27b" => Some(262_140),
+        "xiaomi/mimo-v2.5-pro" | "xiaomi/mimo-v2.5" => Some(131_072),
+        "qwen/qwen3.7-max" | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" => Some(65_536),
+        "google/gemma-4-31b-it" => Some(16_384),
+        "google/gemma-4-31b-it:free" | "google/gemma-4-26b-a4b-it:free" => Some(32_768),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn model_supports_reasoning(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    if lower.contains("deepseek") && lower.contains("v4") {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "arcee-ai/trinity-large-thinking"
+            | "google/gemma-4-31b-it"
+            | "google/gemma-4-31b-it:free"
+            | "google/gemma-4-26b-a4b-it"
+            | "google/gemma-4-26b-a4b-it:free"
+            | "moonshotai/kimi-k2.6"
+            | "moonshotai/kimi-k2.6:free"
+            | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+            | "qwen/qwen3.7-max"
+            | "qwen/qwen3.6-35b-a3b"
+            | "qwen/qwen3.6-27b"
+            | "tencent/hy3-preview"
+            | "xiaomi/mimo-v2.5-pro"
+            | "xiaomi/mimo-v2.5"
+            | "z-ai/glm-5.1"
+    )
 }
 
 /// Parse an explicit `_Nk` context-window hint from a model name (vendor
@@ -416,6 +483,38 @@ mod tests {
         assert_eq!(
             context_window_for_model("deepseek-ai/deepseek-v4-pro"),
             Some(DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS)
+        );
+    }
+
+    #[test]
+    fn recent_openrouter_large_models_have_static_windows() {
+        for (model, expected_window) in [
+            ("arcee-ai/trinity-large-thinking", 262_144),
+            (concat!("qwen/", "qwen3.7-max"), 1_000_000),
+            (concat!("qwen/", "qwen3.6-35b-a3b"), 262_144),
+            (concat!("xiaomi/", "mimo-v2.5-pro"), 1_000_000),
+            ("moonshotai/kimi-k2.6", 262_144),
+            ("google/gemma-4-31b-it", 262_144),
+            ("z-ai/glm-5.1", 202_752),
+        ] {
+            assert_eq!(context_window_for_model(model), Some(expected_window));
+            assert!(model_supports_reasoning(model));
+        }
+    }
+
+    #[test]
+    fn recent_openrouter_large_models_have_known_output_caps() {
+        assert_eq!(
+            max_output_tokens_for_model("arcee-ai/trinity-large-thinking"),
+            Some(262_144)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.7-max")),
+            Some(65_536)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("xiaomi/", "mimo-v2.5-pro")),
+            Some(131_072)
         );
     }
 
