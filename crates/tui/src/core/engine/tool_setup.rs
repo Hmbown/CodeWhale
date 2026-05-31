@@ -79,14 +79,9 @@ impl Engine {
         if self.config.features.enabled(Feature::WebSearch) {
             builder = builder.with_web_tools();
         }
-        // Plan mode is strictly read-only: do not expose shell execution at
-        // all, even if the session would otherwise allow it.
-        if mode != AppMode::Plan
-            && self.config.features.enabled(Feature::ShellTool)
-            && self.session.allow_shell
-        {
-            builder = builder.with_shell_tools().with_runtime_task_shell_tools();
-        }
+        // Shell tools (exec_shell, task_shell_start, etc.) are already gated
+        // behind `allow_shell` inside `with_agent_tools`. No separate
+        // feature-flag gate here to avoid double-registration.
 
         // Register the `remember` tool only when the user has opted in to
         // user-memory (#489). Without that opt-in the tool would always
