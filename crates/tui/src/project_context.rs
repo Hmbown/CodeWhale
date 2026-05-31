@@ -170,7 +170,7 @@ struct ReadmePack {
 pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
     let mut entries = Vec::new();
     collect_pack_entries(workspace, workspace, 0, &mut entries);
-    entries.sort();
+    sort_pack_paths(&mut entries);
     entries.truncate(PACK_MAX_ENTRIES);
 
     let mut config_files = entries
@@ -179,7 +179,7 @@ pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
         .take(PACK_MAX_CONFIG_FILES)
         .cloned()
         .collect::<Vec<_>>();
-    config_files.sort();
+    sort_pack_paths(&mut config_files);
 
     let mut key_source_files = entries
         .iter()
@@ -187,7 +187,7 @@ pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
         .take(PACK_MAX_SOURCE_FILES)
         .cloned()
         .collect::<Vec<_>>();
-    key_source_files.sort();
+    sort_pack_paths(&mut key_source_files);
 
     let readme = read_readme_excerpt(workspace, &entries);
     let mut counts = BTreeMap::new();
@@ -289,10 +289,50 @@ fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
     for component in relative.components() {
         parts.push(component.as_os_str().to_string_lossy().to_string());
     }
-    if parts.is_empty() {
-        None
+    normalize_pack_relative_path(&parts.join("/"))
+}
+
+fn normalize_pack_relative_path(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        parts.push(part);
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn sort_pack_paths(paths: &mut [String]) {
+    paths.sort_by(|a, b| {
+        pack_path_priority(a)
+            .cmp(&pack_path_priority(b))
+            .then_with(|| pack_path_sort_key(a).cmp(&pack_path_sort_key(b)))
+            .then_with(|| a.cmp(b))
+    });
+}
+
+fn pack_path_sort_key(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn pack_path_priority(path: &str) -> u8 {
+    let lower = pack_path_sort_key(path);
+    let name = lower.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if matches!(name, "readme.md" | "readme.txt" | "readme") {
+        0
+    } else if is_config_file(&lower) {
+        1
+    } else if is_source_file(&lower) {
+        2
+    } else if lower.ends_with('/') {
+        3
     } else {
-        Some(parts.join("/"))
+        4
     }
 }
 
@@ -1027,6 +1067,55 @@ mod tests {
             pack.contains("\"zzz-important/\""),
             "breadth-first packing should keep later top-level directories visible:\n{pack}"
         );
+    }
+
+    #[test]
+    fn project_context_pack_sort_is_cross_platform_and_priority_aware() {
+        let mut unix_paths = vec![
+            "src/z.rs".to_string(),
+            "docs/".to_string(),
+            "README.md".to_string(),
+            "Cargo.toml".to_string(),
+            "src/a.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+        let mut windows_paths = vec![
+            "src\\z.rs".to_string(),
+            "docs\\".to_string(),
+            "README.md".to_string(),
+            "Cargo.toml".to_string(),
+            "src\\a.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+
+        sort_pack_paths(&mut unix_paths);
+        sort_pack_paths(&mut windows_paths);
+
+        let normalized_windows = windows_paths
+            .iter()
+            .map(|path| path.replace('\\', "/"))
+            .collect::<Vec<_>>();
+        assert_eq!(unix_paths, normalized_windows);
+        assert_eq!(
+            unix_paths,
+            vec![
+                "README.md",
+                "Cargo.toml",
+                "src/a.rs",
+                "src/z.rs",
+                "docs/",
+                "notes.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_pack_relative_path_rejects_parent_segments() {
+        assert_eq!(
+            normalize_pack_relative_path(".\\src\\main.rs"),
+            Some("src/main.rs".to_string())
+        );
+        assert_eq!(normalize_pack_relative_path("../secret.txt"), None);
     }
 
     #[test]
