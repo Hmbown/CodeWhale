@@ -1402,9 +1402,18 @@ mod tests {
             .with_agent_tools(false)
             .build(ctx);
 
-        assert!(!registry.contains("exec_shell"), "exec_shell should be excluded when allow_shell is false");
-        assert!(!registry.contains("task_shell_start"), "task_shell_start should be excluded when allow_shell is false");
-        assert!(!registry.contains("task_shell_wait"), "task_shell_wait should be excluded when allow_shell is false");
+        assert!(
+            !registry.contains("exec_shell"),
+            "exec_shell should be excluded when allow_shell is false"
+        );
+        assert!(
+            !registry.contains("task_shell_start"),
+            "task_shell_start should be excluded when allow_shell is false"
+        );
+        assert!(
+            !registry.contains("task_shell_wait"),
+            "task_shell_wait should be excluded when allow_shell is false"
+        );
     }
 
     #[test]
@@ -1412,12 +1421,19 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
 
-        let registry = ToolRegistryBuilder::new()
-            .with_agent_tools(true)
-            .build(ctx);
+        let registry = ToolRegistryBuilder::new().with_agent_tools(true).build(ctx);
 
-        assert!(registry.contains("exec_shell"), "exec_shell should be included when allow_shell is true");
-        assert!(registry.contains("task_shell_start"), "task_shell_start should be included when allow_shell is true");
-        assert!(registry.contains("task_shell_wait"), "task_shell_wait should be included when allow_shell is true");
+        assert!(
+            registry.contains("exec_shell"),
+            "exec_shell should be included when allow_shell is true"
+        );
+        assert!(
+            registry.contains("task_shell_start"),
+            "task_shell_start should be included when allow_shell is true"
+        );
+        assert!(
+            registry.contains("task_shell_wait"),
+            "task_shell_wait should be included when allow_shell is true"
+        );
     }
 }
