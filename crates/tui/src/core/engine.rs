@@ -1024,6 +1024,7 @@ impl Engine {
                     usage: turn.usage.clone(),
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
+                    tool_catalog: None,
                 })
                 .await;
             return;
@@ -1194,6 +1195,7 @@ impl Engine {
                 &self.config.tools_always_load,
             )
         });
+        let tool_catalog_for_event = tools.clone();
 
         // Main turn loop
         let (status, error) = self
@@ -1227,6 +1229,7 @@ impl Engine {
                 usage: turn.usage,
                 status,
                 error,
+                tool_catalog: tool_catalog_for_event,
             })
             .await;
 
@@ -1272,6 +1275,7 @@ impl Engine {
                     usage: zero_usage,
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
+                    tool_catalog: None,
                 })
                 .await;
             return;
@@ -1349,6 +1353,7 @@ impl Engine {
                 usage: zero_usage,
                 status: turn_status,
                 error: turn_error,
+                tool_catalog: None,
             })
             .await;
     }

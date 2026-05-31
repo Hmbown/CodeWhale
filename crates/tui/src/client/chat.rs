@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout as tokio_timeout;
@@ -551,24 +552,29 @@ const TOOL_RESULT_DEDUP_MIN_CHARS: usize = 1_024;
 /// up with tiny `gh auth status` and `cat package.json` files.
 const TOOL_RESULT_SHA_PERSIST_MIN_CHARS: usize = 1_024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptInspection {
     pub base_static_prefix_hash: String,
     pub full_request_prefix_hash: String,
+    /// Hash of the rendered tool catalog JSON, or empty when no tools were supplied.
+    pub tool_catalog_hash: String,
     pub layers: Vec<PromptLayerInspection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptLayerInspection {
     pub name: String,
     pub stability: PromptLayerStability,
     pub char_len: usize,
+    pub byte_len: usize,
+    /// Rough token estimate for quick before/after cache-hit reports.
+    pub token_estimate: usize,
     pub sha256: String,
     pub tool_result: Option<ToolResultInspection>,
     pub turn_meta: Option<TurnMetaInspection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ToolResultInspection {
     pub original_chars: usize,
     pub sent_chars: usize,
@@ -576,7 +582,7 @@ pub(crate) struct ToolResultInspection {
     pub deduplicated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TurnMetaInspection {
     pub original_chars: usize,
     pub sent_chars: usize,
@@ -584,7 +590,7 @@ pub(crate) struct TurnMetaInspection {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PromptLayerStability {
     Static,
     History,
@@ -605,6 +611,7 @@ fn inspect_wire_request(tools: Option<&[Tool]>, messages: &[Value]) -> PromptIns
     let mut layers = Vec::new();
     let mut base_static_prefix_parts = Vec::new();
     let mut full_request_prefix_parts = Vec::new();
+    let mut tool_catalog_hash = String::new();
     let mut start_index = 0;
 
     if let Some(message) = messages.first() {
@@ -628,6 +635,7 @@ fn inspect_wire_request(tools: Option<&[Tool]>, messages: &[Value]) -> PromptIns
     }
 
     if let Some(tool_catalog) = tool_catalog_for_inspect(tools) {
+        tool_catalog_hash = sha256_hex(tool_catalog.as_bytes());
         base_static_prefix_parts.push(tool_catalog.clone());
         full_request_prefix_parts.push(tool_catalog.clone());
         layers.push(prompt_layer(
@@ -669,6 +677,7 @@ fn inspect_wire_request(tools: Option<&[Tool]>, messages: &[Value]) -> PromptIns
     PromptInspection {
         base_static_prefix_hash: sha256_hex(base_static_prefix.as_bytes()),
         full_request_prefix_hash: sha256_hex(full_request_prefix.as_bytes()),
+        tool_catalog_hash,
         layers,
     }
 }
@@ -840,10 +849,18 @@ fn prompt_layer(
     stability: PromptLayerStability,
     content: &str,
 ) -> PromptLayerInspection {
+    let char_len = content.chars().count();
+    let token_estimate = if char_len == 0 {
+        0
+    } else {
+        (char_len / 4).max(1)
+    };
     PromptLayerInspection {
         name,
         stability,
-        char_len: content.chars().count(),
+        char_len,
+        byte_len: content.len(),
+        token_estimate,
         sha256: sha256_hex(content.as_bytes()),
         tool_result: None,
         turn_meta: None,
