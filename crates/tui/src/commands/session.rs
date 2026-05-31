@@ -513,11 +513,8 @@ mod tests {
         let _lock = crate::test_support::lock_test_env();
         let home = tmpdir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let previous_home = std::env::var_os("HOME");
-        // SAFETY: guarded by the process-wide test env mutex above.
-        unsafe {
-            std::env::set_var("HOME", &home);
-        }
+        let home_guard = EnvVarGuard::set("HOME", &home);
+        let previous_home = home_guard.previous();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.current_session_id = Some("parent-session".to_string());
         app.api_messages.push(crate::models::Message {
@@ -547,14 +544,8 @@ mod tests {
             Some("parent-session")
         );
         assert_eq!(child.metadata.forked_from_message_count, Some(1));
-        // SAFETY: guarded by the process-wide test env mutex above.
-        unsafe {
-            if let Some(previous_home) = previous_home {
-                std::env::set_var("HOME", previous_home);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
+        drop(home_guard);
+        assert_eq!(std::env::var_os("HOME"), previous_home);
     }
 
     #[test]
