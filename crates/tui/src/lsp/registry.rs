@@ -144,14 +144,8 @@ mod tests {
 
     #[test]
     fn detects_java_extension() {
-        assert_eq!(
-            detect_language(&PathBuf::from("App.java")),
-            Language::Java
-        );
-        assert_eq!(
-            detect_language(&PathBuf::from("APP.JAVA")),
-            Language::Java
-        );
+        assert_eq!(detect_language(&PathBuf::from("App.java")), Language::Java);
+        assert_eq!(detect_language(&PathBuf::from("APP.JAVA")), Language::Java);
     }
 
     #[test]
