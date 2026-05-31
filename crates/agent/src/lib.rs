@@ -3,29 +3,53 @@ use std::collections::HashMap;
 use codewhale_config::ProviderKind;
 use serde::{Deserialize, Serialize};
 
+/// Metadata for a single model entry in the registry.
+///
+/// Each model has a canonical `id` used by the provider, a list of `aliases`
+/// that users may reference, and capability flags indicating whether the model
+/// supports tool use and reasoning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
+    /// The canonical model identifier used by the provider (e.g. `"deepseek-v4-pro"`).
     pub id: String,
+    /// The provider that serves this model.
     pub provider: ProviderKind,
+    /// Alternative names that users can use to reference this model (case-insensitive).
     pub aliases: Vec<String>,
+    /// Whether this model supports tool/function calling.
     pub supports_tools: bool,
+    /// Whether this model supports extended reasoning.
     pub supports_reasoning: bool,
 }
 
+/// The result of resolving a user-requested model name to a concrete model entry.
+///
+/// Contains the resolved [`ModelInfo`], whether a fallback was used, and the
+/// chain of resolution strategies that were attempted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResolution {
+    /// The original model name requested by the user, if any.
     pub requested: Option<String>,
+    /// The concrete model that was resolved.
     pub resolved: ModelInfo,
+    /// Whether a fallback was used because the requested model was not found.
     pub used_fallback: bool,
+    /// The ordered list of resolution strategies that were attempted.
     pub fallback_chain: Vec<String>,
 }
 
+/// A registry of supported models and their aliases, used to resolve user-facing
+/// model names to concrete provider-specific model entries.
+///
+/// The default registry is populated with all built-in models across supported
+/// providers (DeepSeek, NVIDIA NIM, OpenAI-compatible, and others).
 #[derive(Debug, Clone)]
 pub struct ModelRegistry {
     models: Vec<ModelInfo>,
     alias_map: HashMap<String, usize>,
 }
 
+/// Creates a registry pre-populated with all built-in models and their aliases.
 impl Default for ModelRegistry {
     fn default() -> Self {
         let models = vec![
@@ -300,6 +324,11 @@ impl Default for ModelRegistry {
 }
 
 impl ModelRegistry {
+    /// Creates a new registry from a list of [`ModelInfo`] entries.
+    ///
+    /// Builds an internal alias map for fast lookup by model id or alias.
+    /// If multiple models share the same id or alias, the first one registered
+    /// takes priority.
     #[must_use]
     pub fn new(models: Vec<ModelInfo>) -> Self {
         let mut alias_map = HashMap::new();
@@ -312,11 +341,23 @@ impl ModelRegistry {
         Self { models, alias_map }
     }
 
+    /// Returns a clone of all models in the registry.
     #[must_use]
     pub fn list(&self) -> Vec<ModelInfo> {
         self.models.clone()
     }
 
+    /// Resolves a user-requested model name to a concrete [`ModelInfo`].
+    ///
+    /// Resolution follows this priority order:
+    /// 1. If the provider is Ollama, the requested name is used as-is (to
+    ///    support arbitrary local model tags like `qwen2.5-coder:7b`).
+    /// 2. If a `provider_hint` is given, search for a model matching that
+    ///    provider whose id or alias matches the request (case-insensitive).
+    /// 3. Look up the alias map for a case-insensitive match.
+    /// 4. Fall back to the first model belonging to the hinted provider
+    ///    (or DeepSeek if no hint was given).
+    /// 5. As a last resort, fall back to the first model in the registry.
     #[must_use]
     pub fn resolve(
         &self,
