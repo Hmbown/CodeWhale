@@ -978,8 +978,7 @@ mod tests {
 
     #[test]
     fn in_memory_client_call_tool_returns_value() {
-        let client = InMemoryMcpClient::default()
-            .with_tool("echo", json!({"output": "hi"}));
+        let client = InMemoryMcpClient::default().with_tool("echo", json!({"output": "hi"}));
         let result = client.call_tool("echo", json!({})).unwrap();
         assert_eq!(result["output"], "hi");
     }
@@ -1002,8 +1001,8 @@ mod tests {
 
     #[test]
     fn in_memory_client_read_resource_returns_value() {
-        let client = InMemoryMcpClient::default()
-            .with_resource("mcp://s/health", json!({"ok": true}));
+        let client =
+            InMemoryMcpClient::default().with_resource("mcp://s/health", json!({"ok": true}));
         let result = client.read_resource("mcp://s/health").unwrap();
         assert_eq!(result["ok"], true);
     }
@@ -1047,10 +1046,7 @@ mod tests {
         let mut manager = McpManager::default();
         manager.configs.insert(
             "s1".to_string(),
-            (
-                make_server_config("s1"),
-                ToolFilter::default(),
-            ),
+            (make_server_config("s1"), ToolFilter::default()),
         );
         let summary = manager.start_all(|_| {});
         assert!(summary.ready.is_empty());
@@ -1063,7 +1059,11 @@ mod tests {
         let mut manager = McpManager::default();
         let mut cfg = make_server_config("s1");
         cfg.enabled = false;
-        manager.register_server(cfg, ToolFilter::default(), Box::new(InMemoryMcpClient::default()));
+        manager.register_server(
+            cfg,
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
         let summary = manager.start_all(|_| {});
         assert!(summary.ready.is_empty());
         assert_eq!(summary.cancelled, vec!["s1"]);
@@ -1173,8 +1173,7 @@ mod tests {
             make_server_config("s1"),
             ToolFilter::default(),
             Box::new(
-                InMemoryMcpClient::default()
-                    .with_resource("mcp://s1/health", json!({"ok": true})),
+                InMemoryMcpClient::default().with_resource("mcp://s1/health", json!({"ok": true})),
             ),
         );
         let resources = manager.list_resources().unwrap();
@@ -1189,8 +1188,7 @@ mod tests {
             make_server_config("s1"),
             ToolFilter::default(),
             Box::new(
-                InMemoryMcpClient::default()
-                    .with_resource("mcp://s1/health", json!({"ok": true})),
+                InMemoryMcpClient::default().with_resource("mcp://s1/health", json!({"ok": true})),
             ),
         );
         let result = manager.read_resource("s1", "mcp://s1/health").unwrap();
@@ -1317,10 +1315,7 @@ mod tests {
 
     #[test]
     fn jsonrpc_error_produces_valid_envelope() {
-        let err = jsonrpc_error(
-            Some(json!(2)),
-            JsonRpcError::invalid_params("bad"),
-        );
+        let err = jsonrpc_error(Some(json!(2)), JsonRpcError::invalid_params("bad"));
         assert_eq!(err["jsonrpc"], "2.0");
         assert_eq!(err["id"], 2);
         assert_eq!(err["error"]["code"], -32602);
