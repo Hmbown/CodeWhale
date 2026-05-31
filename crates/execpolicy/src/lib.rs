@@ -378,7 +378,7 @@ impl ExecPolicyEngine {
         Ok(ExecPolicyDecision {
             allow,
             requires_approval,
-            matched_rule: trusted_rule.or(matched_ask_rule),
+            matched_rule: matched_ask_rule.or(trusted_rule),
             requirement,
         })
     }
@@ -399,8 +399,8 @@ fn first_token(command: &str) -> String {
 fn normalize_path_value(value: &str) -> String {
     value
         .replace('\\', "/")
-        .trim_matches('/')
         .trim()
+        .trim_matches('/')
         .to_ascii_lowercase()
 }
 
@@ -620,6 +620,53 @@ mod tests {
         assert_eq!(
             denied.reason(),
             "Command blocked by denied prefix rule 'cargo test --danger'"
+        );
+    }
+
+    #[test]
+    fn typed_ask_rule_label_wins_when_never_blocks_trusted_command() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::user(vec!["cargo test".to_string()], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx("cargo test --workspace", AskForApproval::Never))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+        assert_eq!(
+            decision.reason(),
+            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval, but approval policy is never."
+        );
+    }
+
+    #[test]
+    fn typed_ask_path_matching_trims_spaces_before_boundary_slashes() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::user(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::file_path("edit_file", " /TMP/PROJECT/ ")]),
+        ]);
+
+        let decision = engine
+            .check(ExecPolicyContext {
+                command: "",
+                cwd: "/workspace",
+                tool: Some("edit_file"),
+                path: Some("tmp/project"),
+                ask_for_approval: AskForApproval::Never,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=edit_file path= /TMP/PROJECT/ ")
         );
     }
 }
