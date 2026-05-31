@@ -331,17 +331,11 @@ pub struct LocalShellParams {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolPayload {
     /// A built-in function call with JSON-encoded arguments.
-    Function {
-        arguments: String,
-    },
+    Function { arguments: String },
     /// A custom tool invocation with a free-form input string.
-    Custom {
-        input: String,
-    },
+    Custom { input: String },
     /// A local shell command execution.
-    LocalShell {
-        params: LocalShellParams,
-    },
+    LocalShell { params: LocalShellParams },
     /// An MCP tool invocation targeting a specific server and tool.
     Mcp {
         server: String,
@@ -532,9 +526,7 @@ pub struct ApprovalDecisionRequest {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum EventFrame {
     /// A new model response has started.
-    ResponseStart {
-        response_id: String,
-    },
+    ResponseStart { response_id: String },
     /// A incremental text delta for an in-progress response.
     ResponseDelta {
         response_id: String,
@@ -543,9 +535,7 @@ pub enum EventFrame {
         channel: ResponseChannel,
     },
     /// The model response has finished.
-    ResponseEnd {
-        response_id: String,
-    },
+    ResponseEnd { response_id: String },
     /// A tool call has begun.
     ToolCallStart {
         response_id: String,
@@ -559,13 +549,9 @@ pub enum EventFrame {
         output: Value,
     },
     /// Progress update for an MCP server starting up.
-    McpStartupUpdate {
-        update: McpStartupUpdateEvent,
-    },
+    McpStartupUpdate { update: McpStartupUpdateEvent },
     /// All MCP servers have finished starting.
-    McpStartupComplete {
-        summary: McpStartupCompleteEvent,
-    },
+    McpStartupComplete { summary: McpStartupCompleteEvent },
     /// An MCP tool call has begun.
     McpToolCallBegin {
         server_name: String,
@@ -578,13 +564,9 @@ pub enum EventFrame {
         ok: bool,
     },
     /// User approval is needed for a command execution.
-    ExecApprovalRequest {
-        request: ExecApprovalRequestEvent,
-    },
+    ExecApprovalRequest { request: ExecApprovalRequestEvent },
     /// User approval is needed for applying a patch.
-    ApplyPatchApprovalRequest {
-        request: ExecApprovalRequestEvent,
-    },
+    ApplyPatchApprovalRequest { request: ExecApprovalRequestEvent },
     /// An MCP server is requesting user input (elicitation).
     ElicitationRequest {
         server_name: String,
@@ -592,42 +574,21 @@ pub enum EventFrame {
         prompt: String,
     },
     /// A command has started executing.
-    ExecCommandBegin {
-        command: String,
-        cwd: String,
-    },
+    ExecCommandBegin { command: String, cwd: String },
     /// Incremental output from a running command.
-    ExecCommandOutputDelta {
-        command: String,
-        delta: String,
-    },
+    ExecCommandOutputDelta { command: String, delta: String },
     /// A command has finished executing.
-    ExecCommandEnd {
-        command: String,
-        exit_code: i32,
-    },
+    ExecCommandEnd { command: String, exit_code: i32 },
     /// A patch has started being applied to a file.
-    PatchApplyBegin {
-        path: String,
-    },
+    PatchApplyBegin { path: String },
     /// A patch has finished being applied.
-    PatchApplyEnd {
-        path: String,
-        ok: bool,
-    },
+    PatchApplyEnd { path: String, ok: bool },
     /// A new turn has started within a thread.
-    TurnStarted {
-        turn_id: String,
-    },
+    TurnStarted { turn_id: String },
     /// A turn has completed successfully.
-    TurnComplete {
-        turn_id: String,
-    },
+    TurnComplete { turn_id: String },
     /// A turn was aborted before completion.
-    TurnAborted {
-        turn_id: String,
-        reason: String,
-    },
+    TurnAborted { turn_id: String, reason: String },
     /// An error occurred during processing.
     Error {
         response_id: String,
