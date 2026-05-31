@@ -1736,6 +1736,7 @@ fn stub_runtime() -> SubAgentRuntime {
         mailbox: None,
         parent_completion_tx: None,
         fork_context: None,
+        mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
     }
 }

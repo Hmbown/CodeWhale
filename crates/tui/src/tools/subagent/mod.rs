@@ -786,6 +786,8 @@ pub struct SubAgentRuntime {
     pub parent_completion_tx: Option<mpsc::UnboundedSender<SubAgentCompletion>>,
     /// Snapshot of the request prefix visible to an opt-in forked child.
     pub fork_context: Option<SubAgentForkContext>,
+    /// The parent's MCP pool if available.
+    pub mcp_pool: Option<std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>>,
     /// Per-step DeepSeek API timeout for the child's `create_message` call.
     /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800) at
     /// engine construction so a slow but legitimate model turn does not
@@ -825,8 +827,19 @@ impl SubAgentRuntime {
             mailbox: None,
             parent_completion_tx: None,
             fork_context: None,
+            mcp_pool: None,
             step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
         }
+    }
+
+    /// Attach an MCP pool so the subagent can execute MCP tools.
+    #[must_use]
+    pub fn with_mcp_pool(
+        mut self,
+        pool: Option<std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>>,
+    ) -> Self {
+        self.mcp_pool = pool;
+        self
     }
 
     /// Override the per-step DeepSeek API timeout (default
@@ -959,6 +972,7 @@ impl SubAgentRuntime {
             mailbox: self.mailbox.clone(),
             parent_completion_tx: self.parent_completion_tx.clone(),
             fork_context: self.fork_context.clone(),
+            mcp_pool: self.mcp_pool.clone(),
             step_api_timeout: self.step_api_timeout,
         }
     }
@@ -4762,17 +4776,21 @@ impl SubAgentToolRegistry {
         // review, RLM, sub-agent management (so grandchildren can spawn),
         // plus per-child fresh todo/plan state.
         let context = runtime.context.clone();
-        let registry = ToolRegistryBuilder::new()
-            .with_full_agent_surface(
-                Some(runtime.client.clone()),
-                runtime.model.clone(),
-                runtime.manager.clone(),
-                runtime.clone(),
-                runtime.allow_shell,
-                todo_list,
-                plan_state,
-            )
-            .build(context);
+        let mut registry = ToolRegistryBuilder::new().with_full_agent_surface(
+            Some(runtime.client.clone()),
+            runtime.model.clone(),
+            runtime.manager.clone(),
+            runtime.clone(),
+            runtime.allow_shell,
+            todo_list,
+            plan_state,
+        );
+
+        if let Some(pool) = runtime.mcp_pool.as_ref() {
+            registry = registry.with_mcp_tools(std::sync::Arc::clone(pool));
+        }
+
+        let registry = registry.build(context);
 
         Self {
             allowed_tools: explicit_allowed_tools,
