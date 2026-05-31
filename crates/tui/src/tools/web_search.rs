@@ -980,14 +980,8 @@ fn parse_volcengine_results(response_text: &str, max_results: usize) -> Vec<WebS
         .into_iter()
         .flat_map(|arr| arr.iter())
         .filter_map(|item| {
-            let title = item
-                .get("title")
-                .and_then(|s| s.as_str())?
-                .trim();
-            let url = item
-                .get("url")
-                .and_then(|s| s.as_str())?
-                .trim();
+            let title = item.get("title").and_then(|s| s.as_str())?.trim();
+            let url = item.get("url").and_then(|s| s.as_str())?.trim();
             if title.is_empty() || url.is_empty() {
                 return None;
             }
