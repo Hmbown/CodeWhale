@@ -4198,10 +4198,10 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             if command.is_none() && url.is_none() {
                 bail!("Provide either --command or --url for `mcp add`.");
             }
-            if let Some(transport) = transport.as_deref() {
-                if !transport.trim().eq_ignore_ascii_case("sse") {
-                    bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
-                }
+            if let Some(transport) = transport.as_deref()
+                && !transport.trim().eq_ignore_ascii_case("sse")
+            {
+                bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
             }
             let mut cfg = load_mcp_config(&config_path)?;
             cfg.servers.insert(

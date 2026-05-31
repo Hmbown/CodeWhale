@@ -5345,8 +5345,12 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        // Config::default() carries no api_key and the test runner
-        // should not have DEEPSEEK_API_KEY in its environment.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _lock = lock_test_env();
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", tmp.path().join("config.toml"));
+        let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_provider = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _codewhale_provider = EnvVarGuard::remove("CODEWHALE_PROVIDER");
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,

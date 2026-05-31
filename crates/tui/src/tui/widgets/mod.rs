@@ -2320,11 +2320,11 @@ fn push_command_entry(
                 }
             }
         }
-        if let Some(hint) = argument_hint {
-            if !hint.trim().is_empty() {
-                description.push_str("  ");
-                description.push_str(hint.trim());
-            }
+        if let Some(hint) = argument_hint
+            && !hint.trim().is_empty()
+        {
+            description.push_str("  ");
+            description.push_str(hint.trim());
         }
         (description, None)
     };
