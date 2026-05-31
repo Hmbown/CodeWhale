@@ -2111,15 +2111,41 @@ fn turn_liveness_leaves_active_turn_running() {
     let mut app = create_test_app();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.dispatch_started_at =
-        Some(Instant::now() - DISPATCH_WATCHDOG_TIMEOUT - Duration::from_secs(10));
+    app.turn_started_at = Some(Instant::now() - Duration::from_secs(60));
 
     let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
 
     assert!(!recovered);
     assert!(app.is_loading);
-    assert!(app.dispatch_started_at.is_some());
+    assert!(app.turn_started_at.is_some());
     assert!(app.status_toasts.is_empty());
+}
+
+#[test]
+fn turn_liveness_recovers_stalled_in_progress_turn() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.runtime_turn_id = Some("stale-turn-id".to_string());
+    app.turn_started_at =
+        Some(Instant::now() - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_millis(1));
+    app.streaming_message_index = Some(0);
+    app.user_scrolled_during_stream = true;
+
+    let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
+
+    assert!(recovered);
+    assert!(!app.is_loading);
+    assert!(app.turn_started_at.is_none());
+    assert!(app.runtime_turn_status.is_none());
+    assert!(app.runtime_turn_id.is_none());
+    assert!(app.dispatch_started_at.is_none());
+    assert!(app.streaming_message_index.is_none());
+    assert!(app.streaming_thinking_active_entry.is_none());
+    assert!(!app.user_scrolled_during_stream);
+    let toast = app.status_toasts.back().expect("stall toast");
+    assert_eq!(toast.level, StatusToastLevel::Error);
+    assert!(toast.text.contains("Turn stalled"));
 }
 
 #[test]
