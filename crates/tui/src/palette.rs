@@ -1,4 +1,16 @@
 //! DeepSeek color palette and semantic roles.
+//!
+//! This module defines the color system for the TUI in three layers:
+//!
+//! 1. **RGB tuples** (`*_RGB` constants) — raw color values used by theme
+//!    generation and runtime palette construction.
+//! 2. **Semantic `Color` constants** — pre-computed `ratatui::style::Color`
+//!    values mapped to UI roles (surface, text, accent, status, mode).
+//! 3. **Backward-compatible aliases** (`DEEPSEEK_*`) — legacy names that
+//!    delegate to the current Whale palette constants.
+//!
+//! Some constants defined here are not yet referenced in production code
+//! but are kept for design-system completeness and future UI work.
 
 use ratatui::style::Color;
 #[cfg(target_os = "macos")]
@@ -69,10 +81,6 @@ pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (38, 54, 80); // #263650
 // Backward-compatible aliases for existing call sites.
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = WHALE_ACCENT_PRIMARY_RGB;
 pub const DEEPSEEK_SKY_RGB: (u8, u8, u8) = WHALE_INFO_RGB;
-#[allow(dead_code)]
-pub const DEEPSEEK_AQUA_RGB: (u8, u8, u8) = (54, 187, 212);
-#[allow(dead_code)]
-pub const DEEPSEEK_NAVY_RGB: (u8, u8, u8) = (24, 63, 138);
 pub const DEEPSEEK_INK_RGB: (u8, u8, u8) = WHALE_BG_RGB;
 pub const DEEPSEEK_SLATE_RGB: (u8, u8, u8) = WHALE_PANEL_RGB;
 pub const DEEPSEEK_RED_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
@@ -217,18 +225,6 @@ pub const DEEPSEEK_BLUE: Color = Color::Rgb(
 /// Now maps to the secondary accent (Seafoam) for backward compat.
 pub const DEEPSEEK_SKY: Color =
     Color::Rgb(DEEPSEEK_SKY_RGB.0, DEEPSEEK_SKY_RGB.1, DEEPSEEK_SKY_RGB.2);
-#[allow(dead_code)]
-pub const DEEPSEEK_AQUA: Color = Color::Rgb(
-    DEEPSEEK_AQUA_RGB.0,
-    DEEPSEEK_AQUA_RGB.1,
-    DEEPSEEK_AQUA_RGB.2,
-);
-#[allow(dead_code)]
-pub const DEEPSEEK_NAVY: Color = Color::Rgb(
-    DEEPSEEK_NAVY_RGB.0,
-    DEEPSEEK_NAVY_RGB.1,
-    DEEPSEEK_NAVY_RGB.2,
-);
 pub const DEEPSEEK_INK: Color =
     Color::Rgb(DEEPSEEK_INK_RGB.0, DEEPSEEK_INK_RGB.1, DEEPSEEK_INK_RGB.2);
 pub const DEEPSEEK_SLATE: Color = Color::Rgb(
