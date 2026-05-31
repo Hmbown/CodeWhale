@@ -63,6 +63,13 @@ controls for live jobs. Jobs are process-local; after restart, live process
 state is not reattached, and any remembered detached entries must be marked
 stale rather than presented as live processes.
 
+Shell permission policy is evaluated by `crates/execpolicy`. Deny prefixes are
+checked before trusted prefixes and block matching commands regardless of layer.
+Trusted prefixes only skip approval in modes that permit trust shortcuts. Typed
+ask records are currently a narrow foundation: when one matches under
+`AskForApproval::Never`, the command is rejected because the runtime cannot ask
+the user; existing allow/deny behavior is otherwise unchanged.
+
 ### MCP manager and palette discovery
 
 MCP server configuration is surfaced in the TUI through `/mcp` and the
