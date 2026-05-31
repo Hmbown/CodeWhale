@@ -27,10 +27,14 @@ use codewhale_tools::{ToolCall, ToolRegistry};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// How a new thread's conversation history is initialized.
 #[derive(Debug, Clone)]
 pub enum InitialHistory {
+    /// Start with an empty conversation.
     New,
+    /// Forked from an existing thread with the given history items.
     Forked(Vec<Value>),
+    /// Resumed from a persisted thread with its full history.
     Resumed {
         conversation_id: String,
         history: Vec<Value>,
@@ -38,23 +42,37 @@ pub enum InitialHistory {
     },
 }
 
+/// Result of spawning or resuming a thread.
 #[derive(Debug, Clone)]
 pub struct NewThread {
+    /// The thread metadata.
     pub thread: Thread,
+    /// Resolved model identifier.
     pub model: String,
+    /// Provider that serves the model.
     pub model_provider: String,
+    /// Working directory for the thread.
     pub cwd: PathBuf,
+    /// Approval policy override, if any.
     pub approval_policy: Option<String>,
+    /// Sandbox mode override, if any.
     pub sandbox: Option<String>,
 }
 
+/// Status of a background job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
+    /// Waiting to be picked up.
     Queued,
+    /// Currently executing.
     Running,
+    /// Temporarily paused.
     Paused,
+    /// Finished successfully.
     Completed,
+    /// Finished with an error.
     Failed,
+    /// Cancelled by the user.
     Cancelled,
 }
 
@@ -63,12 +81,18 @@ const DEFAULT_JOB_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_JOB_BACKOFF_BASE_MS: u64 = 500;
 const MAX_JOB_HISTORY_ENTRIES: usize = 64;
 
+/// Retry state for a job that failed and may be retried.
 #[derive(Debug, Clone)]
 pub struct JobRetryMetadata {
+    /// Current attempt number (0 = not yet retried).
     pub attempt: u32,
+    /// Maximum number of retry attempts before giving up.
     pub max_attempts: u32,
+    /// Base delay in milliseconds for exponential backoff.
     pub backoff_base_ms: u64,
+    /// Computed delay in milliseconds until the next retry.
     pub next_backoff_ms: u64,
+    /// Timestamp when the next retry should be attempted.
     pub next_retry_at: Option<i64>,
 }
 
@@ -84,13 +108,20 @@ impl Default for JobRetryMetadata {
     }
 }
 
+/// A single entry in a job's history log.
 #[derive(Debug, Clone)]
 pub struct JobHistoryEntry {
+    /// Timestamp when this entry was recorded.
     pub at: i64,
+    /// Phase name (e.g., "created", "running", "failed").
     pub phase: String,
+    /// Job status at this point in time.
     pub status: JobStatus,
+    /// Progress percentage at this point, if available.
     pub progress: Option<u8>,
+    /// Human-readable detail message.
     pub detail: Option<String>,
+    /// Retry state snapshot at this point.
     pub retry: JobRetryMetadata,
 }
 
@@ -102,19 +133,30 @@ struct PersistedJobDetail {
     pub history: Vec<JobHistoryEntry>,
 }
 
+/// A complete job record with all metadata and history.
 #[derive(Debug, Clone)]
 pub struct JobRecord {
+    /// Unique job identifier.
     pub id: String,
+    /// Human-readable job name.
     pub name: String,
+    /// Current job status.
     pub status: JobStatus,
+    /// Current progress percentage (0-100).
     pub progress: Option<u8>,
+    /// Human-readable detail about the current state.
     pub detail: Option<String>,
+    /// Retry state for failed jobs.
     pub retry: JobRetryMetadata,
+    /// Chronological history of state transitions.
     pub history: Vec<JobHistoryEntry>,
+    /// Timestamp when the job was created.
     pub created_at: i64,
+    /// Timestamp of the last state change.
     pub updated_at: i64,
 }
 
+/// Manages background jobs with retry logic and persistence.
 #[derive(Debug, Default)]
 pub struct JobManager {
     jobs: HashMap<String, JobRecord>,
@@ -379,6 +421,7 @@ impl JobManager {
     }
 }
 
+/// Manages thread lifecycle: spawn, resume, fork, archive, and persistence.
 pub struct ThreadManager {
     store: StateStore,
     running_threads: HashMap<String, Thread>,
@@ -648,6 +691,7 @@ impl ThreadManager {
     }
 }
 
+/// Top-level runtime combining config, model registry, threads, tools, MCP, and hooks.
 pub struct Runtime {
     pub config: ConfigToml,
     pub model_registry: ModelRegistry,
