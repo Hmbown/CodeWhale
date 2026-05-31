@@ -19,7 +19,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 `/mode plan`, `/mode yolo`, `/mode 1`, `/mode 2`, or `/mode 3`.
 
 - **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
-- **Agent**: multi-step tool use. Approvals for shell and paid tools (file writes are allowed without a prompt).
+- **Agent**: multi-step tool use. Shell execution (`exec_shell`, `task_shell_start`, `task_shell_wait`) requires `allow_shell = true` in config; approval prompts gate each call. File writes are allowed without a prompt.
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 
 All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.

@@ -13,16 +13,18 @@ If you just want the short version, see the
 ## 1. Supported platforms
 
 CodeWhale ships matched `codewhale` and `codewhale-tui` prebuilt binaries for
-these platform/architecture combinations from v0.8.8 onward:
+these platform/architecture combinations. Linux ARM64 is available from
+v0.8.8 onward; Linux RISC-V starts with the first release after v0.8.47.
 
 | Platform     | Architecture | npm install | `cargo install` | GitHub release asset                                  |
 | ------------ | ------------ | :---------: | :-------------: | ----------------------------------------------------- |
 | Linux        | x64 (x86_64) |     ✅      |       ✅        | `codewhale-linux-x64`, `codewhale-tui-linux-x64`        |
 | Linux        | arm64        |     ✅      |       ✅        | `codewhale-linux-arm64`, `codewhale-tui-linux-arm64`    |
+| Linux        | riscv64      |     ✅      |       ✅        | `codewhale-linux-riscv64`, `codewhale-tui-linux-riscv64`|
 | macOS        | x64          |     ✅      |       ✅        | `codewhale-macos-x64`, `codewhale-tui-macos-x64`        |
 | macOS        | arm64 (M-series) | ✅      |       ✅        | `codewhale-macos-arm64`, `codewhale-tui-macos-arm64`    |
 | Windows      | x64          |     ✅      |       ✅        | `codewhale-windows-x64.exe`, `codewhale-tui-windows-x64.exe` |
-| Other Linux (musl, riscv64, …) | — |   ❌¹    |       ✅²       | build from source                                     |
+| Other Linux (musl, other architectures) | — |   ❌¹    |       ✅²       | build from source                                     |
 | FreeBSD / OpenBSD              | — |   ❌      |       ✅²       | build from source                                     |
 
 ¹ The npm package will exit with a clear error and point you here.
@@ -478,6 +480,9 @@ Cargo mirror setup in [Section 4](#4-install-via-cargo-any-tier-1-rust-target).
 `codewhale update` normally contacts GitHub Releases for metadata and binary
 assets. On networks where GitHub is blocked or unreliable, use the CNB source
 mirror instead and install both binaries from the release tag:
+
+To check the latest release without downloading or replacing binaries, run
+`codewhale update --check`.
 
 ```bash
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag vX.Y.Z codewhale-cli --locked --force

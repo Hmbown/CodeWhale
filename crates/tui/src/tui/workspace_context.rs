@@ -107,6 +107,11 @@ fn collect(workspace: &Path) -> Option<String> {
     Some(format!("{branch} | {status}"))
 }
 
+pub(crate) fn branch_from_context(context: &str) -> Option<&str> {
+    let (branch, _) = context.rsplit_once(" | ")?;
+    (!branch.is_empty()).then_some(branch)
+}
+
 pub(super) fn branch(workspace: &Path) -> Option<String> {
     let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
     let branch = branch.trim().to_string();

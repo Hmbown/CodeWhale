@@ -464,6 +464,16 @@ fn non_yolo_mode_retains_default_defer_policy() {
         AppMode::Agent,
         &always_load
     ));
+    assert!(!should_default_defer_tool(
+        "task_shell_start",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "task_shell_wait",
+        AppMode::Agent,
+        &always_load
+    ));
     assert!(should_default_defer_tool(
         "git_show",
         AppMode::Agent,
@@ -2095,6 +2105,96 @@ fn tool_search_activates_discovered_deferred_tools() {
     .expect("search succeeds");
     assert!(result.success);
     assert!(active.contains("read_file"));
+}
+
+fn tool_search_catalog_with_matches(count: usize) -> Vec<Tool> {
+    let mut catalog = (0..count)
+        .map(|idx| Tool {
+            tool_type: None,
+            name: format!("matching_tool_{idx:03}"),
+            description: "Matching deferred test tool".to_string(),
+            input_schema: json!({"type":"object","properties":{"query":{"type":"string"}}}),
+            allowed_callers: Some(vec!["direct".to_string()]),
+            defer_loading: Some(true),
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        })
+        .collect::<Vec<_>>();
+    let always_load = HashSet::new();
+    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
+    catalog
+}
+
+fn tool_search_reference_count(result: &ToolResult) -> usize {
+    result
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_references"))
+        .and_then(|references| references.as_array())
+        .map_or(0, Vec::len)
+}
+
+#[test]
+fn tool_search_defaults_to_twenty_results_for_regex_and_bm25() {
+    let catalog = tool_search_catalog_with_matches(25);
+
+    for tool_name in [TOOL_SEARCH_REGEX_NAME, TOOL_SEARCH_BM25_NAME] {
+        let mut active = initial_active_tools(&catalog);
+        let result = execute_tool_search(
+            tool_name,
+            &json!({"query":"matching"}),
+            &catalog,
+            &mut active,
+        )
+        .expect("search succeeds");
+
+        assert_eq!(tool_search_reference_count(&result), 20);
+    }
+}
+
+#[test]
+fn tool_search_respects_and_caps_max_results() {
+    let catalog = tool_search_catalog_with_matches(120);
+
+    let mut active = initial_active_tools(&catalog);
+    let limited = execute_tool_search(
+        TOOL_SEARCH_BM25_NAME,
+        &json!({"query":"matching","max_results":7}),
+        &catalog,
+        &mut active,
+    )
+    .expect("search succeeds");
+    assert_eq!(tool_search_reference_count(&limited), 7);
+
+    let mut active = initial_active_tools(&catalog);
+    let capped = execute_tool_search(
+        TOOL_SEARCH_REGEX_NAME,
+        &json!({"query":"matching","max_results":999}),
+        &catalog,
+        &mut active,
+    )
+    .expect("search succeeds");
+    assert_eq!(tool_search_reference_count(&capped), 100);
+}
+
+#[test]
+fn tool_search_schema_exposes_max_results_default_and_cap() {
+    let mut catalog = Vec::new();
+    let always_load = HashSet::new();
+    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
+
+    for tool_name in [TOOL_SEARCH_REGEX_NAME, TOOL_SEARCH_BM25_NAME] {
+        let tool = catalog
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .expect("tool search definition exists");
+        let schema = &tool.input_schema["properties"]["max_results"];
+
+        assert_eq!(schema["default"], 20);
+        assert_eq!(schema["maximum"], 100);
+        assert_eq!(schema["minimum"], 1);
+    }
 }
 
 #[tokio::test]

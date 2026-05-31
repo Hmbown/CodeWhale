@@ -63,6 +63,21 @@ use super::{LlmClient, StreamEventBox};
 /// the mock does not require `MessageStart` to be present.
 pub type CannedTurn = Vec<StreamEvent>;
 
+/// A queued mock response step.
+pub enum FauxStep {
+    Canned(CannedTurn),
+    /// Build a canned turn from the live outgoing request.
+    ///
+    /// Tests can assert DeepSeek V4's thinking-mode tool-call invariant here:
+    /// on the assistant turn that produced the previous tool call, the next
+    /// outgoing request must still carry `reasoning_content` (represented in
+    /// this model as a [`ContentBlock::Thinking`] block). If it is missing,
+    /// DeepSeek V4 returns HTTP 400 on the follow-up turn. This guards the
+    /// [v0.4.9-v0.5.1 regression range](https://github.com/Hmbown/CodeWhale/compare/v0.4.9...v0.5.1)
+    /// where that content was dropped.
+    Factory(Box<dyn Fn(&MessageRequest) -> CannedTurn + Send + Sync>),
+}
+
 /// A queue-driven mock LLM client.
 ///
 /// The mock holds a FIFO queue of canned response turns. Each call to
@@ -75,7 +90,7 @@ pub type CannedTurn = Vec<StreamEvent>;
 /// can assert on the outgoing payload (e.g. that prior `reasoning_content` is
 /// preserved across turns).
 pub struct MockLlmClient {
-    canned: Mutex<VecDeque<CannedTurn>>,
+    canned: Mutex<VecDeque<FauxStep>>,
     captured_requests: Mutex<Vec<MessageRequest>>,
     calls: AtomicUsize,
     provider_name: &'static str,
@@ -91,7 +106,7 @@ impl MockLlmClient {
     #[must_use]
     pub fn new(canned: Vec<CannedTurn>) -> Self {
         Self {
-            canned: Mutex::new(canned.into()),
+            canned: Mutex::new(canned.into_iter().map(FauxStep::Canned).collect()),
             captured_requests: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
             provider_name: "mock",
@@ -119,7 +134,22 @@ impl MockLlmClient {
         self.canned
             .lock()
             .expect("MockLlmClient.canned mutex poisoned")
-            .push_back(turn);
+            .push_back(FauxStep::Canned(turn));
+    }
+
+    /// Push a factory step onto the back of the queue.
+    ///
+    /// The closure receives the live outgoing [`MessageRequest`] before the
+    /// response stream is built, so assertions panic directly from the client
+    /// call rather than later while polling the returned stream.
+    pub fn push_factory<F>(&self, factory: F)
+    where
+        F: Fn(&MessageRequest) -> CannedTurn + Send + Sync + 'static,
+    {
+        self.canned
+            .lock()
+            .expect("MockLlmClient.canned mutex poisoned")
+            .push_back(FauxStep::Factory(Box::new(factory)));
     }
 
     /// Push a canned non-streaming `MessageResponse`. Consumed by
@@ -175,11 +205,18 @@ impl MockLlmClient {
         self.calls.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn pop_turn(&self) -> Option<CannedTurn> {
+    fn pop_step(&self) -> Option<FauxStep> {
         self.canned
             .lock()
             .expect("MockLlmClient.canned mutex poisoned")
             .pop_front()
+    }
+
+    fn turn_from_step(&self, step: FauxStep, request: &MessageRequest) -> CannedTurn {
+        match step {
+            FauxStep::Canned(turn) => turn,
+            FauxStep::Factory(factory) => factory(request),
+        }
     }
 
     fn pop_message(&self) -> Option<MessageResponse> {
@@ -207,26 +244,28 @@ impl LlmClient for MockLlmClient {
         }
 
         // Fallback: synthesize a MessageResponse from the next streaming turn.
-        let Some(turn) = self.pop_turn() else {
+        let Some(step) = self.pop_step() else {
             return Err(anyhow!(
                 "MockLlmClient: create_message called but no canned response queued (request #{})",
                 self.calls.load(Ordering::SeqCst)
             ));
         };
 
+        let turn = self.turn_from_step(step, &request);
         Ok(synthesize_message_response(turn, &self.model))
     }
 
     async fn create_message_stream(&self, request: MessageRequest) -> Result<StreamEventBox> {
         self.record_request(&request);
 
-        let Some(turn) = self.pop_turn() else {
+        let Some(step) = self.pop_step() else {
             return Err(anyhow!(
                 "MockLlmClient: create_message_stream called but no canned turn queued (call #{})",
                 self.calls.load(Ordering::SeqCst)
             ));
         };
 
+        let turn = self.turn_from_step(step, &request);
         Ok(stream_from_canned(turn))
     }
 
@@ -559,6 +598,22 @@ mod tests {
         };
         assert_eq!(text, "synthesized");
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[tokio::test]
+    async fn create_message_synthesizes_from_factory_turn() {
+        let mock = MockLlmClient::new(Vec::new());
+        mock.push_factory(|request| {
+            assert_eq!(request.model, "mock-model");
+            canned::simple_text_turn("from factory")
+        });
+
+        let resp = mock.create_message(empty_request()).await.unwrap();
+        let text = match &resp.content[0] {
+            ContentBlock::Text { text, .. } => text.clone(),
+            _ => panic!("expected text"),
+        };
+        assert_eq!(text, "from factory");
     }
 
     #[tokio::test]

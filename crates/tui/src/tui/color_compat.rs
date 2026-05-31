@@ -6,6 +6,8 @@
 //! as stray green/cyan backgrounds. This backend adapts every cell to the
 //! detected color depth before handing it to crossterm.
 
+use std::fmt::Write as _;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 
 use ratatui::{
@@ -15,6 +17,9 @@ use ratatui::{
 };
 
 use crate::palette::{self, ColorDepth, PaletteMode, ThemeId, UiTheme};
+
+const RENDER_DEBUG_ENV: &str = "CODEWHALE_TUI_DEBUG";
+const RENDER_DEBUG_SAMPLE_LIMIT: usize = 24;
 
 #[derive(Debug)]
 pub(crate) struct ColorCompatBackend<W: Write> {
@@ -38,6 +43,7 @@ pub(crate) struct ColorCompatBackend<W: Write> {
     /// Forcing the expected size prevents ratatui's internal `autoresize` from
     /// shrinking the viewport back to the stale dimension inside `draw()`.
     forced_size: Option<Size>,
+    render_debug: Option<RenderDebugLog>,
 }
 
 impl<W: Write> ColorCompatBackend<W> {
@@ -53,6 +59,7 @@ impl<W: Write> ColorCompatBackend<W> {
             // to a community preset.
             active_ui_theme: UiTheme::detect(),
             forced_size: None,
+            render_debug: RenderDebugLog::from_env(),
         }
     }
 
@@ -104,6 +111,14 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
                 (x, y, cell)
             })
             .collect::<Vec<_>>();
+        let viewport = if self.render_debug.is_some() {
+            self.size().ok()
+        } else {
+            None
+        };
+        if let Some(render_debug) = &mut self.render_debug {
+            render_debug.record(viewport, &adapted);
+        }
         self.inner
             .draw(adapted.iter().map(|(x, y, cell)| (*x, *y, cell)))
     }
@@ -152,6 +167,88 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
     }
 }
 
+#[derive(Debug)]
+struct RenderDebugLog {
+    file: File,
+    frame: u64,
+}
+
+impl RenderDebugLog {
+    fn from_env() -> Option<Self> {
+        if !render_debug_enabled_from_value(std::env::var(RENDER_DEBUG_ENV).ok().as_deref()) {
+            return None;
+        }
+
+        let log_dir = crate::runtime_log::log_directory()?;
+        if let Err(err) = fs::create_dir_all(&log_dir) {
+            tracing::debug!(?err, "failed to create TUI render debug log directory");
+            return None;
+        }
+        let path = log_dir.join("tui-render.log");
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|err| {
+                tracing::debug!(?err, path = %path.display(), "failed to open TUI render debug log");
+                err
+            })
+            .ok()?;
+
+        Some(Self { file, frame: 0 })
+    }
+
+    fn record(&mut self, viewport: Option<Size>, diff: &[(u16, u16, Cell)]) {
+        self.frame = self.frame.saturating_add(1);
+        let sample = diff
+            .iter()
+            .take(RENDER_DEBUG_SAMPLE_LIMIT)
+            .map(|(x, y, _)| (*x, *y))
+            .collect::<Vec<_>>();
+        let line = render_debug_line(self.frame, viewport, diff.len(), &sample);
+        let _ = self.file.write_all(line.as_bytes());
+    }
+}
+
+fn render_debug_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+fn render_debug_line(
+    frame: u64,
+    viewport: Option<Size>,
+    diff_cells: usize,
+    sample: &[(u16, u16)],
+) -> String {
+    let mut line = String::new();
+    match viewport {
+        Some(size) => {
+            let _ = write!(
+                &mut line,
+                "frame={frame} size={}x{} diff_cells={diff_cells} sample=",
+                size.width, size.height
+            );
+        }
+        None => {
+            let _ = write!(
+                &mut line,
+                "frame={frame} size=unknown diff_cells={diff_cells} sample="
+            );
+        }
+    }
+    for (index, (x, y)) in sample.iter().enumerate() {
+        if index > 0 {
+            line.push(',');
+        }
+        let _ = write!(&mut line, "{x}:{y}");
+    }
+    line.push('\n');
+    line
+}
+
 fn adapt_cell_colors(
     cell: &mut Cell,
     depth: ColorDepth,
@@ -177,12 +274,13 @@ fn adapt_cell_colors(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io::Write, rc::Rc};
+    use std::{cell::RefCell, env, ffi::OsString, fs, io::Write, rc::Rc};
 
     use ratatui::backend::Backend;
     use ratatui::{buffer::Cell, style::Color};
 
     use super::*;
+    use crate::test_support::lock_test_env;
 
     #[derive(Clone, Default)]
     struct SharedWriter(Rc<RefCell<Vec<u8>>>);
@@ -195,6 +293,32 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    struct EnvRestore {
+        key: &'static str,
+        value: Option<OsString>,
+    }
+
+    impl EnvRestore {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                value: env::var_os(key),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            // SAFETY: environment mutation is serialized by lock_test_env.
+            unsafe {
+                match &self.value {
+                    Some(value) => env::set_var(self.key, value),
+                    None => env::remove_var(self.key),
+                }
+            }
         }
     }
 
@@ -317,5 +441,59 @@ mod tests {
         assert_eq!(backend.palette_mode, PaletteMode::Light);
         backend.set_palette_mode(PaletteMode::Grayscale);
         assert_eq!(backend.palette_mode, PaletteMode::Grayscale);
+    }
+
+    #[test]
+    fn render_debug_env_parser_accepts_truthy_values_only() {
+        assert!(!render_debug_enabled_from_value(None));
+        assert!(!render_debug_enabled_from_value(Some("")));
+        assert!(!render_debug_enabled_from_value(Some("0")));
+        assert!(!render_debug_enabled_from_value(Some("false")));
+        assert!(render_debug_enabled_from_value(Some("1")));
+        assert!(render_debug_enabled_from_value(Some("true")));
+        assert!(render_debug_enabled_from_value(Some("YES")));
+        assert!(render_debug_enabled_from_value(Some("on")));
+    }
+
+    #[test]
+    fn render_debug_line_records_frame_size_and_diff_sample() {
+        let line = render_debug_line(7, Some(Size::new(80, 24)), 42, &[(0, 0), (12, 3), (79, 23)]);
+
+        assert_eq!(
+            line,
+            "frame=7 size=80x24 diff_cells=42 sample=0:0,12:3,79:23\n"
+        );
+    }
+
+    #[test]
+    fn backend_writes_render_debug_log_when_enabled() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _home = EnvRestore::capture("HOME");
+        let _userprofile = EnvRestore::capture("USERPROFILE");
+        let _debug = EnvRestore::capture(RENDER_DEBUG_ENV);
+
+        // SAFETY: environment mutation is serialized by lock_test_env.
+        unsafe {
+            env::set_var("HOME", tmp.path());
+            env::set_var("USERPROFILE", "");
+            env::set_var(RENDER_DEBUG_ENV, "1");
+        }
+
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+        let mut cell = Cell::default();
+        cell.set_symbol("x");
+        backend.draw(std::iter::once((3, 4, &cell))).unwrap();
+
+        let log_path = tmp
+            .path()
+            .join(".codewhale")
+            .join("logs")
+            .join("tui-render.log");
+        let body = fs::read_to_string(log_path).expect("render debug log");
+        assert!(body.contains("frame=1"), "{body}");
+        assert!(body.contains("diff_cells=1"), "{body}");
+        assert!(body.contains("sample=3:4"), "{body}");
     }
 }

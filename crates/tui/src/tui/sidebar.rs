@@ -7,6 +7,8 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
+use crate::tui::app::HuntVerdict;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -228,10 +230,10 @@ impl SidebarWorkSummary {
 
 fn sidebar_work_summary(app: &App) -> SidebarWorkSummary {
     let mut summary = SidebarWorkSummary {
-        goal_objective: app.goal.goal_objective.clone(),
-        goal_token_budget: app.goal.goal_token_budget,
-        goal_completed: app.goal.goal_completed,
-        goal_started_at: app.goal.goal_started_at,
+        goal_objective: app.hunt.quarry.clone(),
+        goal_token_budget: app.hunt.token_budget,
+        goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
+        goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         cycle_count: app.cycle_count,
         ..SidebarWorkSummary::default()
@@ -770,7 +772,7 @@ fn active_tool_rows(app: &App) -> Vec<SidebarToolRow> {
     if !stale_running.is_empty() {
         rows.push(collapsed_stale_running_row(stale_running));
     }
-    editorial_tool_rows(rows, usize::MAX)
+    editorial_tool_rows(rows, usize::MAX, ToolRowOrder::OldestFirst)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -837,7 +839,7 @@ fn recent_tool_rows(app: &App, limit: usize) -> Vec<SidebarToolRow> {
         .filter_map(sidebar_tool_row_from_cell)
         .take(RECENT_TOOL_SCAN_LIMIT)
         .collect();
-    editorial_tool_rows(rows, limit)
+    editorial_tool_rows(rows, limit, ToolRowOrder::NewestFirst)
 }
 
 fn push_tool_rows(
@@ -1142,7 +1144,17 @@ fn background_task_duplicates_live_tool(
         })
 }
 
-fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarToolRow> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolRowOrder {
+    OldestFirst,
+    NewestFirst,
+}
+
+fn editorial_tool_rows(
+    rows: Vec<SidebarToolRow>,
+    limit: usize,
+    order_mode: ToolRowOrder,
+) -> Vec<SidebarToolRow> {
     #[derive(Clone)]
     struct Candidate {
         rank: u8,
@@ -1155,9 +1167,26 @@ fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarTo
     let mut ci_poll_groups: Vec<(usize, SidebarToolRow, usize)> = Vec::new();
     let mut shell_wait_groups: Vec<(usize, SidebarToolRow, usize, String)> = Vec::new();
     let mut seen_success: Vec<String> = Vec::new();
+    let mut seen_success_tool_names: Vec<String> = Vec::new();
+    let mut seen_failures: Vec<String> = Vec::new();
+    let mut visible_failure_count: usize = 0;
+    const MAX_VISIBLE_FAILURES: usize = 2;
 
     for (order, mut row) in rows.into_iter().enumerate() {
         if row.status == ToolStatus::Failed {
+            // Deduplicate failures for the same tool name: keep only the most
+            // recent failure per tool. Fixes #1884 — stale failures from
+            // tools that have since succeeded no longer crowd the sidebar.
+            let fail_key = row.name.trim().to_ascii_lowercase();
+            if order_mode == ToolRowOrder::NewestFirst
+                && seen_success_tool_names.contains(&fail_key)
+            {
+                continue;
+            }
+            if seen_failures.contains(&fail_key) {
+                continue;
+            }
+            seen_failures.push(fail_key);
             row.summary = failure_summary_with_hint(&row.summary);
         }
 
@@ -1213,13 +1242,52 @@ fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarTo
         }
         if row.status == ToolStatus::Success {
             seen_success.push(key);
+            let normalized = row.name.trim().to_ascii_lowercase();
+            if !seen_success_tool_names.contains(&normalized) {
+                seen_success_tool_names.push(normalized.clone());
+            }
+
+            // Active rows are oldest-first, so a success means any candidate
+            // failure for the same tool is stale. Recent history rows are
+            // newest-first; in that path the success is older than any
+            // already-seen failure and must not remove it.
+            if order_mode == ToolRowOrder::OldestFirst {
+                let mut removed_visible_failures = 0usize;
+                let mut removed_any_failure = false;
+                candidates.retain(|c| {
+                    let remove = c.row.status == ToolStatus::Failed
+                        && c.row.name.trim().eq_ignore_ascii_case(&normalized);
+                    if remove {
+                        removed_any_failure = true;
+                        if c.rank == 0 {
+                            removed_visible_failures += 1;
+                        }
+                    }
+                    !remove
+                });
+                if removed_any_failure {
+                    seen_failures.retain(|seen| seen != &normalized);
+                    visible_failure_count =
+                        visible_failure_count.saturating_sub(removed_visible_failures);
+                }
+            }
         }
 
-        candidates.push(Candidate {
-            rank: tool_row_rank(&row),
-            order,
-            row,
-        });
+        // Cap visible failures at MAX_VISIBLE_FAILURES. Excess failures
+        // get demoted to rank 3 so they don't crowd the top of the
+        // sidebar. (#1884)
+        let rank = if row.status == ToolStatus::Failed {
+            if visible_failure_count >= MAX_VISIBLE_FAILURES {
+                3
+            } else {
+                visible_failure_count += 1;
+                0
+            }
+        } else {
+            tool_row_rank(&row)
+        };
+
+        candidates.push(Candidate { rank, order, row });
     }
 
     for (order, mut row, count) in ci_poll_groups {
@@ -1883,9 +1951,9 @@ mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
-        SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines, task_panel_lines,
-        work_panel_empty_hint, work_panel_lines,
+        SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
+        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
+        subagent_panel_lines, task_panel_lines, work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette::PaletteMode;
@@ -1925,6 +1993,15 @@ mod tests {
         App::new(options, &Config::default())
     }
 
+    fn sidebar_tool_row(name: &str, status: ToolStatus) -> SidebarToolRow {
+        SidebarToolRow {
+            name: name.to_string(),
+            status,
+            summary: String::new(),
+            duration_ms: None,
+        }
+    }
+
     fn lines_to_text(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()
@@ -1935,6 +2012,62 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    #[test]
+    fn editorial_rows_keep_newer_failure_when_older_success_is_seen_later() {
+        let rows = vec![
+            sidebar_tool_row("gh issue create", ToolStatus::Failed),
+            sidebar_tool_row("gh issue create", ToolStatus::Success),
+        ];
+
+        let rendered = editorial_tool_rows(rows, 4, ToolRowOrder::NewestFirst);
+
+        assert!(
+            rendered
+                .iter()
+                .any(|row| row.name == "gh issue create" && row.status == ToolStatus::Failed),
+            "newest-first rows must keep a failure newer than a later-seen success: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn editorial_rows_hide_older_failure_after_newer_success() {
+        let rows = vec![
+            sidebar_tool_row("gh issue create", ToolStatus::Success),
+            sidebar_tool_row("gh issue create", ToolStatus::Failed),
+        ];
+
+        let rendered = editorial_tool_rows(rows, 4, ToolRowOrder::NewestFirst);
+
+        assert!(
+            !rendered
+                .iter()
+                .any(|row| row.name == "gh issue create" && row.status == ToolStatus::Failed),
+            "newest-first rows should hide stale failures older than success: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn editorial_rows_reclaim_failure_slot_after_oldest_first_success() {
+        let rows = vec![
+            sidebar_tool_row("gh issue create", ToolStatus::Failed),
+            sidebar_tool_row("grep_files", ToolStatus::Failed),
+            sidebar_tool_row("gh issue create", ToolStatus::Success),
+            sidebar_tool_row("cargo test", ToolStatus::Failed),
+        ];
+
+        let rendered = editorial_tool_rows(rows, 2, ToolRowOrder::OldestFirst);
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|row| row.status == ToolStatus::Failed)
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["grep_files", "cargo test"],
+            "success should clear its stale failure and free a visible failure slot"
+        );
     }
 
     #[test]

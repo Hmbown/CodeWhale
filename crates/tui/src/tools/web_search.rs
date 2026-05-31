@@ -1,12 +1,12 @@
 //! Web search tool backed by multiple providers: Bing HTML scrape, DuckDuckGo
-//! (HTML scrape with Bing fallback), Tavily API, Bocha (博查) API, and
-//! Metaso API (<https://metaso.cn>).
+//! (HTML scrape with Bing fallback), Tavily API, Bocha (博查) API,
+//! Metaso API (<https://metaso.cn>), and Baidu AI Search.
 //!
 //! This is the primary web search surface for agents. For browsing workflows
 //! (page open, click, screenshot) use a direct URL approach instead.
 //!
 //! Set `[search]` in config.toml to switch providers:
-//!   provider = "duckduckgo"  # or tavily/bocha/metaso
+//!   provider = "duckduckgo"  # or tavily/bocha/metaso/baidu
 //!   api_key = "tvly-..."
 
 use super::spec::{
@@ -27,6 +27,7 @@ const BING_HOST: &str = "www.bing.com";
 const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
 const BOCHA_ENDPOINT: &str = "https://api.bochaai.com/v1/ai/search";
 const METASO_ENDPOINT: &str = "https://metaso.cn/api/v1";
+const BAIDU_ENDPOINT: &str = "https://qianfan.baidubce.com/v2/ai_search/web_search";
 /// Intentionally public default key provided by Metaso for open-source/community use.
 /// Last-resort fallback after config and env var. Rate-limited to ~100 searches/day.
 const METASO_DEFAULT_API_KEY: &str = "mk-E384C1DD5E8501BB7EFE27C949AFDE5B";
@@ -57,6 +58,7 @@ static TAG_RE: OnceLock<Regex> = OnceLock::new();
 static BING_RESULT_RE: OnceLock<Regex> = OnceLock::new();
 static BING_TITLE_RE: OnceLock<Regex> = OnceLock::new();
 static BING_SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
+static BEARER_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
 
 fn get_title_re() -> &'static Regex {
     TITLE_RE.get_or_init(|| {
@@ -99,6 +101,13 @@ fn get_bing_snippet_re() -> &'static Regex {
     })
 }
 
+fn get_bearer_token_re() -> &'static Regex {
+    BEARER_TOKEN_RE.get_or_init(|| {
+        Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+            .expect("bearer token regex pattern is valid")
+    })
+}
+
 const DEFAULT_MAX_RESULTS: usize = 5;
 const MAX_RESULTS: usize = 10;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
@@ -129,7 +138,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo with Bing fallback; set `[search] provider = \"bing\" | \"tavily\" | \"bocha\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
+        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo with Bing fallback; set `[search] provider = \"bing\" | \"tavily\" | \"bocha\" | \"metaso\" | \"baidu\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
@@ -208,6 +217,13 @@ impl ToolSpec for WebSearchTool {
                 check_policy(decider, "metaso.cn")?;
                 return self
                     .run_metaso_search(&query, max_results, timeout_ms, context)
+                    .await;
+            }
+            SearchProvider::Baidu => {
+                let decider = context.network_policy.as_ref();
+                check_policy(decider, "qianfan.baidubce.com")?;
+                return self
+                    .run_baidu_search(&query, max_results, timeout_ms, context)
                     .await;
             }
             SearchProvider::Bing | SearchProvider::DuckDuckGo => {}
@@ -645,6 +661,73 @@ impl WebSearchTool {
 
         search_tool_result(query.to_string(), "metaso", results, None)
     }
+
+    /// Search via Baidu AI Search API (<https://qianfan.baidubce.com>).
+    async fn run_baidu_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let env_key = std::env::var("BAIDU_SEARCH_API_KEY").ok();
+        let api_key = context
+            .search_api_key
+            .as_deref()
+            .or(env_key.as_deref())
+            .ok_or_else(|| {
+                ToolError::execution_failed(
+                    "Baidu search requires an API key. Set `BAIDU_SEARCH_API_KEY` or `[search] api_key` in config.toml.",
+                )
+            })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+
+        let payload = baidu_search_payload(query, max_results);
+
+        let resp = client
+            .post(BAIDU_ENDPOINT)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Baidu search request failed: {e}"))
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Baidu response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            let msg = match status.as_u16() {
+                401 | 403 => "Baidu search API key rejected — check BAIDU_SEARCH_API_KEY or `[search] api_key` in config.toml".to_string(),
+                429 => "Baidu search rate-limited — wait and retry, or check your Baidu AI Search quota".to_string(),
+                _ => {
+                    let truncated = truncate_error_body(&body);
+                    format!("Baidu search failed: HTTP {} — {truncated}", status.as_u16())
+                }
+            };
+            return Err(ToolError::execution_failed(msg));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Baidu response: {e}"))
+        })?;
+
+        if let Some(error) = baidu_error_message(&parsed) {
+            return Err(ToolError::execution_failed(error));
+        }
+
+        let results = parse_baidu_results(&parsed, max_results);
+        search_tool_result(query.to_string(), "baidu", results, None)
+    }
 }
 
 fn truncate_error_body(body: &str) -> String {
@@ -662,10 +745,85 @@ fn truncate_error_body(body: &str) -> String {
 
 fn sanitize_error_body(body: &str) -> String {
     let stripped = strip_html_tags(body);
-    stripped
+    let visible: String = stripped
         .chars()
         .filter(|c| !c.is_control() || c.is_ascii_whitespace())
+        .collect();
+    get_bearer_token_re()
+        .replace_all(&visible, "Bearer [REDACTED]")
+        .to_string()
+}
+
+fn parse_baidu_results(parsed: &Value, max_results: usize) -> Vec<WebSearchEntry> {
+    parsed
+        .get("references")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flat_map(|arr| arr.iter())
+        .filter_map(|item| {
+            let title = item
+                .get("title")
+                .or_else(|| item.get("name"))
+                .and_then(|s| s.as_str())?
+                .trim();
+            let url = item
+                .get("url")
+                .or_else(|| item.get("link"))
+                .and_then(|s| s.as_str())?
+                .trim();
+            if title.is_empty() || url.is_empty() {
+                return None;
+            }
+            let snippet = item
+                .get("content")
+                .or_else(|| item.get("snippet"))
+                .or_else(|| item.get("summary"))
+                .and_then(|s| s.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+            Some(WebSearchEntry {
+                title: title.to_string(),
+                url: url.to_string(),
+                snippet,
+            })
+        })
+        .take(max_results)
         .collect()
+}
+
+fn baidu_error_message(parsed: &Value) -> Option<String> {
+    let code = parsed
+        .get("error_code")
+        .or_else(|| parsed.get("code"))
+        .and_then(|v| v.as_i64())?;
+    if code == 0 {
+        return None;
+    }
+    let message = parsed
+        .get("error_msg")
+        .or_else(|| parsed.get("message"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown error");
+    Some(format!("Baidu search API error (code {code}: {message})"))
+}
+
+fn baidu_search_payload(query: &str, max_results: usize) -> Value {
+    json!({
+        "messages": [
+            {
+                "role": "user",
+                "content": query,
+            }
+        ],
+        "search_source": "baidu_search_v2",
+        "resource_type_filter": [
+            {
+                "type": "web",
+                "top_k": max_results,
+            }
+        ],
+    })
 }
 
 fn extract_search_query(input: &Value) -> Result<String, ToolError> {
@@ -901,6 +1059,14 @@ fn normalize_url(href: &str) -> String {
 }
 
 fn normalize_bing_url(href: &str) -> String {
+    // Bing wraps every SERP result URL in a `/ck/a?...&u=<base64>` click-tracking
+    // redirect, and in the raw HTML the separators are `&amp;` entities. Without
+    // decoding entities first, `extract_query_param` looks for `u` but the actual
+    // key is `amp;u`, so the real URL is never recovered: every result collapses to
+    // a `bing.com` root domain, which the spam heuristic then rejects — yielding
+    // zero results for the default Bing backend. Decode entities before parsing.
+    let href = decode_html_entities(href);
+    let href = href.as_str();
     if let Some(encoded) = extract_query_param(href, "u") {
         let decoded = percent_decode(&encoded);
         let token = decoded.strip_prefix("a1").unwrap_or(&decoded);
@@ -1026,11 +1192,23 @@ fn extract_query_param(url: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ERROR_BODY_PREVIEW_BYTES, WebSearchEntry, WebSearchTool, decode_html_entities,
-        extract_search_query, is_likely_spam_results, optional_search_max_results, root_domain,
-        sanitize_error_body, truncate_error_body,
+        ERROR_BODY_PREVIEW_BYTES, WebSearchEntry, WebSearchTool, baidu_search_payload,
+        decode_html_entities, extract_search_query, is_likely_spam_results, normalize_bing_url,
+        optional_search_max_results, parse_baidu_results, root_domain, sanitize_error_body,
+        truncate_error_body,
     };
     use serde_json::json;
+
+    // Regression guard: Bing /ck/a redirect hrefs are HTML-entity-encoded
+    // (`&amp;`). normalize_bing_url must decode entities before extracting the
+    // `u=` base64 payload, otherwise the real URL is never recovered and the
+    // result's root domain collapses to bing.com (then dropped as spam → 0
+    // results for the default Bing backend).
+    #[test]
+    fn bing_ckurl_with_html_entities_decodes_real_url() {
+        let href = "https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&amp;ntb=1";
+        assert_eq!(normalize_bing_url(href), "https://rust-lang.org/");
+    }
 
     fn entry(url: &str) -> WebSearchEntry {
         WebSearchEntry {
@@ -1295,6 +1473,96 @@ mod tests {
         assert_eq!(sanitized, "error");
     }
 
+    #[test]
+    fn sanitize_error_body_redacts_bearer_tokens() {
+        let body = r#"{"error":"bad token","authorization":"Bearer test-token/with+chars="}"#;
+
+        let sanitized = sanitize_error_body(body);
+
+        assert!(!sanitized.contains("test-token/with+chars="));
+        assert!(sanitized.contains("Bearer [REDACTED]"));
+    }
+
+    #[test]
+    fn parse_baidu_references_extracts_ranked_results() {
+        let body = json!({
+            "references": [
+                {
+                    "title": "Rust 官方文档",
+                    "url": "https://www.rust-lang.org/",
+                    "content": "Rust 是一门注重性能和可靠性的语言。"
+                },
+                {
+                    "title": "Cargo Book",
+                    "url": "https://doc.rust-lang.org/cargo/",
+                    "snippet": "Cargo is Rust's package manager."
+                }
+            ]
+        });
+
+        let results = parse_baidu_results(&body, 10);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Rust 官方文档");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
+        assert_eq!(
+            results[0].snippet.as_deref(),
+            Some("Rust 是一门注重性能和可靠性的语言。")
+        );
+        assert_eq!(results[1].title, "Cargo Book");
+        assert_eq!(results[1].url, "https://doc.rust-lang.org/cargo/");
+        assert_eq!(
+            results[1].snippet.as_deref(),
+            Some("Cargo is Rust's package manager.")
+        );
+    }
+
+    #[test]
+    fn parse_baidu_references_skips_incomplete_entries() {
+        let body = json!({
+            "references": [
+                {"title": "No URL", "content": "missing url"},
+                {"url": "https://example.com/no-title", "content": "missing title"},
+                {"title": "Valid", "url": "https://example.com/valid"}
+            ]
+        });
+
+        let results = parse_baidu_results(&body, 10);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Valid");
+        assert_eq!(results[0].url, "https://example.com/valid");
+        assert_eq!(results[0].snippet, None);
+    }
+
+    #[test]
+    fn baidu_search_payload_uses_official_search_source() {
+        let payload = baidu_search_payload("Rust cargo workspace", 3);
+
+        assert_eq!(
+            payload.get("search_source").and_then(|v| v.as_str()),
+            Some("baidu_search_v2")
+        );
+        assert_eq!(
+            payload
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .and_then(|messages| messages.first())
+                .and_then(|message| message.get("content"))
+                .and_then(|v| v.as_str()),
+            Some("Rust cargo workspace")
+        );
+        assert_eq!(
+            payload
+                .get("resource_type_filter")
+                .and_then(|v| v.as_array())
+                .and_then(|filters| filters.first())
+                .and_then(|filter| filter.get("top_k"))
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
+    }
+
     #[tokio::test]
     async fn tavily_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
         // Trust-boundary pin: if a user has opted into Tavily but
@@ -1337,6 +1605,35 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("Bocha") && msg.contains("API key"),
+            "error must name the provider and missing key; got `{msg}`"
+        );
+    }
+
+    #[tokio::test]
+    async fn baidu_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolSpec};
+
+        let prev = std::env::var_os("BAIDU_SEARCH_API_KEY");
+        unsafe { std::env::remove_var("BAIDU_SEARCH_API_KEY") };
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        ctx.search_provider = SearchProvider::Baidu;
+        ctx.search_api_key = None;
+        let err = WebSearchTool
+            .execute(json!({"query": "anything"}), &ctx)
+            .await
+            .expect_err("missing api_key must surface as ToolError");
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("BAIDU_SEARCH_API_KEY", value) },
+            None => unsafe { std::env::remove_var("BAIDU_SEARCH_API_KEY") },
+        }
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Baidu") && msg.contains("API key"),
             "error must name the provider and missing key; got `{msg}`"
         );
     }

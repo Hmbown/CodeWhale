@@ -11,6 +11,25 @@ fn loop_guard_block_tool_result(message: String) -> ToolResult {
     ToolResult::error(message).with_metadata(json!({"loop_guard": "identical_tool_call"}))
 }
 
+const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
+
+fn approval_intent_summary(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut chars = trimmed.chars();
+    let mut summary = chars
+        .by_ref()
+        .take(MAX_APPROVAL_INTENT_SUMMARY_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        summary.push_str("...");
+    }
+    Some(summary)
+}
+
 impl Engine {
     pub(super) async fn handle_deepseek_turn(
         &mut self,
@@ -23,7 +42,7 @@ impl Engine {
         // Signal to the terminal / taskbar that a turn is in progress
         // (OSC 9 ; 4 indeterminate progress + title spinner).
         crate::tui::notifications::set_taskbar_progress_busy();
-        crate::tui::notifications::start_title_animation("DeepSeek TUI");
+        crate::tui::notifications::start_title_animation("CodeWhale");
 
         let client = self
             .deepseek_client
@@ -249,6 +268,10 @@ impl Engine {
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 match pm.check_and_update(&system_text, tools_ref) {
                     Err(change) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         tracing::debug!(
                             target: "prefix_cache",
                             "{}",
@@ -262,10 +285,15 @@ impl Engine {
                                 tools_changed: change.tools_changed,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: true,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }
                     Ok(_) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         // Stable check — keep the TUI counter in sync.
                         let _ = self
                             .tx_event
@@ -275,6 +303,7 @@ impl Engine {
                                 tools_changed: false,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: false,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }
@@ -1188,6 +1217,13 @@ impl Engine {
                     "Planning tool '{tool_name}' with input: {tool_input:?}"
                 ));
 
+                let requested_tool_name = tool_name.clone();
+                let tool_def =
+                    resolve_tool_definition(&mut tool_name, &tool_catalog, tool_registry);
+                if requested_tool_name != tool_name {
+                    tool.name = tool_name.clone();
+                }
+
                 let interactive = (tool_name == "exec_shell"
                     && tool_input
                         .get("interactive")
@@ -1219,25 +1255,10 @@ impl Engine {
                     )));
                 }
 
-                let requested_tool_name = tool_name.clone();
-                let mut tool_def = tool_catalog.iter().find(|def| def.name == tool_name);
-
-                // Resolve hallucinated tool names when the model emits a
-                // non-canonical variant (Read_file, readFile, read-file, etc.).
-                if tool_def.is_none()
-                    && let Some(registry) = tool_registry
-                    && let Some(canonical) = registry.resolve(&tool_name)
-                {
-                    crate::logging::info(format!(
-                        "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
-                    ));
-                    tool_def = tool_catalog.iter().find(|d| d.name == canonical);
-                    if tool_def.is_some() {
-                        tool_name = canonical.to_string();
-                        // Update the tool_uses entry so the result is
-                        // attributed to the canonical name.
-                        tool.name = tool_name.clone();
-                    }
+                if !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' is not in the allowed-tools list for the current command"
+                    )));
                 }
 
                 if !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
@@ -1341,6 +1362,22 @@ impl Engine {
                 });
             }
             active_tool_names.extend(deferred_tools_hydrated_this_batch);
+
+            // --- Intent summary for write tools (#2381) ---
+            // When the model invokes write tools, extract its preceding text
+            // as an "intent summary" so the approval view can show *why* the
+            // change is being made, not just *what* will change.
+            let has_write_tools = plans.iter().any(|p| {
+                !p.read_only
+                    && p.approval_required
+                    && p.blocked_error.is_none()
+                    && p.guard_result.is_none()
+            });
+            let intent_summary: Option<String> = if has_write_tools {
+                approval_intent_summary(&current_text_visible)
+            } else {
+                None
+            };
 
             let plan_count = plans.len();
             let batches = plan_tool_execution_batches(plans);
@@ -1696,9 +1733,15 @@ impl Engine {
                                 .send(Event::ApprovalRequired {
                                     id: tool_id.clone(),
                                     tool_name: tool_name.clone(),
+                                    input: tool_input.clone(),
                                     description: plan.approval_description.clone(),
                                     approval_key,
                                     approval_grouping_key,
+                                    intent_summary: if plan.read_only {
+                                        None
+                                    } else {
+                                        intent_summary.clone()
+                                    },
                                 })
                                 .await;
 
@@ -2112,6 +2155,40 @@ fn should_hold_turn_for_subagents(queued_completions: usize, running_children: u
     queued_completions > 0 || running_children > 0
 }
 
+fn command_allows_tool(allowed_tools: Option<&[String]>, tool_name: &str) -> bool {
+    let Some(allowed_tools) = allowed_tools else {
+        return true;
+    };
+    allowed_tools.contains(&tool_name.to_ascii_lowercase())
+}
+
+fn resolve_tool_definition<'a>(
+    tool_name: &mut String,
+    tool_catalog: &'a [Tool],
+    tool_registry: Option<&crate::tools::ToolRegistry>,
+) -> Option<&'a Tool> {
+    let mut tool_def = tool_catalog
+        .iter()
+        .find(|def| def.name.as_str() == tool_name.as_str());
+
+    // Resolve hallucinated tool names before policy gates run, so aliases like
+    // ReadFile are checked against the canonical registered tool name.
+    if tool_def.is_none()
+        && let Some(registry) = tool_registry
+        && let Some(canonical) = registry.resolve(tool_name.as_str())
+    {
+        crate::logging::info(format!(
+            "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
+        ));
+        tool_def = tool_catalog.iter().find(|d| d.name == canonical);
+        if tool_def.is_some() {
+            *tool_name = canonical.to_string();
+        }
+    }
+
+    tool_def
+}
+
 /// Issue #1727: decide whether to surface a "thinking-only, no output" status.
 ///
 /// Reached when the assistant turn had no sendable content (no Text, no
@@ -2217,6 +2294,19 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    #[test]
+    fn approval_intent_summary_trims_and_bounds_text() {
+        assert_eq!(approval_intent_summary("   "), None);
+
+        let long_text = format!("  {}  ", "x".repeat(MAX_APPROVAL_INTENT_SUMMARY_CHARS + 10));
+        let summary = approval_intent_summary(&long_text).expect("summary");
+        assert!(summary.ends_with("..."));
+        assert_eq!(
+            summary.chars().count(),
+            MAX_APPROVAL_INTENT_SUMMARY_CHARS + 3
+        );
     }
 
     /// Regression test for issue #1727 (P0, release-blocking).
@@ -2382,5 +2472,46 @@ mod tests {
             Some("high".to_string()),
             "auto thinking should classify the user request, not stored metadata"
         );
+    }
+
+    #[test]
+    fn allowed_tools_gate_blocks_unlisted_tool() {
+        let allowed = vec!["bash".to_string(), "grep".to_string()];
+        assert!(!command_allows_tool(Some(&allowed), "read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_listed_tool_case_insensitively() {
+        let allowed = vec!["bash".to_string(), "read".to_string()];
+        assert!(command_allows_tool(Some(&allowed), "Read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_all_tools_when_not_set() {
+        assert!(command_allows_tool(None, "write"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_blocks_all_tools_when_empty() {
+        let allowed = Vec::new();
+        assert!(!command_allows_tool(Some(&allowed), "bash"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_checks_canonical_tool_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+        let mut tool_name = "ReadFile".to_string();
+
+        let tool_def = resolve_tool_definition(&mut tool_name, &catalog, Some(&registry));
+
+        assert!(tool_def.is_some());
+        assert_eq!(tool_name, "read_file");
+        let allowed = vec!["read_file".to_string()];
+        assert!(command_allows_tool(Some(&allowed), &tool_name));
     }
 }

@@ -16,6 +16,7 @@
 //! Width or render-option changes still bust the entire cache (correct: wrap
 //! layout depends on width and which cells are visible at all).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use ratatui::{
@@ -73,6 +74,10 @@ struct CachedCell {
 pub struct TranscriptViewCache {
     width: u16,
     options: TranscriptRenderOptions,
+    /// Snapshot of folded_thinking indices from the last `ensure` call.
+    /// When this changes, all cells must be re-rendered because the fold
+    /// state affects the rendered output but not the cell revision.
+    folded_cells: HashSet<usize>,
     /// Per-cell rendered output, indexed by current cell position.
     /// Length always equals the cell count seen on the last `ensure` call.
     per_cell: Vec<CachedCell>,
@@ -94,6 +99,7 @@ impl TranscriptViewCache {
         Self {
             width: 0,
             options: TranscriptRenderOptions::default(),
+            folded_cells: HashSet::new(),
             per_cell: Vec::new(),
             lines: Vec::new(),
             line_meta: Vec::new(),
@@ -122,33 +128,51 @@ impl TranscriptViewCache {
         width: u16,
         options: TranscriptRenderOptions,
     ) {
-        self.ensure_split(&[cells], cell_revisions, width, options);
+        self.ensure_split(
+            &[cells],
+            cell_revisions,
+            width,
+            options,
+            &HashSet::new(),
+            None,
+        );
     }
 
     /// Ensure cached lines match the provided cell shards (logically
     /// concatenated) plus per-cell revisions. Avoids the
     /// `concat-into-Vec<HistoryCell>` clone the caller would otherwise pay
     /// every frame on long transcripts.
+    ///
+    /// `folded_cells` contains original virtual indices of thinking cells
+    /// that should render in their folded (summary) form.
+    ///
+    /// `original_index_map` maps filtered (positional) indices to original
+    /// virtual indices. Required when `collapsed_cells` filtering is active
+    /// so that `folded_cells` lookups resolve to the correct original index.
     pub fn ensure_split(
         &mut self,
         cell_shards: &[&[HistoryCell]],
         cell_revisions: &[u64],
         width: u16,
         options: TranscriptRenderOptions,
+        folded_cells: &HashSet<usize>,
+        original_index_map: Option<&[usize]>,
     ) {
         let total_cells: usize = cell_shards.iter().map(|s| s.len()).sum();
 
         let layout_changed = self.width != width || self.options != options;
-        if layout_changed {
+        let folded_changed = self.folded_cells != *folded_cells;
+        if layout_changed || folded_changed {
             self.per_cell.clear();
         }
         self.width = width;
         self.options = options;
+        self.folded_cells = folded_cells.clone();
 
         // Track whether anything actually changed; if all cells are reused at
         // the same indices, we can skip the reflatten.
         let old_len = self.per_cell.len();
-        let mut any_dirty = layout_changed || old_len != total_cells;
+        let mut any_dirty = layout_changed || folded_changed || old_len != total_cells;
         let mut first_dirty: Option<usize> = if old_len != total_cells {
             Some(old_len.min(total_cells))
         } else {
@@ -190,7 +214,11 @@ impl TranscriptViewCache {
                 } else {
                     width
                 };
-                let rendered = cell.lines_with_copy_metadata(render_width, options);
+                let original_idx = original_index_map
+                    .map(|m| *m.get(idx).unwrap_or(&idx))
+                    .unwrap_or(idx);
+                let folded = folded_cells.contains(&original_idx);
+                let rendered = cell.lines_with_copy_metadata_folded(render_width, options, folded);
                 let mut lines = Vec::with_capacity(rendered.len());
                 let mut copy_separators = Vec::with_capacity(rendered.len());
                 let mut copy_prefix_widths = Vec::with_capacity(rendered.len());
@@ -554,6 +582,7 @@ fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette;
     use crate::tui::history::{ExecCell, ExecSource, HistoryCell, ToolCell, ToolStatus};
 
     fn plain_lines(cache: &TranscriptViewCache) -> Vec<String> {
@@ -593,6 +622,20 @@ mod tests {
             interaction: None,
             output_summary: None,
         }))
+    }
+
+    #[test]
+    fn cache_renders_user_cells_with_highlight_background() {
+        let cells = vec![user_cell("# literal user prompt")];
+        let revisions = vec![1u64];
+
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure(&cells, &revisions, 40, TranscriptRenderOptions::default());
+
+        let lines = cache.lines();
+        assert_eq!(lines[0].style.bg, Some(palette::SURFACE_ELEVATED));
+        assert_eq!(lines[0].width(), 40);
+        assert_eq!(plain_lines(&cache)[0].trim_end(), "▎ # literal user prompt");
     }
 
     #[test]
@@ -1005,5 +1048,117 @@ mod tests {
             "rail_prefix_widths memory unexpectedly large: {memory_kb:.1} KB"
         );
         eprintln!("  ✓ well under 1 MB even for very long sessions");
+    }
+
+    #[test]
+    fn folded_thinking_cache_invalidation() {
+        let long_content = "reasoning line\n".repeat(50);
+        let cells = [HistoryCell::Thinking {
+            content: long_content.clone(),
+            streaming: false,
+            duration_secs: Some(1.5),
+        }];
+        let revisions = [1u64];
+        let options = TranscriptRenderOptions {
+            verbose: true, // expanded by default
+            ..TranscriptRenderOptions::default()
+        };
+        let width = 80u16;
+
+        // First render: no folding → full content.
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        let full_line_count = cache.total_lines();
+
+        // Second render: fold the thinking cell → should invalidate and
+        // produce fewer lines (collapsed summary).
+        let mut folded = HashSet::new();
+        folded.insert(0usize);
+        cache.ensure_split(&[&cells], &revisions, width, options, &folded, None);
+        let folded_line_count = cache.total_lines();
+
+        assert!(
+            folded_line_count < full_line_count,
+            "folded thinking should render fewer lines: folded={folded_line_count} full={full_line_count}"
+        );
+
+        // Third render: unfold → should restore full content.
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        let restored_line_count = cache.total_lines();
+        assert_eq!(
+            restored_line_count, full_line_count,
+            "unfolded thinking should restore full line count"
+        );
+    }
+
+    #[test]
+    fn folded_thinking_with_collapsed_cells_uses_original_indices() {
+        // Two thinking cells: cell 0 and cell 1. Cell 0 is collapsed (hidden).
+        // Fold cell 1 (original index 1). With the filtered index map,
+        // the cache should still fold the correct cell.
+        let cells = [
+            HistoryCell::Thinking {
+                content: "first thinking block\n".repeat(20),
+                streaming: false,
+                duration_secs: Some(1.0),
+            },
+            HistoryCell::Thinking {
+                content: "second thinking block\n".repeat(20),
+                streaming: false,
+                duration_secs: Some(2.0),
+            },
+        ];
+        let revisions = [1u64, 2u64];
+        let options = TranscriptRenderOptions {
+            verbose: true,
+            ..TranscriptRenderOptions::default()
+        };
+        let width = 80u16;
+
+        // No collapsing, no folding — baseline.
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        let baseline = cache.total_lines();
+        assert!(baseline > 0, "baseline render should contain visible lines");
+
+        // Collapse cell 0, fold cell 1. The filtered list has only cell 1
+        // at filtered index 0, but it maps to original index 1.
+        let filtered_cells = [cells[1].clone()];
+        let filtered_revs = [2u64];
+        let index_map: Vec<usize> = vec![1]; // filtered 0 → original 1
+
+        let mut folded = HashSet::new();
+        folded.insert(1usize); // fold original index 1
+
+        let mut cache2 = TranscriptViewCache::new();
+        cache2.ensure_split(
+            &[&filtered_cells],
+            &filtered_revs,
+            width,
+            options,
+            &folded,
+            Some(&index_map),
+        );
+        let folded_filtered = cache2.total_lines();
+
+        // Cell 1 was expanded in baseline; now it should be folded.
+        // We can't compare directly to baseline because baseline had both
+        // cells, but folded_filtered should be less than if cell 1 were
+        // expanded in the filtered view.
+        let mut cache3 = TranscriptViewCache::new();
+        cache3.ensure_split(
+            &[&filtered_cells],
+            &filtered_revs,
+            width,
+            options,
+            &HashSet::new(),
+            Some(&index_map),
+        );
+        let expanded_filtered = cache3.total_lines();
+
+        assert!(
+            folded_filtered < expanded_filtered,
+            "folded cell via index map should render fewer lines: folded={folded_filtered} expanded={expanded_filtered}"
+        );
     }
 }

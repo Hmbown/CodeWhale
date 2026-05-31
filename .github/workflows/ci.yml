@@ -38,6 +38,8 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check provider registry drift
+        run: python3 scripts/check-provider-registry.py
       - name: Linux clippy location
         run: echo "Linux clippy/test gates run on CNB for mirrored fix/*, rebrand/*, work/v*, and main branches."
 

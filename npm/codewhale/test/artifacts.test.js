@@ -55,6 +55,7 @@ test("known platforms are unaffected by alias map", () => {
   for (const [platform, arch, expectedCodeWhale] of [
     ["linux", "x64", "codewhale-linux-x64"],
     ["darwin", "arm64", "codewhale-macos-arm64"],
+    ["linux", "riscv64", "codewhale-linux-riscv64"],
     ["win32", "x64", "codewhale-windows-x64.exe"],
   ]) {
     withMockedOs(platform, arch, () => {

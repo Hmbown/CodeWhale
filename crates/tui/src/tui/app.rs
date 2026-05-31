@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -86,6 +87,9 @@ pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
     let Some(rest) = input.trim_start().strip_prefix('/') else {
         return false;
     };
+    if rest.chars().next().is_some_and(|ch| ch.is_whitespace()) {
+        return false;
+    }
     let Some(command) = rest.split_whitespace().next() else {
         return rest.is_empty();
     };
@@ -811,7 +815,19 @@ pub struct TuiOptions {
     /// Used by `deepseek pr <N>` (#451) to drop the model into a
     /// session with the PR context already typed — the user can edit
     /// before sending or hit Enter to fire as-is.
-    pub initial_input: Option<String>,
+    pub initial_input: Option<InitialInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialInput {
+    /// Pre-populate the composer and wait for the user to press Enter.
+    ///
+    /// Used by `codewhale pr <N>` (#451) to drop the model into a session
+    /// with the PR context already typed so the user can edit before sending.
+    Prefill(String),
+    /// Pre-populate the composer, submit it once startup is ready, then keep
+    /// the interactive session open for follow-up messages (#2370).
+    Submit(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -986,13 +1002,24 @@ impl Default for ViewportState {
     }
 }
 
-/// Goal tracking state (#397).
+/// Verdict for a hunt (#2092).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HuntVerdict {
+    #[default]
+    Hunting,
+    Hunted,
+    Wounded,
+    Escaped,
+}
+
+/// Hunt tracking state (#2092 — was GoalState).
 #[derive(Debug, Clone, Default)]
-pub struct GoalState {
-    pub goal_objective: Option<String>,
-    pub goal_token_budget: Option<u32>,
-    pub goal_started_at: Option<Instant>,
-    pub goal_completed: bool,
+pub struct HuntState {
+    pub quarry: Option<String>,
+    pub token_budget: Option<u32>,
+    pub started_at: Option<Instant>,
+    pub verdict: HuntVerdict,
 }
 
 /// Session cost and token telemetry state.
@@ -1090,9 +1117,12 @@ pub struct App {
     /// Viewport sub-state (scroll, cache, selection).
     pub viewport: ViewportState,
     /// Goal sub-state.
-    pub goal: GoalState,
+    pub hunt: HuntState,
     /// Session sub-state (cost, tokens, telemetry).
     pub session: SessionState,
+    /// Active tool restriction from custom slash command frontmatter.
+    /// `None` means the current turn may use the normal tool set.
+    pub active_allowed_tools: Option<Vec<String>>,
     pub history: Vec<HistoryCell>,
     pub history_version: u64,
     /// Per-cell revision counter, kept in lockstep with `history`.
@@ -1114,10 +1144,6 @@ pub struct App {
     pub status_toasts: VecDeque<StatusToast>,
     /// Sticky status toast used for important warnings/errors.
     pub sticky_status: Option<StatusToast>,
-    /// Version-update hint shown in the footer when a newer release
-    /// is available. Set by a background GitHub API check after app
-    /// startup; `None` until the check completes or if up-to-date.
-    pub version_hint: Option<String>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     pub model: String,
@@ -1132,6 +1158,9 @@ pub struct App {
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
     pub api_provider: ApiProvider,
+    /// True when the active provider/base URL accepts arbitrary model IDs
+    /// verbatim rather than DeepSeek-only aliases.
+    pub model_ids_passthrough: bool,
     /// Current reasoning-effort tier for DeepSeek thinking mode.
     /// Cycled via Shift+Tab; initialized from config at startup.
     pub reasoning_effort: ReasoningEffort,
@@ -1402,6 +1431,13 @@ pub struct App {
     /// Incremented on `TurnComplete` from the elapsed time of the
     /// just-finished turn. Resets per launch.
     pub cumulative_turn_duration: std::time::Duration,
+    /// DeepSeek account balance, refreshed once per turn completion.
+    /// Shared cell updated by background fetch tasks; read lock in the UI thread.
+    pub balance_cell: std::sync::Arc<std::sync::Mutex<Option<crate::pricing::BalanceInfo>>>,
+    /// Tracks whether the initial balance fetch has been attempted for this session.
+    pub balance_initiated: bool,
+    /// Timestamp of the last balance fetch, used to debounce rapid requests.
+    pub last_balance_fetch: Option<std::time::Instant>,
     /// Current runtime turn id (if known).
     pub runtime_turn_id: Option<String>,
     /// Current runtime turn status (if known).
@@ -1430,6 +1466,8 @@ pub struct App {
     pub thinking_started_at: Option<Instant>,
     /// Whether context compaction is currently in progress.
     pub is_compacting: bool,
+    /// Whether context purge is currently in progress.
+    pub is_purging: bool,
     /// Set when the user scrolls up/down during a streaming turn so subsequent
     /// streamed chunks don't yank the view back to the live tail. Cleared
     /// when the user explicitly returns to bottom or the turn completes.
@@ -1441,6 +1479,8 @@ pub struct App {
     /// Most recent user prompt accepted for an active engine turn. Ctrl+C can
     /// restore this into an empty composer after cancelling that turn.
     pub last_submitted_prompt: Option<String>,
+    /// Startup prompt should be submitted automatically after the engine is ready.
+    pub auto_submit_initial_input: bool,
     /// Two-tap quit confirmation. When set, a prior Ctrl+C in idle state has
     /// armed the quit shortcut; a second Ctrl+C before this `Instant` exits
     /// the app, while expiry silently re-arms the prompt for next time.
@@ -1466,6 +1506,10 @@ pub struct App {
     pub prefix_stability_pct: Option<u32>,
     /// Description of the last prefix change, if any.
     pub last_prefix_change_desc: Option<String>,
+    /// Current pinned prefix combined hash (SHA-256, 64 hex chars).
+    /// Updated per-turn via PrefixCacheChange events; surfaced by
+    /// `/cache stats` for cache-hit debugging.
+    pub last_pinned_prefix_hash: Option<String>,
 
     /// Active cycle configuration (token threshold, briefing cap, per-model
     /// overrides). Loaded from config and forwarded to the engine.
@@ -1475,6 +1519,10 @@ pub struct App {
     /// Transcript cells the user has collapsed (hidden from view).
     /// Stores **original** virtual cell indices (pre-filtering).
     pub collapsed_cells: HashSet<usize>,
+    /// Thinking cells the user has folded (showing summary instead of full
+    /// content). Stores **original** virtual cell indices. Toggled by Space
+    /// when the composer is empty and the cursor is on a thinking cell.
+    pub folded_thinking: HashSet<usize>,
     /// Mapping from filtered cell index → original virtual index.
     /// Populated during `ChatWidget::new` by filtering out collapsed cells.
     /// Used by `build_context_menu_entries` to convert line-meta indices
@@ -1624,6 +1672,7 @@ impl App {
         self.session.last_prompt_cache_miss_tokens = None;
         self.session.last_reasoning_replay_tokens = None;
         self.session.turn_cache_history.clear();
+        self.last_pinned_prefix_hash = None;
     }
 
     pub fn tr(&self, id: MessageId) -> &'static str {
@@ -1665,6 +1714,7 @@ impl App {
         }
         let mut effective_auth_config = config.clone();
         effective_auth_config.provider = Some(provider.as_str().to_string());
+        let model_ids_passthrough = effective_auth_config.model_ids_pass_through();
 
         // Check if the effective provider has an API key. This must happen
         // after settings.default_provider is applied; otherwise a saved
@@ -1795,17 +1845,22 @@ impl App {
         let cached_skills = Self::discover_cached_skills(&workspace, &skills_dir);
 
         let input_history = crate::composer_history::load_history();
-        let (initial_input_text, initial_input_cursor) = match initial_input {
-            // #451: pre-populate the composer when invoked via
-            // `deepseek pr <N>` (or any future caller that wants to
-            // drop the model into a session with context already
-            // typed). Cursor lands at the end so Enter sends as-is.
-            Some(text) if !text.is_empty() => {
-                let cursor = text.len();
-                (text, cursor)
-            }
-            _ => (String::new(), 0),
-        };
+        let (initial_input_text, initial_input_cursor, auto_submit_initial_input) =
+            match initial_input {
+                // #451: pre-populate the composer when invoked via
+                // `deepseek pr <N>` (or any future caller that wants to
+                // drop the model into a session with context already
+                // typed). Cursor lands at the end so Enter sends as-is.
+                Some(InitialInput::Prefill(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, false)
+                }
+                Some(InitialInput::Submit(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, true)
+                }
+                _ => (String::new(), 0, false),
+            };
         Self {
             mode: initial_mode,
             composer: ComposerState {
@@ -1831,8 +1886,9 @@ impl App {
                 selection_anchor: None,
             },
             viewport: ViewportState::default(),
-            goal: GoalState::default(),
+            hunt: HuntState::default(),
             session: SessionState::default(),
+            active_allowed_tools: None,
             history: Vec::new(),
             history_version: 0,
             history_revisions: Vec::new(),
@@ -1844,12 +1900,12 @@ impl App {
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,
-            version_hint: None,
             last_status_message_seen: None,
             model,
             auto_model,
             last_effective_model: None,
             api_provider: provider,
+            model_ids_passthrough,
             reasoning_effort,
             last_effective_reasoning_effort: None,
             workspace,
@@ -1980,6 +2036,9 @@ impl App {
             submit_pending_steers_after_interrupt: false,
             turn_started_at: None,
             cumulative_turn_duration: std::time::Duration::ZERO,
+            balance_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            balance_initiated: false,
+            last_balance_fetch: None,
             runtime_turn_id: None,
             runtime_turn_status: None,
             dispatch_started_at: None,
@@ -1992,10 +2051,12 @@ impl App {
             needs_redraw: true,
             thinking_started_at: None,
             is_compacting: false,
+            is_purging: false,
             user_scrolled_during_stream: false,
             coherence_state: CoherenceState::default(),
             last_send_at: None,
             last_submitted_prompt: None,
+            auto_submit_initial_input,
             quit_armed_until: None,
             cycle_count: 0,
             cycle_briefings: Vec::new(),
@@ -2003,8 +2064,10 @@ impl App {
             prefix_checks_total: 0,
             prefix_stability_pct: None,
             last_prefix_change_desc: None,
+            last_pinned_prefix_hash: None,
             cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),
+            folded_thinking: HashSet::new(),
             collapsed_cell_map: Vec::new(),
             edit_in_progress: false,
             lsp_enabled: config.lsp.as_ref().and_then(|l| l.enabled).unwrap_or(true),
@@ -4617,6 +4680,11 @@ impl App {
         }
     }
 
+    pub fn accepts_custom_model_ids(&self) -> bool {
+        self.model_ids_passthrough
+            || crate::config::provider_passes_model_through(self.api_provider)
+    }
+
     pub fn effective_model_for_budget(&self) -> &str {
         if self.auto_model {
             return self
@@ -4732,6 +4800,7 @@ pub enum AppAction {
     UpdateCompaction(CompactionConfig),
     OpenContextInspector,
     CompactContext,
+    PurgeContext,
     TaskAdd {
         prompt: String,
     },
@@ -4796,6 +4865,7 @@ pub enum McpUiAction {
     AddHttp {
         name: String,
         url: String,
+        transport: Option<String>,
     },
     Enable {
         name: String,
@@ -4844,6 +4914,35 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         }
+    }
+
+    #[test]
+    fn initial_input_prefill_waits_for_manual_submit() {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Prefill("review this PR".to_string()));
+
+        let app = App::new(options, &Config::default());
+
+        assert_eq!(app.input, "review this PR");
+        assert_eq!(app.cursor_position, "review this PR".chars().count());
+        assert!(!app.auto_submit_initial_input);
+    }
+
+    #[test]
+    fn initial_input_submit_marks_startup_dispatch() {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Submit(
+            "阅读项目 and wait for instructions".to_string(),
+        ));
+
+        let app = App::new(options, &Config::default());
+
+        assert_eq!(app.input, "阅读项目 and wait for instructions");
+        assert_eq!(
+            app.cursor_position,
+            "阅读项目 and wait for instructions".chars().count()
+        );
+        assert!(app.auto_submit_initial_input);
     }
 
     #[test]
@@ -5010,6 +5109,8 @@ mod tests {
         assert!(looks_like_slash_command_input("/"));
         assert!(looks_like_slash_command_input("/help"));
         assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
+        assert!(!looks_like_slash_command_input("/ hello"));
+        assert!(!looks_like_slash_command_input("  / hello"));
         assert!(!looks_like_slash_command_input(
             "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
         ));
@@ -5314,8 +5415,37 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        // Config::default() carries no api_key and the test runner
-        // should not have DEEPSEEK_API_KEY in its environment.
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _api_key_envs: Vec<_> = [
+            "DEEPSEEK_API_KEY",
+            "NVIDIA_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+            "OPENAI_API_KEY",
+            "ATLASCLOUD_API_KEY",
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+            "OPENROUTER_API_KEY",
+            "NOVITA_API_KEY",
+            "FIREWORKS_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "SGLANG_API_KEY",
+            "VLLM_API_KEY",
+            "OLLAMA_API_KEY",
+        ]
+        .into_iter()
+        .map(EnvVarGuard::remove)
+        .collect();
+
+        // Config::default() carries no api_key, and this test isolates process
+        // env/settings so previous tests or developer shells cannot satisfy it.
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,
