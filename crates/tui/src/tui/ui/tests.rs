@@ -2,6 +2,7 @@ use super::*;
 use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
+use crate::core::events::TurnOutcomeStatus;
 use crate::tui::active_cell::ActiveCell;
 use crate::tui::app::ToolDetailRecord;
 use crate::tui::file_mention::{
@@ -1256,6 +1257,40 @@ fn pro_plan_done_resets_before_next_user_turn() {
             .phase(),
         crate::tui::pro_plan::ProPlanPhase::Plan
     );
+}
+
+#[test]
+fn pro_plan_phase_does_not_advance_on_aborted_turns() {
+    let config = crate::tui::pro_plan::ProPlanConfig::default();
+    let mut router = ProPlanRouter::new(config);
+    router.start_execution(false);
+
+    let (_, interrupted_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Interrupted,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(!interrupted_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+
+    let (_, failed_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Failed,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(!failed_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+
+    let (_, completed_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Completed,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(completed_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Review);
 }
 
 #[test]

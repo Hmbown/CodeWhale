@@ -378,13 +378,11 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
         }
         AppMode::ProPlan => {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomePlanModeTip));
+            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeProPlanModeTip));
             let _ = writeln!(
                 stats,
-                "Pro Plan mode: plan with Pro, execute with Flash, review with Pro"
-            );
-            let _ = writeln!(
-                stats,
-                "The model switches automatically based on the current phase."
+                "{}",
+                tr(locale, MessageId::HomeProPlanModeAutoSwitchTip)
             );
         }
     }

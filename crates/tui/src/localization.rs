@@ -415,6 +415,11 @@ pub enum MessageId {
     ProPlanStatusReview,
     ProPlanStatusDone,
     ToolBlockedReadOnly,
+    ProPlanAcceptedExecution,
+    ProPlanAcceptedAutoExecution,
+    ProPlanExecutionQueued,
+    ProPlanAutoExecutionQueued,
+    ProPlanExitedToAgent,
     SettingsTitle,
     SettingsConfigFile,
     ClearConversation,
@@ -452,6 +457,8 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    HomeProPlanModeTip,
+    HomeProPlanModeAutoSwitchTip,
     HomeGoalModeTip,
     // Onboarding screens — language picker.
     OnboardLanguageTitle,
@@ -704,6 +711,11 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ProPlanStatusReview,
     MessageId::ProPlanStatusDone,
     MessageId::ToolBlockedReadOnly,
+    MessageId::ProPlanAcceptedExecution,
+    MessageId::ProPlanAcceptedAutoExecution,
+    MessageId::ProPlanExecutionQueued,
+    MessageId::ProPlanAutoExecutionQueued,
+    MessageId::ProPlanExitedToAgent,
     MessageId::SettingsTitle,
     MessageId::SettingsConfigFile,
     MessageId::ClearConversation,
@@ -741,6 +753,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::HomeProPlanModeTip,
+    MessageId::HomeProPlanModeAutoSwitchTip,
     MessageId::HomeGoalModeTip,
     MessageId::OnboardLanguageTitle,
     MessageId::OnboardLanguageBlurb,
@@ -1266,6 +1280,15 @@ fn english(id: MessageId) -> &'static str {
         MessageId::ProPlanStatusReview => "PRO-PLAN: Review",
         MessageId::ProPlanStatusDone => "PRO-PLAN: Done",
         MessageId::ToolBlockedReadOnly => "Blocked tool in read-only mode",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plan accepted. Starting Pro Plan execution with the Flash model."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plan accepted. Starting Pro Plan execution with auto-approval."
+        }
+        MessageId::ProPlanExecutionQueued => "Queued accepted plan execution (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => "Queued accepted plan execution (pro-plan auto).",
+        MessageId::ProPlanExitedToAgent => "Exited Pro Plan mode. Switched to Agent mode.",
         MessageId::SettingsTitle => "Settings:",
         MessageId::SettingsConfigFile => "Config file:",
         MessageId::ClearConversation => "Conversation cleared",
@@ -1305,6 +1328,12 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        MessageId::HomeProPlanModeTip => {
+            "Pro Plan mode - Plan with Pro, execute with Flash, review with Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  The model switches automatically based on the current phase"
+        }
         MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
@@ -1738,6 +1767,10 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  Sử dụng /mode plan để tạo danh sách kiểm tra có cấu trúc"
         }
+        MessageId::HomeProPlanModeTip => {
+            "Chế độ Pro Plan - Lập kế hoạch bằng Pro, thực thi bằng Flash, rà soát bằng Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => "  Mô hình tự chuyển theo giai đoạn hiện tại",
         MessageId::HomeGoalModeTip => {
             "Theo dõi mục tiêu - Dùng /goal <mục_tiêu> để đặt mục tiêu làm việc"
         }
@@ -1842,6 +1875,17 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ProPlanStatusReview => "PRO-PLAN: Rà soát",
         MessageId::ProPlanStatusDone => "PRO-PLAN: Hoàn tất",
         MessageId::ToolBlockedReadOnly => "Đã chặn công cụ trong chế độ chỉ đọc",
+        MessageId::ProPlanAcceptedExecution => {
+            "Đã chấp nhận kế hoạch. Bắt đầu thực thi Pro Plan bằng mô hình Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Đã chấp nhận kế hoạch. Bắt đầu thực thi Pro Plan với tự động phê duyệt."
+        }
+        MessageId::ProPlanExecutionQueued => "Đã xếp hàng thực thi kế hoạch (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Đã xếp hàng thực thi kế hoạch (pro-plan tự động)."
+        }
+        MessageId::ProPlanExitedToAgent => "Đã thoát Pro Plan. Chuyển sang chế độ Agent.",
     })
 }
 
@@ -2154,6 +2198,19 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::ProPlanStatusReview => "PRO-PLAN: レビュー",
         MessageId::ProPlanStatusDone => "PRO-PLAN: 完了",
         MessageId::ToolBlockedReadOnly => "読み取り専用モードでツールをブロックしました",
+        MessageId::ProPlanAcceptedExecution => {
+            "プランを承認しました。Flash モデルで Pro Plan 実行を開始します。"
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "プランを承認しました。自動承認で Pro Plan 実行を開始します。"
+        }
+        MessageId::ProPlanExecutionQueued => "承認済みプランの実行をキューしました (pro-plan)。",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "承認済みプランの実行をキューしました (pro-plan auto)。"
+        }
+        MessageId::ProPlanExitedToAgent => {
+            "Pro Plan モードを終了し、Agent モードに切り替えました。"
+        }
         MessageId::SettingsTitle => "設定：",
         MessageId::SettingsConfigFile => "設定ファイル：",
         MessageId::ClearConversation => "会話履歴をクリアしました",
@@ -2195,6 +2252,10 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  /mode plan を使って構造化されたチェックリストを作成"
         }
+        MessageId::HomeProPlanModeTip => {
+            "Pro Plan モード - Pro で計画、Flash で実行、Pro でレビュー"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => "  現在のフェーズに応じてモデルを自動切り替え",
         MessageId::HomeGoalModeTip => "Goal 追跡 - /goal <目標> で持続的な目標を追跡",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "言語を選択",
@@ -2526,6 +2587,13 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ProPlanStatusReview => "PRO-PLAN: 审查",
         MessageId::ProPlanStatusDone => "PRO-PLAN: 完成",
         MessageId::ToolBlockedReadOnly => "只读模式已阻止工具",
+        MessageId::ProPlanAcceptedExecution => {
+            "计划已接受。正在使用 Flash 模型开始 Pro Plan 执行。"
+        }
+        MessageId::ProPlanAcceptedAutoExecution => "计划已接受。正在以自动审批开始 Pro Plan 执行。",
+        MessageId::ProPlanExecutionQueued => "已排队执行接受的计划 (pro-plan)。",
+        MessageId::ProPlanAutoExecutionQueued => "已排队执行接受的计划 (pro-plan auto)。",
+        MessageId::ProPlanExitedToAgent => "已退出 Pro Plan 模式，并切换到 Agent 模式。",
         MessageId::SettingsTitle => "设置：",
         MessageId::SettingsConfigFile => "配置文件：",
         MessageId::ClearConversation => "对话已清空",
@@ -2565,6 +2633,8 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
+        MessageId::HomeProPlanModeTip => "Pro Plan 模式 - 用 Pro 计划、用 Flash 执行、用 Pro 审查",
+        MessageId::HomeProPlanModeAutoSwitchTip => "  模型会根据当前阶段自动切换",
         MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
@@ -2946,6 +3016,17 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ProPlanStatusReview => "PRO-PLAN: Revisão",
         MessageId::ProPlanStatusDone => "PRO-PLAN: Concluído",
         MessageId::ToolBlockedReadOnly => "Ferramenta bloqueada no modo somente leitura",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plano aceito. Iniciando execução do Pro Plan com o modelo Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plano aceito. Iniciando execução do Pro Plan com autoaprovação."
+        }
+        MessageId::ProPlanExecutionQueued => "Execução do plano aceita enfileirada (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Execução do plano aceita enfileirada (pro-plan auto)."
+        }
+        MessageId::ProPlanExitedToAgent => "Saiu do modo Pro Plan. Alternado para Agent.",
         MessageId::SettingsTitle => "Configurações:",
         MessageId::SettingsConfigFile => "Arquivo de configuração:",
         MessageId::ClearConversation => "Conversa limpa",
@@ -2990,6 +3071,12 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Use /mode plan para criar checklists estruturados"
+        }
+        MessageId::HomeProPlanModeTip => {
+            "Modo Pro Plan - Planeje com Pro, execute com Flash, revise com Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  O modelo troca automaticamente conforme a fase atual"
         }
         MessageId::HomeGoalModeTip => {
             "Rastreamento de Goal - Use /goal <objetivo> para rastrear um objetivo persistente"
@@ -3398,6 +3485,17 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ProPlanStatusReview => "PRO-PLAN: Revisión",
         MessageId::ProPlanStatusDone => "PRO-PLAN: Listo",
         MessageId::ToolBlockedReadOnly => "Herramienta bloqueada en modo solo lectura",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plan aceptado. Iniciando ejecución de Pro Plan con el modelo Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plan aceptado. Iniciando ejecución de Pro Plan con autoaprobación."
+        }
+        MessageId::ProPlanExecutionQueued => "Ejecución del plan aceptado en cola (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Ejecución del plan aceptado en cola (pro-plan auto)."
+        }
+        MessageId::ProPlanExitedToAgent => "Saliste del modo Pro Plan. Cambiado a Agent.",
         MessageId::SettingsTitle => "Configuraciones:",
         MessageId::SettingsConfigFile => "Archivo de configuración:",
         MessageId::ClearConversation => "Conversación limpia",
@@ -3442,6 +3540,12 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planear antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Usa /mode plan para crear checklists estructurados"
+        }
+        MessageId::HomeProPlanModeTip => {
+            "Modo Pro Plan - Planear con Pro, ejecutar con Flash, revisar con Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  El modelo cambia automáticamente según la fase actual"
         }
         MessageId::HomeGoalModeTip => {
             "Seguimiento de Goal - Usa /goal <objetivo> para seguir un objetivo persistente"

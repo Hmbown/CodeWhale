@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn test_review_rejected_to_plan() {
+    fn test_review_rejected_returns_to_execute() {
         let config = ProPlanConfig::default();
         let mut router = ProPlanRouter::new(config);
 

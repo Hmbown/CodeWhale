@@ -47,7 +47,7 @@ use crate::config::{
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
-use crate::core::events::Event as EngineEvent;
+use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
 use crate::hooks::{HookEvent, HookExecutor};
 use crate::llm_client::LlmClient;
@@ -918,6 +918,24 @@ fn should_add_pro_plan_planning_instruction(app: &App, input: &str) -> bool {
 
 fn pro_plan_planning_instruction() -> &'static str {
     "\n\n<pro_plan_planning>\nYou are in Pro Plan's planning phase. Use the existing Plan mode behavior and call update_plan with the proposed implementation plan as the next tool call, then stop. Do not edit files in this phase. If the user only asked a question, answer normally without update_plan.\n</pro_plan_planning>"
+}
+
+fn apply_pro_plan_turn_completion(
+    router: &mut ProPlanRouter,
+    status: TurnOutcomeStatus,
+    last_assistant_text: &str,
+    plan_tool_used: bool,
+) -> (ProPlanPhase, bool) {
+    let phase_before = router.phase();
+    if status == TurnOutcomeStatus::Completed {
+        if !last_assistant_text.is_empty() {
+            router.transition(last_assistant_text);
+        }
+        if plan_tool_used && router.phase() == ProPlanPhase::Plan {
+            router.mark_plan_ready();
+        }
+    }
+    (phase_before, router.phase() != phase_before)
 }
 
 fn turn_auto_approve(app: &App, turn_mode: AppMode) -> bool {
@@ -1967,18 +1985,15 @@ async fn run_event_loop(
                                     })
                                     .unwrap_or_default();
 
-                                let phase_before = router.phase();
-                                if !last_assistant_text.is_empty() {
-                                    router.transition(&last_assistant_text);
-                                }
-                                if app.plan_tool_used_in_turn
-                                    && router.phase() == ProPlanPhase::Plan
-                                {
-                                    router.mark_plan_ready();
-                                }
-                                let transition_changed = router.phase() != phase_before;
+                                let (phase_before, transition_changed) =
+                                    apply_pro_plan_turn_completion(
+                                        router,
+                                        status,
+                                        &last_assistant_text,
+                                        app.plan_tool_used_in_turn,
+                                    );
 
-                                if status == crate::core::events::TurnOutcomeStatus::Completed {
+                                if status == TurnOutcomeStatus::Completed {
                                     let no_pending_user_work =
                                         queued_count == 0 && !has_queued_draft;
                                     let phase_after = router.phase();
@@ -6241,7 +6256,7 @@ async fn apply_plan_choice(
             }
             app.add_message(HistoryCell::System {
                 content: if pro_plan {
-                    "Plan accepted. Starting Pro Plan execution with the Flash model.".to_string()
+                    tr(app.ui_locale, MessageId::ProPlanAcceptedExecution).to_string()
                 } else {
                     "Plan accepted. Switching to Agent mode and starting implementation."
                         .to_string()
@@ -6256,7 +6271,7 @@ async fn apply_plan_choice(
             if app.is_loading {
                 app.queue_message(followup);
                 app.status_message = Some(if pro_plan {
-                    "Queued accepted plan execution (pro-plan).".to_string()
+                    tr(app.ui_locale, MessageId::ProPlanExecutionQueued).to_string()
                 } else {
                     "Queued accepted plan execution (agent mode).".to_string()
                 });
@@ -6275,7 +6290,7 @@ async fn apply_plan_choice(
             }
             app.add_message(HistoryCell::System {
                 content: if pro_plan {
-                    "Plan accepted. Starting Pro Plan execution with auto-approval.".to_string()
+                    tr(app.ui_locale, MessageId::ProPlanAcceptedAutoExecution).to_string()
                 } else {
                     "Plan accepted. Switching to YOLO mode and starting implementation.".to_string()
                 },
@@ -6289,7 +6304,7 @@ async fn apply_plan_choice(
             if app.is_loading {
                 app.queue_message(followup);
                 app.status_message = Some(if pro_plan {
-                    "Queued accepted plan execution (pro-plan auto).".to_string()
+                    tr(app.ui_locale, MessageId::ProPlanAutoExecutionQueued).to_string()
                 } else {
                     "Queued accepted plan execution (YOLO mode).".to_string()
                 });
@@ -6310,7 +6325,7 @@ async fn apply_plan_choice(
         }
         PlanChoice::ExitPlan => {
             let content = if app.mode == AppMode::ProPlan {
-                "Exited Pro Plan mode. Switched to Agent mode."
+                tr(app.ui_locale, MessageId::ProPlanExitedToAgent)
             } else {
                 "Exited Plan mode. Switched to Agent mode."
             };
