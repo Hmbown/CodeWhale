@@ -755,6 +755,12 @@ pub enum SearchProvider {
         alias = "baidu-ai-search"
     )]
     Baidu,
+    /// Volcengine Ark web_search via Responses API. Requires api_key.
+    /// Free tier: 20K queries/month per API key. Falls back to
+    /// `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY`
+    /// env vars when `[search] api_key` is not set.
+    #[serde(alias = "volcengine", alias = "ark", alias = "volc")]
+    Volcengine,
 }
 
 impl SearchProvider {
@@ -769,6 +775,7 @@ impl SearchProvider {
             "baidu" | "baidu-search" | "baidu_search" | "baidu-ai-search" | "baidu_ai_search" => {
                 Some(Self::Baidu)
             }
+            "volcengine" | "ark" | "volc" | "volcengine-ark" => Some(Self::Volcengine),
             _ => None,
         }
     }
@@ -782,6 +789,7 @@ impl SearchProvider {
             Self::Bocha => "bocha",
             Self::Metaso => "metaso",
             Self::Baidu => "baidu",
+            Self::Volcengine => "volcengine",
         }
     }
 }
@@ -813,12 +821,13 @@ pub struct SearchProviderResolution {
 /// Web search provider configuration (`[search]` table in config.toml).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SearchConfig {
-    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso` | `baidu`. Default: `duckduckgo`.
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso` | `baidu` | `volcengine`. Default: `duckduckgo`.
     #[serde(default)]
     pub provider: Option<SearchProvider>,
-    /// API key for Tavily, Bocha, Metaso, or Baidu. Not required for Bing or DuckDuckGo.
+    /// API key for Tavily, Bocha, Metaso, Baidu, or Volcengine. Not required for Bing or DuckDuckGo.
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in default.
     /// Baidu also falls back to `BAIDU_SEARCH_API_KEY` env var.
+    /// Volcengine also falls back to `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY` env vars.
     #[serde(default)]
     pub api_key: Option<String>,
 }
