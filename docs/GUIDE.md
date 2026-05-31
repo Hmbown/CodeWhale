@@ -453,6 +453,31 @@ Approvals are part of the safety model. Shell commands, paid tools, writes, and
 actions outside the expected workspace can have side effects. Approval prompts
 let you keep control while still letting the model do useful work.
 
+### How do I run a Python file on macOS?
+
+Open Terminal in the folder that contains the file and run:
+
+```bash
+python3 your_file.py
+```
+
+If macOS says `python3` is missing, install Python from
+[python.org](https://www.python.org/downloads/macos/) or with Homebrew:
+
+```bash
+brew install python
+```
+
+Inside CodeWhale, ask the agent to inspect the file and run it with
+`python3 your_file.py`. If the script needs packages, install them in a virtual
+environment first:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
 ### Where is my config stored?
 
 New CodeWhale config uses `~/.codewhale/config.toml`. Legacy
