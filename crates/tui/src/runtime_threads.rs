@@ -2885,6 +2885,7 @@ impl RuntimeThreadManager {
                     usage,
                     status,
                     error,
+                    ..
                 } => {
                     turn_usage = Some(usage);
                     turn_status = match status {
@@ -3709,6 +3710,7 @@ mod tests {
                         },
                         status: TurnOutcomeStatus::Completed,
                         error: None,
+                        tool_catalog: None,
                     })
                     .await;
             }
@@ -4001,6 +4003,7 @@ mod tests {
                         },
                         status: TurnOutcomeStatus::Completed,
                         error: None,
+                        tool_catalog: None,
                     })
                     .await;
                 if turn_index >= 2 {
@@ -4237,6 +4240,7 @@ mod tests {
                 },
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
 
@@ -4318,6 +4322,7 @@ mod tests {
                 usage: Usage::default(),
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
         Ok(())
@@ -4395,6 +4400,7 @@ mod tests {
                 usage: Usage::default(),
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
         Ok(())
@@ -4458,6 +4464,7 @@ mod tests {
                 usage: Usage::default(),
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
 
@@ -4585,6 +4592,7 @@ mod tests {
                 usage: Usage::default(),
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
         Ok(())
@@ -4665,6 +4673,7 @@ mod tests {
                 },
                 status: TurnOutcomeStatus::Completed,
                 error: None,
+                tool_catalog: None,
             })
             .await?;
 
@@ -4726,6 +4735,7 @@ mod tests {
                         },
                         status: TurnOutcomeStatus::Completed,
                         error: None,
+                        tool_catalog: None,
                     })
                     .await;
             }
@@ -4836,6 +4846,7 @@ mod tests {
                                 },
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
+                                tool_catalog: None,
                             })
                             .await;
                     }
@@ -4866,6 +4877,7 @@ mod tests {
                                 },
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
+                                tool_catalog: None,
                             })
                             .await;
                     }
