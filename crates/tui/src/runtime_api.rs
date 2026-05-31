@@ -711,7 +711,7 @@ fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool, 
     if show_qr {
         match qrcode::QrCode::new(qr_url.as_bytes()) {
             Ok(qr) => {
-                let qr_str = qr.render::<char>().module_dimensions(2, 1).build();
+                let qr_str = qr.render::<qrcode::render::unicode::Dense1x2>().build();
                 println!("\n{qr_str}");
             }
             Err(e) => {
