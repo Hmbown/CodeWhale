@@ -554,6 +554,7 @@ fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette;
     use crate::tui::history::{ExecCell, ExecSource, HistoryCell, ToolCell, ToolStatus};
 
     fn plain_lines(cache: &TranscriptViewCache) -> Vec<String> {
@@ -593,6 +594,20 @@ mod tests {
             interaction: None,
             output_summary: None,
         }))
+    }
+
+    #[test]
+    fn cache_renders_user_cells_with_highlight_background() {
+        let cells = vec![user_cell("# literal user prompt")];
+        let revisions = vec![1u64];
+
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure(&cells, &revisions, 40, TranscriptRenderOptions::default());
+
+        let lines = cache.lines();
+        assert_eq!(lines[0].style.bg, Some(palette::SURFACE_ELEVATED));
+        assert_eq!(lines[0].width(), 40);
+        assert_eq!(plain_lines(&cache)[0].trim_end(), "▎ # literal user prompt");
     }
 
     #[test]

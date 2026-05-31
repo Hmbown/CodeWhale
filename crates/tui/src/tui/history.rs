@@ -309,13 +309,9 @@ impl HistoryCell {
         options: TranscriptRenderOptions,
     ) -> Vec<RenderedTranscriptLine> {
         match self {
-            HistoryCell::User { content } => render_message_with_copy_metadata(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => {
+                hard_break_copy_lines(render_user_message(content, width))
+            }
             HistoryCell::Assistant { content, streaming } => render_message_with_copy_metadata(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, options.low_motion),
