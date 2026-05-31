@@ -9,22 +9,26 @@ only the provider and safety knobs you need.
 
 Default config path:
 
-- `~/.deepseek/config.toml`
+- `~/.codewhale/config.toml`
+- Legacy fallback: `~/.deepseek/config.toml`
 
 Overrides:
 
 - CLI: `codewhale --config /path/to/config.toml`
-- Env: `DEEPSEEK_CONFIG_PATH=/path/to/config.toml`
+- Env: `CODEWHALE_CONFIG_PATH=/path/to/config.toml`
+- Legacy env alias: `DEEPSEEK_CONFIG_PATH=/path/to/config.toml`
 
 If both are set, `--config` wins. Environment variable overrides are applied after the file is loaded.
 
 ### Per-project overlay (#485)
 
 When the TUI starts in a workspace that contains a
-`<workspace>/.deepseek/config.toml` file, the values declared in that
-file are merged on top of the global config. This lets a repo lock its
-own provider, model, sandbox policy, or approval policy without
-touching the user's `~/.deepseek/config.toml`. Pass
+`<workspace>/.codewhale/config.toml` file, the values declared in that
+file are merged on top of the global config. Legacy
+`<workspace>/.deepseek/config.toml` files are still read when the
+CodeWhale path is absent. This lets a repo lock its own provider,
+model, sandbox policy, or approval policy without touching the user's
+`~/.codewhale/config.toml`. Pass
 `--no-project-config` to skip the overlay for one launch.
 
 Supported keys in the project overlay (top-level fields only):
@@ -52,8 +56,9 @@ specific use case.
 The `codewhale` facade and `codewhale-tui` binary share the same config file for
 DeepSeek auth and model defaults. `codewhale auth set --provider deepseek` (and
 the legacy `codewhale login --api-key ...` alias) saves the key to
-`~/.deepseek/config.toml`, and `codewhale --model deepseek-v4-flash` is forwarded
-to the TUI as `DEEPSEEK_MODEL`.
+`~/.codewhale/config.toml` (migrating legacy `~/.deepseek/config.toml` on first
+launch when needed), and `codewhale --model deepseek-v4-flash` is forwarded to
+the TUI as `DEEPSEEK_MODEL`.
 
 Credential lookup uses `config -> keyring -> env` after any explicit CLI
 `--api-key`. Run `codewhale auth status` to inspect the active provider's config
@@ -298,11 +303,15 @@ Remaining variables:
 - `DEEPSEEK_MANAGED_CONFIG_PATH`
 - `DEEPSEEK_REQUIREMENTS_PATH`
 - `DEEPSEEK_MAX_SUBAGENTS` (clamped to `1..=20`)
-- `DEEPSEEK_TASKS_DIR` (runtime task queue/artifact storage, default `~/.deepseek/tasks`)
+- `DEEPSEEK_TASKS_DIR` (runtime task queue/artifact storage, default
+  `~/.codewhale/tasks`, with legacy `~/.deepseek/tasks` fallback when only the
+  legacy directory exists)
 - `DEEPSEEK_ALLOW_INSECURE_HTTP` (`1`/`true` allows non-local `http://` base URLs; default is reject)
 - `DEEPSEEK_FORCE_HTTP1` (`1|true|yes|on` pins the HTTP client to HTTP/1.1, disabling HTTP/2; useful on Windows or behind proxies that mishandle long-lived H2 streams)
-- `DEEPSEEK_HOME` (override the base data directory; defaults to `~/.deepseek`)
-- `DEEPSEEK_AUTOMATIONS_DIR` (override the automations storage directory; defaults to `~/.deepseek/automations`)
+- `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`)
+- `DEEPSEEK_AUTOMATIONS_DIR` (override the automations storage directory; uses
+  `~/.codewhale/automations` when that directory exists, otherwise the legacy
+  `~/.deepseek/automations` path)
 - `DEEPSEEK_CAPACITY_ENABLED`
 - `DEEPSEEK_CAPACITY_LOW_RISK_MAX`
 - `DEEPSEEK_CAPACITY_MEDIUM_RISK_MAX`
@@ -336,7 +345,7 @@ concatenated, in declared order, alongside the auto-loaded
 ```toml
 instructions = [
     "./AGENTS.md",
-    "~/.deepseek/global.md",
+    "~/.codewhale/global.md",
     "~/team/agents-shared.md",
 ]
 ```
@@ -348,7 +357,8 @@ Rules:
   truncated with a `[…elided]` marker rather than skipped.
 - Missing files are skipped with a tracing warning so a stale
   entry doesn't fail the launch.
-- Project config (`<workspace>/.deepseek/config.toml`)
+- Project config (`<workspace>/.codewhale/config.toml`, or legacy
+  `<workspace>/.deepseek/config.toml`)
   **replaces** the user array wholesale rather than merging.
   If you want both, list `~/global.md` inside the project
   array. Set `instructions = []` in the project to clear the
@@ -508,24 +518,28 @@ If you are upgrading from older releases:
   `[subagents.models]` accepts lower-case role or type keys such as `worker`,
   `explorer`, `general`, `explore`, `plan`, and `review`. Values must normalize
   to a supported DeepSeek model id before an agent is spawned.
-- `skills_dir` (string, optional): defaults to `~/.deepseek/skills` (each skill is
+- `skills_dir` (string, optional): defaults to `~/.codewhale/skills` (each skill is
   a directory containing `SKILL.md`). Workspace-local `.agents/skills` or
   `./skills` are preferred when present; the runtime also discovers global
   agentskills.io-compatible `~/.agents/skills` and the broader Claude-ecosystem
   `~/.claude/skills`. First launch installs versioned bundled skills for common
   workflows including skill creation, delegation, MCP/plugin scaffolding,
   documents, presentations, spreadsheets, PDFs, and Feishu/Lark.
-- `mcp_config_path` (string, optional): defaults to `~/.deepseek/mcp.json`.
+- `mcp_config_path` (string, optional): defaults to `~/.codewhale/mcp.json`, with
+  legacy `~/.deepseek/mcp.json` fallback when the CodeWhale path is absent.
   It is visible in `/config` and can be changed from the TUI. The new path is
   used immediately by `/mcp`, but rebuilding the model-visible MCP tool pool
   requires restarting the TUI.
-- `notes_path` (string, optional): defaults to `~/.deepseek/notes.txt` and is used by the model-visible `note` tool.
+- `notes_path` (string, optional): defaults to `~/.codewhale/notes.txt`, with
+  legacy `~/.deepseek/notes.txt` fallback when the CodeWhale path is absent, and
+  is used by the model-visible `note` tool.
 - `[memory].enabled` (bool, optional): defaults to `false`. When `true`,
   the TUI loads the user memory file into a `<user_memory>` prompt block,
   enables `# foo` quick-capture in the composer, surfaces the `/memory`
   slash command, and registers the `remember` tool. The same toggle is
   available via `DEEPSEEK_MEMORY=on`.
-- `memory_path` (string, optional): defaults to `~/.deepseek/memory.md`.
+- `memory_path` (string, optional): defaults to `~/.codewhale/memory.md`, with
+  legacy `~/.deepseek/memory.md` fallback when the CodeWhale path is absent.
   Used by the user-memory feature when enabled — see
   [`MEMORY.md`](MEMORY.md) for the full feature surface (`# foo`
   composer prefix, `/memory` slash command, `remember` tool, opt-in
@@ -533,7 +547,10 @@ If you are upgrading from older releases:
 - `snapshots.*` (optional): side-git workspace snapshots for file rollback:
   - `[snapshots].enabled` (bool, default `true`)
   - `[snapshots].max_age_days` (int, default `7`)
-  - snapshots live under `~/.deepseek/snapshots/<project_hash>/<worktree_hash>/.git` and never use the workspace's own `.git` directory
+  - snapshots live under
+    `~/.codewhale/snapshots/<project_hash>/<worktree_hash>/.git`, with legacy
+    `~/.deepseek/snapshots/...` fallback when only the legacy state exists, and
+    never use the workspace's own `.git` directory
 - `context.*` (optional): append-only Fin seam manager, currently opt-in.
   Fin is the fast `deepseek-v4-flash` path with thinking off used for
   coordination work such as routing, summaries, and context maintenance.
@@ -617,7 +634,7 @@ User memory is split across one top-level path setting and one opt-in
 toggle table:
 
 ```toml
-memory_path = "~/.deepseek/memory.md"
+memory_path = "~/.codewhale/memory.md"
 
 [memory]
 enabled = true
@@ -755,7 +772,8 @@ See `docs/capacity_controller.md` for formulas, intervention behavior, and telem
 ## Notes On `codewhale-tui doctor`
 
 `codewhale-tui doctor` follows the same config resolution rules as the rest of the
-TUI. That means `--config` / `DEEPSEEK_CONFIG_PATH` are respected, and MCP/skills
+TUI. That means `--config`, `CODEWHALE_CONFIG_PATH`, and the legacy
+`DEEPSEEK_CONFIG_PATH` are respected, and MCP/skills
 checks use the resolved `mcp_config_path` / `skills_dir` (including env overrides).
 
 To bootstrap missing MCP/skills paths, run `codewhale-tui setup --all`. You can
@@ -790,17 +808,17 @@ configure reasoning effort.
   MCP/skills/tools/plugins counts, sandbox, `.env` presence). Read-only and
   network-free; safe to run in CI. If `.env` is missing and `.env.example` is
   present in the workspace, the status output points at `cp .env.example .env`.
-- `--tools` — scaffold `~/.deepseek/tools/` with a `README.md` describing the
+- `--tools` — scaffold `~/.codewhale/tools/` with a `README.md` describing the
   self-describing frontmatter convention (`# name:` / `# description:` /
   `# usage:`) and an `example.sh` that follows it. The directory is
   intentionally not auto-loaded; wire individual scripts into the agent via
   MCP, hooks, or skills.
-- `--plugins` — scaffold `~/.deepseek/plugins/` with a `README.md` and an
+- `--plugins` — scaffold `~/.codewhale/plugins/` with a `README.md` and an
   `example/PLUGIN.md` placeholder using the same frontmatter shape as
   `SKILL.md`. Plugins are not loaded automatically either; reference them
   from a skill, hook, or MCP wrapper when you want them active.
 - `--all` now scaffolds MCP + skills + tools + plugins together.
-- `--clean` — list `~/.deepseek/sessions/checkpoints/latest.json` and
+- `--clean` — list `~/.codewhale/sessions/checkpoints/latest.json` and
   `offline_queue.json` if they exist. Pass `--force` to actually remove them.
   This never touches real session history or the task queue.
 
