@@ -1423,6 +1423,7 @@ impl Engine {
                     usage: zero_usage,
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
+                    tool_catalog: None,
                 })
                 .await;
             return;
@@ -1477,6 +1478,7 @@ impl Engine {
                 usage: zero_usage,
                 status,
                 error,
+                tool_catalog: None,
             })
             .await;
     }

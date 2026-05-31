@@ -852,8 +852,10 @@ fn prompt_layer(
     let char_len = content.chars().count();
     let token_estimate = if char_len == 0 {
         0
-    } else {
+    } else if content.is_ascii() {
         (char_len / 4).max(1)
+    } else {
+        char_len.max(1)
     };
     PromptLayerInspection {
         name,

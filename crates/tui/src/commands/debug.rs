@@ -167,6 +167,10 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
 }
 
 fn format_cache_inspect(app: &mut App, verbose: bool, json_mode: bool) -> String {
+    if verbose && json_mode {
+        return "cache inspect: --json and --verbose cannot be combined".to_string();
+    }
+
     let reasoning_effort = if app.reasoning_effort == crate::tui::app::ReasoningEffort::Auto {
         app.last_effective_reasoning_effort
             .and_then(crate::tui::app::ReasoningEffort::api_value)
@@ -313,7 +317,7 @@ fn format_verbose_diff(previous: &PromptInspection, current: &PromptInspection) 
             (Some(prev), None) => {
                 out.push_str(&format!("  [{index}] {} removed\n", prev.name));
             }
-            (None, None) => {}
+            (None, None) => unreachable!("index is within max_len"),
         }
     }
     out
@@ -893,6 +897,41 @@ mod tests {
             .expect("tool catalog layer");
         assert!(tool_layer["byte_len"].as_u64().unwrap() > 0);
         assert!(tool_layer["token_estimate"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn cache_inspect_rejects_json_verbose_combo() {
+        let mut app = create_test_app();
+        let msg = cache(&mut app, Some("inspect --json --verbose"))
+            .message
+            .expect("inspect output");
+
+        assert_eq!(
+            msg,
+            "cache inspect: --json and --verbose cannot be combined"
+        );
+    }
+
+    #[test]
+    fn cache_inspect_json_uses_cjk_aware_token_estimate() {
+        let mut app = create_test_app();
+        app.system_prompt = Some(SystemPrompt::Text("缓存命中测试".to_string()));
+
+        let msg = cache(&mut app, Some("inspect --json"))
+            .message
+            .expect("inspect json output");
+        let parsed: serde_json::Value = serde_json::from_str(&msg).expect("valid json");
+        let system_layer = parsed["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["name"] == "Global system prefix")
+            .expect("system layer");
+
+        assert_eq!(
+            system_layer["token_estimate"].as_u64(),
+            system_layer["char_len"].as_u64()
+        );
     }
 
     #[test]
