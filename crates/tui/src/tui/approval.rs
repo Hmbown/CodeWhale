@@ -157,44 +157,6 @@ impl ApprovalRequest {
         Self::new_inner(id, tool_name, description, params, approval_key, None, None)
     }
 
-    pub fn new_with_intent(
-        id: &str,
-        tool_name: &str,
-        description: &str,
-        params: &Value,
-        approval_key: &str,
-        intent_summary: Option<&str>,
-    ) -> Self {
-        Self::new_inner(
-            id,
-            tool_name,
-            description,
-            params,
-            approval_key,
-            None,
-            intent_summary,
-        )
-    }
-
-    pub fn new_with_workspace(
-        id: &str,
-        tool_name: &str,
-        description: &str,
-        params: &Value,
-        approval_key: &str,
-        workspace: &Path,
-    ) -> Self {
-        Self::new_inner(
-            id,
-            tool_name,
-            description,
-            params,
-            approval_key,
-            Some(workspace),
-            None,
-        )
-    }
-
     pub fn new_with_workspace_and_intent(
         id: &str,
         tool_name: &str,
