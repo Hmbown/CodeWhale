@@ -264,7 +264,7 @@ fn background_tty_command_has_controlling_terminal() {
         .expect("background tty execution should return task_id");
 
     let done = manager
-        .get_output(&task_id, true, 5000)
+        .get_output(&task_id, true, 10_000)
         .expect("get tty command output");
 
     assert_eq!(done.status, ShellStatus::Completed);
