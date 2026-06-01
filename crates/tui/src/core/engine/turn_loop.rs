@@ -6,6 +6,7 @@
 //! checkpoints, and loop termination.
 
 use super::*;
+use crate::prompt_zones::PinnedPrefix;
 
 fn loop_guard_block_tool_result(message: String) -> ToolResult {
     ToolResult::error(message).with_metadata(json!({"loop_guard": "identical_tool_call"}))
@@ -307,6 +308,34 @@ impl Engine {
                             })
                             .await;
                     }
+                }
+            }
+
+            // Three-zone prefix contract (#2264): freeze baseline on first
+            // turn, verify against frozen baseline on subsequent turns.
+            // Operates alongside PrefixStabilityManager — this is the
+            // diagnostic layer that never auto-re-pins (unlike check_and_update).
+            // Phase 2: warn-only, no request refusal.
+            let system_text =
+                crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
+            let current_tools: Vec<crate::models::Tool> = active_tools.clone().unwrap_or_default();
+
+            match &self.session.frozen_prefix {
+                Some(frozen) => {
+                    if let Err(drift) = frozen.verify(&system_text, &current_tools) {
+                        tracing::debug!(
+                            target: "prefix_cache",
+                            "three-zone drift: {drift}"
+                        );
+                        let pinned =
+                            PinnedPrefix::new(self.session.system_prompt.as_ref(), current_tools);
+                        self.session.frozen_prefix = Some(pinned.freeze());
+                    }
+                }
+                None => {
+                    let pinned =
+                        PinnedPrefix::new(self.session.system_prompt.as_ref(), current_tools);
+                    self.session.frozen_prefix = Some(pinned.freeze());
                 }
             }
 

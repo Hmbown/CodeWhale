@@ -6,6 +6,7 @@ use crate::cycle_manager::CycleBriefing;
 use crate::models::{Message, SystemPrompt, Usage};
 use crate::prefix_cache::PrefixStabilityManager;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
+use crate::prompt_zones::FrozenPrefix;
 use crate::tui::approval::ApprovalMode;
 use crate::working_set::WorkingSet;
 use chrono::{DateTime, Utc};
@@ -91,6 +92,11 @@ pub struct Session {
     /// Tracks the immutable prefix fingerprint and detects drift across turns.
     /// Set during engine construction; None until the first system prompt assembly.
     pub prefix_stability: Option<PrefixStabilityManager>,
+
+    /// Three-zone immutable prefix baseline (#2264). Frozen on the first
+    /// request of the session; verified against the current system+tool
+    /// state before every subsequent request. None until the first turn.
+    pub frozen_prefix: Option<FrozenPrefix>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -166,6 +172,7 @@ impl Session {
             current_cycle_started: Utc::now(),
             cycle_briefings: Vec::new(),
             prefix_stability: None,
+            frozen_prefix: None,
         }
     }
 
