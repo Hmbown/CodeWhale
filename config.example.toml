@@ -553,21 +553,20 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # method        = "auto"   # auto | osc9 | bel | off
 #                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm.
 #                       On macOS / Linux, falls back to BEL.
-#                       On Windows, falls back to "off" — BEL maps to the
-#                       system error chime (SystemAsterisk / MB_OK), which
-#                       sounds like an error popup. Set method = "bel"
-#                       explicitly to opt back in (#583).
+#                       On Windows, BEL is routed through MessageBeep(MB_OK).
 #                 osc9: \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification)
 #                 bel:  plain \x07 beep
 #                 off:  disable entirely
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
-# completion_sound = "beep" # off | beep | bell — sound on turn completion (✅ marker)
+# completion_sound = "beep" # off | beep | bell | file — sound on turn completion (✅ marker)
+# sound_file = "E:\\google\\downloads\\notify.wav" # used when completion_sound = "file" (Windows)
 [notifications]
 # method = "auto"
 # threshold_secs = 30
 # include_summary = false
 # completion_sound = "beep"
+# sound_file = "E:\\google\\downloads\\notify.wav"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workspace Snapshots (#137)
