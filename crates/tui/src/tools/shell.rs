@@ -312,6 +312,29 @@ fn terminate_windows_job(job: Option<&WindowsJob>, child: &mut Child) -> std::io
 }
 
 #[cfg(windows)]
+fn terminate_and_close_windows_job(windows_job: Option<WindowsJob>) {
+    if let Some(job) = windows_job.as_ref()
+        && let Err(err) = job.terminate()
+    {
+        tracing::warn!(
+            ?err,
+            "failed to terminate Windows shell job before closing job handle"
+        );
+    }
+    drop(windows_job);
+}
+
+#[cfg(windows)]
+fn terminate_child_and_close_windows_job(
+    windows_job: Option<WindowsJob>,
+    child: &mut Child,
+) -> std::io::Result<()> {
+    let result = terminate_windows_job(windows_job.as_ref(), child);
+    drop(windows_job);
+    result
+}
+
+#[cfg(windows)]
 fn attach_windows_job(child: &Child, command: &str) -> Option<WindowsJob> {
     match WindowsJob::attach_to_child(child) {
         Ok(job) => Some(job),
@@ -485,16 +508,7 @@ impl BackgroundShell {
             let _ = kill_child_process_group(proc);
         }
         #[cfg(windows)]
-        if let Some(job) = self.windows_job.as_ref() {
-            let _ = job.terminate();
-        }
-        #[cfg(windows)]
-        {
-            // Close the job handle before joining reader threads so
-            // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE can still release inherited
-            // pipe handles if explicit termination failed.
-            self.windows_job = None;
-        }
+        terminate_and_close_windows_job(self.windows_job.take());
         if let Some(handle) = self.stdout_thread.take() {
             let _ = handle.join();
         }
@@ -1039,9 +1053,7 @@ impl ShellManager {
         // Wait with timeout
         if let Some(status) = child.wait_timeout(timeout)? {
             #[cfg(windows)]
-            if let Some(job) = windows_job.as_ref() {
-                let _ = job.terminate();
-            }
+            terminate_and_close_windows_job(windows_job);
             let stdout = stdout_thread.join().unwrap_or_default();
             let stderr = stderr_thread.join().unwrap_or_default();
             let stdout_str = String::from_utf8_lossy(&stdout).to_string();
@@ -1083,7 +1095,7 @@ impl ShellManager {
             #[cfg(unix)]
             let _ = kill_child_process_group(&mut child);
             #[cfg(windows)]
-            let _ = terminate_windows_job(windows_job.as_ref(), &mut child);
+            let _ = terminate_child_and_close_windows_job(windows_job, &mut child);
             #[cfg(all(not(unix), not(windows)))]
             let _ = child.kill();
             let status = child.wait().ok();
@@ -1175,9 +1187,7 @@ impl ShellManager {
 
         if let Some(status) = child.wait_timeout(timeout)? {
             #[cfg(windows)]
-            if let Some(job) = windows_job.as_ref() {
-                let _ = job.terminate();
-            }
+            terminate_and_close_windows_job(windows_job);
             Ok(ShellResult {
                 task_id: None,
                 status: if status.success() {
@@ -1207,7 +1217,7 @@ impl ShellManager {
             #[cfg(unix)]
             let _ = kill_child_process_group(&mut child);
             #[cfg(windows)]
-            let _ = terminate_windows_job(windows_job.as_ref(), &mut child);
+            let _ = terminate_child_and_close_windows_job(windows_job, &mut child);
             #[cfg(all(not(unix), not(windows)))]
             let _ = child.kill();
             let status = child.wait().ok();

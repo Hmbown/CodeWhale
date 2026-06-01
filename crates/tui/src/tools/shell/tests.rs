@@ -1005,7 +1005,8 @@ fn windows_job_terminate_denied_falls_back_to_child_kill() {
         "limited job handle should not allow TerminateJobObject"
     );
 
-    terminate_windows_job(Some(&limited_job), &mut child).expect("fallback child kill");
+    terminate_child_and_close_windows_job(Some(limited_job), &mut child)
+        .expect("fallback child kill");
 
     let status = child
         .wait_timeout(std::time::Duration::from_secs(3))
@@ -1014,6 +1015,54 @@ fn windows_job_terminate_denied_falls_back_to_child_kill() {
         status.is_some(),
         "fallback child kill should terminate child"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_close_releases_foreground_reader_threads_when_terminate_denied() {
+    let mut child = Command::new("ping")
+        .args(["127.0.0.1", "-n", "8"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ping");
+
+    let job = WindowsJob::attach_to_child(&child).expect("attach job");
+    let limited_job = duplicate_job_without_terminate_access(job);
+    assert!(
+        limited_job.terminate().is_err(),
+        "limited job handle should not allow TerminateJobObject"
+    );
+
+    let stdout_handle = child.stdout.take().expect("stdout pipe");
+    let stderr_handle = child.stderr.take().expect("stderr pipe");
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = stdout_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = stderr_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+
+    let started = std::time::Instant::now();
+    terminate_and_close_windows_job(Some(limited_job));
+    let _ = stdout_thread.join().unwrap_or_default();
+    let _ = stderr_thread.join().unwrap_or_default();
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(3))
+        .expect("wait after kill-on-close");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "reader joins waited for natural descendant exit instead of kill-on-close"
+    );
+    assert!(status.is_some(), "kill-on-close should terminate child");
 }
 
 #[cfg(windows)]
