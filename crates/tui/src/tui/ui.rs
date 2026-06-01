@@ -1614,6 +1614,16 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::TurnStarted { turn_id } => {
+                        let dispatch_elapsed_ms = app
+                            .dispatch_started_at
+                            .map(|started| started.elapsed().as_millis())
+                            .unwrap_or_default();
+                        tracing::debug!(
+                            target: "turn_dispatch",
+                            turn_id = %turn_id,
+                            dispatch_elapsed_ms,
+                            "TUI observed TurnStarted"
+                        );
                         app.suppress_stream_events_until_turn_complete = false;
                         app.is_loading = true;
                         app.offline_mode = false;
@@ -1652,6 +1662,12 @@ async fn run_event_loop(
                         tool_catalog,
                         base_url,
                     } => {
+                        tracing::debug!(
+                            target: "turn_dispatch",
+                            status = ?status,
+                            runtime_turn_id = app.runtime_turn_id.as_deref().unwrap_or("<unknown>"),
+                            "TUI observed TurnComplete"
+                        );
                         app.session.last_tool_catalog = tool_catalog;
                         app.session.last_base_url = base_url;
                         let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
@@ -4268,15 +4284,26 @@ fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
 }
 
 fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool) -> bool {
+    let dispatch_elapsed = app
+        .dispatch_started_at
+        .map(|started| now.saturating_duration_since(started));
     if app.is_loading
         && app.runtime_turn_status.is_none()
         && !has_running_agents
         && !app.is_compacting
         && !app.is_purging
-        && app.dispatch_started_at.is_some_and(|started| {
-            now.saturating_duration_since(started) > DISPATCH_WATCHDOG_TIMEOUT
-        })
+        && dispatch_elapsed.is_some_and(|elapsed| elapsed > DISPATCH_WATCHDOG_TIMEOUT)
     {
+        tracing::warn!(
+            target: "turn_dispatch",
+            elapsed_ms = dispatch_elapsed
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or_default(),
+            has_running_agents,
+            is_compacting = app.is_compacting,
+            is_purging = app.is_purging,
+            "turn dispatch watchdog fired before TurnStarted"
+        );
         app.is_loading = false;
         app.dispatch_started_at = None;
         app.turn_started_at = None;
@@ -4324,6 +4351,12 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
                 now.saturating_duration_since(last_activity) > TURN_STALL_WATCHDOG_TIMEOUT
             })
     {
+        tracing::warn!(
+            target: "turn_dispatch",
+            runtime_turn_id = app.runtime_turn_id.as_deref().unwrap_or("<unknown>"),
+            runtime_turn_status = app.runtime_turn_status.as_deref().unwrap_or("<none>"),
+            "turn stall watchdog fired before TurnComplete"
+        );
         // Finalize in-flight thinking / assistant / tool cells so the
         // transcript doesn't show permanent spinners after recovery.
         streaming_thinking::finalize_current(app);
@@ -4944,6 +4977,23 @@ async fn dispatch_user_message(
         app.last_effective_model = None;
     }
 
+    let dispatch_content_bytes = content.len();
+    let dispatch_mode = app.mode.label();
+    let dispatch_model = effective_model.clone();
+    let dispatch_reasoning_effort = effective_reasoning_effort.clone();
+    tracing::debug!(
+        target: "turn_dispatch",
+        content_bytes = dispatch_content_bytes,
+        mode = dispatch_mode,
+        model = %dispatch_model,
+        reasoning_effort = ?dispatch_reasoning_effort,
+        auto_model = app.auto_model,
+        allow_shell = app.allow_shell,
+        trust_mode = app.trust_mode,
+        auto_approve = app.mode == AppMode::Yolo,
+        "TUI sending SendMessage op to engine"
+    );
+
     if let Err(err) = engine_handle
         .send(Op::SendMessage {
             content,
@@ -4964,11 +5014,28 @@ async fn dispatch_user_message(
         })
         .await
     {
+        tracing::warn!(
+            target: "turn_dispatch",
+            ?err,
+            content_bytes = dispatch_content_bytes,
+            mode = dispatch_mode,
+            model = %dispatch_model,
+            "TUI failed to send SendMessage op to engine"
+        );
         app.is_loading = false;
         app.dispatch_started_at = None;
         app.last_send_at = None;
         return Err(err);
     }
+
+    tracing::debug!(
+        target: "turn_dispatch",
+        content_bytes = dispatch_content_bytes,
+        mode = dispatch_mode,
+        model = %dispatch_model,
+        elapsed_ms = dispatch_started_at.elapsed().as_millis(),
+        "TUI queued SendMessage op to engine"
+    );
 
     Ok(())
 }

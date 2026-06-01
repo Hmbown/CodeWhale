@@ -1034,6 +1034,23 @@ impl Engine {
                     allowed_tools,
                     hook_executor,
                 } => {
+                    let op_started = Instant::now();
+                    let content_bytes = content.len();
+                    let mode_label = mode.label().to_string();
+                    let model_label = model.clone();
+                    let reasoning_effort_label = reasoning_effort.clone();
+                    tracing::debug!(
+                        target: "turn_dispatch",
+                        content_bytes,
+                        mode = %mode_label,
+                        model = %model_label,
+                        reasoning_effort = ?reasoning_effort_label,
+                        auto_model,
+                        allow_shell,
+                        trust_mode,
+                        auto_approve,
+                        "engine received SendMessage op"
+                    );
                     self.handle_send_message(
                         content,
                         mode,
@@ -1068,6 +1085,14 @@ impl Engine {
                         approval_mode,
                     )
                     .await;
+                    tracing::debug!(
+                        target: "turn_dispatch",
+                        content_bytes,
+                        mode = %mode_label,
+                        model = %model_label,
+                        elapsed_ms = op_started.elapsed().as_millis(),
+                        "engine finished SendMessage op"
+                    );
                 }
                 Op::CancelRequest => {
                     self.cancel_token.cancel();
@@ -1487,6 +1512,15 @@ In {new} mode: {policy}\n\n\
         // Drain stale steer messages from previous turns.
         while self.rx_steer.try_recv().is_ok() {}
 
+        let content_bytes = content.len();
+        tracing::debug!(
+            target: "turn_dispatch",
+            content_bytes,
+            mode = %mode.label(),
+            model = %model,
+            "engine handling SendMessage"
+        );
+
         // Create turn context first so start event includes a stable turn id.
         let mut turn = TurnContext::new(self.config.max_steps);
         self.turn_counter = self.turn_counter.saturating_add(1);
@@ -1495,12 +1529,27 @@ In {new} mode: {policy}\n\n\
         // Emit turn started event IMMEDIATELY so the UI knows the turn is
         // active. The snapshot below can take 30+ seconds on slow filesystems
         // (e.g. WSL2 /mnt/c) and must not delay the TurnStarted event.
-        let _ = self
+        let turn_started_result = self
             .tx_event
             .send(Event::TurnStarted {
                 turn_id: turn.id.clone(),
             })
             .await;
+        match turn_started_result {
+            Ok(()) => tracing::debug!(
+                target: "turn_dispatch",
+                turn_id = %turn.id,
+                turn_counter = self.turn_counter,
+                "engine emitted TurnStarted"
+            ),
+            Err(err) => tracing::warn!(
+                target: "turn_dispatch",
+                turn_id = %turn.id,
+                turn_counter = self.turn_counter,
+                ?err,
+                "engine failed to emit TurnStarted"
+            ),
+        }
 
         // Snapshot the workspace BEFORE we touch a single tool. Run the git
         // work on the blocking pool so the async runtime stays responsive;
