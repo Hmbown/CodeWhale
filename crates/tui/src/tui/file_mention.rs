@@ -270,7 +270,10 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
     let ws = workspace_for_app(app);
     let candidates = find_file_mention_completions(&ws, &partial, FILE_MENTION_COMPLETION_LIMIT);
     if candidates.is_empty() {
-        app.status_message = Some(format!("No files match @{partial}"));
+        app.status_message = Some(no_file_mention_matches_status(
+            &partial,
+            app.mention_walk_depth,
+        ));
         return true;
     }
     if candidates.len() == 1 {
@@ -295,6 +298,16 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         .join(", ");
     app.status_message = Some(format!("Matches: {preview}"));
     true
+}
+
+fn no_file_mention_matches_status(partial: &str, walk_depth: usize) -> String {
+    if walk_depth > 0 && (partial.contains('/') || partial.contains('\\')) {
+        format!(
+            "No files match @{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
+        )
+    } else {
+        format!("No files match @{partial}")
+    }
 }
 
 /// Splice a completion into the input, replacing the `@<partial>` token at
