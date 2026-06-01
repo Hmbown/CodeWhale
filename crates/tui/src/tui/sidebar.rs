@@ -1377,7 +1377,9 @@ fn shell_wait_poll_key(row: &SidebarToolRow) -> String {
 }
 
 fn normalize_activity_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut cleaned = String::with_capacity(text.len());
+    crate::tui::osc8::strip_ansi_into(text, &mut cleaned);
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn tool_row_rank(row: &SidebarToolRow) -> u8 {
