@@ -1524,6 +1524,7 @@ fn turn_metadata_includes_auto_model_route() {
 
     let user_msg = engine.user_text_message_with_turn_metadata_for_route(
         "debug this regression".to_string(),
+        AppMode::Agent,
         "deepseek-v4-pro",
         true,
         Some("max"),
@@ -1537,6 +1538,32 @@ fn turn_metadata_includes_auto_model_route() {
     assert!(text.contains("Auto model route: deepseek-v4-pro"));
     assert!(text.contains("Auto reasoning effort: max"));
     assert!(!text.contains("debug this regression"));
+}
+
+#[test]
+fn turn_metadata_includes_current_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let user_msg = engine.user_text_message_with_turn_metadata_for_route(
+        "please run the build now".to_string(),
+        AppMode::Yolo,
+        "deepseek-v4-pro",
+        false,
+        None,
+        false,
+    );
+    let first_block = user_msg.content.first().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = first_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains("Current mode: yolo"));
+    assert!(!text.contains("please run the build now"));
 }
 
 #[test]

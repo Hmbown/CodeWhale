@@ -924,6 +924,7 @@ impl Engine {
 
     fn turn_metadata_block(
         &self,
+        mode: AppMode,
         routed_model: &str,
         auto_model: bool,
         reasoning_effort: Option<&str>,
@@ -937,7 +938,10 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let mut lines = vec![format!("Current local date: {today}")];
+        let mut lines = vec![
+            format!("Current local date: {today}"),
+            format!("Current mode: {}", mode.as_setting()),
+        ];
         if auto_model {
             lines.push(format!("Auto model route: {routed_model}"));
         }
@@ -958,6 +962,7 @@ impl Engine {
     fn user_text_message_with_turn_metadata(&self, text: String) -> Message {
         self.user_text_message_with_turn_metadata_for_route(
             text,
+            AppMode::Agent,
             &self.session.model,
             self.session.auto_model,
             self.session.reasoning_effort.as_deref(),
@@ -968,6 +973,7 @@ impl Engine {
     fn user_text_message_with_turn_metadata_for_route(
         &self,
         text: String,
+        mode: AppMode,
         routed_model: &str,
         auto_model: bool,
         reasoning_effort: Option<&str>,
@@ -977,6 +983,7 @@ impl Engine {
             role: "user".to_string(),
             content: vec![
                 self.turn_metadata_block(
+                    mode,
                     routed_model,
                     auto_model,
                     reasoning_effort,
@@ -1091,6 +1098,7 @@ impl Engine {
         // Add user message to session
         let user_msg = self.user_text_message_with_turn_metadata_for_route(
             content,
+            mode,
             &model,
             auto_model,
             reasoning_effort.as_deref(),
