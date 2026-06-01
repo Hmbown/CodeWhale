@@ -1051,6 +1051,137 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     );
 }
 
+/// Plan mode toggle must not change the byte representation of the tool
+/// catalog head. DeepSeek's KV prefix cache includes the tools array in
+/// the immutable prefix; if toggling between Plan and Agent mode changes
+/// the tool bytes, every mode switch forces a full re-prefill.
+///
+/// This test verifies two invariants:
+/// 1. Building the catalog twice for the same mode produces identical bytes.
+/// 2. The head of the catalog (non-deferred tools) preserves its order
+///    when deferred tools are activated mid-session.
+#[test]
+fn plan_mode_toggle_preserves_catalog_byte_stability() {
+    let always_load = HashSet::new();
+
+    // Build catalog for Plan mode twice — must be byte-identical.
+    let plan_native = vec![
+        api_tool("read_file"),
+        api_tool("list_dir"),
+        api_tool("write_file"),
+        api_tool("edit_file"),
+        api_tool("exec_shell"),
+    ];
+    let plan_mcp = vec![api_tool("mcp_search"), api_tool("mcp_write")];
+
+    let catalog_a = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Plan,
+        &always_load,
+    );
+    let catalog_b = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Plan,
+        &always_load,
+    );
+
+    let json_a = serde_json::to_string(&catalog_a).unwrap();
+    let json_b = serde_json::to_string(&catalog_b).unwrap();
+    assert_eq!(
+        json_a, json_b,
+        "building the catalog twice for Plan mode must produce identical bytes"
+    );
+
+    // Build catalog for Agent mode twice — must be byte-identical.
+    let agent_catalog_a = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+    let agent_catalog_b = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+
+    let agent_json_a = serde_json::to_string(&agent_catalog_a).unwrap();
+    let agent_json_b = serde_json::to_string(&agent_catalog_b).unwrap();
+    assert_eq!(
+        agent_json_a, agent_json_b,
+        "building the catalog twice for Agent mode must produce identical bytes"
+    );
+
+    // Verify that the non-deferred tools that are common to both modes
+    // appear in the same order. Plan mode excludes execution tools, but
+    // the tools that are present in both modes must have stable ordering.
+    let plan_names: Vec<&str> = catalog_a
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+    let agent_names: Vec<&str> = agent_catalog_a
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+
+    // The common prefix of non-deferred tools must be identical.
+    let common_len = plan_names.len().min(agent_names.len());
+    assert_eq!(
+        &plan_names[..common_len],
+        &agent_names[..common_len],
+        "non-deferred tools common to Plan and Agent must appear in the same order"
+    );
+
+    // Verify that activating a deferred tool mid-session appends to the
+    // tail without reordering the head.
+    let mut tools_with_deferred = plan_native.clone();
+    tools_with_deferred.push({
+        let mut t = api_tool("deferred_search");
+        t.defer_loading = Some(true);
+        t
+    });
+    let catalog_with_deferred = build_model_tool_catalog(
+        tools_with_deferred,
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+
+    // Activate the deferred tool.
+    let mut active: HashSet<String> = catalog_with_deferred
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.clone())
+        .collect();
+    active.insert("deferred_search".to_string());
+
+    let listed = active_tools_for_step(&catalog_with_deferred, &active, false);
+    let listed_names: Vec<&str> = listed.iter().map(|t| t.name.as_str()).collect();
+
+    // The head (non-deferred tools) must still be in their original order.
+    let head_names: Vec<&str> = catalog_with_deferred
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+    assert!(
+        listed_names.starts_with(&head_names),
+        "activating a deferred tool must not reorder the catalog head: \
+         expected {head_names:?} as prefix, got {listed_names:?}"
+    );
+    // The deferred tool must be at the tail.
+    assert_eq!(
+        listed_names.last(),
+        Some(&"deferred_search"),
+        "deferred tool must be appended at the tail"
+    );
+}
+
 #[test]
 fn parent_turn_registry_includes_recall_archive_for_investigative_modes() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
