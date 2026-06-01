@@ -1,9 +1,9 @@
 //! Settings system - Persistent user preferences
 //!
-//! Settings are stored at ~/.config/deepseek/settings.toml
+//! Settings are stored at ~/.codewhale/settings.toml, with legacy fallbacks.
 //!
 //! TUI-specific preferences (theme, keybinds, font_size) that survive project
-//! switches are stored separately at ~/.deepseek/tui.toml. See [`TuiPrefs`].
+//! switches are stored separately in tui.toml. See [`TuiPrefs`].
 
 use std::path::PathBuf;
 
@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
 use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
+
+const SETTINGS_FILE_NAME: &str = "settings.toml";
 
 // ============================================================================
 // TuiPrefs — ~/.deepseek/tui.toml
@@ -343,15 +345,38 @@ impl Settings {
             if !config_path.is_empty() {
                 let p = expand_path(config_path);
                 if let Some(parent) = p.parent() {
-                    return Ok(parent.join("settings.toml"));
+                    return Ok(parent.join(SETTINGS_FILE_NAME));
                 }
             }
         }
 
-        let config_dir = dirs::config_dir()
+        let primary = codewhale_config::codewhale_home()
+            .ok()
+            .map(|home| home.join(SETTINGS_FILE_NAME));
+        if let Some(path) = primary.as_ref()
+            && path.exists()
+        {
+            return Ok(path.clone());
+        }
+
+        let legacy_home = codewhale_config::legacy_deepseek_home()
+            .ok()
+            .map(|home| home.join(SETTINGS_FILE_NAME));
+        if let Some(path) = legacy_home
+            && path.exists()
+        {
+            return Ok(path);
+        }
+
+        let legacy_config_dir = dirs::config_dir()
             .context("Failed to resolve config directory: not found.")?
-            .join("deepseek");
-        Ok(config_dir.join("settings.toml"))
+            .join("deepseek")
+            .join(SETTINGS_FILE_NAME);
+        if legacy_config_dir.exists() {
+            return Ok(legacy_config_dir);
+        }
+
+        Ok(primary.unwrap_or(legacy_config_dir))
     }
 
     /// Load settings from disk, or return defaults if not found
@@ -467,8 +492,8 @@ impl Settings {
         //
         // Only flip `auto` to `off`; respect an explicit `"on"` so users
         // who upgrade Ptyxis or want to confirm the fix landed upstream
-        // can override the heuristic from `~/.config/deepseek/settings.toml`
-        // or `/set synchronized_output on`.
+        // can override the heuristic from the persisted settings.toml or
+        // `/set synchronized_output on`.
         if self.synchronized_output.eq_ignore_ascii_case("auto") && detected_ptyxis_terminal() {
             self.synchronized_output = "off".to_string();
         }
@@ -2090,6 +2115,92 @@ mod tests {
     /// so the parallel test runner doesn't observe interleaved env values.
     fn config_path_test_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::lock_test_env()
+    }
+
+    struct EnvVarRestore {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn settings_path_defaults_to_codewhale_home_for_new_writes() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = Settings::path().expect("settings path");
+
+        assert_eq!(got, tmp.path().join(".codewhale").join("settings.toml"));
+    }
+
+    #[test]
+    fn settings_path_reads_legacy_deepseek_home_when_present() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy_dir = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        std::fs::write(legacy_dir.join("settings.toml"), "low_motion = true\n")
+            .expect("legacy settings");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = Settings::path().expect("settings path");
+
+        assert_eq!(got, legacy_dir.join("settings.toml"));
+    }
+
+    #[test]
+    fn settings_path_keeps_platform_config_dir_as_last_legacy_fallback() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let config_dir = dirs::config_dir().expect("config dir");
+        let legacy_settings = config_dir.join("deepseek").join("settings.toml");
+        std::fs::create_dir_all(legacy_settings.parent().expect("parent"))
+            .expect("legacy config dir");
+        std::fs::write(&legacy_settings, "low_motion = true\n").expect("legacy settings");
+
+        let got = Settings::path().expect("settings path");
+
+        assert_eq!(got, legacy_settings);
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub enum OnboardingState {
     Welcome,
     /// Pick the UI locale before any other config decisions (#566).
     /// Defaults to auto-detection from `LC_ALL` / `LANG`; explicit picks
-    /// land in `~/.deepseek/settings.toml` via `Settings::set("locale", …)`.
+    /// land in the persisted settings.toml via `Settings::set("locale", …)`.
     Language,
     ApiKey,
     TrustDirectory,
@@ -2153,7 +2153,7 @@ impl App {
     }
 
     /// Apply a locale tag selected from the onboarding language picker (#566).
-    /// Persists the value to `~/.deepseek/settings.toml` and immediately
+    /// Persists the value to settings.toml and immediately
     /// re-resolves `ui_locale` so the rest of onboarding renders in the new
     /// language. `App` doesn't keep `Settings` resident — it loads on entry
     /// and rewrites on exit, mirroring the pattern used by the `/config`
@@ -2167,7 +2167,7 @@ impl App {
         Ok(())
     }
 
-    /// Locale tag currently persisted in `~/.deepseek/settings.toml` (or
+    /// Locale tag currently persisted in settings.toml (or
     /// `"auto"` when no settings file exists). Used by the onboarding
     /// language picker to highlight the current selection without `App`
     /// having to keep `Settings` resident.

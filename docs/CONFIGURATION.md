@@ -479,7 +479,9 @@ round-trip intact.
 
 codewhale also stores user preferences in:
 
-- `~/.config/deepseek/settings.toml`
+- `~/.codewhale/settings.toml` on new installs
+- `~/.deepseek/settings.toml` or the legacy platform config-dir
+  `deepseek/settings.toml` when an existing settings file is present
 
 Notable settings include `auto_compact` (default `false`), which opts into
 replacement-style summarization only near the active model limit. The default

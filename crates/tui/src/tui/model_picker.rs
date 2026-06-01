@@ -543,8 +543,7 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        // App::new merges in `~/.config/deepseek/settings.toml` /
-        // `Application Support/deepseek/settings.toml`, which can override
+        // App::new merges in the user's persisted settings.toml, which can override
         // the model, effort, and provider with whatever the developer
         // happens to have saved. Pin all three back to known values so
         // the picker tests below exercise the picker logic, not the
