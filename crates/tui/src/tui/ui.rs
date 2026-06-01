@@ -3412,6 +3412,7 @@ async fn run_event_loop(
                         let _ = engine_handle
                             .send(Op::SetModel {
                                 model: app.model.clone(),
+                                mode: app.mode,
                             })
                             .await;
                     }
@@ -4721,10 +4722,12 @@ async fn dispatch_user_message(
 async fn apply_model_and_compaction_update(
     engine_handle: &EngineHandle,
     compaction: crate::compaction::CompactionConfig,
+    mode: AppMode,
 ) {
     let _ = engine_handle
         .send(Op::SetModel {
             model: compaction.model.clone(),
+            mode,
         })
         .await;
     let _ = engine_handle
@@ -4752,6 +4755,7 @@ async fn drain_web_config_events(
                             apply_model_and_compaction_update(
                                 engine_handle,
                                 app.compaction_config(),
+                                app.mode,
                             )
                             .await;
                         }
@@ -4776,6 +4780,7 @@ async fn drain_web_config_events(
                             apply_model_and_compaction_update(
                                 engine_handle,
                                 app.compaction_config(),
+                                app.mode,
                             )
                             .await;
                         }
@@ -4861,7 +4866,7 @@ async fn apply_model_picker_choice(
     }
 
     if model_changed {
-        apply_model_and_compaction_update(engine_handle, app.compaction_config()).await;
+        apply_model_and_compaction_update(engine_handle, app.compaction_config(), app.mode).await;
     }
 
     let model_summary = if model_is_auto {
@@ -5210,7 +5215,7 @@ async fn apply_command_result(
                 }
             }
             AppAction::UpdateCompaction(compaction) => {
-                apply_model_and_compaction_update(engine_handle, compaction).await;
+                apply_model_and_compaction_update(engine_handle, compaction, app.mode).await;
             }
             AppAction::OpenConfigEditor(mode) => match mode {
                 ConfigUiMode::Native => {
@@ -5240,6 +5245,7 @@ async fn apply_command_result(
                                 apply_model_and_compaction_update(
                                     engine_handle,
                                     app.compaction_config(),
+                                    app.mode,
                                 )
                                 .await;
                             }
@@ -6716,7 +6722,8 @@ async fn handle_view_events(
                 if let Some(action) = result.action {
                     match action {
                         AppAction::UpdateCompaction(compaction) => {
-                            apply_model_and_compaction_update(engine_handle, compaction).await;
+                            apply_model_and_compaction_update(engine_handle, compaction, app.mode)
+                                .await;
                         }
                         AppAction::OpenConfigView => {}
                         _ => {}

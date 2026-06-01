@@ -783,10 +783,12 @@ impl Engine {
                         .send(Event::status(format!("Mode changed to: {mode:?}")))
                         .await;
                 }
-                Op::SetModel { model } => {
+                Op::SetModel { model, mode } => {
                     self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
                     self.session.model = model;
                     self.config.model.clone_from(&self.session.model);
+                    self.refresh_system_prompt(mode);
+                    self.emit_session_updated().await;
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(

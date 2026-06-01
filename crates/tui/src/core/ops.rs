@@ -60,9 +60,9 @@ pub enum Op {
     #[allow(dead_code)]
     ChangeMode { mode: AppMode },
 
-    /// Update the model being used
+    /// Update the model being used and refresh the prompt for the current mode.
     #[allow(dead_code)]
-    SetModel { model: String },
+    SetModel { model: String, mode: AppMode },
 
     /// Update auto-compaction settings
     SetCompaction { config: CompactionConfig },

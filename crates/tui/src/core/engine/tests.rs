@@ -1238,6 +1238,61 @@ async fn session_update_preserves_reasoning_tool_only_turn() {
     assert_eq!(messages, vec![assistant]);
 }
 
+#[tokio::test]
+async fn set_model_reloads_instruction_sources_and_updates_session_prompt() {
+    let tmp = tempdir().expect("tempdir");
+    let instructions = tmp.path().join("instructions.md");
+    fs::write(&instructions, "FLASH_INSTRUCTIONS_MARKER").expect("write instructions");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-flash".to_string(),
+        instructions: vec![instructions.clone().into()],
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+    fs::write(&instructions, "PRO_INSTRUCTIONS_MARKER").expect("rewrite instructions");
+
+    let run = tokio::spawn(engine.run());
+    handle
+        .send(Op::SetModel {
+            model: "deepseek-v4-pro".to_string(),
+            mode: AppMode::Agent,
+        })
+        .await
+        .expect("send set model");
+
+    let (model, prompt) = {
+        let mut rx = handle.rx_event.write().await;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("session update after model switch")
+                .expect("event");
+            if let Event::SessionUpdated {
+                model,
+                system_prompt,
+                ..
+            } = event
+            {
+                let prompt = match system_prompt.expect("system prompt") {
+                    SystemPrompt::Text(text) => text,
+                    SystemPrompt::Blocks(blocks) => blocks
+                        .into_iter()
+                        .map(|block| block.text)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                break (model, prompt);
+            }
+        }
+    };
+    run.abort();
+
+    assert_eq!(model, "deepseek-v4-pro");
+    assert!(prompt.contains("PRO_INSTRUCTIONS_MARKER"));
+    assert!(!prompt.contains("FLASH_INSTRUCTIONS_MARKER"));
+}
+
 #[test]
 fn detects_context_length_errors_from_provider_payloads() {
     let msg = r#"SSE stream request failed: HTTP 400 Bad Request: {"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 153056 tokens (148960 in the messages, 4096 in the completion).","type":"invalid_request_error"}}"#;

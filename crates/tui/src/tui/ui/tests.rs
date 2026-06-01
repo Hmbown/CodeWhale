@@ -2021,11 +2021,12 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
     let compaction = app.compaction_config();
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    apply_model_and_compaction_update(&engine.handle, compaction).await;
+    apply_model_and_compaction_update(&engine.handle, compaction, app.mode).await;
 
     match engine.rx_op.recv().await.expect("set model op") {
-        crate::core::ops::Op::SetModel { model } => {
+        crate::core::ops::Op::SetModel { model, mode } => {
             assert_eq!(model, "deepseek-v4-flash");
+            assert_eq!(mode, app.mode);
         }
         other => panic!("expected SetModel, got {other:?}"),
     }
