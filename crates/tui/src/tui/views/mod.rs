@@ -770,6 +770,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Composer,
+                key: "mention_menu_behavior".to_string(),
+                value: settings.mention_menu_behavior.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Composer,
                 key: "mention_walk_depth".to_string(),
                 value: settings.mention_walk_depth.to_string(),
                 editable: true,
