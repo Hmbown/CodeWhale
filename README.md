@@ -489,6 +489,12 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 User config: `~/.codewhale/config.toml` (legacy `~/.deepseek/config.toml` fallback). Project overlay: `<workspace>/.codewhale/config.toml` (legacy `<workspace>/.deepseek/config.toml`) (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). [config.example.toml](config.example.toml) has every option.
 
+The TUI footer can be trimmed or reordered with `/statusline`, or by setting
+`[tui].status_items` in config. Current footer customization selects from the
+built-in chips such as `mode`, `model`, `status`, `git_branch`, `tokens`, and
+`cache`; multi-line layouts, custom colors, and external command widgets are
+not part of the current statusline surface.
+
 Custom DeepSeek-compatible endpoints usually do not need a new provider. Keep
 `provider = "deepseek"` and set `[providers.deepseek].base_url` / `model`, or
 use `provider = "openai"` for generic OpenAI-compatible gateways. Keep

@@ -179,6 +179,14 @@ The interactive TUI has a few stable regions:
 - Status and footer areas: live activity, queued follow-ups, and short command
   hints.
 
+The footer status line is configurable. Run `/statusline` to choose which
+footer chips are visible, or set `[tui].status_items` in `config.toml` for a
+stable order. Supported keys currently include `mode`, `model`, `cost`,
+`balance`, `status`, `coherence`, `agents`, `reasoning_replay`,
+`prefix_stability`, `cache`, `context_percent`, `git_branch`,
+`last_tool_elapsed`, `rate_limit`, and `tokens`. Omit `status_items` to keep
+the built-in default order; set it to `[]` to hide configurable chips.
+
 The transcript is the audit trail. When CodeWhale reads files, runs commands,
 or edits code, the action appears there. If a command fails, use the visible
 failure output as part of your next instruction instead of starting over.
@@ -255,6 +263,7 @@ Common commands for first-time users:
 | `/models` | Fetch or list models from the active endpoint |
 | `/provider` | Pick the active API provider |
 | `/config` | Edit runtime and provider settings |
+| `/statusline` | Choose which footer status chips are visible |
 | `/settings` | Inspect persistent UI preferences |
 | `/compact` | Summarize long context to recover token budget |
 | `/review` | Ask for a structured review workflow |
