@@ -4,6 +4,21 @@ This is the source-of-truth catalog of every keyboard shortcut the TUI recognize
 
 Bindings are not (yet) user-configurable — tracked for a future release (#436, #437). This document is the contract that future config-file overrides will name into.
 
+## macOS and terminal notes
+
+CodeWhale receives key events after your terminal emulator translates them.
+On macOS, `Cmd` shortcuts are usually handled by the terminal application
+itself, while `Ctrl` shortcuts are sent to the TUI. `Option` may be sent as an
+`Alt`/Meta modifier depending on terminal settings. In iTerm2, set Option to
+"Esc+" if you want Option-key chords to reach terminal apps as Alt-key chords.
+
+For multi-line composer input, `Enter` submits the message. Use
+`Alt-Enter` or `Ctrl-J` to insert a newline without sending. If your terminal
+does not send `Option-Enter` as Alt-Enter, `Ctrl-J` is the portable fallback.
+
+`Ctrl-C` cancels the active turn when the model or a tool is running. When the
+TUI is idle, it arms a quit confirmation instead; press it again to exit.
+
 ## Global (any context)
 
 | Chord                | Action                                                        |

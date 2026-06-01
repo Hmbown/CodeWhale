@@ -464,6 +464,8 @@ ACP workflows outside the built-in Zed slice.
 | `Shift+Tab` | Cycle reasoning-effort: off → high → max |
 | `F1` | Searchable help overlay |
 | `Esc` | Back / dismiss |
+| `Alt+Enter` / `Ctrl+J` | Insert a composer newline without sending |
+| `Ctrl+C` | Cancel the active turn; press again to quit when idle |
 | `Ctrl+K` | Command palette |
 | `Ctrl+R` | Resume an earlier session |
 | `Alt+R` | Search prompt history and recover cleared drafts |
@@ -471,7 +473,8 @@ ACP workflows outside the built-in Zed slice.
 | `@path` | Attach file/directory context in composer |
 | `↑` (at composer start) | Select attachment row for removal |
 
-Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
+Full shortcut catalog, including macOS/iTerm modifier notes:
+[docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 ---
 
