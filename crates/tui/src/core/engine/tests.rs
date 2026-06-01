@@ -1492,6 +1492,7 @@ fn working_set_reaches_model_as_turn_metadata() {
 fn turn_metadata_includes_current_local_date_without_working_set() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
         workspace: tmp.path().to_path_buf(),
         ..Default::default()
     };
@@ -1511,6 +1512,7 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     assert!(text.starts_with("<turn_meta>\n"));
     assert!(text.contains(&format!("Current local date: {today}")));
+    assert!(text.contains("Current model: deepseek-v4-flash"));
 }
 
 #[test]
@@ -1534,6 +1536,7 @@ fn turn_metadata_includes_auto_model_route() {
         panic!("expected text metadata block");
     };
 
+    assert!(text.contains("Current model: deepseek-v4-pro"));
     assert!(text.contains("Auto model route: deepseek-v4-pro"));
     assert!(text.contains("Auto reasoning effort: max"));
     assert!(!text.contains("debug this regression"));

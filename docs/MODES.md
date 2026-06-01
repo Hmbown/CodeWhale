@@ -9,6 +9,10 @@ Model selection is separate. `--model auto` and `/model auto` route each turn to
 a concrete model and thinking level; they are not TUI modes and are not part of
 the `Tab` cycle.
 
+Each user turn includes a small `<turn_meta>` block with the current local date
+and the concrete model sent to the provider. When `--model auto` is active, the
+same block also records that the model was auto-routed.
+
 ## TUI Modes
 
 Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
