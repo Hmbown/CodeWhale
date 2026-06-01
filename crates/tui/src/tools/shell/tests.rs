@@ -4,6 +4,11 @@ use crate::tools::spec::ToolContext;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+#[cfg(windows)]
+use windows::Win32::Foundation::{DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, HANDLE};
+#[cfg(windows)]
+use windows::Win32::System::Threading::GetCurrentProcess;
+
 // `env_lock` exists only to serialize Unix-only env-mutating tests.
 // Windows builds gate that test out, so the helper would be dead code
 // under `-Dwarnings` if the import + helper were unconditional.
@@ -14,6 +19,33 @@ use std::sync::{Mutex, OnceLock};
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(windows)]
+const JOB_OBJECT_QUERY_ACCESS: u32 = 0x0004;
+
+#[cfg(windows)]
+fn duplicate_job_without_terminate_access(job: WindowsJob) -> WindowsJob {
+    let process = unsafe { GetCurrentProcess() };
+    let mut limited_handle = HANDLE::default();
+
+    unsafe {
+        DuplicateHandle(
+            process,
+            job.handle,
+            process,
+            &mut limited_handle,
+            JOB_OBJECT_QUERY_ACCESS,
+            false,
+            DUPLICATE_HANDLE_OPTIONS(0),
+        )
+        .expect("duplicate job handle without terminate access");
+    }
+
+    drop(job);
+    WindowsJob {
+        handle: limited_handle,
+    }
 }
 
 fn echo_command(message: &str) -> String {
@@ -950,6 +982,78 @@ fn background_collection_does_not_block_on_detached_descendant_pipe() {
     assert!(
         started.elapsed() < std::time::Duration::from_secs(6),
         "get_output blocked on descendant pipe handles"
+    );
+    assert_eq!(done.status, ShellStatus::Completed);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_terminate_denied_falls_back_to_child_kill() {
+    let mut child = Command::new("ping")
+        .args(["127.0.0.1", "-n", "20"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn ping");
+
+    let job = WindowsJob::attach_to_child(&child).expect("attach job");
+    let limited_job = duplicate_job_without_terminate_access(job);
+
+    assert!(
+        limited_job.terminate().is_err(),
+        "limited job handle should not allow TerminateJobObject"
+    );
+
+    terminate_windows_job(Some(&limited_job), &mut child).expect("fallback child kill");
+
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(3))
+        .expect("wait after fallback kill");
+    assert!(
+        status.is_some(),
+        "fallback child kill should terminate child"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_kill_on_close_releases_reader_threads_when_terminate_denied() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute(
+            r#"cmd /c start "" /b ping 127.0.0.1 -n 8"#,
+            None,
+            5000,
+            true,
+        )
+        .expect("execute");
+    let task_id = result.task_id.expect("task id");
+
+    {
+        let shell = manager
+            .processes
+            .get_mut(&task_id)
+            .expect("background shell");
+        let job = shell.windows_job.take().expect("windows job attached");
+        let limited_job = duplicate_job_without_terminate_access(job);
+        assert!(
+            limited_job.terminate().is_err(),
+            "limited job handle should not allow TerminateJobObject"
+        );
+        shell.windows_job = Some(limited_job);
+    }
+
+    let started = std::time::Instant::now();
+    let done = manager
+        .get_output(&task_id, true, 3000)
+        .expect("get_output must complete via kill-on-close fallback");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "get_output waited for natural descendant exit instead of kill-on-close"
     );
     assert_eq!(done.status, ShellStatus::Completed);
 }
