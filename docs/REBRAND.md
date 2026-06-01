@@ -23,8 +23,10 @@ codewhale doctor
 codewhale
 ```
 
-Your `~/.deepseek/config.toml`, `~/.deepseek/sessions/`, `~/.deepseek/skills/`,
-`~/.deepseek/tasks/`, and `~/.deepseek/mcp.json` are untouched. Existing
+Your existing `~/.deepseek/config.toml`, `~/.deepseek/sessions/`,
+`~/.deepseek/skills/`, `~/.deepseek/tasks/`, and `~/.deepseek/mcp.json` are
+not deleted. New CodeWhale installs prefer `~/.codewhale/`, and legacy
+`~/.deepseek/` state remains a read fallback while you migrate. Existing
 `DEEPSEEK_*` environment variables continue to work.
 
 ## What got renamed
@@ -52,9 +54,10 @@ Anything that targets the DeepSeek provider API stays exactly as it was:
   aliases `deepseek-chat` and `deepseek-reasoner`.
 - **Hosts**: `api.deepseek.com` (global) and `api.deepseeki.com` (China
   fallback).
-- **Config directory**: `~/.deepseek/`. Renaming this would invalidate
-  every existing install's saved API key, sessions, skills, MCP config,
-  and audit log.
+- **Legacy state compatibility**: existing `~/.deepseek/` config, sessions,
+  skills, tasks, MCP config, memory, and notes remain readable. New writes use
+  the CodeWhale state root (`~/.codewhale/`) unless you explicitly point a
+  setting at another path.
 - **GitHub repository URL**: `https://github.com/Hmbown/CodeWhale`.
   The old `Hmbown/DeepSeek-TUI` URL redirects there during the transition.
 - **Homebrew tap and formula** (`Hmbown/homebrew-deepseek-tui`): still
@@ -116,6 +119,35 @@ they land you on the deprecation shim, which then prompts the install of
 A second checksum manifest, `deepseek-artifacts-sha256.txt`, is attached as
 an alias of `codewhale-artifacts-sha256.txt` so v0.8.40's hardcoded lookup
 still verifies.
+
+### Sessions, skills, and manual workspaces
+
+Renaming the binary does not require starting over:
+
+- **Config**: on first launch, CodeWhale copies `~/.deepseek/config.toml` to
+  `~/.codewhale/config.toml` if the CodeWhale file does not already exist.
+  It never overwrites a newer CodeWhale config. You can inspect the active path
+  with `codewhale doctor`.
+- **Sessions and tasks**: managed state is read from `~/.codewhale/...` when
+  present, with `~/.deepseek/...` used as the legacy fallback when only the old
+  directory exists. Existing saved sessions still appear in `codewhale sessions`
+  and the TUI resume picker.
+- **Skills**: CodeWhale discovers workspace skills first, then global skills,
+  including both `~/.codewhale/skills` and legacy `~/.deepseek/skills`. Existing
+  skill directories with `SKILL.md` do not need to be rewritten.
+- **Manual binary installs**: keep the dispatcher and TUI binaries as siblings
+  on your `PATH`: `codewhale` plus `codewhale-tui`. On Windows, the recommended
+  user-local location is `%LOCALAPPDATA%\Programs\CodeWhale\bin`. On Unix-like
+  systems, any user-writable `PATH` directory is fine as long as both binaries
+  are present.
+- **Specified work directories**: running `codewhale` from a project directory,
+  or launching it with a specific workspace path, does not move project files.
+  CodeWhale reads `<workspace>/.codewhale/config.toml` first and falls back to
+  legacy `<workspace>/.deepseek/config.toml` when the new path is absent.
+
+If both `~/.codewhale/...` and `~/.deepseek/...` copies exist, the CodeWhale
+path wins. Keep the legacy directory until you have confirmed `codewhale
+doctor`, `codewhale sessions`, and your expected skills all show the same state.
 
 ## Why the name change
 
