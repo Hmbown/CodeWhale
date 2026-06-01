@@ -2462,42 +2462,27 @@ impl Config {
     /// Resolved per-stream chunk idle timeout in seconds.
     ///
     /// Reads `[tui].stream_chunk_timeout_secs` and returns a safe value for
-    /// `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS`, defaulting to
-    /// `DEFAULT_STREAM_CHUNK_TIMEOUT_SECS`. `None` or `0` resolve to the
-    /// default, and explicit values are clamped to
+    /// `DEFAULT_STREAM_CHUNK_TIMEOUT_SECS`. `None` falls back to the legacy
+    /// `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` env var when present, otherwise the
+    /// default. `0` resolves to the default, and explicit values are clamped to
     /// `[MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS]`.
     #[must_use]
     pub fn stream_chunk_timeout_secs(&self) -> u64 {
-        let raw = self
+        let raw = match self
             .tui
             .as_ref()
             .and_then(|tui| tui.stream_chunk_timeout_secs)
-            .unwrap_or(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS);
+        {
+            Some(raw) => raw,
+            None => std::env::var(STREAM_CHUNK_TIMEOUT_ENV)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS),
+        };
         if raw == 0 {
             return DEFAULT_STREAM_CHUNK_TIMEOUT_SECS;
         }
         raw.clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
-    }
-
-    /// Apply `[tui].stream_chunk_timeout_secs` as the engine runtime env-var
-    /// override when explicitly set.
-    pub(crate) fn apply_stream_chunk_timeout_env(&self) {
-        if self.tui.is_none() {
-            return;
-        }
-        if self
-            .tui
-            .as_ref()
-            .and_then(|tui| tui.stream_chunk_timeout_secs)
-            .is_some()
-        {
-            unsafe {
-                std::env::set_var(
-                    STREAM_CHUNK_TIMEOUT_ENV,
-                    self.stream_chunk_timeout_secs().to_string(),
-                );
-            }
-        }
     }
 
     /// Raw sub-agent model override map. Values are validated at spawn time
@@ -5623,39 +5608,14 @@ mod tests {
     }
 
     #[test]
-    fn apply_stream_chunk_timeout_env_sets_timeout_var() {
+    fn stream_chunk_timeout_reads_legacy_env_when_config_omitted() {
         let _lock = lock_test_env();
         let previous = env::var_os(STREAM_CHUNK_TIMEOUT_ENV);
 
         unsafe {
-            env::remove_var(STREAM_CHUNK_TIMEOUT_ENV);
+            env::set_var(STREAM_CHUNK_TIMEOUT_ENV, "123");
         }
-
-        let config_with_default = Config {
-            tui: Some(TuiConfig {
-                stream_chunk_timeout_secs: Some(0),
-                ..TuiConfig::default()
-            }),
-            ..Config::default()
-        };
-        config_with_default.apply_stream_chunk_timeout_env();
-        assert_eq!(
-            env::var(STREAM_CHUNK_TIMEOUT_ENV).as_deref(),
-            Ok(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS.to_string()).as_deref()
-        );
-
-        let config_with_custom = Config {
-            tui: Some(TuiConfig {
-                stream_chunk_timeout_secs: Some(123),
-                ..TuiConfig::default()
-            }),
-            ..Config::default()
-        };
-        config_with_custom.apply_stream_chunk_timeout_env();
-        assert_eq!(
-            env::var(STREAM_CHUNK_TIMEOUT_ENV).as_deref(),
-            Ok("123").as_deref()
-        );
+        assert_eq!(Config::default().stream_chunk_timeout_secs(), 123);
 
         unsafe {
             match previous {

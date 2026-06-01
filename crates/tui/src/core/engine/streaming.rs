@@ -4,10 +4,6 @@
 //! content block kind tracking, streamed tool-use buffers, transparent retry
 //! policy, and scrubbers for text that looks like a forged tool-call wrapper.
 
-use crate::config::{
-    DEFAULT_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS,
-    MIN_STREAM_CHUNK_TIMEOUT_SECS, STREAM_CHUNK_TIMEOUT_ENV,
-};
 use crate::models::ToolCaller;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,17 +22,6 @@ pub(super) struct ToolUseState {
     pub(super) input_buffer: String,
 }
 
-/// Reads the shared stream idle-timeout override used by the SSE client.
-pub(super) fn stream_chunk_timeout_secs() -> u64 {
-    stream_chunk_timeout_secs_from_env(std::env::var(STREAM_CHUNK_TIMEOUT_ENV).ok().as_deref())
-}
-
-fn stream_chunk_timeout_secs_from_env(value: Option<&str>) -> u64 {
-    value
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS)
-        .clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
-}
 /// Maximum total bytes of text/thinking content before aborting the stream.
 pub(super) const STREAM_MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 /// Sanity backstop for total stream wall-clock duration. **Not** a routine
@@ -144,21 +129,4 @@ pub(crate) fn filter_tool_call_delta(delta: &str, in_tool_call: &mut bool) -> St
     }
 
     output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stream_chunk_timeout_defaults_and_clamps_env_values() {
-        assert_eq!(stream_chunk_timeout_secs_from_env(None), 300);
-        assert_eq!(
-            stream_chunk_timeout_secs_from_env(Some("not-a-number")),
-            300
-        );
-        assert_eq!(stream_chunk_timeout_secs_from_env(Some("0")), 1);
-        assert_eq!(stream_chunk_timeout_secs_from_env(Some("90")), 90);
-        assert_eq!(stream_chunk_timeout_secs_from_env(Some("99999")), 3600);
-    }
 }

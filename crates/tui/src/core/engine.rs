@@ -187,6 +187,8 @@ pub struct EngineConfig {
     /// once at engine construction, then threaded onto every
     /// `SubAgentRuntime` the engine builds (#1806, #1808).
     pub subagent_api_timeout: Duration,
+    /// Per-stream chunk idle timeout for the model SSE loop.
+    pub stream_chunk_timeout: Duration,
     /// Native tools that should stay in the model-visible catalog even when
     /// they are outside the small default core surface (#2076).
     pub tools_always_load: HashSet<String>,
@@ -243,6 +245,9 @@ impl Default for EngineConfig {
             search_api_key: None,
             subagent_api_timeout: Duration::from_secs(
                 crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS,
+            ),
+            stream_chunk_timeout: Duration::from_secs(
+                crate::config::DEFAULT_STREAM_CHUNK_TIMEOUT_SECS,
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
@@ -803,6 +808,15 @@ impl Engine {
                         .send(Event::status(format!(
                             "Auto-compaction {}",
                             if enabled { "enabled" } else { "disabled" }
+                        )))
+                        .await;
+                }
+                Op::SetStreamChunkTimeout { timeout_secs } => {
+                    self.config.stream_chunk_timeout = Duration::from_secs(timeout_secs);
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Stream chunk timeout set to {timeout_secs}s"
                         )))
                         .await;
                 }
@@ -2266,8 +2280,6 @@ fn goal_objective_for_prompt(
 
 /// Spawn the engine in a background task
 pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
-    api_config.apply_stream_chunk_timeout_env();
-
     let (engine, handle) = Engine::new(config, api_config);
 
     spawn_supervised(
@@ -2392,7 +2404,7 @@ use self::streaming::{
     ContentBlockKind, FAKE_WRAPPER_NOTICE, MAX_STREAM_ERRORS_BEFORE_FAIL,
     MAX_TRANSPARENT_STREAM_RETRIES, STREAM_MAX_CONTENT_BYTES, STREAM_MAX_DURATION_SECS,
     ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta,
-    should_transparently_retry_stream, stream_chunk_timeout_secs,
+    should_transparently_retry_stream,
 };
 use self::tool_catalog::{
     CODE_EXECUTION_TOOL_NAME, JS_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME,

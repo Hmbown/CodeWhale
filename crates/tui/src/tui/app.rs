@@ -1184,6 +1184,7 @@ pub struct App {
     pub config_path: Option<PathBuf>,
     pub config_profile: Option<String>,
     pub mcp_config_path: PathBuf,
+    pub stream_chunk_timeout_secs: u64,
     pub skills_dir: PathBuf,
     /// Path to the user-memory file (#489). Always populated; only
     /// consulted when `use_memory` is `true`.
@@ -1936,6 +1937,7 @@ impl App {
             config_path,
             config_profile,
             mcp_config_path: mcp_config_path.clone(),
+            stream_chunk_timeout_secs: config.stream_chunk_timeout_secs(),
             skills_dir,
             memory_path,
             use_memory,
@@ -4825,6 +4827,7 @@ pub enum AppAction {
         model: Option<String>,
     },
     UpdateCompaction(CompactionConfig),
+    UpdateStreamChunkTimeout(u64),
     OpenContextInspector,
     CompactContext,
     PurgeContext,

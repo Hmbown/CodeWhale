@@ -415,8 +415,7 @@ impl Engine {
             // budget restarts with the fresh stream.
             let mut stream_start = Instant::now();
             let mut stream_content_bytes: usize = 0;
-            let chunk_timeout_secs = stream_chunk_timeout_secs();
-            let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
+            let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
             let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
 
             // Process stream events
@@ -2264,6 +2263,11 @@ fn is_turn_metadata_text(text: &str) -> bool {
     text.trim_start().starts_with("<turn_meta>")
 }
 
+fn stream_chunk_timeout_budget(config: &EngineConfig) -> (u64, Duration) {
+    let chunk_timeout_secs = config.stream_chunk_timeout.as_secs();
+    (chunk_timeout_secs, Duration::from_secs(chunk_timeout_secs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2294,6 +2298,19 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    #[test]
+    fn stream_chunk_timeout_budget_uses_engine_config() {
+        let config = EngineConfig {
+            stream_chunk_timeout: Duration::from_secs(42),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            stream_chunk_timeout_budget(&config),
+            (42, Duration::from_secs(42))
+        );
     }
 
     #[test]
