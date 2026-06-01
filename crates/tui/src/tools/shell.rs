@@ -488,6 +488,13 @@ impl BackgroundShell {
         if let Some(job) = self.windows_job.as_ref() {
             let _ = job.terminate();
         }
+        #[cfg(windows)]
+        {
+            // Close the job handle before joining reader threads so
+            // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE can still release inherited
+            // pipe handles if explicit termination failed.
+            self.windows_job = None;
+        }
         if let Some(handle) = self.stdout_thread.take() {
             let _ = handle.join();
         }
@@ -495,10 +502,6 @@ impl BackgroundShell {
             let _ = handle.join();
         }
         self.stdin = None;
-        #[cfg(windows)]
-        {
-            self.windows_job = None;
-        }
         self.child = None;
     }
 
