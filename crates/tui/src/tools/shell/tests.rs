@@ -100,6 +100,20 @@ fn failed_network_shell_result(stdout: &str, stderr: &str) -> ShellResult {
     }
 }
 
+fn wait_for_completed_shell(manager: &mut ShellManager, task_id: &str) -> ShellResult {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let result = manager
+            .get_output(task_id, true, 1_000)
+            .expect("get_output");
+        if result.status != ShellStatus::Running || Instant::now() >= deadline {
+            return result;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn shell_execution_scrubs_parent_env_and_keeps_explicit_env() {
@@ -173,10 +187,7 @@ fn test_background_execution() {
         .task_id
         .expect("background execution should return task_id");
 
-    // Wait for completion
-    let final_result = manager
-        .get_output(&task_id, true, 5000)
-        .expect("get_output");
+    let final_result = wait_for_completed_shell(&mut manager, &task_id);
 
     assert_eq!(final_result.status, ShellStatus::Completed);
     assert!(final_result.stdout.contains("done"));
@@ -767,6 +778,8 @@ async fn test_completed_background_shell_releases_process_handles() {
 
     assert!(result.success);
     let mut manager = shell_manager.lock().expect("shell manager lock");
+    let result = wait_for_completed_shell(&mut manager, &task_id);
+    assert_eq!(result.status, ShellStatus::Completed);
     let shell = manager.processes.get_mut(&task_id).expect("tracked shell");
     shell.poll();
     assert_eq!(shell.status, ShellStatus::Completed);
