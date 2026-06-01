@@ -666,7 +666,7 @@ pub struct TuiConfig {
     ///
     /// Edited interactively via `/statusline`; persisted to `tui.status_items`
     /// in `~/.deepseek/config.toml`.
-    #[serde(deserialize_with = "deser_status_items")]
+    #[serde(default, deserialize_with = "deser_status_items")]
     pub status_items: Option<Vec<StatusItem>>,
     /// Emit OSC 8 hyperlink escape sequences around URLs in the transcript so
     /// supporting terminals (iTerm2, Terminal.app 13+, Ghostty, Kitty,
@@ -8813,5 +8813,15 @@ model = "deepseek-ai/deepseek-v4-pro"
         assert_eq!(items[1], StatusItem::Model);
         assert_eq!(items[2], StatusItem::Cost);
         assert_eq!(items[3], StatusItem::Status);
+    }
+
+    #[test]
+    fn status_items_deser_allows_missing_field() {
+        let toml_str = r#"
+            locale = "zh-Hans"
+            mouse_capture = false
+        "#;
+        let tui: TuiConfig = toml::from_str(toml_str).expect("missing status_items should parse");
+        assert_eq!(tui.status_items, None);
     }
 }
