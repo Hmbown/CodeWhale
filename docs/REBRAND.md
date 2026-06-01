@@ -40,6 +40,13 @@ not deleted. New CodeWhale installs prefer `~/.codewhale/`, and legacy
 | Release assets | `deepseek-<platform>` / `deepseek-tui-<platform>` | `codewhale-<platform>` / `codewhale-tui-<platform>` |
 | Checksum manifest | `deepseek-artifacts-sha256.txt` | `codewhale-artifacts-sha256.txt` |
 
+## What changed for local state
+
+New installs write product-owned state under `~/.codewhale/`. Existing
+`~/.deepseek/` config, sessions, skills, tasks, MCP config, memory, and notes
+remain readable as legacy fallbacks while you migrate. CodeWhale never deletes
+the legacy directory automatically.
+
 ## What did NOT change
 
 Anything that targets the DeepSeek provider API stays exactly as it was:
@@ -54,10 +61,6 @@ Anything that targets the DeepSeek provider API stays exactly as it was:
   aliases `deepseek-chat` and `deepseek-reasoner`.
 - **Hosts**: `api.deepseek.com` (global) and `api.deepseeki.com` (China
   fallback).
-- **Legacy state compatibility**: existing `~/.deepseek/` config, sessions,
-  skills, tasks, MCP config, memory, and notes remain readable. New writes use
-  the CodeWhale state root (`~/.codewhale/`) unless you explicitly point a
-  setting at another path.
 - **GitHub repository URL**: `https://github.com/Hmbown/CodeWhale`.
   The old `Hmbown/DeepSeek-TUI` URL redirects there during the transition.
 - **Homebrew tap and formula** (`Hmbown/homebrew-deepseek-tui`): still
@@ -135,6 +138,10 @@ Renaming the binary does not require starting over:
 - **Skills**: CodeWhale discovers workspace skills first, then global skills,
   including both `~/.codewhale/skills` and legacy `~/.deepseek/skills`. Existing
   skill directories with `SKILL.md` do not need to be rewritten.
+- **MCP config**: the default path is `~/.codewhale/mcp.json`. If that file is
+  absent, CodeWhale still reads legacy `~/.deepseek/mcp.json`. To use a custom
+  MCP config file, set `mcp_config_path` in `config.toml` or
+  `DEEPSEEK_MCP_CONFIG`.
 - **Manual binary installs**: keep the dispatcher and TUI binaries as siblings
   on your `PATH`: `codewhale` plus `codewhale-tui`. On Windows, the recommended
   user-local location is `%LOCALAPPDATA%\Programs\CodeWhale\bin`. On Unix-like
