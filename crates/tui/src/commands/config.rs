@@ -6,8 +6,9 @@ use std::time::Duration;
 use super::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, effective_home_dir, expand_path,
-    normalize_model_name_for_provider,
+    COMMON_DEEPSEEK_MODELS, Config, DEFAULT_STREAM_CHUNK_TIMEOUT_SECS,
+    MAX_STREAM_CHUNK_TIMEOUT_SECS, MIN_STREAM_CHUNK_TIMEOUT_SECS, STREAM_CHUNK_TIMEOUT_ENV,
+    clear_api_key, effective_home_dir, expand_path, normalize_model_name_for_provider,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
@@ -135,6 +136,16 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
                 }
             };
             Some(config.deepseek_base_url())
+        }
+        "stream_chunk_timeout_secs" => {
+            let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    return CommandResult::error(format!("Failed to load config: {err}"));
+                }
+            };
+            Some(config.stream_chunk_timeout_secs().to_string())
         }
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "theme" | "ui_theme" => {
@@ -366,6 +377,45 @@ pub fn persist_root_string_key(
     Ok(path)
 }
 
+pub fn persist_tui_integer_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: u64,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut doc: toml::Value = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let tui_entry = table
+        .entry("tui".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let tui_table = tui_entry
+        .as_table_mut()
+        .context("config.toml [tui] must be a table")?;
+    tui_table.insert(key.to_string(), toml::Value::Integer(value as i64));
+
+    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+    fs::write(&path, body)
+        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    Ok(path)
+}
+
 /// Resolve the path to `~/.codewhale/config.toml` (or
 /// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
@@ -489,6 +539,52 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             return CommandResult::error(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
             );
+        }
+        "stream_chunk_timeout_secs" => {
+            let value = value.trim();
+            let parsed = match value.parse::<u64>() {
+                Ok(v) => v,
+                Err(_) => {
+                    return CommandResult::error(
+                        "stream_chunk_timeout_secs must be a whole number",
+                    );
+                }
+            };
+            if parsed != 0
+                && (parsed < MIN_STREAM_CHUNK_TIMEOUT_SECS
+                    || parsed > MAX_STREAM_CHUNK_TIMEOUT_SECS)
+            {
+                return CommandResult::error(format!(
+                    "stream_chunk_timeout_secs must be 0 or {}..={}",
+                    MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS
+                ));
+            }
+            let resolved = if parsed == 0 {
+                DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
+            } else {
+                parsed
+            };
+            unsafe {
+                std::env::set_var(STREAM_CHUNK_TIMEOUT_ENV, resolved.to_string());
+            }
+            if persist {
+                match persist_tui_integer_key(
+                    app.config_path.as_deref(),
+                    "stream_chunk_timeout_secs",
+                    parsed,
+                ) {
+                    Ok(path) => {
+                        return CommandResult::message(format!(
+                            "stream_chunk_timeout_secs = {parsed} (saved to {}; affects subsequent turns in this session)",
+                            path.display()
+                        ));
+                    }
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            }
+            return CommandResult::message(format!(
+                "stream_chunk_timeout_secs = {parsed} (session only; affects subsequent turns in this session)"
+            ));
         }
         _ => {}
     }
@@ -1374,6 +1470,7 @@ mod tests {
         userprofile: Option<OsString>,
         codewhale_config_path: Option<OsString>,
         deepseek_config_path: Option<OsString>,
+        stream_chunk_timeout: Option<OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -1387,6 +1484,7 @@ mod tests {
             let userprofile_prev = env::var_os("USERPROFILE");
             let codewhale_config_prev = env::var_os("CODEWHALE_CONFIG_PATH");
             let deepseek_config_prev = env::var_os("DEEPSEEK_CONFIG_PATH");
+            let stream_chunk_timeout_prev = env::var_os(STREAM_CHUNK_TIMEOUT_ENV);
 
             // Safety: test-only environment mutation guarded by process-wide mutex.
             unsafe {
@@ -1401,6 +1499,7 @@ mod tests {
                 userprofile: userprofile_prev,
                 codewhale_config_path: codewhale_config_prev,
                 deepseek_config_path: deepseek_config_prev,
+                stream_chunk_timeout: stream_chunk_timeout_prev,
                 _lock: lock,
             }
         }
@@ -1453,6 +1552,17 @@ mod tests {
                 // Safety: test-only environment mutation guarded by a global mutex.
                 unsafe {
                     env::remove_var("DEEPSEEK_CONFIG_PATH");
+                }
+            }
+            if let Some(value) = self.stream_chunk_timeout.take() {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::set_var(STREAM_CHUNK_TIMEOUT_ENV, value);
+                }
+            } else {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::remove_var(STREAM_CHUNK_TIMEOUT_ENV);
                 }
             }
         }
@@ -2008,6 +2118,91 @@ mod tests {
             )
         );
         assert!(saved.contains("base_url = \"https://example.session.local/v1\""));
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_secs_save_persists_value() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-stream-chunk-timeout-save-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 90 --save"));
+        let msg = result.message.unwrap();
+        let saved_path = config_toml_path(None).unwrap();
+        let saved = fs::read_to_string(&saved_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "stream_chunk_timeout_secs = 90 (saved to {}; affects subsequent turns in this session)",
+                saved_path.display()
+            )
+        );
+        assert!(saved.contains("[tui]"));
+        assert!(saved.contains("stream_chunk_timeout_secs = 90"));
+        assert_eq!(
+            std::env::var(STREAM_CHUNK_TIMEOUT_ENV).unwrap_or_else(|_| String::new()),
+            "90"
+        );
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_secs_rejects_invalid_input() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs abc"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("stream_chunk_timeout_secs must be a whole number"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_secs_rejects_out_of_range_value() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 3601"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("stream_chunk_timeout_secs must be 0 or 1..=3600"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_secs_zero_uses_default() {
+        let _lock = lock_test_env();
+        let previous = std::env::var_os(STREAM_CHUNK_TIMEOUT_ENV);
+        unsafe {
+            std::env::remove_var(STREAM_CHUNK_TIMEOUT_ENV);
+        }
+
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 0"));
+        assert!(!result.is_error);
+        assert_eq!(
+            std::env::var(STREAM_CHUNK_TIMEOUT_ENV).as_deref(),
+            Ok(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS.to_string()).as_deref()
+        );
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(STREAM_CHUNK_TIMEOUT_ENV, value),
+                None => std::env::remove_var(STREAM_CHUNK_TIMEOUT_ENV),
+            }
+        }
     }
 
     #[test]

@@ -4,6 +4,10 @@
 //! content block kind tracking, streamed tool-use buffers, transparent retry
 //! policy, and scrubbers for text that looks like a forged tool-call wrapper.
 
+use crate::config::{
+    DEFAULT_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS,
+    MIN_STREAM_CHUNK_TIMEOUT_SECS, STREAM_CHUNK_TIMEOUT_ENV,
+};
 use crate::models::ToolCaller;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,18 +26,9 @@ pub(super) struct ToolUseState {
     pub(super) input_buffer: String,
 }
 
-/// Default maximum time to wait for a single stream chunk before assuming a stall.
-/// **This is the idle timeout** — it resets on every SSE chunk, so long
-/// thinking turns that ARE producing reasoning_content stay alive. Only a
-/// genuine `chunk_timeout` window of silence kills the stream.
-const DEFAULT_STREAM_CHUNK_TIMEOUT_SECS: u64 = 300;
-const MIN_STREAM_CHUNK_TIMEOUT_SECS: u64 = 1;
-const MAX_STREAM_CHUNK_TIMEOUT_SECS: u64 = 3600;
-const STREAM_IDLE_TIMEOUT_ENV: &str = "DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS";
-
 /// Reads the shared stream idle-timeout override used by the SSE client.
 pub(super) fn stream_chunk_timeout_secs() -> u64 {
-    stream_chunk_timeout_secs_from_env(std::env::var(STREAM_IDLE_TIMEOUT_ENV).ok().as_deref())
+    stream_chunk_timeout_secs_from_env(std::env::var(STREAM_CHUNK_TIMEOUT_ENV).ok().as_deref())
 }
 
 fn stream_chunk_timeout_secs_from_env(value: Option<&str>) -> u64 {

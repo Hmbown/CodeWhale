@@ -413,6 +413,7 @@ max_subagents = 10 # optional (1-20)
 alternate_screen = "auto"   # auto/always use the TUI screen; never uses terminal scrollback
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
+stream_chunk_timeout_secs = 300 # optional SSE stream stall timeout (seconds) (1-3600); 0 uses default
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
 # notification_condition = "always" # always | never — overrides [notifications].threshold_secs.
 #                                    "always" = notify on every successful turn (no threshold);

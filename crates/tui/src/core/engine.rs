@@ -2266,6 +2266,8 @@ fn goal_objective_for_prompt(
 
 /// Spawn the engine in a background task
 pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
+    api_config.apply_stream_chunk_timeout_env();
+
     let (engine, handle) = Engine::new(config, api_config);
 
     spawn_supervised(

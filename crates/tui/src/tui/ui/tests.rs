@@ -1940,6 +1940,7 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             osc8_links: None,
             notification_condition: None,
             composer_arrows_scroll: None,
+            ..crate::config::TuiConfig::default()
         }),
         ..Config::default()
     };

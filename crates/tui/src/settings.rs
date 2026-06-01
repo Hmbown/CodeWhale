@@ -833,6 +833,10 @@ impl Settings {
                 "DEC 2026 synchronized output: auto, on, off (set off if your terminal flickers)",
             ),
             (
+                "stream_chunk_timeout_secs",
+                "Per-stream chunk idle timeout in seconds (0=default, 1..=3600)",
+            ),
+            (
                 "prefer_external_pdftotext",
                 "Route PDF reads through Poppler's pdftotext instead of the bundled pure-Rust extractor: on/off (default off)",
             ),

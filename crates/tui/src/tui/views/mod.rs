@@ -648,6 +648,15 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "stream_chunk_timeout_secs".to_string(),
+                value: Config::load(app.config_path.clone(), app.config_profile.as_deref())
+                    .map(|config| config.stream_chunk_timeout_secs().to_string())
+                    .unwrap_or_else(|_| "(unavailable)".to_string()),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "locale".to_string(),
                 value: settings.locale.clone(),
                 editable: true,
@@ -1176,6 +1185,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "background_color" => "#RRGGBB | default",
         "base_url" => "save user config; e.g. https://api.deepseek.com/beta or https://gateway/v1",
         "cost_currency" => "usd | cny",
+        "stream_chunk_timeout_secs" => "0=default, or 1..=3600 seconds",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
@@ -2293,6 +2303,7 @@ mod tests {
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"reasoning_effort"));
         assert!(keys.contains(&"base_url"));
+        assert!(keys.contains(&"stream_chunk_timeout_secs"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
@@ -2335,6 +2346,28 @@ mod tests {
             .find(|row| row.key == "base_url")
             .expect("base_url row missing");
         assert_eq!(row.value, "https://ui-config-view.local/v1");
+    }
+
+    #[test]
+    fn config_view_stream_chunk_timeout_secs_reflects_app_config_path() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "deepseek-tui-stream-chunk-timeout-view-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let config_path = temp_root.join("config.toml");
+        fs::write(&config_path, "[tui]\nstream_chunk_timeout_secs = 90\n").unwrap();
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let view = ConfigView::new_for_app(&app);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "stream_chunk_timeout_secs")
+            .expect("stream_chunk_timeout_secs row missing");
+        assert_eq!(row.value, "90");
     }
 
     #[test]
