@@ -197,6 +197,15 @@ impl ToolSpec for WebSearchTool {
         let max_results = max_results.clamp(1, MAX_RESULTS);
         let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
 
+        if configured_search_base_url(context.search_base_url.as_deref()).is_some()
+            && !matches!(context.search_provider, SearchProvider::DuckDuckGo)
+        {
+            return Err(ToolError::invalid_input(format!(
+                "[search].base_url is only supported with provider = \"duckduckgo\"; current provider is \"{}\"",
+                context.search_provider.as_str()
+            )));
+        }
+
         // Dispatch to the configured API-backed search providers before
         // building the HTML-scraping client used by Bing/DuckDuckGo.
         match context.search_provider {
@@ -306,8 +315,14 @@ impl ToolSpec for WebSearchTool {
             message_suffix = Some("Bing returned no results; used DuckDuckGo fallback");
         }
 
+        let duckduckgo_blocked = is_duckduckgo_challenge(&body);
+        if results.is_empty() && duckduckgo_blocked && !allow_bing_fallback {
+            return Err(ToolError::execution_failed(format!(
+                "DuckDuckGo-compatible search endpoint at {duckduckgo_host} returned a bot challenge; check the private search service, credentials, or network policy"
+            )));
+        }
+
         if results.is_empty() && allow_bing_fallback {
-            let duckduckgo_blocked = is_duckduckgo_challenge(&body);
             // Bing is a separate host — gate it independently so a deny on
             // DuckDuckGo doesn't silently let Bing through (and vice versa).
             check_policy(decider, BING_HOST)?;
@@ -1340,10 +1355,7 @@ fn duckduckgo_search_url(
     base_url: Option<&str>,
     query: &str,
 ) -> Result<(String, String), ToolError> {
-    let raw = base_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DUCKDUCKGO_ENDPOINT);
+    let raw = configured_search_base_url(base_url).unwrap_or(DUCKDUCKGO_ENDPOINT);
     let mut url = reqwest::Url::parse(raw).map_err(|err| {
         ToolError::invalid_input(format!(
             "Invalid DuckDuckGo-compatible search base_url: {err}"
@@ -1356,11 +1368,12 @@ fn duckduckgo_search_url(
     Ok((url.to_string(), host.to_string()))
 }
 
+fn configured_search_base_url(base_url: Option<&str>) -> Option<&str> {
+    base_url.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
-    match base_url {
-        Some(value) => value.trim().is_empty(),
-        None => true,
-    }
+    configured_search_base_url(base_url).is_none()
 }
 
 fn normalize_text(text: &str) -> String {
@@ -2023,5 +2036,63 @@ mod tests {
         assert!(!super::duckduckgo_allows_bing_fallback(Some(
             "https://search.internal.example/html/"
         )));
+    }
+
+    #[tokio::test]
+    async fn custom_duckduckgo_challenge_returns_actionable_error() {
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolSpec};
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/html/"))
+            .and(query_param("q", "rust async"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<html><body><div class="anomaly-modal">Unfortunately, bots use DuckDuckGo too</div></body></html>"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        ctx.search_provider = SearchProvider::DuckDuckGo;
+        ctx.search_base_url = Some(format!("{}/html/", server.uri()));
+
+        let err = WebSearchTool
+            .execute(json!({"query": "rust async"}), &ctx)
+            .await
+            .expect_err("custom endpoint challenge should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("DuckDuckGo-compatible search endpoint")
+                && msg.contains("bot challenge")
+                && msg.contains("private search service"),
+            "got `{msg}`"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_base_url_with_non_duckduckgo_provider_is_explicit_error() {
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolSpec};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        ctx.search_provider = SearchProvider::Tavily;
+        ctx.search_base_url = Some("https://search.internal.example/html/".to_string());
+
+        let err = WebSearchTool
+            .execute(json!({"query": "rust async"}), &ctx)
+            .await
+            .expect_err("non-duckduckgo provider with base_url should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[search].base_url")
+                && msg.contains("provider = \"duckduckgo\"")
+                && msg.contains("tavily"),
+            "got `{msg}`"
+        );
     }
 }
