@@ -898,11 +898,13 @@ async fn main() -> Result<()> {
             }
             Commands::Exec(args) => {
                 let config = load_config_from_cli(&cli)?;
-                let model = resolve_exec_model(&config, args.model.as_deref());
-                let prompt = join_prompt_parts(&args.prompt);
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
+                let mut config = config.clone();
+                merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                let model = resolve_exec_model(&config, args.model.as_deref());
+                let prompt = join_prompt_parts(&args.prompt);
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
                 // The `deepseek` launcher forwards `--yolo` to this binary via
                 // the DEEPSEEK_YOLO env var (which the config loader folds into
@@ -4952,6 +4954,67 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
     }
 }
 
+fn merge_user_workspace_config(
+    config: &mut Config,
+    config_path: Option<PathBuf>,
+    workspace: &Path,
+) {
+    if config.managed_config_path.is_some() || config.requirements_path.is_some() {
+        return;
+    }
+    let allow_shell_before = config.allow_shell;
+    let allow_shell_from_env = std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some();
+    let Some(path) = crate::config::resolve_load_config_path(config_path) else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&raw) else {
+        return;
+    };
+    merge_user_workspace_config_from_doc(config, &doc, workspace);
+    if allow_shell_from_env {
+        config.allow_shell = allow_shell_before;
+    }
+}
+
+fn merge_user_workspace_config_from_doc(config: &mut Config, doc: &toml::Value, workspace: &Path) {
+    for table_name in ["workspace", "projects"] {
+        let Some(entries) = doc.get(table_name).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (raw_path, entry) in entries {
+            if !workspace_config_path_matches(raw_path, workspace) {
+                continue;
+            }
+            if let Some(allow_shell) = entry.get("allow_shell").and_then(toml::Value::as_bool) {
+                config.allow_shell = Some(allow_shell);
+            }
+        }
+    }
+}
+
+fn workspace_config_path_matches(raw_path: &str, workspace: &Path) -> bool {
+    let configured = crate::config::expand_path(raw_path);
+    let configured = configured.canonicalize().unwrap_or(configured);
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    paths_equal_for_config(&configured, &workspace)
+}
+
+#[cfg(windows)]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+#[cfg(not(windows))]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
 async fn run_interactive(
     cli: &Cli,
     config: &Config,
@@ -4967,6 +5030,7 @@ async fn run_interactive(
     // or legacy $WORKSPACE/.deepseek/config.toml
     // unless --no-project-config was passed (#485).
     let mut merged_config = config.clone();
+    merge_user_workspace_config(&mut merged_config, cli.config.clone(), &workspace);
     if !cli.no_project_config {
         merge_project_config(&mut merged_config, &workspace);
     }
@@ -6800,6 +6864,98 @@ allow_shell = false
         let mut config = Config::default();
         merge_project_config(&mut config, tmp.path());
         assert_eq!(config.max_subagents, Some(4));
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_can_enable_shell_for_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
+
+        assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn user_workspace_overlay_ignores_non_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let configured_workspace = tmp.path().join("configured");
+        let active_workspace = tmp.path().join("active");
+        fs::create_dir_all(&configured_workspace).expect("mkdir configured workspace");
+        fs::create_dir_all(&active_workspace).expect("mkdir active workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            configured_workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &active_workspace);
+
+        assert_eq!(config.allow_shell, None);
+    }
+
+    #[test]
+    fn user_workspace_overlay_preserves_allow_shell_env_override() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        unsafe {
+            std::env::set_var("DEEPSEEK_ALLOW_SHELL", "false");
+        }
+        let mut config = Config {
+            allow_shell: Some(false),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+        unsafe {
+            std::env::remove_var("DEEPSEEK_ALLOW_SHELL");
+        }
+
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_does_not_override_managed_config() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        let mut config = Config {
+            allow_shell: Some(false),
+            managed_config_path: Some("managed.toml".to_string()),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+
         assert_eq!(config.allow_shell, Some(false));
     }
 

@@ -2704,7 +2704,7 @@ fn expand_pathbuf(path: PathBuf) -> PathBuf {
     path
 }
 
-fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
+pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
     if let Some(path) = path {
         return Some(expand_pathbuf(path));
     }

@@ -20,6 +20,20 @@ Overrides:
 
 If both are set, `--config` wins. Environment variable overrides are applied after the file is loaded.
 
+### User workspace entries
+
+For a shell opt-in that should live in the user's global config rather than in
+the repository, add a workspace-scoped entry:
+
+```toml
+[workspace.'/absolute/path/to/project']
+allow_shell = true
+```
+
+The entry applies only when the launched workspace path matches the table key.
+The legacy `[projects."/absolute/path/to/project"]` table is also accepted for
+this user-owned override.
+
 ### Per-project overlay (#485)
 
 When the TUI starts in a workspace that contains a
@@ -592,7 +606,7 @@ If you are upgrading from older releases:
 - `base_url` (string, optional): defaults to `https://api.deepseek.com/beta` for DeepSeek's OpenAI-compatible Chat Completions API, including legacy `provider = "deepseek-cn"` configs. Other defaults are `https://integrate.api.nvidia.com/v1` for `nvidia-nim`, `https://api.openai.com/v1` for `openai`, `https://api.atlascloud.ai/v1` for `atlascloud`, `https://maas-openapi.wanjiedata.com/api/v1` for `wanjie-ark`, `https://openrouter.ai/api/v1` for `openrouter`, `https://api.xiaomimimo.com/v1` for `xiaomi-mimo`, `https://api.novita.ai/v1` for `novita`, `https://api.fireworks.ai/inference/v1` for `fireworks`, `https://api.siliconflow.com/v1` for `siliconflow`, `https://api.moonshot.ai/v1` for `moonshot`, `http://localhost:30000/v1` for `sglang`, `http://localhost:8000/v1` for `vllm`, and `http://localhost:11434/v1` for `ollama`. Set `https://api.deepseek.com` or `https://api.deepseek.com/v1` explicitly to opt out of DeepSeek beta features.
 - `default_text_model` (string, optional): defaults to `deepseek-v4-pro` for DeepSeek and generic OpenAI-compatible endpoints, `deepseek-ai/deepseek-v4-pro` for NVIDIA NIM, `deepseek-ai/deepseek-v4-flash` for AtlasCloud, `deepseek-reasoner` for Wanjie Ark, `deepseek/deepseek-v4-pro` for OpenRouter and Novita, `mimo-v2.5-pro` for Xiaomi MiMo, `accounts/fireworks/models/deepseek-v4-pro` for Fireworks, `deepseek-ai/DeepSeek-V4-Pro` for SiliconFlow, `kimi-k2.6` for Moonshot, `deepseek-ai/DeepSeek-V4-Pro` for SGLang/vLLM, and `deepseek-coder:1.3b` for Ollama. Current public DeepSeek IDs are `deepseek-v4-pro` and `deepseek-v4-flash`, both with 1M context windows, 384K max output, and thinking mode enabled by default. Legacy `deepseek-chat` and `deepseek-reasoner` remain compatibility aliases for `deepseek-v4-flash` until July 24, 2026, except SiliconFlow maps `deepseek-reasoner` and `deepseek-r1` to its Pro model while `deepseek-chat` and `deepseek-v3` map to Flash. Provider-specific mappings translate `deepseek-v4-pro` / `deepseek-v4-flash` to each provider's model ID where supported. OpenRouter also recognizes recent large IDs such as `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `qwen/qwen3.6-35b-a3b`, `google/gemma-4-31b-it`, and `moonshotai/kimi-k2.6`. Generic `openai`, `atlascloud`, `wanjie-ark`, `xiaomi-mimo`, and Ollama model IDs are passed through unchanged. OpenRouter and SiliconFlow provider configs with a custom `base_url` also preserve explicit model values, which lets OpenAI-compatible gateways accept bare model IDs. Use `/models` or `codewhale models` to discover live IDs from your configured endpoint. `CODEWHALE_MODEL` overrides this for a single process; `DEEPSEEK_MODEL` is the legacy alias.
 - `reasoning_effort` (string, optional): `off`, `low`, `medium`, `high`, or `max`; defaults to the configured UI tier. DeepSeek Platform receives top-level `thinking` / `reasoning_effort` fields. NVIDIA NIM receives equivalent settings through `chat_template_kwargs`.
-- `allow_shell` (bool, optional): defaults to `true` (sandboxed).
+- `allow_shell` (bool, optional): defaults to `false`; shell tools must be explicitly enabled.
 - `approval_policy` (string, optional): `on-request`, `untrusted`, or `never`. Runtime `approval_mode` editing in `/config` also accepts `on-request` and `untrusted` aliases.
 - `sandbox_mode` (string, optional): `read-only`, `workspace-write`, `danger-full-access`, `external-sandbox`.
   Platform support is not identical. macOS uses Seatbelt for policy
