@@ -830,7 +830,8 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
     }
 
     let model_budget = max_width.saturating_sub(fixed_width).max(1);
-    let model_label = truncate_line_to_width(&app.model, model_budget);
+    let model_display = app.route_display_label();
+    let model_label = truncate_line_to_width(&model_display, model_budget);
 
     let mut spans = vec![
         Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),

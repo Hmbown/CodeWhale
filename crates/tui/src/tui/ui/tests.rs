@@ -6585,10 +6585,34 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
     let items = crate::config::StatusItem::default_footer();
     let props = render_footer_from(&app, &items, None);
     assert_eq!(props.mode_label, "agent");
-    assert!(!props.model.is_empty(), "footer should show a model name");
+    assert_eq!(props.model, "deepseek-v4-pro");
     // Tiny but real costs should render instead of disappearing as "$0.00".
     assert!(!props.cost.is_empty());
     assert_eq!(spans_text(&props.cost), "<$0.0001");
+}
+
+#[test]
+fn render_footer_from_auto_route_shows_whale_label_and_exact_choice() {
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    app.last_effective_model = Some("deepseek-v4-pro".to_string());
+    app.last_effective_reasoning_effort = Some(ReasoningEffort::Max);
+
+    let props = render_footer_from(&app, &crate::config::StatusItem::default_footer(), None);
+
+    assert_eq!(props.model, "auto: Blue Whale (deepseek-v4-pro/max)");
+}
+
+#[test]
+fn render_footer_from_unknown_auto_route_keeps_exact_model_only() {
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    app.last_effective_model = Some("custom-model-9b".to_string());
+    app.last_effective_reasoning_effort = Some(ReasoningEffort::Max);
+
+    let props = render_footer_from(&app, &crate::config::StatusItem::default_footer(), None);
+
+    assert_eq!(props.model, "auto: custom-model-9b");
 }
 
 #[test]

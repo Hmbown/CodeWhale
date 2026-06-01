@@ -281,7 +281,7 @@ impl FooterProps {
         // to cross the 60s threshold inside `footer_worked_chip`.
         let worked = footer_worked_chip(app.cumulative_turn_duration);
         Self {
-            model: app.model_display_label(),
+            model: app.route_display_label(),
             mode_label,
             mode_color,
             text_dim_color: app.ui_theme.text_dim,

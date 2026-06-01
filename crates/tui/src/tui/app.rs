@@ -4735,6 +4735,30 @@ impl App {
         self.model.clone()
     }
 
+    pub fn route_display_label(&self) -> String {
+        let should_show_route = self.auto_model || self.reasoning_effort == ReasoningEffort::Auto;
+        if !should_show_route {
+            return self.model_display_label();
+        }
+
+        let model = if self.auto_model {
+            self.last_effective_model
+                .as_deref()
+                .filter(|model| *model != "auto")
+        } else {
+            Some(self.model.as_str())
+        };
+        let effort = self.last_effective_reasoning_effort;
+
+        if let (Some(model), Some(effort)) = (model, effort)
+            && let Some(label) = whale_route_label(model, effort)
+        {
+            return format!("auto: {label} ({model}/{})", effort.short_label());
+        }
+
+        self.model_display_label()
+    }
+
     pub fn reasoning_effort_display_label(&self) -> String {
         if self.auto_model || self.reasoning_effort == ReasoningEffort::Auto {
             if let Some(effective) = self.last_effective_reasoning_effort {
@@ -4758,6 +4782,25 @@ impl App {
     /// engine has its own copy to mutate per-session.
     pub fn cycle_config(&self) -> CycleConfig {
         self.cycle.clone()
+    }
+}
+
+fn whale_route_label(model: &str, effort: ReasoningEffort) -> Option<&'static str> {
+    let model = model.to_ascii_lowercase();
+    let is_pro = model.contains("deepseek-v4-pro") || model.contains("deepseek_v4_pro");
+    let is_flash = model.contains("deepseek-v4-flash") || model.contains("deepseek_v4_flash");
+    match (is_pro, is_flash, effort) {
+        (true, false, ReasoningEffort::Max) => Some("Blue Whale"),
+        (true, false, ReasoningEffort::High | ReasoningEffort::Medium | ReasoningEffort::Low) => {
+            Some("Fin Whale")
+        }
+        (true, false, ReasoningEffort::Off) => Some("Sperm Whale"),
+        (false, true, ReasoningEffort::Max) => Some("Humpback Whale"),
+        (false, true, ReasoningEffort::High | ReasoningEffort::Medium | ReasoningEffort::Low) => {
+            Some("Minke Whale")
+        }
+        (false, true, ReasoningEffort::Off) => Some("Dwarf Sperm Whale"),
+        _ => None,
     }
 }
 
