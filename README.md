@@ -452,6 +452,9 @@ The first ACP slice supports new sessions and prompt responses through your
 existing DeepSeek config/API key. Tool-backed editing and checkpoint replay are
 not exposed through ACP yet.
 
+For backend wrappers that need tools, streaming, or structured conversation
+state, see the integration mode matrix in [docs/RUNTIME_API.md](docs/RUNTIME_API.md).
+
 Community-maintained adapter: [acp-codewhale-adapter](https://github.com/rockeverm3m/acp-codewhale-adapter)
 bridges `codewhale exec --auto` to `cc-connect` for users who need tool-backed
 ACP workflows outside the built-in Zed slice.

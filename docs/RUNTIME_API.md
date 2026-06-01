@@ -22,6 +22,26 @@ macOS workbench (or any local supervisor)
 The engine runs as a local-only process. All APIs bind to `localhost` by
 default. No hosted relay, no provider-token custody, no secret leakage.
 
+## Choosing an integration mode
+
+Use the mode that matches the surface your wrapper needs:
+
+| Mode | Best fit | Tool access | Streaming | Message shape |
+|---|---|---|---|---|
+| `codewhale serve --http` | Local apps, web/chat backends, mobile or desktop supervisors | Tools run through normal thread/turn execution under the configured policy, with approval APIs for gated calls | SSE events via `/v1/threads/{id}/events` and compatibility streaming via `/v1/stream` | Structured thread, turn, task, approval, and event records |
+| `codewhale exec --auto --output-format stream-json` | Non-interactive CLI wrappers and harnesses that need tool-backed output without running a daemon | Built-in tools plus configured MCP tools available to the non-interactive agent | Newline-delimited JSON on stdout | A single prompt string for the turn; role/history separation must be encoded by the caller |
+| `codewhale serve --acp` | Editors and ACP-compatible clients such as Zed | Not yet exposed through ACP | ACP `session/update` chunks | ACP session prompt/update messages |
+| `codewhale serve --mcp` | Other MCP clients that want to call CodeWhale as a tool server | Exposes CodeWhale tools to the external MCP client | MCP request/response over stdio | MCP tool-call payloads |
+
+For Feishu/Lark bots, custom web chats, or other long-running chat backends,
+prefer `serve --http` when the client needs structured conversations,
+approvals, interrupt/steer controls, event replay, or separate system prompt
+state. Use `exec --auto --output-format stream-json` for simpler wrappers that
+can encode their own context into one prompt and only need a tool-backed NDJSON
+stream. Use ACP when the host already speaks Agent Client Protocol; the current
+ACP adapter is deliberately chat-only and does not load MCP tools into the ACP
+session.
+
 ## ACP stdio adapter: `codewhale serve --acp`
 
 `codewhale serve --acp` speaks JSON-RPC 2.0 over newline-delimited stdio for
