@@ -922,6 +922,38 @@ fn test_orphaned_subprocess_does_not_block_collect_output() {
     assert_eq!(done.status, ShellStatus::Completed);
 }
 
+// Windows equivalent of the orphaned pipe-handle regression. `cmd /c start /b`
+// launches a descendant process that inherits stdout/stderr and outlives the
+// shell. Job-object cleanup must terminate that descendant before reader-thread
+// joins, otherwise get_output() blocks until ping exits.
+#[cfg(windows)]
+#[test]
+fn background_collection_does_not_block_on_detached_descendant_pipe() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute(
+            r#"cmd /c start "" /b ping 127.0.0.1 -n 8"#,
+            None,
+            5000,
+            true,
+        )
+        .expect("execute");
+    let task_id = result.task_id.expect("task id");
+
+    let started = std::time::Instant::now();
+    let done = manager
+        .get_output(&task_id, true, 3000)
+        .expect("get_output must complete, not hang");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "get_output blocked on descendant pipe handles"
+    );
+    assert_eq!(done.status, ShellStatus::Completed);
+}
+
 #[test]
 fn test_list_jobs_cleans_up_completed_old_processes() {
     let tmp = tempdir().expect("tempdir");
