@@ -15,6 +15,7 @@ use chrono::TimeZone;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
 const MAX_LIST_LIMIT: usize = 100;
+const MAX_RESTORE_INDEX: usize = 1000;
 
 /// Entry point for `/restore [N|list [N]]`.
 pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -55,7 +56,12 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     let n: usize = match arg.parse() {
-        Ok(n) if n >= 1 => n,
+        Ok(n) if (1..=MAX_RESTORE_INDEX).contains(&n) => n,
+        Ok(n) if n > MAX_RESTORE_INDEX => {
+            return CommandResult::error(format!(
+                "Restore index must be <= {MAX_RESTORE_INDEX}; got {n}. Use /restore list [N] to inspect snapshots first.",
+            ));
+        }
         _ => {
             return CommandResult::error(format!(
                 "Usage: /restore <N> or /restore list [N]  (N is 1-based; got '{arg}')",
@@ -335,6 +341,23 @@ mod tests {
         let result = restore(&mut app, Some("12"));
         assert!(result.message.unwrap().contains("Restored"));
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "v0");
+    }
+
+    #[test]
+    fn restore_numeric_index_rejects_unbounded_query() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let mut app = make_app(&tmp, true);
+
+        let result = restore(&mut app, Some("1001"));
+
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Restore index must be <= 1000")
+        );
     }
 
     #[test]
