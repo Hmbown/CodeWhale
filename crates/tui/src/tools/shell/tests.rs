@@ -119,7 +119,7 @@ fn shell_execution_scrubs_parent_env_and_keeps_explicit_env() {
 
     let result = manager
         .execute_with_options_env(
-            "printf '%s\\n%s\\n' \"${DEEPSEEK_CHILD_ENV_SHELL_SECRET-unset}\" \"${DEEPSEEK_CHILD_ENV_EXPLICIT-unset}\"",
+            "sh -c 'printf \"%s\\n%s\\n\" \"${DEEPSEEK_CHILD_ENV_SHELL_SECRET-unset}\" \"${DEEPSEEK_CHILD_ENV_EXPLICIT-unset}\"'",
             None,
             5000,
             false,
