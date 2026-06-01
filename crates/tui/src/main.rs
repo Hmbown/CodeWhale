@@ -30,6 +30,7 @@ mod config;
 mod config_ui;
 mod core;
 mod cost_status;
+mod custom_theme;
 mod cycle_manager;
 mod deepseek_theme;
 mod dependencies;

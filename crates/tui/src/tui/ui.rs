@@ -399,6 +399,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // can rebuild the API client without restarting the process.
     let mut config = config.clone();
     let config = &mut config;
+    // Load custom themes from ~/.codewhale/themes/ BEFORE building App so
+    // that ThemeId::from_name() can resolve custom theme names during
+    // app construction (ui_theme_from_settings → from_setting → from_name).
+    crate::palette::load_custom_themes();
     let mut app = App::new(options.clone(), config);
     sync_config_provider_from_app(config, &app);
 
@@ -6431,7 +6435,9 @@ fn draw_app_frame_inner(
     full_repaint: bool,
 ) -> Result<()> {
     terminal.backend_mut().set_palette_mode(app.ui_theme.mode);
-    terminal.backend_mut().set_theme(app.theme_id, app.ui_theme);
+    terminal
+        .backend_mut()
+        .set_theme(app.theme_id.clone(), app.ui_theme);
     // DEC 2026 wrapping is on by default but can be turned off for
     // terminals that mishandle it (Ptyxis 50.x + VTE 0.84.x flashes the
     // whole viewport on every wrapped frame instead of deferring as the

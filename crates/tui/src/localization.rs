@@ -288,6 +288,8 @@ pub enum MessageId {
     CmdNetworkDescription,
     CmdNoteDescription,
     CmdThemeDescription,
+    CmdThemeDescribe,
+    CmdThemeSave,
     CmdProviderDescription,
     CmdQueueDescription,
     CmdRecallDescription,
@@ -1031,6 +1033,12 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
+        MessageId::CmdThemeDescribe => {
+            "Generate a custom theme from a natural-language description"
+        }
+        MessageId::CmdThemeSave => {
+            "Save the most recently generated theme JSON to disk and register it"
+        }
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
@@ -1439,6 +1447,8 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Thêm, liệt kê, sửa hoặc xóa ghi chú trong không gian làm việc"
         }
         MessageId::CmdThemeDescription => "Chuyển đổi giao diện hoặc mở bảng chọn giao diện",
+        MessageId::CmdThemeDescribe => "Tạo giao diện tùy chỉnh từ mô tả ngôn ngữ tự nhiên",
+        MessageId::CmdThemeSave => "Lưu JSON giao diện được tạo gần đây nhất vào đĩa và đăng ký",
         MessageId::CmdProviderDescription => {
             "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)"
         }
@@ -1874,6 +1884,8 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdThemeDescription => {
             "テーマを切り替え（ダーク/ライト/グレースケール/システム）"
         }
+        MessageId::CmdThemeDescribe => "自然言語の説明からカスタムテーマを生成",
+        MessageId::CmdThemeSave => "最近生成されたテーマJSONをディスクに保存して登録",
         MessageId::CmdProviderDescription => {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
@@ -2249,6 +2261,8 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
         MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
+        MessageId::CmdThemeDescribe => "用自然语言描述生成自定义主题",
+        MessageId::CmdThemeSave => "保存最近生成的主题JSON到磁盘并注册",
         MessageId::CmdProviderDescription => {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
@@ -2610,6 +2624,12 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNetworkDescription => "Gerenciar regras de rede permitidas e bloqueadas",
         MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar tema: escuro, claro, tons de cinza ou sistema",
+        MessageId::CmdThemeDescribe => {
+            "Gerar um tema personalizado a partir de uma descrição em linguagem natural"
+        }
+        MessageId::CmdThemeSave => {
+            "Salvar o JSON do tema gerado mais recentemente no disco e registrá-lo"
+        }
         MessageId::CmdProviderDescription => {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
@@ -3035,6 +3055,12 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Agregar nota al archivo persistente (.codewhale/notes.md)"
         }
         MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
+        MessageId::CmdThemeDescribe => {
+            "Generar un tema personalizado a partir de una descripción en lenguaje natural"
+        }
+        MessageId::CmdThemeSave => {
+            "Guardar el JSON del tema generado más recientemente en el disco y registrarlo"
+        }
         MessageId::CmdProviderDescription => {
             "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }

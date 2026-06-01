@@ -175,10 +175,11 @@ pub enum UiLocale {
     Es419,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiThemeValue {
     System,
+    Terminal,
     Dark,
     Light,
     Grayscale,
@@ -186,7 +187,11 @@ pub enum UiThemeValue {
     TokyoNight,
     Dracula,
     GruvboxDark,
+    Claude,
     Matrix,
+    SolarizedLight,
+    /// Custom theme identified by file-name stem
+    Custom(String),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -491,7 +496,7 @@ pub fn apply_document(
             bool_str(doc.settings.show_tool_details),
         ),
         ("locale", doc.settings.locale.as_setting()),
-        ("theme", doc.settings.theme.as_setting()),
+        ("theme", &doc.settings.theme.as_setting()),
         (
             "background_color",
             doc.settings
@@ -723,23 +728,28 @@ impl UiLocale {
 }
 
 impl UiThemeValue {
-    fn as_setting(self) -> &'static str {
+    fn as_setting(&self) -> String {
         match self {
-            Self::System => "system",
-            Self::Dark => "dark",
-            Self::Light => "light",
-            Self::Grayscale => "grayscale",
-            Self::CatppuccinMocha => "catppuccin-mocha",
-            Self::TokyoNight => "tokyo-night",
-            Self::Dracula => "dracula",
-            Self::GruvboxDark => "gruvbox-dark",
-            Self::Matrix => "matrix",
+            Self::System => "system".to_string(),
+            Self::Terminal => "terminal".to_string(),
+            Self::Dark => "dark".to_string(),
+            Self::Light => "light".to_string(),
+            Self::Grayscale => "grayscale".to_string(),
+            Self::CatppuccinMocha => "catppuccin-mocha".to_string(),
+            Self::TokyoNight => "tokyo-night".to_string(),
+            Self::Dracula => "dracula".to_string(),
+            Self::GruvboxDark => "gruvbox-dark".to_string(),
+            Self::Claude => "claude".to_string(),
+            Self::Matrix => "matrix".to_string(),
+            Self::SolarizedLight => "solarized-light".to_string(),
+            Self::Custom(name) => name.clone(),
         }
     }
 
     fn from_setting(value: &str) -> Result<Self> {
         match crate::palette::normalize_theme_name(value) {
             Some("system") => Ok(Self::System),
+            Some("terminal") => Ok(Self::Terminal),
             Some("dark") => Ok(Self::Dark),
             Some("light") => Ok(Self::Light),
             Some("grayscale") => Ok(Self::Grayscale),
@@ -747,9 +757,19 @@ impl UiThemeValue {
             Some("tokyo-night") => Ok(Self::TokyoNight),
             Some("dracula") => Ok(Self::Dracula),
             Some("gruvbox-dark") => Ok(Self::GruvboxDark),
+            Some("claude") => Ok(Self::Claude),
             Some("matrix") => Ok(Self::Matrix),
-            Some(other) => bail!("unsupported theme '{other}'"),
-            None => bail!("invalid theme '{value}'"),
+            Some("solarized-light") => Ok(Self::SolarizedLight),
+            // Unknown names are accepted as custom themes
+            None | Some(_) => {
+                let name = value.trim().to_ascii_lowercase();
+                if name.is_empty() || name.len() > 64 {
+                    bail!(
+                        "invalid theme '{value}': expected a known theme or a custom theme name (1-64 characters)"
+                    );
+                }
+                Ok(Self::Custom(name))
+            }
         }
     }
 }
@@ -1178,21 +1198,20 @@ background_color = "#1A1B26"
             locale,
             &serde_json::json!(["auto", "en", "ja", "zh-Hans", "pt-BR", "es-419"])
         );
-        let theme = &schema["$defs"]["UiThemeValue"]["enum"];
-        assert_eq!(
-            theme,
-            &serde_json::json!([
-                "system",
-                "dark",
-                "light",
-                "grayscale",
-                "catppuccin-mocha",
-                "tokyo-night",
-                "dracula",
-                "gruvbox-dark",
-                "matrix"
-            ])
+        // UiThemeValue now includes a Custom(String) variant so the schema
+        // is a oneOf rather than a flat enum list.
+        let theme_schema = &schema["$defs"]["UiThemeValue"];
+        assert!(
+            theme_schema.is_object(),
+            "UiThemeValue schema should be an object (oneOf)"
         );
+        // Verify that known built-in values appear somewhere in the schema.
+        let schema_str = serde_json::to_string(theme_schema).unwrap();
+        assert!(schema_str.contains("system"));
+        assert!(schema_str.contains("dark"));
+        assert!(schema_str.contains("grayscale"));
+        assert!(schema_str.contains("catppuccin-mocha"));
+        assert!(schema_str.contains("solarized-light"));
     }
 
     #[test]

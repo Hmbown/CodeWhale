@@ -153,14 +153,26 @@ impl TuiPrefs {
     /// Returns `Err` if an unrecognised `theme` value is found so callers can
     /// surface a helpful message rather than silently ignoring a typo.
     pub fn validate(&mut self) -> Result<()> {
-        let theme = self.theme.trim().to_ascii_lowercase();
-        let Some(theme) = normalize_theme_name(&theme) else {
-            anyhow::bail!(
-                "Invalid tui.toml theme '{}': expected system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, or solarized-light.",
-                self.theme
-            );
-        };
-        self.theme = theme.to_string();
+        let theme_key = self.theme.trim().to_ascii_lowercase();
+        if let Some(canonical) = normalize_theme_name(&theme_key) {
+            self.theme = canonical.to_string();
+        } else {
+            // Allow custom theme names that aren't in the built-in list.
+            // At this point custom themes haven't been loaded from disk yet,
+            // so we accept any plausible name. If the theme turns out not to
+            // exist, `ThemeId::from_name()` will fall back to System at
+            // app init and the user sees the default theme.
+            if theme_key.is_empty() || theme_key.len() > 64 {
+                anyhow::bail!(
+                    "Invalid tui.toml theme '{}': expected a known theme name \
+                     (system, dark, light, grayscale, catppuccin-mocha, \
+                     tokyo-night, dracula, gruvbox-dark, claude, matrix, \
+                     solarized-light) or a custom theme name (1-64 characters).",
+                    self.theme
+                );
+            }
+            self.theme = theme_key;
+        }
         Ok(())
     }
 }
@@ -987,8 +999,10 @@ fn normalize_synchronized_output(value: &str) -> &str {
     }
 }
 
-fn normalize_settings_theme(value: &str) -> &'static str {
-    normalize_theme_name(value).unwrap_or("system")
+fn normalize_settings_theme(value: &str) -> String {
+    normalize_theme_name(value)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| value.trim().to_ascii_lowercase())
 }
 
 /// Returns `true` when the active terminal is Ptyxis (the new default
@@ -2138,18 +2152,30 @@ mod tests {
     }
 
     #[test]
-    fn tui_prefs_validate_rejects_unknown_theme() {
+    fn tui_prefs_validate_accepts_unknown_theme_as_custom() {
+        // Custom theme names (not matching any built-in) are now accepted
+        // as plausible custom theme names; validation only rejects empty
+        // or excessively long names.
         let mut prefs = TuiPrefs {
             theme: "nord".to_string(),
             ..TuiPrefs::default()
         };
-        let err = prefs.validate().expect_err("nord is not a valid theme");
+        prefs
+            .validate()
+            .expect("custom theme names should be accepted");
+        assert_eq!(prefs.theme, "nord");
+    }
+
+    #[test]
+    fn tui_prefs_validate_rejects_overly_long_theme_name() {
+        let mut prefs = TuiPrefs {
+            theme: "a".repeat(65),
+            ..TuiPrefs::default()
+        };
+        let err = prefs
+            .validate()
+            .expect_err("overly long theme name should be rejected");
         assert!(err.to_string().contains("Invalid tui.toml theme"));
-        assert!(
-            err.to_string()
-                .contains("expected system, dark, light, grayscale")
-        );
-        assert!(err.to_string().contains("solarized-light"));
     }
 
     #[test]

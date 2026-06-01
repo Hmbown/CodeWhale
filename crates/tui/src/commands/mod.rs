@@ -384,6 +384,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
+        name: "theme-describe",
+        aliases: &["theme-create", "theme-new", "theme-generate"],
+        usage: "/theme-describe <natural-language description>",
+        description_id: MessageId::CmdThemeDescribe,
+    },
+    CommandInfo {
+        name: "theme-save",
+        aliases: &["theme-write", "theme-install"],
+        usage: "/theme-save <name>",
+        description_id: MessageId::CmdThemeSave,
+    },
+    CommandInfo {
         name: "verbose",
         aliases: &[],
         usage: "/verbose [on|off]",
@@ -624,6 +636,10 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jihua" => config::mode(app, Some("plan")),
         "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),
+        "theme-describe" | "theme-create" | "theme-new" | "theme-generate" => {
+            config::theme_describe(app, arg)
+        }
+        "theme-save" | "theme-write" | "theme-install" => config::theme_save(app, arg),
         "verbose" => config::verbose(app, arg),
         "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),

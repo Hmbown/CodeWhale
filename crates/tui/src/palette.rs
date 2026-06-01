@@ -1248,7 +1248,12 @@ pub const MATRIX_UI_THEME: UiTheme = UiTheme {
 /// Stable identifiers for the named themes the user can select. `System`
 /// defers to `PaletteMode::detect()` (terminal-driven dark/light). Each
 /// dark/light id resolves to a single fixed `UiTheme`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Custom(String)` carries the file-name stem of a user-defined theme
+/// stored under `~/.codewhale/themes/<name>.json`. The resolved `UiTheme`
+/// is fetched from the global `CUSTOM_THEMES` registry, which is populated
+/// at app startup by `load_custom_themes()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeId {
     System,
     Terminal,
@@ -1262,88 +1267,150 @@ pub enum ThemeId {
     Claude,
     Matrix,
     SolarizedLight,
+    /// User-defined custom theme persisted under `~/.codewhale/themes/<name>.json`.
+    Custom(String),
+}
+
+/// In-memory registry of loaded custom themes. Key is the theme's
+/// file-name stem (e.g. `"amber-library"`). Populated at startup by
+/// `palette::load_custom_themes()` and kept in sync by the install/remove
+/// helpers.
+static CUSTOM_THEMES: std::sync::RwLock<Option<std::collections::HashMap<String, UiTheme>>> =
+    std::sync::RwLock::new(None);
+
+/// Seed the `CUSTOM_THEMES` registry from disk. Called once during app
+/// initialisation. Any theme files that fail to parse are skipped with
+/// a warning on stderr.
+pub fn load_custom_themes() {
+    let themes = crate::custom_theme::load_custom_themes();
+    if let Ok(mut guard) = CUSTOM_THEMES.write() {
+        *guard = Some(themes);
+    }
+}
+
+/// Install a custom theme into the in-memory registry. Does NOT persist to
+/// disk (call `crate::custom_theme::save_custom_theme()` first if you want
+/// the theme to survive restarts).
+#[allow(dead_code)]
+pub fn register_custom_theme(name: &str, ui_theme: UiTheme) {
+    if let Ok(mut guard) = CUSTOM_THEMES.write() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        map.insert(name.to_string(), ui_theme);
+    }
+}
+
+/// Remove a custom theme from the in-memory registry. Does NOT delete the
+/// file on disk.
+pub fn unregister_custom_theme(name: &str) {
+    if let Ok(mut guard) = CUSTOM_THEMES.write()
+        && let Some(ref mut map) = *guard
+    {
+        map.remove(name);
+    }
 }
 
 impl ThemeId {
     /// Parse a settings string (`"system"`, `"dark"`, `"catppuccin-mocha"`, …).
+    /// Also checks the custom-theme registry so user-defined themes are
+    /// selectable from config or `/theme <name>`.
     /// Accepts a few aliases (`"whale"` for dark, `"light"` for whale-light)
     /// so existing config files keep working. Case-insensitive.
     #[must_use]
     pub fn from_name(value: &str) -> Option<Self> {
-        match normalize_theme_name(value)? {
-            "system" => Some(Self::System),
-            "terminal" => Some(Self::Terminal),
-            "dark" => Some(Self::Whale),
-            "light" => Some(Self::WhaleLight),
-            "grayscale" => Some(Self::Grayscale),
-            "catppuccin-mocha" => Some(Self::CatppuccinMocha),
-            "tokyo-night" => Some(Self::TokyoNight),
-            "dracula" => Some(Self::Dracula),
-            "gruvbox-dark" => Some(Self::GruvboxDark),
-            "claude" => Some(Self::Claude),
-            "matrix" => Some(Self::Matrix),
-            "solarized-light" => Some(Self::SolarizedLight),
-            _ => None,
+        // Try built-in names first
+        if let Some(builtin) = normalize_theme_name(value) {
+            return Some(match builtin {
+                "system" => Self::System,
+                "terminal" => Self::Terminal,
+                "dark" => Self::Whale,
+                "light" => Self::WhaleLight,
+                "grayscale" => Self::Grayscale,
+                "catppuccin-mocha" => Self::CatppuccinMocha,
+                "tokyo-night" => Self::TokyoNight,
+                "dracula" => Self::Dracula,
+                "gruvbox-dark" => Self::GruvboxDark,
+                "claude" => Self::Claude,
+                "matrix" => Self::Matrix,
+                "solarized-light" => Self::SolarizedLight,
+                _ => return None,
+            });
         }
+        // Check the custom-theme registry
+        let name = value.trim().to_ascii_lowercase();
+        if let Ok(guard) = CUSTOM_THEMES.read()
+            && let Some(ref map) = *guard
+            && map.contains_key(&name)
+        {
+            return Some(Self::Custom(name));
+        }
+        None
     }
 
     /// Canonical settings string (lowercase, dash-separated). Round-trips
-    /// through `from_name`.
+    /// through `from_name`. For custom themes, returns the file-name stem.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Self::System => "system",
-            Self::Terminal => "terminal",
-            Self::Whale => "dark",
-            Self::WhaleLight => "light",
-            Self::Grayscale => "grayscale",
-            Self::CatppuccinMocha => "catppuccin-mocha",
-            Self::TokyoNight => "tokyo-night",
-            Self::Dracula => "dracula",
-            Self::GruvboxDark => "gruvbox-dark",
-            Self::Claude => "claude",
-            Self::Matrix => "matrix",
-            Self::SolarizedLight => "solarized-light",
+            Self::System => "system".to_string(),
+            Self::Terminal => "terminal".to_string(),
+            Self::Whale => "dark".to_string(),
+            Self::WhaleLight => "light".to_string(),
+            Self::Grayscale => "grayscale".to_string(),
+            Self::CatppuccinMocha => "catppuccin-mocha".to_string(),
+            Self::TokyoNight => "tokyo-night".to_string(),
+            Self::Dracula => "dracula".to_string(),
+            Self::GruvboxDark => "gruvbox-dark".to_string(),
+            Self::Claude => "claude".to_string(),
+            Self::Matrix => "matrix".to_string(),
+            Self::SolarizedLight => "solarized-light".to_string(),
+            Self::Custom(n) => n.clone(),
         }
     }
 
-    /// Human-readable label for picker rows.
+    /// Human-readable label for picker rows. Custom themes are prefixed
+    /// with a pencil glyph so the user can tell them apart from built-in
+    /// presets.
     #[must_use]
-    pub const fn display_name(self) -> &'static str {
+    pub fn display_name(&self) -> String {
         match self {
-            Self::System => "System",
-            Self::Terminal => "Terminal",
-            Self::Whale => "Whale (Dark)",
-            Self::WhaleLight => "Whale Light",
-            Self::Grayscale => "Grayscale",
-            Self::CatppuccinMocha => "Catppuccin Mocha",
-            Self::TokyoNight => "Tokyo Night",
-            Self::Dracula => "Dracula",
-            Self::GruvboxDark => "Gruvbox Dark",
-            Self::Claude => "Claude",
-            Self::Matrix => "Matrix",
-            Self::SolarizedLight => "Solarized Light",
+            Self::System => "System".to_string(),
+            Self::Terminal => "Terminal".to_string(),
+            Self::Whale => "Whale (Dark)".to_string(),
+            Self::WhaleLight => "Whale Light".to_string(),
+            Self::Grayscale => "Grayscale".to_string(),
+            Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
+            Self::TokyoNight => "Tokyo Night".to_string(),
+            Self::Dracula => "Dracula".to_string(),
+            Self::GruvboxDark => "Gruvbox Dark".to_string(),
+            Self::Claude => "Claude".to_string(),
+            Self::Matrix => "Matrix".to_string(),
+            Self::SolarizedLight => "Solarized Light".to_string(),
+            Self::Custom(n) => format!("✎ {}", n),
         }
     }
 
     /// Short tagline for picker rows.
     #[must_use]
-    pub const fn tagline(self) -> &'static str {
+    pub fn tagline(&self) -> String {
         match self {
-            Self::System => "Follow terminal background (COLORFGBG / macOS appearance)",
-            Self::Terminal => "Inherit terminal colors fully (transparent surfaces, ANSI accents)",
-            Self::Whale => "Whale dark — deep navy & gold",
-            Self::WhaleLight => "DeepSeek light, paper-ish",
-            Self::Grayscale => "Color-minimal high contrast",
-            Self::CatppuccinMocha => "Soft pastels on warm dark",
-            Self::TokyoNight => "Deep blue/violet night palette",
-            Self::Dracula => "Classic high-contrast purple",
-            Self::GruvboxDark => "Vintage warm earth tones",
-            Self::Claude => "Warm navy & coral",
-            Self::Matrix => "The Matrix films inspired theme",
+            Self::System => "Follow terminal background (COLORFGBG / macOS appearance)".to_string(),
+            Self::Terminal => {
+                "Inherit terminal colors fully (transparent surfaces, ANSI accents)".to_string()
+            }
+            Self::Whale => "Whale dark — deep navy & gold".to_string(),
+            Self::WhaleLight => "DeepSeek light, paper-ish".to_string(),
+            Self::Grayscale => "Color-minimal high contrast".to_string(),
+            Self::CatppuccinMocha => "Soft pastels on warm dark".to_string(),
+            Self::TokyoNight => "Deep blue/violet night palette".to_string(),
+            Self::Dracula => "Classic high-contrast purple".to_string(),
+            Self::GruvboxDark => "Vintage warm earth tones".to_string(),
+            Self::Claude => "Warm navy & coral".to_string(),
+            Self::Matrix => "The Matrix films inspired theme".to_string(),
             Self::SolarizedLight => {
                 "Solarized light — Light, calming palette on warm ivory — easy on the eyes"
+                    .to_string()
             }
+            Self::Custom(_) => "User-defined custom theme [Del to remove]".to_string(),
         }
     }
 
@@ -1352,7 +1419,7 @@ impl ThemeId {
     /// dark/light theme — callers that want to live-track terminal background
     /// changes need to re-invoke this.
     #[must_use]
-    pub fn ui_theme(self) -> UiTheme {
+    pub fn ui_theme(&self) -> UiTheme {
         match self {
             Self::System => UiTheme::detect(),
             Self::Terminal => TERMINAL_UI_THEME,
@@ -1366,12 +1433,28 @@ impl ThemeId {
             Self::Claude => CLAUDE_UI_THEME,
             Self::Matrix => MATRIX_UI_THEME,
             Self::SolarizedLight => SOLARIZED_LIGHT_UI_THEME,
+            Self::Custom(name) => {
+                if let Ok(guard) = CUSTOM_THEMES.read()
+                    && let Some(ref map) = *guard
+                    && let Some(theme) = map.get(name)
+                {
+                    return *theme;
+                }
+                // Fallback: registry not loaded or theme was deleted
+                UI_THEME
+            }
         }
+    }
+
+    /// Returns `true` iff this is a user-defined custom theme (deletable).
+    #[must_use]
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
     }
 }
 
-/// Themes shown in the `/theme` picker, in display order.
-pub const SELECTABLE_THEMES: &[ThemeId] = &[
+/// Built-in themes in display order.
+const BUILTIN_THEME_IDS: &[ThemeId] = &[
     ThemeId::System,
     ThemeId::Terminal,
     ThemeId::Whale,
@@ -1385,6 +1468,29 @@ pub const SELECTABLE_THEMES: &[ThemeId] = &[
     ThemeId::Matrix,
     ThemeId::SolarizedLight,
 ];
+
+/// Returns the complete list of selectable theme IDs for the picker:
+/// built-in presets followed by any custom themes loaded from disk.
+/// Caches the result so repeated calls during the same frame do not
+/// re-scan the custom-theme directory.
+pub fn selectable_themes() -> Vec<ThemeId> {
+    let mut out: Vec<ThemeId> = BUILTIN_THEME_IDS.to_vec();
+    if let Ok(guard) = CUSTOM_THEMES.read()
+        && let Some(ref map) = *guard
+    {
+        let mut custom_keys: Vec<&String> = map.keys().collect();
+        custom_keys.sort();
+        for key in custom_keys {
+            out.push(ThemeId::Custom(key.clone()));
+        }
+    }
+    out
+}
+
+/// Deprecated: kept for backward-compatibility with existing callers that
+/// expect a static slice. New code should use `selectable_themes()`.
+#[allow(dead_code)]
+pub const SELECTABLE_THEMES: &[ThemeId] = BUILTIN_THEME_IDS;
 
 impl UiTheme {
     #[must_use]
@@ -1404,7 +1510,7 @@ impl UiTheme {
 
     #[must_use]
     pub fn from_setting(value: &str) -> Option<Self> {
-        ThemeId::from_name(value).map(ThemeId::ui_theme)
+        ThemeId::from_name(value).as_ref().map(ThemeId::ui_theme)
     }
 
     #[must_use]
@@ -1654,18 +1760,12 @@ const fn theme_diff_deleted_bg(ui: &UiTheme) -> Color {
 /// stage compiles down to a single load+compare on the hot path.
 #[inline]
 #[must_use]
-pub const fn theme_remap_active(theme: ThemeId) -> bool {
-    matches!(
-        theme,
-        ThemeId::Terminal
-            | ThemeId::CatppuccinMocha
-            | ThemeId::TokyoNight
-            | ThemeId::Dracula
-            | ThemeId::GruvboxDark
-            | ThemeId::Claude
-            | ThemeId::Matrix
-            | ThemeId::SolarizedLight
-    )
+pub fn theme_remap_active(theme: &ThemeId) -> bool {
+    match theme {
+        ThemeId::System | ThemeId::Whale | ThemeId::WhaleLight | ThemeId::Grayscale => false,
+        ThemeId::Custom(_) => true,
+        _ => true,
+    }
 }
 
 /// Remap a foreground color for a community theme preset. Mirrors the
@@ -1680,7 +1780,7 @@ pub const fn theme_remap_active(theme: ThemeId) -> bool {
 /// would see their override silently overwritten by the preset's
 /// surface_bg on every cell remap.
 #[must_use]
-pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
+pub fn adapt_fg_for_theme(color: Color, theme: &ThemeId, ui: &UiTheme) -> Color {
     if !theme_remap_active(theme) {
         return color;
     }
@@ -1698,7 +1798,7 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
         ui.status_working
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
-        if theme == ThemeId::Matrix {
+        if matches!(theme, ThemeId::Matrix) {
             Color::Rgb(0x00, 0x55, 0x00) // #005500
         } else {
             ui.mode_plan
@@ -1721,7 +1821,7 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
 /// Remap a background color for a community theme preset. See the
 /// `ui` note on [`adapt_fg_for_theme`] — same contract here.
 #[must_use]
-pub fn adapt_bg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
+pub fn adapt_bg_for_theme(color: Color, theme: &ThemeId, ui: &UiTheme) -> Color {
     if !theme_remap_active(theme) {
         return color;
     }
@@ -2276,19 +2376,19 @@ mod tests {
         assert_eq!(TERMINAL_UI_THEME.text_body, Color::Reset);
 
         assert_eq!(
-            adapt_bg_for_theme(DEEPSEEK_INK, ThemeId::Terminal, &TERMINAL_UI_THEME),
+            adapt_bg_for_theme(DEEPSEEK_INK, &ThemeId::Terminal, &TERMINAL_UI_THEME),
             Color::Reset
         );
         assert_eq!(
-            adapt_bg_for_theme(DIFF_ADDED_BG, ThemeId::Terminal, &TERMINAL_UI_THEME),
+            adapt_bg_for_theme(DIFF_ADDED_BG, &ThemeId::Terminal, &TERMINAL_UI_THEME),
             Color::Reset
         );
         assert_eq!(
-            adapt_fg_for_theme(TEXT_BODY, ThemeId::Terminal, &TERMINAL_UI_THEME),
+            adapt_fg_for_theme(TEXT_BODY, &ThemeId::Terminal, &TERMINAL_UI_THEME),
             Color::Reset
         );
         assert_eq!(
-            adapt_fg_for_theme(DIFF_ADDED, ThemeId::Terminal, &TERMINAL_UI_THEME),
+            adapt_fg_for_theme(DIFF_ADDED, &ThemeId::Terminal, &TERMINAL_UI_THEME),
             Color::Green
         );
     }

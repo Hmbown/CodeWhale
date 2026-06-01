@@ -101,11 +101,12 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
         let adapted = content
             .map(|(x, y, cell)| {
                 let mut cell = cell.clone();
+                let theme_id = self.theme_id.clone();
                 adapt_cell_colors(
                     &mut cell,
                     self.depth,
                     self.palette_mode,
-                    self.theme_id,
+                    &theme_id,
                     &self.active_ui_theme,
                 );
                 (x, y, cell)
@@ -253,7 +254,7 @@ fn adapt_cell_colors(
     cell: &mut Cell,
     depth: ColorDepth,
     palette_mode: PaletteMode,
-    theme_id: ThemeId,
+    theme_id: &ThemeId,
     ui_theme: &UiTheme,
 ) {
     // Stage 1: community-theme remap (dark palette → preset slots). No-op
@@ -332,7 +333,7 @@ mod tests {
             &mut cell,
             ColorDepth::Ansi256,
             PaletteMode::Dark,
-            ThemeId::System,
+            &ThemeId::System,
             &palette::UI_THEME,
         );
 
@@ -350,7 +351,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Dark,
-            ThemeId::System,
+            &ThemeId::System,
             &palette::UI_THEME,
         );
 
@@ -385,7 +386,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Light,
-            ThemeId::WhaleLight,
+            &ThemeId::WhaleLight,
             &palette::LIGHT_UI_THEME,
         );
 
@@ -403,7 +404,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Grayscale,
-            ThemeId::Grayscale,
+            &ThemeId::Grayscale,
             &palette::GRAYSCALE_UI_THEME,
         );
 
@@ -424,7 +425,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Dark,
-            ThemeId::TokyoNight,
+            &ThemeId::TokyoNight,
             &active,
         );
 

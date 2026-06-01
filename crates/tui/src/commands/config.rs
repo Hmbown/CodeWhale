@@ -755,14 +755,212 @@ fn mode_display_name(mode: AppMode) -> &'static str {
     }
 }
 
-/// `/theme [name]` — with no argument, open the interactive picker (arrow
-/// keys, live preview, Enter to persist, Esc to revert). With an argument,
-/// route through `set_config_value("theme", ...)` so the apply + save flow is
-/// shared with `/config`.
+/// `/theme [name|new|delete]` — with no argument, open the interactive
+/// picker (arrow keys, live preview, Enter to persist, Esc to revert).
+/// With a known theme name, route through `set_config_value("theme", ...)`
+/// so the apply + save flow is shared with `/config`.
+///
+/// Subcommands:
+/// - `/theme new` — guided custom-theme creation flow
+/// - `/theme delete <name>` — remove a custom theme from disk and registry
 pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => CommandResult::action(AppAction::OpenThemePicker),
+        Some("new") | Some("create") | Some("custom") => {
+            // Guided custom-theme creation flow. Redirect to /theme-describe.
+            CommandResult::message(
+                "Use /theme-describe to generate a custom theme from a natural-language \
+                 description.\nExamples:\n  /theme-describe A warm amber library theme \
+                 with brown accents, cream text, moderate contrast dark mode\n  \
+                 /theme-describe A minimalist light theme with soft blue accents, \
+                 high contrast, clean and modern"
+                    .to_string(),
+            )
+        }
+        Some(arg) if arg.starts_with("delete ") || arg.starts_with("remove ") => {
+            let name = arg.split_once(' ').map(|(_, n)| n.trim()).unwrap_or("");
+            if name.is_empty() {
+                return CommandResult::error(
+                    "Usage: /theme delete <name>. Use /theme to see deletable themes.",
+                );
+            }
+            delete_custom_theme(app, name)
+        }
         Some(name) => set_config_value(app, "theme", name, true),
+    }
+}
+
+/// `/theme-describe <description>` — generate a custom CodeWhale TUI theme
+/// from a natural-language description. Constructs a structured prompt with
+/// the full `UiTheme` field reference so the AI knows exactly which 40 color
+/// slots to populate. The AI's response is the theme JSON, which the user
+/// can review and save to `~/.codewhale/themes/<name>.json`.
+pub fn theme_describe(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let description = arg.map(str::trim).unwrap_or("");
+    if description.is_empty() {
+        return CommandResult::error(
+            "Usage: /theme-describe <description>\n\
+             Example: /theme-describe A warm amber library theme with brown accents, \
+             cream text, moderate contrast dark mode",
+        );
+    }
+
+    let prompt = format!(
+        "Generate a custom CodeWhale TUI theme based on this description: \"{description}\"\n\n\
+         The theme is a JSON object. All colors are 6-digit hex strings \
+         (e.g. \"#1a1410\"). mode is one of: dark, light, grayscale, \
+         solarized-light.\n\n\
+         Fields (2 meta + 38 color = 40 total):\n\
+         Meta: name (kebab-case identifier), mode (dark|light|grayscale|solarized-light)\n\
+         Colors (38):\n\
+         - Surface: surface_bg, panel_bg, elevated_bg, composer_bg, \
+         selection_bg, header_bg, footer_bg\n\
+         - Text: text_dim, text_hint, text_muted, text_body, text_soft, border\n\
+         - Accent: accent_primary, accent_secondary, accent_action\n\
+         - Error: error_fg, error_hover, error_surface, error_border, error_text\n\
+         - Status: warning, success, info\n\
+         - Mode badges: mode_agent, mode_yolo, mode_plan, mode_goal\n\
+         - Statusline: status_ready, status_working, status_warning\n\
+         - Diff: diff_added_fg, diff_deleted_fg, diff_added_bg, diff_deleted_bg\n\
+         - Tool cells: tool_running, tool_success, tool_failed\n\n\
+         IMPORTANT: Output ONLY the JSON inside a markdown code fence ```json \
+         block. No explanation before or after. The user will then use \
+         /theme-save <name> to persist it. The name field in the JSON must match."
+    );
+
+    CommandResult::action(AppAction::SendMessage(prompt))
+}
+
+/// `/theme-save <name>` — persist the most recently generated theme JSON
+/// from the conversation history to `~/.codewhale/themes/<name>.json` and
+/// register it in-memory so it appears immediately in the picker.
+///
+/// Aliases: `/theme-write`, `/theme-install`.
+///
+/// This command solves the workspace-boundary problem: CodeWhale AI tools
+/// are scoped to the workspace directory and cannot write to `~/.codewhale/`,
+/// but this Rust-side command runs with full filesystem access inside the
+/// CodeWhale process itself.
+pub fn theme_save(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let name = arg.map(str::trim).unwrap_or("");
+    if name.is_empty() || name.len() > 64 {
+        return CommandResult::error(
+            "Usage: /theme-save <name>\n\
+             Example: /theme-save amber-library\n\n\
+             The name must be 1-64 characters. Use lowercase, digits, and hyphens.",
+        );
+    }
+
+    // Scan conversation history backwards for the most recent assistant
+    // message containing a JSON block with UiTheme fields. This finds the
+    // output of a recent /theme-describe command.
+    let json_text = match find_recent_theme_json(&app.history) {
+        Some(j) => j,
+        None => {
+            return CommandResult::error(
+                "No theme JSON found in the recent conversation. \
+                 Use /theme-describe first to generate a theme, then \
+                 /theme-save <name> to persist it.",
+            );
+        }
+    };
+
+    // Parse as UiThemeCustom, which handles defaults for missing fields
+    let custom: crate::custom_theme::UiThemeCustom = match serde_json::from_str(&json_text) {
+        Ok(c) => c,
+        Err(e) => {
+            return CommandResult::error(format!(
+                "Failed to parse theme JSON: {e}. Ensure the AI output is complete \
+                 and try running /theme-describe again."
+            ));
+        }
+    };
+
+    // Persist to disk
+    match crate::custom_theme::save_custom_theme(name, &custom) {
+        Ok(path) => {
+            let ui_theme = custom.to_ui_theme();
+            crate::palette::register_custom_theme(name, ui_theme);
+            CommandResult::message(format!(
+                "Theme '{name}' saved to {} and ready to use. Open /theme to select it.",
+                path.display()
+            ))
+        }
+        Err(e) => CommandResult::error(format!("Failed to save theme '{name}': {e}")),
+    }
+}
+
+/// Extract the text of the most recent JSON block containing theme fields
+/// from the conversation history. Scans backwards so the most recent
+/// /theme-describe output is found first.
+fn find_recent_theme_json(history: &[crate::tui::history::HistoryCell]) -> Option<String> {
+    for cell in history.iter().rev() {
+        let text = match cell {
+            crate::tui::history::HistoryCell::Assistant { content, .. } => content.clone(),
+            _ => continue,
+        };
+        // Look for a JSON object containing core theme keys
+        if text.contains("\"surface_bg\"")
+            && text.contains("\"text_body\"")
+            && text.contains("\"accent_primary\"")
+        {
+            // Try to extract just the JSON object
+            if let Some(json) = extract_json_object(&text) {
+                return Some(json);
+            }
+        }
+    }
+    None
+}
+
+/// Extract the first balanced JSON object from text.
+fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let mut depth = 0;
+    let bytes = text.as_bytes();
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Delete a custom theme: remove from disk, unregister from memory, and
+/// if it was the active theme, fall back to System.
+fn delete_custom_theme(app: &mut App, name: &str) -> CommandResult {
+    let id = match crate::palette::ThemeId::from_name(name) {
+        Some(id) => id,
+        None => return CommandResult::error(format!("Theme '{name}' not found.")),
+    };
+    if !id.is_custom() {
+        return CommandResult::error(format!(
+            "'{name}' is a built-in theme and cannot be deleted. Only custom themes \
+             (under ~/.codewhale/themes/) can be removed."
+        ));
+    }
+    match crate::custom_theme::delete_custom_theme(name) {
+        Ok(()) => {
+            crate::palette::unregister_custom_theme(name);
+
+            // If the deleted theme is currently active, fall back to System
+            if app.theme_id.name().eq_ignore_ascii_case(name) {
+                app.theme_id = crate::palette::ThemeId::System;
+                app.ui_theme = crate::palette::UiTheme::detect();
+                app.needs_redraw = true;
+            }
+            CommandResult::message(format!(
+                "Custom theme '{name}' deleted. Use /theme to open the picker."
+            ))
+        }
+        Err(e) => CommandResult::error(format!("Failed to delete custom theme '{name}': {e}")),
     }
 }
 

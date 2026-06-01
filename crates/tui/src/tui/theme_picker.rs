@@ -1,13 +1,16 @@
 //! `/theme` picker with live preview.
 //!
 //! Modeled after `feedback_picker`. Differences:
-//! - The option list comes from `palette::SELECTABLE_THEMES`.
+//! - The option list comes from `palette::selectable_themes()` (built-in +
+//!   custom themes loaded from `~/.codewhale/themes/`).
 //! - Up/Down emit a `ConfigUpdated{persist:false}` so the host swaps
 //!   `app.ui_theme` immediately and the whole TUI re-paints under the
 //!   modal — the user sees the candidate theme before committing.
 //! - Enter persists (`persist:true`); Esc emits one more
 //!   `ConfigUpdated{persist:false}` to restore the original theme name
 //!   that was active when the picker opened.
+//! - Delete (or `Backspace`) on a custom theme row deletes the theme
+//!   file from disk and removes the entry from the picker list.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -18,10 +21,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
 };
 
-use crate::palette::{SELECTABLE_THEMES, ThemeId, UiTheme};
+use crate::palette::{ThemeId, UiTheme, selectable_themes};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 pub struct ThemePickerView {
+    /// The current theme list (built-in + custom). Re-fetched when the
+    /// picker is opened so freshly-installed custom themes are visible.
+    themes: Vec<ThemeId>,
     selected: usize,
     /// Settings name of the theme that was active when the picker opened.
     /// Used to revert on Esc.
@@ -35,13 +41,15 @@ pub struct ThemePickerView {
 impl ThemePickerView {
     #[must_use]
     pub fn new(original_name: String) -> Self {
+        let themes = selectable_themes();
         // If the persisted name matches one of the entries, start there;
         // otherwise fall back to "System" so the cursor lands on a valid row.
-        let selected = SELECTABLE_THEMES
+        let selected = themes
             .iter()
             .position(|id| id.name() == original_name.trim().to_ascii_lowercase())
             .unwrap_or(0);
         Self {
+            themes,
             selected,
             original_name,
             system_ui_theme: UiTheme::detect(),
@@ -49,15 +57,15 @@ impl ThemePickerView {
     }
 
     fn current(&self) -> ThemeId {
-        SELECTABLE_THEMES
+        self.themes
             .get(self.selected)
-            .copied()
+            .cloned()
             .unwrap_or(ThemeId::System)
     }
 
     /// Resolve a theme to a `UiTheme`, returning the cached `System`
     /// resolution to avoid repeated env-var reads inside `render`.
-    fn ui_theme_for(&self, id: ThemeId) -> UiTheme {
+    fn ui_theme_for(&self, id: &ThemeId) -> UiTheme {
         if matches!(id, ThemeId::System) {
             self.system_ui_theme
         } else {
@@ -68,7 +76,7 @@ impl ThemePickerView {
     fn preview_event(&self) -> ViewAction {
         ViewAction::Emit(ViewEvent::ConfigUpdated {
             key: "theme".to_string(),
-            value: self.current().name().to_string(),
+            value: self.current().name(),
             persist: false,
         })
     }
@@ -76,7 +84,7 @@ impl ThemePickerView {
     fn commit_event(&self) -> ViewAction {
         ViewAction::EmitAndClose(ViewEvent::ConfigUpdated {
             key: "theme".to_string(),
-            value: self.current().name().to_string(),
+            value: self.current().name(),
             persist: true,
         })
     }
@@ -90,11 +98,40 @@ impl ThemePickerView {
     }
 
     fn move_up(&mut self) {
-        self.selected = (self.selected + SELECTABLE_THEMES.len() - 1) % SELECTABLE_THEMES.len();
+        self.selected = (self.selected + self.themes.len() - 1) % self.themes.len();
     }
 
     fn move_down(&mut self) {
-        self.selected = (self.selected + 1) % SELECTABLE_THEMES.len();
+        self.selected = (self.selected + 1) % self.themes.len();
+    }
+
+    /// Delete the currently-selected custom theme (both from disk and the
+    /// in-memory registry) and remove its row from the picker.
+    fn delete_current_custom_theme(&mut self) -> ViewAction {
+        let current = self.current();
+        let ThemeId::Custom(ref name) = current else {
+            return ViewAction::None;
+        };
+        let name = name.clone();
+        // Delete from disk
+        if let Err(e) = crate::custom_theme::delete_custom_theme(&name) {
+            return ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key: "theme".to_string(),
+                value: format!("Failed to delete custom theme '{name}': {e}"),
+                persist: false,
+            });
+        }
+        // Remove from registry
+        crate::palette::unregister_custom_theme(&name);
+
+        // Remove from the local list
+        self.themes.remove(self.selected);
+        if self.selected >= self.themes.len() && !self.themes.is_empty() {
+            self.selected = self.themes.len() - 1;
+        }
+
+        // Preview whatever is now selected
+        self.preview_event()
     }
 }
 
@@ -124,8 +161,16 @@ impl ModalView for ThemePickerView {
                 self.preview_event()
             }
             KeyCode::End => {
-                self.selected = SELECTABLE_THEMES.len().saturating_sub(1);
+                self.selected = self.themes.len().saturating_sub(1);
                 self.preview_event()
+            }
+            // Delete key or Backspace on a custom-theme row removes it
+            KeyCode::Delete | KeyCode::Backspace
+                if self.current().is_custom()
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.delete_current_custom_theme()
             }
             // Number shortcuts: '1'..='9' jump to that row (1-indexed).
             // '0' is rejected explicitly — saturating_sub would otherwise
@@ -136,7 +181,7 @@ impl ModalView for ThemePickerView {
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
                 let idx = (c as usize) - ('1' as usize);
-                if idx < SELECTABLE_THEMES.len() {
+                if idx < self.themes.len() {
                     self.selected = idx;
                     self.preview_event()
                 } else {
@@ -148,6 +193,7 @@ impl ModalView for ThemePickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        let row_count = self.themes.len();
         // Modal must always fit inside `area`. The old `.max(52) / .max(10)`
         // floors could produce dimensions larger than the available area on
         // very small terminals (or split-pane setups), which then made the
@@ -155,12 +201,10 @@ impl ModalView for ThemePickerView {
         // soft-preferred size and clamp it strictly to `area`.
         let popup_width = 78u16.min(area.width.saturating_sub(4));
         // 1 title + 1 spacer + N rows + spacer + bottom hint
-        let needed_height = (SELECTABLE_THEMES.len() as u16).saturating_add(9);
+        let needed_height = (row_count as u16).saturating_add(9);
         let popup_height = needed_height.min(area.height.saturating_sub(4));
 
         if popup_width == 0 || popup_height == 0 {
-            // Nothing sensible to draw — the host's caller has already
-            // cleared the area, so we just return.
             return;
         }
 
@@ -171,14 +215,17 @@ impl ModalView for ThemePickerView {
             height: popup_height,
         };
 
-        // The live theme has already been swapped under us via ConfigUpdated,
-        // so we pull the *current* preview's UiTheme from the cursor row to
-        // skin the modal chrome. That way the popup itself shifts color as
-        // the cursor moves, matching what the background will look like
-        // after Enter.
-        let live = self.ui_theme_for(self.current());
+        let current = self.current();
+        let live = self.ui_theme_for(&current);
 
         Clear.render(popup_area, buf);
+
+        // Bottom hint: show [Del] affordance when the cursor is on a custom theme row
+        let del_hint = if current.is_custom() {
+            Span::styled(" Del ", Style::default().fg(live.error_fg))
+        } else {
+            Span::raw("")
+        };
 
         let block = Block::default()
             .title(Line::from(Span::styled(
@@ -193,7 +240,9 @@ impl ModalView for ThemePickerView {
                 Span::styled(" Enter ", Style::default().fg(live.text_muted)),
                 Span::raw("save "),
                 Span::styled(" Esc ", Style::default().fg(live.text_muted)),
-                Span::raw("revert "),
+                Span::raw("revert"),
+                del_hint,
+                Span::raw("remove"),
             ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(live.border))
@@ -203,15 +252,14 @@ impl ModalView for ThemePickerView {
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        let mut lines: Vec<Line> = Vec::with_capacity(SELECTABLE_THEMES.len() + 5);
+        let mut lines: Vec<Line> = Vec::with_capacity(row_count + 5);
         lines.push(Line::from(Span::styled(
             "Pick a theme — preview is live; Enter saves to settings.toml.",
             Style::default().fg(live.text_muted),
         )));
         lines.push(Line::from(""));
 
-        for (idx, id) in SELECTABLE_THEMES.iter().enumerate() {
-            let id = *id;
+        for (idx, id) in self.themes.iter().enumerate() {
             let is_selected = idx == self.selected;
             let row_style = if is_selected {
                 Style::default()
@@ -237,9 +285,8 @@ impl ModalView for ThemePickerView {
             let pointer = if is_selected { "▶" } else { " " };
 
             // 3-cell color swatch per row using the candidate theme's own
-            // accent + panel + border colors so the picker doubles as a
-            // legend. Use the cached resolver so `System` doesn't repeat
-            // `UiTheme::detect()`.
+            // accent + panel + border colors. Use the cached resolver so
+            // `System` doesn't repeat `UiTheme::detect()`.
             let row_theme = self.ui_theme_for(id);
             let swatch = vec![
                 Span::styled("  ", Style::default().bg(row_theme.surface_bg)),
@@ -275,13 +322,13 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn selected_name(action: &ViewAction) -> Option<&str> {
+    fn selected_name(action: &ViewAction) -> Option<String> {
         match action {
             ViewAction::Emit(ViewEvent::ConfigUpdated { key, value, .. })
             | ViewAction::EmitAndClose(ViewEvent::ConfigUpdated { key, value, .. })
                 if key == "theme" =>
             {
-                Some(value.as_str())
+                Some(value.clone())
             }
             _ => None,
         }
@@ -311,13 +358,13 @@ mod tests {
     #[test]
     fn arrow_navigation_wraps_at_picker_edges() {
         let mut v = ThemePickerView::new("system".to_string());
-        let last = SELECTABLE_THEMES.last().unwrap();
+        let last = v.themes.last().unwrap().clone();
 
         let action = v.handle_key(key(KeyCode::Up));
         assert_eq!(selected_name(&action), Some(last.name()));
 
         let action = v.handle_key(key(KeyCode::Down));
-        assert_eq!(selected_name(&action), Some(SELECTABLE_THEMES[0].name()));
+        assert_eq!(selected_name(&action), Some(v.themes[0].name()));
     }
 
     #[test]
@@ -385,9 +432,6 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_on_zero_sized_area() {
-        // The picker historically panicked here via .max(W).max(H) floors
-        // that produced dimensions larger than the available area, then
-        // underflowed the centering arithmetic.
         let v = ThemePickerView::new("system".to_string());
         let outer = ratatui::layout::Rect::new(0, 0, 10, 10);
         let area = ratatui::layout::Rect::new(0, 0, 0, 0);
@@ -397,10 +441,16 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_on_tiny_area() {
-        // 20×6 is smaller than every soft floor the picker prefers.
         let v = ThemePickerView::new("system".to_string());
         let area = ratatui::layout::Rect::new(0, 0, 20, 6);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         v.render(area, &mut buf);
+    }
+
+    #[test]
+    fn delete_key_noops_on_builtin_theme() {
+        let mut v = ThemePickerView::new("system".to_string());
+        let action = v.handle_key(key(KeyCode::Delete));
+        assert!(matches!(action, ViewAction::None));
     }
 }
