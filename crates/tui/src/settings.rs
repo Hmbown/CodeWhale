@@ -353,30 +353,13 @@ impl Settings {
         let primary = codewhale_config::codewhale_home()
             .ok()
             .map(|home| home.join(SETTINGS_FILE_NAME));
-        if let Some(path) = primary.as_ref()
-            && path.exists()
-        {
-            return Ok(path.clone());
-        }
-
         let legacy_home = codewhale_config::legacy_deepseek_home()
             .ok()
             .map(|home| home.join(SETTINGS_FILE_NAME));
-        if let Some(path) = legacy_home
-            && path.exists()
-        {
-            return Ok(path);
-        }
+        let legacy_config_dir =
+            dirs::config_dir().map(|dir| dir.join("deepseek").join(SETTINGS_FILE_NAME));
 
-        let legacy_config_dir = dirs::config_dir()
-            .context("Failed to resolve config directory: not found.")?
-            .join("deepseek")
-            .join(SETTINGS_FILE_NAME);
-        if legacy_config_dir.exists() {
-            return Ok(legacy_config_dir);
-        }
-
-        Ok(primary.unwrap_or(legacy_config_dir))
+        resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
     }
 
     /// Load settings from disk, or return defaults if not found
@@ -900,6 +883,34 @@ impl Settings {
     pub fn synchronized_output_enabled(&self) -> bool {
         !self.synchronized_output.eq_ignore_ascii_case("off")
     }
+}
+
+fn resolve_settings_path_from_candidates(
+    primary: Option<PathBuf>,
+    legacy_home: Option<PathBuf>,
+    legacy_config_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = primary.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    if let Some(path) = legacy_home
+        && path.exists()
+    {
+        return Ok(path);
+    }
+
+    if let Some(path) = legacy_config_dir.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    primary.or(legacy_config_dir).ok_or_else(|| {
+        anyhow::anyhow!("Failed to resolve settings path: no config directory found.")
+    })
 }
 
 fn normalize_default_model(value: &str) -> Option<String> {
@@ -2171,36 +2182,66 @@ mod tests {
     fn settings_path_reads_legacy_deepseek_home_when_present() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
         let legacy_dir = tmp.path().join(".deepseek");
         std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
-        std::fs::write(legacy_dir.join("settings.toml"), "low_motion = true\n")
-            .expect("legacy settings");
-        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
-        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
-        let _home = EnvVarRestore::set("HOME", tmp.path());
+        let legacy_home = legacy_dir.join("settings.toml");
+        std::fs::write(&legacy_home, "low_motion = true\n").expect("legacy settings");
+        let legacy_config_dir = tmp
+            .path()
+            .join("platform-config")
+            .join("deepseek")
+            .join("settings.toml");
+        std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
+            .expect("legacy config dir");
+        std::fs::write(&legacy_config_dir, "low_motion = false\n")
+            .expect("platform legacy settings");
 
-        let got = Settings::path().expect("settings path");
+        let got = resolve_settings_path_from_candidates(
+            Some(primary),
+            Some(legacy_home.clone()),
+            Some(legacy_config_dir),
+        )
+        .expect("settings path");
 
-        assert_eq!(got, legacy_dir.join("settings.toml"));
+        assert_eq!(got, legacy_home);
     }
 
     #[test]
     fn settings_path_keeps_platform_config_dir_as_last_legacy_fallback() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
-        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
-        let _home = EnvVarRestore::set("HOME", tmp.path());
-
-        let config_dir = dirs::config_dir().expect("config dir");
-        let legacy_settings = config_dir.join("deepseek").join("settings.toml");
-        std::fs::create_dir_all(legacy_settings.parent().expect("parent"))
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
+        let legacy_home = tmp.path().join(".deepseek").join("settings.toml");
+        let legacy_config_dir = tmp
+            .path()
+            .join("platform-config")
+            .join("deepseek")
+            .join("settings.toml");
+        std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
             .expect("legacy config dir");
-        std::fs::write(&legacy_settings, "low_motion = true\n").expect("legacy settings");
+        std::fs::write(&legacy_config_dir, "low_motion = true\n").expect("legacy settings");
 
-        let got = Settings::path().expect("settings path");
+        let got = resolve_settings_path_from_candidates(
+            Some(primary),
+            Some(legacy_home),
+            Some(legacy_config_dir.clone()),
+        )
+        .expect("settings path");
 
-        assert_eq!(got, legacy_settings);
+        assert_eq!(got, legacy_config_dir);
+    }
+
+    #[test]
+    fn settings_path_uses_primary_when_platform_config_dir_is_unavailable() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
+
+        let got = resolve_settings_path_from_candidates(Some(primary.clone()), None, None)
+            .expect("settings path");
+
+        assert_eq!(got, primary);
     }
 
     #[test]
