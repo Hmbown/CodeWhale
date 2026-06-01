@@ -530,6 +530,7 @@ struct ConfigRow {
 enum ConfigSection {
     Model,
     Permissions,
+    Network,
     Display,
     Composer,
     Sidebar,
@@ -542,6 +543,7 @@ impl ConfigSection {
         match self {
             ConfigSection::Model => "Model",
             ConfigSection::Permissions => "Permissions",
+            ConfigSection::Network => "Network",
             ConfigSection::Display => "Display",
             ConfigSection::Composer => "Composer",
             ConfigSection::Sidebar => "Sidebar",
@@ -647,11 +649,9 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             },
             ConfigRow {
-                section: ConfigSection::Display,
+                section: ConfigSection::Network,
                 key: "stream_chunk_timeout_secs".to_string(),
-                value: Config::load(app.config_path.clone(), app.config_profile.as_deref())
-                    .map(|config| config.stream_chunk_timeout_secs().to_string())
-                    .unwrap_or_else(|_| "(unavailable)".to_string()),
+                value: app.stream_chunk_timeout_secs.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -2282,6 +2282,7 @@ mod tests {
             vec![
                 ConfigSection::Model.label(),
                 ConfigSection::Permissions.label(),
+                ConfigSection::Network.label(),
                 ConfigSection::Display.label(),
                 ConfigSection::Composer.label(),
                 ConfigSection::Sidebar.label(),
@@ -2349,17 +2350,9 @@ mod tests {
     }
 
     #[test]
-    fn config_view_stream_chunk_timeout_secs_reflects_app_config_path() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-tui-stream-chunk-timeout-view-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let config_path = temp_root.join("config.toml");
-        fs::write(&config_path, "[tui]\nstream_chunk_timeout_secs = 90\n").unwrap();
-
+    fn config_view_stream_chunk_timeout_secs_uses_loaded_app_state() {
         let mut app = create_test_app();
-        app.config_path = Some(config_path.clone());
+        app.stream_chunk_timeout_secs = 90;
         let view = ConfigView::new_for_app(&app);
 
         let row = view
@@ -2368,6 +2361,7 @@ mod tests {
             .find(|row| row.key == "stream_chunk_timeout_secs")
             .expect("stream_chunk_timeout_secs row missing");
         assert_eq!(row.value, "90");
+        assert_eq!(row.section, ConfigSection::Network);
     }
 
     #[test]

@@ -417,6 +417,14 @@ pub fn persist_tui_integer_key(
     Ok(path)
 }
 
+fn stream_chunk_timeout_value_label(raw: u64, resolved: u64) -> String {
+    if raw == 0 {
+        format!("0 (default {resolved})")
+    } else {
+        raw.to_string()
+    }
+}
+
 /// Resolve the path to `~/.codewhale/config.toml` (or
 /// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
@@ -573,9 +581,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     parsed,
                 ) {
                     Ok(path) => {
+                        let value_label = stream_chunk_timeout_value_label(parsed, resolved);
                         return CommandResult::with_message_and_action(
                             format!(
-                                "stream_chunk_timeout_secs = {parsed} (saved to {}; affects subsequent turns in this session)",
+                                "stream_chunk_timeout_secs = {value_label} (saved to {}; affects subsequent turns in this session)",
                                 path.display()
                             ),
                             AppAction::UpdateStreamChunkTimeout(resolved),
@@ -584,9 +593,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
                 }
             }
+            let value_label = stream_chunk_timeout_value_label(parsed, resolved);
             return CommandResult::with_message_and_action(
                 format!(
-                    "stream_chunk_timeout_secs = {parsed} (session only; affects subsequent turns in this session)"
+                    "stream_chunk_timeout_secs = {value_label} (session only; affects subsequent turns in this session)"
                 ),
                 AppAction::UpdateStreamChunkTimeout(resolved),
             );
@@ -2189,6 +2199,11 @@ mod tests {
                 DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
             ))
         ));
+        let msg = result.message.expect("status message");
+        assert!(
+            msg.contains("stream_chunk_timeout_secs = 0 (default 300)"),
+            "got {msg}"
+        );
     }
 
     #[test]
