@@ -423,6 +423,7 @@ osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTer
 #                           # Override: `locale = "zh-Hans"` for Simplified Chinese regardless of OS locale.
 #                           # Also settable at runtime: /config locale zh-Hans
 #                           # Note: this only affects TUI labels/chrome — it does NOT change model output language.
+# mention_menu_behavior = "fuzzy" # fuzzy | browser; browser lists immediate directory children for @-mentions.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Feature Flags

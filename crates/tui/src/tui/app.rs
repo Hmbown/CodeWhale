@@ -885,6 +885,9 @@ pub struct MentionCompletionCache {
     /// Workspace depth limit used for this completion walk. Included so live
     /// config changes invalidate cached popup results.
     pub walk_depth: usize,
+    /// Completion behavior used for this walk. Included so live config changes
+    /// invalidate cached popup results.
+    pub behavior: String,
     /// Cached completion entries.
     pub entries: Vec<String>,
 }
@@ -1207,6 +1210,9 @@ pub struct App {
     /// Maximum workspace depth for `@`-mention completion walks. `0` means
     /// unlimited depth.
     pub mention_walk_depth: usize,
+    /// `@`-mention completion behavior: fuzzy workspace search or deterministic
+    /// directory browser.
+    pub mention_menu_behavior: String,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
     /// Set to `true` the first time a real `Event::Paste` arrives during a
@@ -2103,6 +2109,7 @@ impl App {
                 .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
             mention_menu_limit: settings.mention_menu_limit,
             mention_walk_depth: settings.mention_walk_depth,
+            mention_menu_behavior: settings.mention_menu_behavior.clone(),
             session_title: None,
             receipt_text: None,
             receipt_started_at: None,
