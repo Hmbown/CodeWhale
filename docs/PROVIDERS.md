@@ -206,6 +206,26 @@ the endpoint's ability to accept OpenAI-compatible `tools` payloads. A custom
 OpenAI-compatible or local endpoint can still reject tool calls even if
 CodeWhale can send the schema.
 
+### When a Local Model Prints Tool JSON
+
+CodeWhale only executes tools when the provider returns Chat Completions
+`tool_calls` or streamed `delta.tool_calls`. If a local model prints text such
+as `{"name":"grep_files","arguments":{...}}` in the assistant message, that is
+ordinary model output, not an executable tool request.
+
+For OpenAI-compatible or local runtimes, check:
+
+- The endpoint accepts the `tools` array in `/v1/chat/completions` requests.
+- The selected model or chat template is configured for function/tool calls.
+- The server returns `tool_calls` in the response rather than plain JSON text.
+- The compatibility layer does not strip tools before forwarding the request.
+- If in doubt, test a small `read_file` or `grep_files` request against a known
+  tool-calling model before debugging CodeWhale's tool registry.
+
+Changing `provider`, `base_url`, or `model` can select a route that supports the
+OpenAI-compatible payload shape, but CodeWhale cannot convert arbitrary JSON
+text into a trusted tool call after the model has emitted it as prose.
+
 DeepSeek compatibility aliases `deepseek-chat` and `deepseek-reasoner` map to
 `deepseek-v4-flash` capability metadata and are scheduled to retire on
 2026-07-24 at 2026-07-24T15:59:00Z.
