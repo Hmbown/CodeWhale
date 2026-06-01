@@ -1,3 +1,5 @@
+pub mod provider;
+
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
@@ -188,6 +190,12 @@ impl ProviderKind {
     #[must_use]
     pub fn is_siliconflow(self) -> bool {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
+    }
+
+    /// Return the concrete [`provider::Provider`] trait object for this provider kind.
+    #[must_use]
+    pub fn provider(self) -> &'static dyn provider::Provider {
+        provider::resolve_provider(self.as_str()).unwrap_or_else(provider::default_provider)
     }
 }
 
