@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use codewhale_config::ProviderKind;
+use crate::ProviderKind;
 use serde::{Deserialize, Serialize};
 
 /// Metadata for a single model entry in the registry.
@@ -489,19 +489,20 @@ impl ModelRegistry {
                     fallback_chain,
                 };
             }
-            if let Some(provider) = provider_hint
-                && let Some(model) = self
+            if let Some(provider) = provider_hint {
+                if let Some(model) = self
                     .models
                     .iter()
                     .find(|m| m.provider == provider && model_matches(m, name))
                     .cloned()
-            {
-                return ModelResolution {
-                    requested: Some(name.to_string()),
-                    resolved: model,
-                    used_fallback: false,
-                    fallback_chain,
-                };
+                {
+                    return ModelResolution {
+                        requested: Some(name.to_string()),
+                        resolved: model,
+                        used_fallback: false,
+                        fallback_chain,
+                    };
+                }
             }
             if let Some(idx) = self.alias_map.get(&normalize(name)) {
                 return ModelResolution {

@@ -9,7 +9,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use codewhale_agent::ModelRegistry;
+use codewhale_config::ModelRegistry;
 use codewhale_config::{CliRuntimeOverrides, ConfigStore};
 use codewhale_core::Runtime;
 use codewhale_execpolicy::ExecPolicyEngine;

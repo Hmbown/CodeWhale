@@ -9,7 +9,6 @@ description = "Core runtime boundaries for DeepSeek workspace architecture"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.49" }
 codewhale-config = { path = "../config", version = "0.8.49" }
 codewhale-execpolicy = { path = "../execpolicy", version = "0.8.49" }
 codewhale-hooks = { path = "../hooks", version = "0.8.49" }

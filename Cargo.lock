@@ -802,21 +802,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
-name = "codewhale-agent"
-version = "0.8.49"
-dependencies = [
- "codewhale-config",
- "serde",
-]
-
-[[package]]
 name = "codewhale-app-server"
 version = "0.8.49"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
- "codewhale-agent",
  "codewhale-config",
  "codewhale-core",
  "codewhale-execpolicy",
@@ -842,7 +833,6 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
- "codewhale-agent",
  "codewhale-app-server",
  "codewhale-config",
  "codewhale-execpolicy",
@@ -880,7 +870,6 @@ version = "0.8.49"
 dependencies = [
  "anyhow",
  "chrono",
- "codewhale-agent",
  "codewhale-config",
  "codewhale-execpolicy",
  "codewhale-hooks",

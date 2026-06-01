@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use codewhale_agent::ModelRegistry;
+use codewhale_config::ModelRegistry;
 use codewhale_config::{CliRuntimeOverrides, ConfigToml, ProviderKind};
 use codewhale_execpolicy::{
     AskForApproval, ExecApprovalRequirement, ExecPolicyContext, ExecPolicyDecision,

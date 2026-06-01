@@ -2257,6 +2257,9 @@ impl EnvRuntimeOverrides {
     }
 }
 
+pub mod model_registry;
+pub use model_registry::{ModelInfo, ModelRegistry, ModelResolution};
+
 #[cfg(test)]
 mod tests {
     use super::*;
