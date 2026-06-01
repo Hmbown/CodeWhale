@@ -1256,14 +1256,16 @@ impl Engine {
                 }
 
                 if blocked_error.is_none()
-                    && !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                    && !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name)
+                {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' is not in the allowed-tools list for the current command"
                     )));
                 }
 
                 if blocked_error.is_none()
-                && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
+                    && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def)
+                {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' does not allow caller '{}'",
                         caller_type_for_tool_use(tool_caller.as_ref())
@@ -1290,7 +1292,8 @@ impl Engine {
                     // Warn if any ToolCallBefore hook is configured as background
                     // — background hooks return exit_code: None immediately, so
                     // the denial check (exit_code == Some(2)) can never match.
-                    if hook_executor.has_background_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
+                    if hook_executor
+                        .has_background_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
                     {
                         tracing::warn!(
                             "ToolCallBefore hook(s) configured with background=true — \

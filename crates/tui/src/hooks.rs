@@ -562,7 +562,10 @@ impl HookExecutor {
         if !self.config.enabled {
             return false;
         }
-        self.config.hooks.iter().any(|h| h.event == event && h.background)
+        self.config
+            .hooks
+            .iter()
+            .any(|h| h.event == event && h.background)
     }
 
     /// Run configured `message_submit` hooks as a mutable submit pipeline.
