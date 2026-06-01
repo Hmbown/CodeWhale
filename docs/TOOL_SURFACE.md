@@ -40,7 +40,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 
 ### Shell
 
-Shell tools are part of the model-visible tool catalog only when shell access is
+Shell tools appear in the model-visible tool catalog only when shell access is
 enabled for the active session or profile. In Agent mode that usually means
 `allow_shell = true`; YOLO enables shell access automatically. Plan mode keeps
 shell execution off.

@@ -25,7 +25,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 ### Tool availability by mode
 
 | Tool family | Plan | Agent | YOLO |
-|---|---:|---:|---:|
+|:---|:---:|:---:|:---:|
 | Read-only file, search, and diagnostic tools | yes | yes | yes |
 | File write and patch tools | no | yes | yes |
 | Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | yes, when `allow_shell = true` | yes |
@@ -34,7 +34,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 
 If a shell tool is missing from the model-visible catalog in Agent mode, check
 `allow_shell` first. The setting can come from the active config/profile or from
-the runtime session. YOLO mode turns shell access on together with trust mode and
+the runtime session. YOLO turns shell access on together with trust mode and
 auto-approval, which is why shell commands may work there even when the Agent
 mode catalog does not list them.
 
