@@ -511,8 +511,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         active_task_id: None,
         active_thread_id: None,
         // #456: plumb the App's HookExecutor so `exec_shell` can surface
-        // the configured `shell_env` hooks. Wrapped in Arc once and shared.
-        hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
+        // the configured `shell_env` hooks. Clone the shared Arc.
+        hook_executor: app.runtime_services.hook_executor.clone(),
         handle_store: app.runtime_services.handle_store.clone(),
         rlm_sessions: app.runtime_services.rlm_sessions.clone(),
     };
@@ -754,7 +754,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         allowed_tools: app.active_allowed_tools.clone(),
-        hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
+        hook_executor: app.runtime_services.hook_executor.clone(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -4707,7 +4707,7 @@ async fn dispatch_user_message(
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
             allowed_tools: app.active_allowed_tools.clone(),
-            hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
+            hook_executor: app.runtime_services.hook_executor.clone(),
         })
         .await
     {

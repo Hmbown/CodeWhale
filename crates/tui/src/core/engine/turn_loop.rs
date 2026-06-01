@@ -1255,9 +1255,31 @@ impl Engine {
                     )));
                 }
 
-                if !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                if blocked_error.is_none()
+                    && !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' is not in the allowed-tools list for the current command"
+                    )));
+                }
+
+                if blocked_error.is_none()
+                && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' does not allow caller '{}'",
+                        caller_type_for_tool_use(tool_caller.as_ref())
+                    )));
+                }
+
+                if blocked_error.is_none()
+                    && tool_def.is_none()
+                    && !McpPool::is_mcp_tool(&tool_name)
+                    && tool_name != CODE_EXECUTION_TOOL_NAME
+                    && tool_name != JS_EXECUTION_TOOL_NAME
+                    && !is_tool_search_tool(&tool_name)
+                {
+                    blocked_error = Some(ToolError::not_available(missing_tool_error_message(
+                        &tool_name,
+                        &tool_catalog,
                     )));
                 }
 
@@ -1265,6 +1287,18 @@ impl Engine {
                     && let Some(hook_executor) = self.config.hook_executor.as_ref()
                     && hook_executor.has_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
                 {
+                    // Warn if any ToolCallBefore hook is configured as background
+                    // — background hooks return exit_code: None immediately, so
+                    // the denial check (exit_code == Some(2)) can never match.
+                    if hook_executor.has_background_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
+                    {
+                        tracing::warn!(
+                            "ToolCallBefore hook(s) configured with background=true — \
+                             background hooks cannot deny tool calls because they exit \
+                             immediately with no result"
+                        );
+                    }
+
                     let hook_context = crate::hooks::HookContext::new()
                         .with_tool_name(&tool_name)
                         .with_tool_args(&tool_input)
@@ -1298,26 +1332,6 @@ impl Engine {
                             "ToolCallBefore hook denied tool '{tool_name}': {reason}"
                         )));
                     }
-                }
-
-                if !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
-                    blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' does not allow caller '{}'",
-                        caller_type_for_tool_use(tool_caller.as_ref())
-                    )));
-                }
-
-                if blocked_error.is_none()
-                    && tool_def.is_none()
-                    && !McpPool::is_mcp_tool(&tool_name)
-                    && tool_name != CODE_EXECUTION_TOOL_NAME
-                    && tool_name != JS_EXECUTION_TOOL_NAME
-                    && !is_tool_search_tool(&tool_name)
-                {
-                    blocked_error = Some(ToolError::not_available(missing_tool_error_message(
-                        &tool_name,
-                        &tool_catalog,
-                    )));
                 }
 
                 if McpPool::is_mcp_tool(&tool_name) {

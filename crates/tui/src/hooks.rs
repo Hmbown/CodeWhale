@@ -551,6 +551,20 @@ impl HookExecutor {
         self.config.enabled && self.config.hooks.iter().any(|h| h.event == event)
     }
 
+    /// Check if there are any background hooks configured for a specific event.
+    ///
+    /// Background hooks fire and forget — their `exit_code` is always `None`,
+    /// so they cannot deny tool calls. This is a known limitation; the check
+    /// is used to warn operators when a `ToolCallBefore` hook is configured
+    /// as background but expects to block a tool.
+    #[must_use]
+    pub fn has_background_hooks_for_event(&self, event: HookEvent) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+        self.config.hooks.iter().any(|h| h.event == event && h.background)
+    }
+
     /// Run configured `message_submit` hooks as a mutable submit pipeline.
     ///
     /// This is deliberately separate from [`Self::execute`]: most hook events
