@@ -938,7 +938,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
 }
 
 #[tokio::test]
-async fn test_running_count_ignores_finished_task_handles() {
+async fn test_running_count_counts_running_agents_until_status_reconciles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
@@ -953,17 +953,14 @@ async fn test_running_count_ignores_finished_task_handles() {
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
-    let handle = tokio::spawn(async {});
-    handle.await.expect("dummy task should finish immediately");
-    agent.task_handle = Some(tokio::spawn(async {}));
-    if let Some(handle) = agent.task_handle.as_ref() {
-        while !handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
+    let finished_handle = tokio::spawn(async {});
+    while !finished_handle.is_finished() {
+        tokio::task::yield_now().await;
     }
+    agent.task_handle = Some(finished_handle);
     manager.agents.insert(agent.id.clone(), agent);
 
-    assert_eq!(manager.running_count(), 0);
+    assert_eq!(manager.running_count(), 1);
 }
 
 #[test]

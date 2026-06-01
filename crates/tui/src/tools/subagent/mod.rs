@@ -1249,11 +1249,13 @@ impl SubAgentManager {
                     return false;
                 }
                 // Exclude persisted agents with no task_handle (they're not actually running)
-                let Some(handle) = agent.task_handle.as_ref() else {
+                if agent.task_handle.is_none() {
                     return false;
-                };
-                // Exclude agents whose task has finished (status will be updated to Completed shortly)
-                !handle.is_finished()
+                }
+                // Keep recently finished handles counted until the terminal
+                // status update has reconciled. Otherwise a fanout burst can
+                // refill the cap before the UI/state catches up (#2211).
+                true
             })
             .count()
     }
