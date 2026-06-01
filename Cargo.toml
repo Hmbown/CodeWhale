@@ -14,7 +14,6 @@ members = [
     "crates/state",
     "crates/tools",
     "crates/tui",
-    "crates/tui-core",
 ]
 default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
