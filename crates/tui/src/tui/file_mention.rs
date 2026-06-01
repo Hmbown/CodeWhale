@@ -301,13 +301,24 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
 }
 
 fn no_file_mention_matches_status(partial: &str, walk_depth: usize) -> String {
-    if walk_depth > 0 && (partial.contains('/') || partial.contains('\\')) {
+    if path_partial_reaches_walk_depth(partial, walk_depth) {
         format!(
             "No files match @{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
         )
     } else {
         format!("No files match @{partial}")
     }
+}
+
+fn path_partial_reaches_walk_depth(partial: &str, walk_depth: usize) -> bool {
+    if walk_depth == 0 {
+        return false;
+    }
+    let component_count = partial
+        .split(['/', '\\'])
+        .filter(|component| !component.is_empty())
+        .count();
+    component_count >= walk_depth
 }
 
 /// Splice a completion into the input, replacing the `@<partial>` token at

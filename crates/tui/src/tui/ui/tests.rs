@@ -4714,6 +4714,40 @@ fn try_autocomplete_file_mention_no_match_mentions_depth_cap_for_path_like_parti
 }
 
 #[test]
+fn try_autocomplete_file_mention_no_match_skips_depth_hint_for_shallow_path() {
+    let tmpdir = TempDir::new().expect("tempdir");
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_walk_depth = 6;
+    app.input = "@shallow_missing/main.rs".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_file_mention(&mut app));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("No files match @shallow_missing/main.rs")
+    );
+}
+
+#[test]
+fn try_autocomplete_file_mention_no_match_skips_depth_hint_when_unlimited() {
+    let tmpdir = TempDir::new().expect("tempdir");
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_walk_depth = 0;
+    app.input = "@a/b/c/d/e/f/g/target".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_file_mention(&mut app));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("No files match @a/b/c/d/e/f/g/target")
+    );
+}
+
+#[test]
 fn try_autocomplete_file_mention_returns_false_outside_mention() {
     let mut app = create_test_app();
     app.input = "no mention here".to_string();
