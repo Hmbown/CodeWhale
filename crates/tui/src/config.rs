@@ -298,6 +298,12 @@ pub struct ProviderCapability {
     pub thinking_supported: bool,
     /// Whether the provider returns prompt-cache telemetry fields.
     pub cache_telemetry_supported: bool,
+    /// Whether the provider supports explicit `cache_control: ephemeral`
+    /// markers on system prompts, tools, and messages. Anthropic-style
+    /// providers benefit from these markers (cache hit = 1/10 of input
+    /// price). DeepSeek / OpenAI providers use automatic prefix caching
+    /// and should NOT receive these markers.
+    pub cache_control_supported: bool,
     /// Which request-payload dialect the provider uses.
     pub request_payload_mode: RequestPayloadMode,
     /// Deprecation metadata for compatibility aliases that are still accepted.
@@ -344,6 +350,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             max_output: 4096,
             thinking_supported: false,
             cache_telemetry_supported: false,
+            cache_control_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
         };
@@ -358,6 +365,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             max_output: crate::models::max_output_tokens_for_model(resolved_model).unwrap_or(4096),
             thinking_supported: crate::models::model_supports_reasoning(resolved_model),
             cache_telemetry_supported: false,
+            cache_control_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
         };
@@ -371,6 +379,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             max_output: 4096,
             thinking_supported: false,
             cache_telemetry_supported: false,
+            cache_control_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
         };
@@ -385,6 +394,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             max_output: crate::models::max_output_tokens_for_model(resolved_model).unwrap_or(4096),
             thinking_supported: crate::models::model_supports_reasoning(resolved_model),
             cache_telemetry_supported: false,
+            cache_control_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
         };
@@ -440,6 +450,11 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     // Request payload mode: all current providers use chat completions.
     let request_payload_mode = RequestPayloadMode::ChatCompletions;
 
+    // Cache control markers: only Anthropic-style providers benefit from
+    // explicit ephemeral markers. DeepSeek / OpenAI use automatic prefix
+    // caching and should NOT receive these markers.
+    let cache_control_supported = false;
+
     ProviderCapability {
         provider,
         resolved_model: resolved_model.to_string(),
@@ -447,6 +462,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
         max_output,
         thinking_supported,
         cache_telemetry_supported,
+        cache_control_supported,
         request_payload_mode,
         alias_deprecation,
     }

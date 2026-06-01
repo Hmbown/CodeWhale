@@ -1827,6 +1827,56 @@ pub(super) fn count_reasoning_replay_chars(body: &Value) -> u64 {
         .sum()
 }
 
+/// Inject `cache_control: ephemeral` markers into a request for providers
+/// that support explicit cache breakpoints (Anthropic-style).
+///
+/// Three marker positions:
+/// 1. Last system prompt block (if system is present)
+/// 2. Last tool (fallback when no system prompt)
+/// 3. Last content block of the last message
+///
+/// For providers with `cache_control_supported = false` (DeepSeek, OpenAI,
+/// etc.) this function is a no-op — those providers rely on automatic
+/// prefix caching and should not receive explicit markers.
+#[allow(dead_code)]
+pub(super) fn inject_cache_control_markers(
+    request: &mut MessageRequest,
+    cache_control_supported: bool,
+) {
+    if !cache_control_supported {
+        return;
+    }
+
+    let ephemeral = crate::models::CacheControl {
+        cache_type: "ephemeral".to_string(),
+    };
+
+    // 1. Mark the last system prompt block.
+    let has_system =
+        if let Some(crate::models::SystemPrompt::Blocks(blocks)) = request.system.as_mut() {
+            if let Some(last) = blocks.last_mut() {
+                last.cache_control = Some(ephemeral.clone());
+            }
+            true
+        } else {
+            false
+        };
+
+    // 2. If no system prompt, mark the last tool as fallback.
+    if !has_system && let Some(last_tool) = request.tools.as_mut().and_then(|t| t.last_mut()) {
+        last_tool.cache_control = Some(ephemeral.clone());
+    }
+
+    // 3. Mark the last content block of the last message.
+    if let Some(crate::models::ContentBlock::Text { cache_control, .. }) = request
+        .messages
+        .last_mut()
+        .and_then(|m| m.content.last_mut())
+    {
+        *cache_control = Some(ephemeral);
+    }
+}
+
 /// Render the transport-shape headers we care about for #103 diagnostics.
 /// Always returns SOMETHING printable so the decode-error log line is parseable
 /// even when the server stripped a header we expected.
@@ -3739,6 +3789,117 @@ mod alias_thinking_detection_tests {
                     "stream vs replay disagree for {model} on {provider:?}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_control_marker_tests {
+    use super::inject_cache_control_markers;
+    use crate::models::{ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt, Tool};
+
+    fn make_request_with_system_and_messages() -> MessageRequest {
+        MessageRequest {
+            model: "test-model".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            max_tokens: 1024,
+            system: Some(SystemPrompt::Blocks(vec![SystemBlock {
+                block_type: "text".to_string(),
+                text: "You are helpful.".to_string(),
+                cache_control: None,
+            }])),
+            tools: Some(vec![Tool {
+                tool_type: None,
+                name: "read_file".to_string(),
+                description: "Read a file".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                allowed_callers: None,
+                defer_loading: None,
+                input_examples: None,
+                strict: None,
+                cache_control: None,
+            }]),
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        }
+    }
+
+    #[test]
+    fn deepseek_is_noop() {
+        // DeepSeek providers have cache_control_supported = false;
+        // inject_cache_control_markers must not modify the request.
+        let mut req = make_request_with_system_and_messages();
+        inject_cache_control_markers(&mut req, false);
+
+        // System block should still be None.
+        match req.system.as_ref().unwrap() {
+            SystemPrompt::Blocks(blocks) => {
+                assert!(blocks[0].cache_control.is_none());
+            }
+            _ => panic!("expected blocks"),
+        }
+        // Last message text block should still be None.
+        match &req.messages[0].content[0] {
+            ContentBlock::Text { cache_control, .. } => {
+                assert!(cache_control.is_none());
+            }
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn anthropic_adds_markers_to_system_and_last_message() {
+        let mut req = make_request_with_system_and_messages();
+        inject_cache_control_markers(&mut req, true);
+
+        // System block should have ephemeral.
+        match req.system.as_ref().unwrap() {
+            SystemPrompt::Blocks(blocks) => {
+                assert_eq!(
+                    blocks[0].cache_control.as_ref().unwrap().cache_type,
+                    "ephemeral"
+                );
+            }
+            _ => panic!("expected blocks"),
+        }
+        // Last message text block should have ephemeral.
+        match &req.messages[0].content[0] {
+            ContentBlock::Text { cache_control, .. } => {
+                assert_eq!(cache_control.as_ref().unwrap().cache_type, "ephemeral");
+            }
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn no_system_falls_back_to_last_tool() {
+        let mut req = make_request_with_system_and_messages();
+        req.system = None;
+        inject_cache_control_markers(&mut req, true);
+
+        // Last tool should have ephemeral.
+        let tools = req.tools.as_ref().unwrap();
+        assert_eq!(
+            tools[0].cache_control.as_ref().unwrap().cache_type,
+            "ephemeral"
+        );
+        // Last message text block should also have ephemeral.
+        match &req.messages[0].content[0] {
+            ContentBlock::Text { cache_control, .. } => {
+                assert_eq!(cache_control.as_ref().unwrap().cache_type, "ephemeral");
+            }
+            _ => panic!("expected text"),
         }
     }
 }
