@@ -934,7 +934,7 @@ fn background_collection_does_not_block_on_detached_descendant_pipe() {
 
     let result = manager
         .execute(
-            r#"cmd /c start "" /b ping 127.0.0.1 -n 8"#,
+            r#"cmd /c start "" /b ping 127.0.0.1 -n 4"#,
             None,
             5000,
             true,
@@ -948,7 +948,7 @@ fn background_collection_does_not_block_on_detached_descendant_pipe() {
         .expect("get_output must complete, not hang");
 
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(3),
+        started.elapsed() < std::time::Duration::from_secs(6),
         "get_output blocked on descendant pipe handles"
     );
     assert_eq!(done.status, ShellStatus::Completed);

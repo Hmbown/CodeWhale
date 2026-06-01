@@ -298,9 +298,31 @@ fn windows_io_error(error: windows::core::Error) -> std::io::Error {
 #[cfg(windows)]
 fn terminate_windows_job(job: Option<&WindowsJob>, child: &mut Child) -> std::io::Result<()> {
     if let Some(job) = job {
-        job.terminate()
-    } else {
-        child.kill()
+        match job.terminate() {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to terminate Windows job object; falling back to immediate child kill"
+                );
+            }
+        }
+    }
+    child.kill()
+}
+
+#[cfg(windows)]
+fn attach_windows_job(child: &Child, command: &str) -> Option<WindowsJob> {
+    match WindowsJob::attach_to_child(child) {
+        Ok(job) => Some(job),
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                command,
+                "failed to attach Windows shell process to job object; descendant cleanup degraded"
+            );
+            None
+        }
     }
 }
 
@@ -982,7 +1004,7 @@ impl ShellManager {
             .spawn()
             .with_context(|| format!("Failed to execute: {original_command}"))?;
         #[cfg(windows)]
-        let windows_job = WindowsJob::attach_to_child(&child).ok();
+        let windows_job = attach_windows_job(&child, original_command);
 
         if let Some(input) = stdin_data
             && let Some(mut stdin) = child.stdin.take()
@@ -1146,7 +1168,7 @@ impl ShellManager {
             .spawn()
             .with_context(|| format!("Failed to execute: {original_command}"))?;
         #[cfg(windows)]
-        let windows_job = WindowsJob::attach_to_child(&child).ok();
+        let windows_job = attach_windows_job(&child, original_command);
 
         if let Some(status) = child.wait_timeout(timeout)? {
             #[cfg(windows)]
@@ -1298,7 +1320,7 @@ impl ShellManager {
                 .with_context(|| format!("Failed to spawn background: {original_command}"))?;
             #[cfg(windows)]
             {
-                windows_job = WindowsJob::attach_to_child(&child).ok();
+                windows_job = attach_windows_job(&child, original_command);
             }
 
             let stdout_handle = child.stdout.take().context("Failed to capture stdout")?;
