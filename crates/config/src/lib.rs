@@ -160,6 +160,7 @@ pub struct ProviderConfigToml {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub auth_mode: Option<String>,
+    pub path_suffix: Option<String>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
 }
@@ -248,6 +249,7 @@ pub struct ConfigToml {
     pub api_key: Option<String>,
     /// TUI-compatible DeepSeek base URL.
     pub base_url: Option<String>,
+    pub path_suffix: Option<String>,
     /// Optional extra HTTP headers forwarded to model API requests.
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
@@ -504,69 +506,81 @@ impl ConfigToml {
                 .map(|path| path.display().to_string()),
             "providers.deepseek.api_key" => self.providers.deepseek.api_key.clone(),
             "providers.deepseek.base_url" => self.providers.deepseek.base_url.clone(),
+            "providers.deepseek.path_suffix" => self.providers.deepseek.path_suffix.clone(),
             "providers.deepseek.model" => self.providers.deepseek.model.clone(),
             "providers.deepseek.http_headers" => {
                 serialize_http_headers(&self.providers.deepseek.http_headers)
             }
             "providers.nvidia_nim.api_key" => self.providers.nvidia_nim.api_key.clone(),
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url.clone(),
+            "providers.nvidia_nim.path_suffix" => self.providers.nvidia_nim.path_suffix.clone(),
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model.clone(),
             "providers.nvidia_nim.http_headers" => {
                 serialize_http_headers(&self.providers.nvidia_nim.http_headers)
             }
             "providers.openai.api_key" => self.providers.openai.api_key.clone(),
             "providers.openai.base_url" => self.providers.openai.base_url.clone(),
+            "providers.openai.path_suffix" => self.providers.openai.path_suffix.clone(),
             "providers.openai.model" => self.providers.openai.model.clone(),
             "providers.openai.http_headers" => {
                 serialize_http_headers(&self.providers.openai.http_headers)
             }
             "providers.atlascloud.api_key" => self.providers.atlascloud.api_key.clone(),
             "providers.atlascloud.base_url" => self.providers.atlascloud.base_url.clone(),
+            "providers.atlascloud.path_suffix" => self.providers.atlascloud.path_suffix.clone(),
             "providers.atlascloud.model" => self.providers.atlascloud.model.clone(),
             "providers.atlascloud.http_headers" => {
                 serialize_http_headers(&self.providers.atlascloud.http_headers)
             }
             "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key.clone(),
             "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url.clone(),
+            "providers.wanjie_ark.path_suffix" => self.providers.wanjie_ark.path_suffix.clone(),
             "providers.wanjie_ark.model" => self.providers.wanjie_ark.model.clone(),
             "providers.volcengine.api_key" => self.providers.volcengine.api_key.clone(),
             "providers.volcengine.base_url" => self.providers.volcengine.base_url.clone(),
+            "providers.volcengine.path_suffix" => self.providers.volcengine.path_suffix.clone(),
             "providers.volcengine.model" => self.providers.volcengine.model.clone(),
             "providers.wanjie_ark.http_headers" => {
                 serialize_http_headers(&self.providers.wanjie_ark.http_headers)
             }
             "providers.openrouter.api_key" => self.providers.openrouter.api_key.clone(),
             "providers.openrouter.base_url" => self.providers.openrouter.base_url.clone(),
+            "providers.openrouter.path_suffix" => self.providers.openrouter.path_suffix.clone(),
             "providers.openrouter.model" => self.providers.openrouter.model.clone(),
             "providers.openrouter.http_headers" => {
                 serialize_http_headers(&self.providers.openrouter.http_headers)
             }
             "providers.xiaomi_mimo.api_key" => self.providers.xiaomi_mimo.api_key.clone(),
             "providers.xiaomi_mimo.base_url" => self.providers.xiaomi_mimo.base_url.clone(),
+            "providers.xiaomi_mimo.path_suffix" => self.providers.xiaomi_mimo.path_suffix.clone(),
             "providers.xiaomi_mimo.model" => self.providers.xiaomi_mimo.model.clone(),
             "providers.xiaomi_mimo.http_headers" => {
                 serialize_http_headers(&self.providers.xiaomi_mimo.http_headers)
             }
             "providers.novita.api_key" => self.providers.novita.api_key.clone(),
             "providers.novita.base_url" => self.providers.novita.base_url.clone(),
+            "providers.novita.path_suffix" => self.providers.novita.path_suffix.clone(),
             "providers.novita.model" => self.providers.novita.model.clone(),
             "providers.novita.http_headers" => {
                 serialize_http_headers(&self.providers.novita.http_headers)
             }
             "providers.fireworks.api_key" => self.providers.fireworks.api_key.clone(),
             "providers.fireworks.base_url" => self.providers.fireworks.base_url.clone(),
+            "providers.fireworks.path_suffix" => self.providers.fireworks.path_suffix.clone(),
             "providers.fireworks.model" => self.providers.fireworks.model.clone(),
             "providers.fireworks.http_headers" => {
                 serialize_http_headers(&self.providers.fireworks.http_headers)
             }
             "providers.siliconflow.api_key" => self.providers.siliconflow.api_key.clone(),
             "providers.siliconflow.base_url" => self.providers.siliconflow.base_url.clone(),
+            "providers.siliconflow.path_suffix" => self.providers.siliconflow.path_suffix.clone(),
             "providers.siliconflow.model" => self.providers.siliconflow.model.clone(),
             "providers.siliconflow.http_headers" => {
                 serialize_http_headers(&self.providers.siliconflow.http_headers)
             }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key.clone(),
             "providers.moonshot.base_url" => self.providers.moonshot.base_url.clone(),
+            "providers.moonshot.path_suffix" => self.providers.moonshot.path_suffix.clone(),
             "providers.moonshot.model" => self.providers.moonshot.model.clone(),
             "providers.moonshot.auth_mode" => self.providers.moonshot.auth_mode.clone(),
             "providers.moonshot.http_headers" => {
@@ -574,18 +588,21 @@ impl ConfigToml {
             }
             "providers.sglang.api_key" => self.providers.sglang.api_key.clone(),
             "providers.sglang.base_url" => self.providers.sglang.base_url.clone(),
+            "providers.sglang.path_suffix" => self.providers.sglang.path_suffix.clone(),
             "providers.sglang.model" => self.providers.sglang.model.clone(),
             "providers.sglang.http_headers" => {
                 serialize_http_headers(&self.providers.sglang.http_headers)
             }
             "providers.vllm.api_key" => self.providers.vllm.api_key.clone(),
             "providers.vllm.base_url" => self.providers.vllm.base_url.clone(),
+            "providers.vllm.path_suffix" => self.providers.vllm.path_suffix.clone(),
             "providers.vllm.model" => self.providers.vllm.model.clone(),
             "providers.vllm.http_headers" => {
                 serialize_http_headers(&self.providers.vllm.http_headers)
             }
             "providers.ollama.api_key" => self.providers.ollama.api_key.clone(),
             "providers.ollama.base_url" => self.providers.ollama.base_url.clone(),
+            "providers.ollama.path_suffix" => self.providers.ollama.path_suffix.clone(),
             "providers.ollama.model" => self.providers.ollama.model.clone(),
             "providers.ollama.http_headers" => {
                 serialize_http_headers(&self.providers.ollama.http_headers)
@@ -639,6 +656,11 @@ impl ConfigToml {
                 self.providers.deepseek.base_url = Some(value.clone());
                 self.base_url = Some(value);
             }
+            "providers.deepseek.path_suffix" => {
+                let value = value.to_string();
+                self.providers.deepseek.path_suffix = Some(value.clone());
+                self.path_suffix = Some(value);
+            }
             "providers.deepseek.model" => {
                 let value = value.to_string();
                 self.providers.deepseek.model = Some(value.clone());
@@ -651,6 +673,9 @@ impl ConfigToml {
             }
             "providers.openai.api_key" => self.providers.openai.api_key = Some(value.to_string()),
             "providers.openai.base_url" => self.providers.openai.base_url = Some(value.to_string()),
+            "providers.openai.path_suffix" => {
+                self.providers.openai.path_suffix = Some(value.to_string())
+            }
             "providers.openai.model" => self.providers.openai.model = Some(value.to_string()),
             "providers.openai.http_headers" => {
                 self.providers.openai.http_headers = parse_http_headers(value)?;
@@ -660,6 +685,9 @@ impl ConfigToml {
             }
             "providers.atlascloud.base_url" => {
                 self.providers.atlascloud.base_url = Some(value.to_string());
+            }
+            "providers.atlascloud.path_suffix" => {
+                self.providers.atlascloud.path_suffix = Some(value.to_string());
             }
             "providers.atlascloud.model" => {
                 self.providers.atlascloud.model = Some(value.to_string());
@@ -673,6 +701,9 @@ impl ConfigToml {
             "providers.wanjie_ark.base_url" => {
                 self.providers.wanjie_ark.base_url = Some(value.to_string());
             }
+            "providers.wanjie_ark.path_suffix" => {
+                self.providers.wanjie_ark.path_suffix = Some(value.to_string());
+            }
             "providers.wanjie_ark.model" => {
                 self.providers.wanjie_ark.model = Some(value.to_string());
             }
@@ -681,6 +712,9 @@ impl ConfigToml {
             }
             "providers.volcengine.base_url" => {
                 self.providers.volcengine.base_url = Some(value.to_string());
+            }
+            "providers.volcengine.path_suffix" => {
+                self.providers.volcengine.path_suffix = Some(value.to_string());
             }
             "providers.volcengine.model" => {
                 self.providers.volcengine.model = Some(value.to_string());
@@ -694,6 +728,9 @@ impl ConfigToml {
             "providers.nvidia_nim.base_url" => {
                 self.providers.nvidia_nim.base_url = Some(value.to_string());
             }
+            "providers.nvidia_nim.path_suffix" => {
+                self.providers.nvidia_nim.path_suffix = Some(value.to_string());
+            }
             "providers.nvidia_nim.model" => {
                 self.providers.nvidia_nim.model = Some(value.to_string());
             }
@@ -705,6 +742,9 @@ impl ConfigToml {
             }
             "providers.openrouter.base_url" => {
                 self.providers.openrouter.base_url = Some(value.to_string());
+            }
+            "providers.openrouter.path_suffix" => {
+                self.providers.openrouter.path_suffix = Some(value.to_string());
             }
             "providers.openrouter.model" => {
                 self.providers.openrouter.model = Some(value.to_string());
@@ -718,6 +758,9 @@ impl ConfigToml {
             "providers.xiaomi_mimo.base_url" => {
                 self.providers.xiaomi_mimo.base_url = Some(value.to_string());
             }
+            "providers.xiaomi_mimo.path_suffix" => {
+                self.providers.xiaomi_mimo.path_suffix = Some(value.to_string());
+            }
             "providers.xiaomi_mimo.model" => {
                 self.providers.xiaomi_mimo.model = Some(value.to_string());
             }
@@ -729,6 +772,9 @@ impl ConfigToml {
             }
             "providers.novita.base_url" => {
                 self.providers.novita.base_url = Some(value.to_string());
+            }
+            "providers.novita.path_suffix" => {
+                self.providers.novita.path_suffix = Some(value.to_string());
             }
             "providers.novita.model" => {
                 self.providers.novita.model = Some(value.to_string());
@@ -742,6 +788,9 @@ impl ConfigToml {
             "providers.fireworks.base_url" => {
                 self.providers.fireworks.base_url = Some(value.to_string());
             }
+            "providers.fireworks.path_suffix" => {
+                self.providers.fireworks.path_suffix = Some(value.to_string());
+            }
             "providers.fireworks.model" => {
                 self.providers.fireworks.model = Some(value.to_string());
             }
@@ -754,6 +803,9 @@ impl ConfigToml {
             "providers.siliconflow.base_url" => {
                 self.providers.siliconflow.base_url = Some(value.to_string());
             }
+            "providers.siliconflow.path_suffix" => {
+                self.providers.siliconflow.path_suffix = Some(value.to_string());
+            }
             "providers.siliconflow.model" => {
                 self.providers.siliconflow.model = Some(value.to_string());
             }
@@ -765,6 +817,9 @@ impl ConfigToml {
             }
             "providers.moonshot.base_url" => {
                 self.providers.moonshot.base_url = Some(value.to_string());
+            }
+            "providers.moonshot.path_suffix" => {
+                self.providers.moonshot.path_suffix = Some(value.to_string());
             }
             "providers.moonshot.model" => {
                 self.providers.moonshot.model = Some(value.to_string());
@@ -781,6 +836,9 @@ impl ConfigToml {
             "providers.sglang.base_url" => {
                 self.providers.sglang.base_url = Some(value.to_string());
             }
+            "providers.sglang.path_suffix" => {
+                self.providers.sglang.path_suffix = Some(value.to_string());
+            }
             "providers.sglang.model" => {
                 self.providers.sglang.model = Some(value.to_string());
             }
@@ -793,6 +851,9 @@ impl ConfigToml {
             "providers.vllm.base_url" => {
                 self.providers.vllm.base_url = Some(value.to_string());
             }
+            "providers.vllm.path_suffix" => {
+                self.providers.vllm.path_suffix = Some(value.to_string());
+            }
             "providers.vllm.model" => {
                 self.providers.vllm.model = Some(value.to_string());
             }
@@ -804,6 +865,9 @@ impl ConfigToml {
             }
             "providers.ollama.base_url" => {
                 self.providers.ollama.base_url = Some(value.to_string());
+            }
+            "providers.ollama.path_suffix" => {
+                self.providers.ollama.path_suffix = Some(value.to_string());
             }
             "providers.ollama.model" => {
                 self.providers.ollama.model = Some(value.to_string());
@@ -846,6 +910,10 @@ impl ConfigToml {
                 self.providers.deepseek.base_url = None;
                 self.base_url = None;
             }
+            "providers.deepseek.path_suffix" => {
+                self.providers.deepseek.path_suffix = None;
+                self.path_suffix = None;
+            }
             "providers.deepseek.model" => {
                 self.providers.deepseek.model = None;
                 self.default_text_model = None;
@@ -856,64 +924,78 @@ impl ConfigToml {
             }
             "providers.openai.api_key" => self.providers.openai.api_key = None,
             "providers.openai.base_url" => self.providers.openai.base_url = None,
+            "providers.openai.path_suffix" => self.providers.openai.path_suffix = None,
             "providers.openai.model" => self.providers.openai.model = None,
             "providers.openai.http_headers" => self.providers.openai.http_headers.clear(),
             "providers.atlascloud.api_key" => self.providers.atlascloud.api_key = None,
             "providers.atlascloud.base_url" => self.providers.atlascloud.base_url = None,
+            "providers.atlascloud.path_suffix" => self.providers.atlascloud.path_suffix = None,
             "providers.atlascloud.model" => self.providers.atlascloud.model = None,
             "providers.atlascloud.http_headers" => self.providers.atlascloud.http_headers.clear(),
             "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key = None,
             "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url = None,
+            "providers.wanjie_ark.path_suffix" => self.providers.wanjie_ark.path_suffix = None,
             "providers.wanjie_ark.model" => self.providers.wanjie_ark.model = None,
             "providers.volcengine.api_key" => self.providers.volcengine.api_key = None,
             "providers.volcengine.base_url" => self.providers.volcengine.base_url = None,
+            "providers.volcengine.path_suffix" => self.providers.volcengine.path_suffix = None,
             "providers.volcengine.model" => self.providers.volcengine.model = None,
             "providers.wanjie_ark.http_headers" => {
                 self.providers.wanjie_ark.http_headers.clear();
             }
             "providers.nvidia_nim.api_key" => self.providers.nvidia_nim.api_key = None,
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url = None,
+            "providers.nvidia_nim.path_suffix" => self.providers.nvidia_nim.path_suffix = None,
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model = None,
             "providers.nvidia_nim.http_headers" => self.providers.nvidia_nim.http_headers.clear(),
             "providers.openrouter.api_key" => self.providers.openrouter.api_key = None,
             "providers.openrouter.base_url" => self.providers.openrouter.base_url = None,
+            "providers.openrouter.path_suffix" => self.providers.openrouter.path_suffix = None,
             "providers.openrouter.model" => self.providers.openrouter.model = None,
             "providers.openrouter.http_headers" => self.providers.openrouter.http_headers.clear(),
             "providers.xiaomi_mimo.api_key" => self.providers.xiaomi_mimo.api_key = None,
             "providers.xiaomi_mimo.base_url" => self.providers.xiaomi_mimo.base_url = None,
+            "providers.xiaomi_mimo.path_suffix" => self.providers.xiaomi_mimo.path_suffix = None,
             "providers.xiaomi_mimo.model" => self.providers.xiaomi_mimo.model = None,
             "providers.xiaomi_mimo.http_headers" => {
                 self.providers.xiaomi_mimo.http_headers.clear();
             }
             "providers.novita.api_key" => self.providers.novita.api_key = None,
             "providers.novita.base_url" => self.providers.novita.base_url = None,
+            "providers.novita.path_suffix" => self.providers.novita.path_suffix = None,
             "providers.novita.model" => self.providers.novita.model = None,
             "providers.novita.http_headers" => self.providers.novita.http_headers.clear(),
             "providers.fireworks.api_key" => self.providers.fireworks.api_key = None,
             "providers.fireworks.base_url" => self.providers.fireworks.base_url = None,
+            "providers.fireworks.path_suffix" => self.providers.fireworks.path_suffix = None,
             "providers.fireworks.model" => self.providers.fireworks.model = None,
             "providers.fireworks.http_headers" => self.providers.fireworks.http_headers.clear(),
             "providers.siliconflow.api_key" => self.providers.siliconflow.api_key = None,
             "providers.siliconflow.base_url" => self.providers.siliconflow.base_url = None,
+            "providers.siliconflow.path_suffix" => self.providers.siliconflow.path_suffix = None,
             "providers.siliconflow.model" => self.providers.siliconflow.model = None,
             "providers.siliconflow.http_headers" => {
                 self.providers.siliconflow.http_headers.clear();
             }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key = None,
             "providers.moonshot.base_url" => self.providers.moonshot.base_url = None,
+            "providers.moonshot.path_suffix" => self.providers.moonshot.path_suffix = None,
             "providers.moonshot.model" => self.providers.moonshot.model = None,
             "providers.moonshot.auth_mode" => self.providers.moonshot.auth_mode = None,
             "providers.moonshot.http_headers" => self.providers.moonshot.http_headers.clear(),
             "providers.sglang.api_key" => self.providers.sglang.api_key = None,
             "providers.sglang.base_url" => self.providers.sglang.base_url = None,
+            "providers.sglang.path_suffix" => self.providers.sglang.path_suffix = None,
             "providers.sglang.model" => self.providers.sglang.model = None,
             "providers.sglang.http_headers" => self.providers.sglang.http_headers.clear(),
             "providers.vllm.api_key" => self.providers.vllm.api_key = None,
             "providers.vllm.base_url" => self.providers.vllm.base_url = None,
+            "providers.vllm.path_suffix" => self.providers.vllm.path_suffix = None,
             "providers.vllm.model" => self.providers.vllm.model = None,
             "providers.vllm.http_headers" => self.providers.vllm.http_headers.clear(),
             "providers.ollama.api_key" => self.providers.ollama.api_key = None,
             "providers.ollama.base_url" => self.providers.ollama.base_url = None,
+            "providers.ollama.path_suffix" => self.providers.ollama.path_suffix = None,
             "providers.ollama.model" => self.providers.ollama.model = None,
             "providers.ollama.http_headers" => self.providers.ollama.http_headers.clear(),
             _ => {
@@ -977,6 +1059,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.deepseek.base_url.as_ref() {
             out.insert("providers.deepseek.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.deepseek.path_suffix.as_ref() {
+            out.insert("providers.deepseek.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.deepseek.model.as_ref() {
             out.insert("providers.deepseek.model".to_string(), v.clone());
         }
@@ -988,6 +1073,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.openai.base_url.as_ref() {
             out.insert("providers.openai.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.openai.path_suffix.as_ref() {
+            out.insert("providers.openai.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.openai.model.as_ref() {
             out.insert("providers.openai.model".to_string(), v.clone());
@@ -1001,6 +1089,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.atlascloud.base_url.as_ref() {
             out.insert("providers.atlascloud.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.atlascloud.path_suffix.as_ref() {
+            out.insert("providers.atlascloud.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.atlascloud.model.as_ref() {
             out.insert("providers.atlascloud.model".to_string(), v.clone());
         }
@@ -1013,6 +1104,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.volcengine.base_url.as_ref() {
             out.insert("providers.volcengine.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.volcengine.path_suffix.as_ref() {
+            out.insert("providers.volcengine.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.volcengine.model.as_ref() {
             out.insert("providers.volcengine.model".to_string(), v.clone());
         }
@@ -1021,6 +1115,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.wanjie_ark.base_url.as_ref() {
             out.insert("providers.wanjie_ark.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.wanjie_ark.path_suffix.as_ref() {
+            out.insert("providers.wanjie_ark.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.wanjie_ark.model.as_ref() {
             out.insert("providers.wanjie_ark.model".to_string(), v.clone());
@@ -1037,6 +1134,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.nvidia_nim.base_url.as_ref() {
             out.insert("providers.nvidia_nim.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.nvidia_nim.path_suffix.as_ref() {
+            out.insert("providers.nvidia_nim.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.nvidia_nim.model.as_ref() {
             out.insert("providers.nvidia_nim.model".to_string(), v.clone());
         }
@@ -1048,6 +1148,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.openrouter.base_url.as_ref() {
             out.insert("providers.openrouter.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.openrouter.path_suffix.as_ref() {
+            out.insert("providers.openrouter.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.openrouter.model.as_ref() {
             out.insert("providers.openrouter.model".to_string(), v.clone());
@@ -1064,6 +1167,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.xiaomi_mimo.base_url.as_ref() {
             out.insert("providers.xiaomi_mimo.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.xiaomi_mimo.path_suffix.as_ref() {
+            out.insert("providers.xiaomi_mimo.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.xiaomi_mimo.model.as_ref() {
             out.insert("providers.xiaomi_mimo.model".to_string(), v.clone());
         }
@@ -1076,6 +1182,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.novita.base_url.as_ref() {
             out.insert("providers.novita.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.novita.path_suffix.as_ref() {
+            out.insert("providers.novita.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.novita.model.as_ref() {
             out.insert("providers.novita.model".to_string(), v.clone());
         }
@@ -1087,6 +1196,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.fireworks.base_url.as_ref() {
             out.insert("providers.fireworks.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.fireworks.path_suffix.as_ref() {
+            out.insert("providers.fireworks.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.fireworks.model.as_ref() {
             out.insert("providers.fireworks.model".to_string(), v.clone());
@@ -1103,6 +1215,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.siliconflow.base_url.as_ref() {
             out.insert("providers.siliconflow.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.siliconflow.path_suffix.as_ref() {
+            out.insert("providers.siliconflow.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.siliconflow.model.as_ref() {
             out.insert("providers.siliconflow.model".to_string(), v.clone());
         }
@@ -1114,6 +1229,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.moonshot.base_url.as_ref() {
             out.insert("providers.moonshot.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.moonshot.path_suffix.as_ref() {
+            out.insert("providers.moonshot.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.moonshot.model.as_ref() {
             out.insert("providers.moonshot.model".to_string(), v.clone());
@@ -1130,6 +1248,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.sglang.base_url.as_ref() {
             out.insert("providers.sglang.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.sglang.path_suffix.as_ref() {
+            out.insert("providers.sglang.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.sglang.model.as_ref() {
             out.insert("providers.sglang.model".to_string(), v.clone());
         }
@@ -1142,6 +1263,9 @@ impl ConfigToml {
         if let Some(v) = self.providers.vllm.base_url.as_ref() {
             out.insert("providers.vllm.base_url".to_string(), v.clone());
         }
+        if let Some(v) = self.providers.vllm.path_suffix.as_ref() {
+            out.insert("providers.vllm.path_suffix".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.vllm.model.as_ref() {
             out.insert("providers.vllm.model".to_string(), v.clone());
         }
@@ -1153,6 +1277,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.ollama.base_url.as_ref() {
             out.insert("providers.ollama.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.ollama.path_suffix.as_ref() {
+            out.insert("providers.ollama.path_suffix".to_string(), v.clone());
         }
         if let Some(v) = self.providers.ollama.model.as_ref() {
             out.insert("providers.ollama.model".to_string(), v.clone());
@@ -1200,6 +1327,9 @@ impl ConfigToml {
         let root_deepseek_base_url = (provider == ProviderKind::Deepseek)
             .then(|| self.base_url.clone())
             .flatten();
+        let root_deepseek_path_suffix = (provider == ProviderKind::Deepseek)
+            .then(|| self.path_suffix.clone())
+            .flatten();
         let root_deepseek_model = (provider == ProviderKind::Deepseek)
             .then(|| self.default_text_model.clone())
             .flatten();
@@ -1238,6 +1368,12 @@ impl ConfigToml {
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
             });
+        let path_suffix = cli
+            .path_suffix
+            .clone()
+            .or_else(|| env.path_suffix_for(provider))
+            .or_else(|| provider_cfg.path_suffix.clone())
+            .or(root_deepseek_path_suffix.clone());
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
         // This makes `deepseek auth set` a reliable fix even when the user's
         // shell still exports an old key. When the file is empty, the injected
@@ -1342,6 +1478,7 @@ impl ConfigToml {
             api_key,
             api_key_source,
             base_url,
+            path_suffix,
             auth_mode,
             output_mode,
             log_level,
@@ -1701,6 +1838,7 @@ pub struct CliRuntimeOverrides {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub path_suffix: Option<String>,
     pub auth_mode: Option<String>,
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
@@ -1737,6 +1875,7 @@ pub struct ResolvedRuntimeOptions {
     pub api_key: Option<String>,
     pub api_key_source: Option<RuntimeApiKeySource>,
     pub base_url: String,
+    pub path_suffix: Option<String>,
     pub auth_mode: Option<String>,
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
@@ -2095,21 +2234,36 @@ struct EnvRuntimeOverrides {
     yolo: Option<bool>,
     http_headers: Option<BTreeMap<String, String>>,
     deepseek_base_url: Option<String>,
+    deepseek_path_suffix: Option<String>,
     nvidia_base_url: Option<String>,
+    nvidia_path_suffix: Option<String>,
     openai_base_url: Option<String>,
+    openai_path_suffix: Option<String>,
     atlascloud_base_url: Option<String>,
+    atlascloud_path_suffix: Option<String>,
     volcengine_base_url: Option<String>,
+    volcengine_path_suffix: Option<String>,
     wanjie_ark_base_url: Option<String>,
+    wanjie_ark_path_suffix: Option<String>,
     openrouter_base_url: Option<String>,
+    openrouter_path_suffix: Option<String>,
     xiaomi_mimo_base_url: Option<String>,
+    xiaomi_mimo_path_suffix: Option<String>,
     novita_base_url: Option<String>,
+    novita_path_suffix: Option<String>,
     fireworks_base_url: Option<String>,
+    fireworks_path_suffix: Option<String>,
     siliconflow_base_url: Option<String>,
+    siliconflow_path_suffix: Option<String>,
     siliconflow_model: Option<String>,
     moonshot_base_url: Option<String>,
+    moonshot_path_suffix: Option<String>,
     sglang_base_url: Option<String>,
+    sglang_path_suffix: Option<String>,
     vllm_base_url: Option<String>,
+    vllm_path_suffix: Option<String>,
     ollama_base_url: Option<String>,
+    ollama_path_suffix: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -2161,43 +2315,54 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("DEEPSEEK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            deepseek_path_suffix: std::env::var("DEEPSEEK_PATH_SUFFIX").ok(),
             nvidia_base_url: std::env::var("NVIDIA_NIM_BASE_URL")
                 .or_else(|_| std::env::var("NIM_BASE_URL"))
                 .or_else(|_| std::env::var("NVIDIA_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            nvidia_path_suffix: std::env::var("NVIDIA_PATH_SUFFIX").ok(),
             openai_base_url: std::env::var("OPENAI_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            openai_path_suffix: std::env::var("OPENAI_PATH_SUFFIX").ok(),
             atlascloud_base_url: std::env::var("ATLASCLOUD_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            atlascloud_path_suffix: std::env::var("ATLASCLOUD_PATH_SUFFIX").ok(),
             volcengine_base_url: std::env::var("VOLCENGINE_BASE_URL")
                 .or_else(|_| std::env::var("VOLCENGINE_ARK_BASE_URL"))
                 .or_else(|_| std::env::var("ARK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            volcengine_path_suffix: std::env::var("VOLCENGINE_PATH_SUFFIX").ok(),
             wanjie_ark_base_url: std::env::var("WANJIE_ARK_BASE_URL")
                 .or_else(|_| std::env::var("WANJIE_BASE_URL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            wanjie_ark_path_suffix: std::env::var("WANJIE_ARK_PATH_SUFFIX").ok(),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            openrouter_path_suffix: std::env::var("OPENROUTER_PATH_SUFFIX").ok(),
             xiaomi_mimo_base_url: std::env::var("XIAOMI_MIMO_BASE_URL")
                 .or_else(|_| std::env::var("MIMO_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            xiaomi_mimo_path_suffix: std::env::var("XIAOMI_MIMO_PATH_SUFFIX").ok(),
             novita_base_url: std::env::var("NOVITA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            novita_path_suffix: std::env::var("NOVITA_PATH_SUFFIX").ok(),
             fireworks_base_url: std::env::var("FIREWORKS_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            fireworks_path_suffix: std::env::var("FIREWORKS_PATH_SUFFIX").ok(),
             siliconflow_base_url: std::env::var("SILICONFLOW_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            siliconflow_path_suffix: std::env::var("SILICONFLOW_PATH_SUFFIX").ok(),
             siliconflow_model: std::env::var("SILICONFLOW_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -2205,15 +2370,19 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("KIMI_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            moonshot_path_suffix: std::env::var("MOONSHOT_PATH_SUFFIX").ok(),
             sglang_base_url: std::env::var("SGLANG_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            sglang_path_suffix: std::env::var("SGLANG_PATH_SUFFIX").ok(),
             vllm_base_url: std::env::var("VLLM_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            vllm_path_suffix: std::env::var("VLLM_PATH_SUFFIX").ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            ollama_path_suffix: std::env::var("OLLAMA_PATH_SUFFIX").ok(),
         }
     }
 
@@ -2236,6 +2405,26 @@ impl EnvRuntimeOverrides {
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
+        }
+    }
+
+    fn path_suffix_for(&self, provider: ProviderKind) -> Option<String> {
+        match provider {
+            ProviderKind::Deepseek => self.deepseek_path_suffix.clone(),
+            ProviderKind::NvidiaNim => self.nvidia_path_suffix.clone(),
+            ProviderKind::Openai => self.openai_path_suffix.clone(),
+            ProviderKind::Atlascloud => self.atlascloud_path_suffix.clone(),
+            ProviderKind::WanjieArk => self.wanjie_ark_path_suffix.clone(),
+            ProviderKind::Volcengine => self.volcengine_path_suffix.clone(),
+            ProviderKind::Openrouter => self.openrouter_path_suffix.clone(),
+            ProviderKind::XiaomiMimo => self.xiaomi_mimo_path_suffix.clone(),
+            ProviderKind::Novita => self.novita_path_suffix.clone(),
+            ProviderKind::Fireworks => self.fireworks_path_suffix.clone(),
+            ProviderKind::Siliconflow => self.siliconflow_path_suffix.clone(),
+            ProviderKind::Moonshot => self.moonshot_path_suffix.clone(),
+            ProviderKind::Sglang => self.sglang_path_suffix.clone(),
+            ProviderKind::Vllm => self.vllm_path_suffix.clone(),
+            ProviderKind::Ollama => self.ollama_path_suffix.clone(),
         }
     }
 

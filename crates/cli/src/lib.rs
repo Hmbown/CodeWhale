@@ -96,6 +96,8 @@ struct Cli {
     api_key: Option<String>,
     #[arg(long)]
     base_url: Option<String>,
+    #[arg(long)]
+    path_suffix: Option<String>,
     /// Workspace directory for TUI file tools
     #[arg(short = 'C', long = "workspace", alias = "cd", value_name = "DIR")]
     workspace: Option<PathBuf>,
@@ -487,6 +489,7 @@ fn run() -> Result<()> {
         model: cli.model.clone(),
         api_key: cli.api_key.clone(),
         base_url: cli.base_url.clone(),
+        path_suffix: cli.path_suffix.clone(),
         auth_mode: None,
         output_mode: cli.output_mode.clone(),
         log_level: cli.log_level.clone(),
@@ -2728,6 +2731,7 @@ mod tests {
             api_key: Some("resolved-openai-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
             base_url: "https://openai-compatible.example/v4".to_string(),
+            path_suffix: None,
             auth_mode: Some("api_key".to_string()),
             output_mode: None,
             log_level: None,
@@ -2787,6 +2791,7 @@ mod tests {
             api_key: Some("config-file-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::ConfigFile),
             base_url: "https://api.deepseek.com/beta".to_string(),
+            path_suffix: None,
             auth_mode: Some("api_key".to_string()),
             output_mode: None,
             log_level: None,
@@ -2842,6 +2847,7 @@ mod tests {
             api_key: Some("resolved-kimi-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
             base_url: "https://api.moonshot.ai/v1".to_string(),
+            path_suffix: None,
             auth_mode: Some("api_key".to_string()),
             output_mode: None,
             log_level: None,
@@ -2908,6 +2914,7 @@ mod tests {
             api_key: None,
             api_key_source: None,
             base_url: "https://openai-compatible.example/v4".to_string(),
+            path_suffix: None,
             auth_mode: None,
             output_mode: None,
             log_level: None,
@@ -3002,6 +3009,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 api_key_source: Some(RuntimeApiKeySource::Keyring),
                 base_url: "http://localhost:8000/v1".to_string(),
+                path_suffix: None,
                 auth_mode: Some("api_key".to_string()),
                 output_mode: None,
                 log_level: None,

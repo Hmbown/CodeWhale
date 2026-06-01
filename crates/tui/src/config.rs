@@ -1332,6 +1332,7 @@ pub struct Config {
     pub provider: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub path_suffix: Option<String>,
     /// Optional extra HTTP headers sent to model API requests.
     pub http_headers: Option<HashMap<String, String>>,
     pub default_text_model: Option<String>,
@@ -1665,6 +1666,7 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub auth_mode: Option<String>,
+    pub path_suffix: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
 }
 
@@ -2099,6 +2101,21 @@ impl Config {
             ApiProvider::Volcengine => DEFAULT_VOLCENGINE_MODEL,
         }
         .to_string()
+    }
+
+    /// Return the configured path suffix (normalized).
+    #[must_use]
+    pub fn path_suffix(&self) -> Option<String> {
+        let provider = self.api_provider();
+        let provider_path_suffix = self
+            .provider_config_for(provider)
+            .and_then(|provider| provider.path_suffix.clone());
+
+        let root_path_suffix = match provider {
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN => self.path_suffix.clone(),
+            _ => None,
+        };
+        provider_path_suffix.or(root_path_suffix)
     }
 
     /// Return the configured API base URL (normalized).
@@ -3748,6 +3765,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         provider: override_cfg.provider.or(base.provider),
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
+        path_suffix: override_cfg.path_suffix.or(base.path_suffix),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         default_text_model: override_cfg.default_text_model.or(base.default_text_model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
@@ -3832,6 +3850,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         base_url: override_cfg.base_url.or(base.base_url),
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
+        path_suffix: override_cfg.path_suffix.or(base.path_suffix),
         http_headers: override_cfg.http_headers.or(base.http_headers),
     }
 }

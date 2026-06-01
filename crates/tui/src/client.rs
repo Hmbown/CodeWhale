@@ -125,6 +125,7 @@ pub struct DeepSeekClient {
     pub(super) http_client: reqwest::Client,
     api_key: String,
     pub(super) base_url: String,
+    pub(super) path_suffix: Option<String>,
     pub(super) api_provider: ApiProvider,
     retry: RetryPolicy,
     default_model: String,
@@ -291,6 +292,7 @@ impl Clone for DeepSeekClient {
             http_client: self.http_client.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
+            path_suffix: self.path_suffix.clone(),
             api_provider: self.api_provider,
             retry: self.retry.clone(),
             default_model: self.default_model.clone(),
@@ -359,12 +361,12 @@ fn validate_base_url_security(base_url: &str) -> Result<()> {
     )
 }
 
-pub(super) fn versioned_base_url(base_url: &str) -> String {
+pub(super) fn versioned_base_url(base_url: &str, version: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     if base_url_has_version_suffix(trimmed) {
         trimmed.to_string()
     } else {
-        format!("{trimmed}/v1")
+        format!("{trimmed}{version}")
     }
 }
 
@@ -390,19 +392,23 @@ fn is_version_segment(segment: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-pub(super) fn api_url(base_url: &str, path: &str) -> String {
+pub(super) fn api_url(base_url: &str, path: &str, path_suffix: Option<&str>) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
     }
-    let mut versioned = versioned_base_url(base_url);
+    let mut versioned = versioned_base_url(base_url, path_suffix.unwrap_or("/v1"));
     // The /beta suffix is not a real API version — it is an
     // opt-in surface for beta features.  Only paths with an
     // explicit `beta/` prefix should hit the beta surface;
     // everything else (models, chat/completions, health, …)
     // must go to the standard /v1 surface.
     if versioned.ends_with("beta") {
-        versioned = format!("{}/v1", unversioned_base_url(base_url));
+        versioned = format!(
+            "{}{}",
+            unversioned_base_url(base_url),
+            path_suffix.unwrap_or("/v1")
+        );
     }
     format!("{}/{}", versioned.trim_end_matches('/'), path)
 }
@@ -469,6 +475,7 @@ impl DeepSeekClient {
     pub fn new(config: &Config) -> Result<Self> {
         let api_key = config.deepseek_api_key()?;
         let base_url = config.deepseek_base_url();
+        let path_suffix = config.path_suffix();
         let api_provider = config.api_provider();
         validate_base_url_security(&base_url)?;
         let retry = config.retry_policy();
@@ -496,6 +503,7 @@ impl DeepSeekClient {
             base_url,
             api_provider,
             retry,
+            path_suffix,
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
@@ -585,7 +593,11 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url(
+            &self.base_url,
+            "chat/completions",
+            self.path_suffix.as_deref(),
+        );
         let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
@@ -632,7 +644,7 @@ impl DeepSeekClient {
 
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
-        let url = api_url(&self.base_url, "models");
+        let url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
 
         let status = response.status();
@@ -679,7 +691,7 @@ impl DeepSeekClient {
         if !should_probe {
             return;
         }
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
@@ -790,7 +802,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         self.wait_for_rate_limit().await;
         let response = self.http_client.get(health_url).send().await;
         match response {
@@ -1096,7 +1108,11 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = api_url(
+            &self.base_url,
+            "beta/completions",
+            self.path_suffix.as_deref(),
+        );
         let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
@@ -1214,23 +1230,40 @@ mod tests {
     #[test]
     fn api_url_handles_default_v1_and_beta_base_urls() {
         assert_eq!(
-            api_url("https://api.deepseek.com", "chat/completions"),
+            api_url("https://api.deepseek.com", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "chat/completions"),
+            api_url("https://api.deepseek.com/v1", "chat/completions", None),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "chat/completions", Some("")),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/v1", "chat/completions", Some("")),
             "https://api.deepseek.com/v1/chat/completions"
         );
         // Non-beta paths from a /beta base URL route to /v1.
         // Only paths with an explicit beta/ prefix use the beta surface.
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "chat/completions"),
+            api_url("https://api.deepseek.com/beta", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
             api_url(
+                "https://api.deepseek.com/beta",
+                "chat/completions",
+                Some("/v2")
+            ),
+            "https://api.deepseek.com/v2/chat/completions"
+        );
+        assert_eq!(
+            api_url(
                 "https://openai-compatible.example/api/coding/paas/v4",
-                "chat/completions"
+                "chat/completions",
+                None
             ),
             "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
         );
@@ -1239,15 +1272,31 @@ mod tests {
     #[test]
     fn api_url_routes_beta_paths_from_any_deepseek_base() {
         assert_eq!(
-            api_url("https://api.deepseek.com", "beta/completions"),
+            api_url("https://api.deepseek.com", "beta/completions", None),
             "https://api.deepseek.com/beta/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "beta/completions"),
+            api_url("https://api.deepseek.com/v1", "beta/completions", None),
             "https://api.deepseek.com/beta/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "beta/completions"),
+            api_url("https://api.deepseek.com/beta", "beta/completions", None),
+            "https://api.deepseek.com/beta/completions"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "beta/completions", Some("")),
+            "https://api.deepseek.com/beta/completions"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/v1", "beta/completions", Some("")),
+            "https://api.deepseek.com/beta/completions"
+        );
+        assert_eq!(
+            api_url(
+                "https://api.deepseek.com/beta",
+                "beta/completions",
+                Some("")
+            ),
             "https://api.deepseek.com/beta/completions"
         );
     }
@@ -1258,22 +1307,41 @@ mod tests {
         // /beta/models. Non-beta paths from a /beta base URL must
         // still route to /v1.
         assert_eq!(
-            api_url("https://api.deepseek.com", "models"),
+            api_url("https://api.deepseek.com", "models", None),
             "https://api.deepseek.com/v1/models"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "models"),
+            api_url("https://api.deepseek.com/v1", "models", None),
             "https://api.deepseek.com/v1/models"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "models"),
+            api_url("https://api.deepseek.com/beta", "models", None),
             "https://api.deepseek.com/v1/models"
         );
+        // if path_suffix not none, then the path_suffix will be added to the url
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("")),
+            "https://api.deepseek.com/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/beta", "models", Some("")),
+            "https://api.deepseek.com/models"
+        );
+
         // explicit v<N> versions other than /v1 should be preserved
         assert_eq!(
             api_url(
                 "https://openai-compatible.example/api/coding/paas/v4",
-                "models"
+                "models",
+                None
+            ),
+            "https://openai-compatible.example/api/coding/paas/v4/models"
+        );
+        assert_eq!(
+            api_url(
+                "https://openai-compatible.example/api/coding/paas/v4",
+                "models",
+                Some("")
             ),
             "https://openai-compatible.example/api/coding/paas/v4/models"
         );

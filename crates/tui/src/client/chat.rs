@@ -136,7 +136,11 @@ impl DeepSeekClient {
             self.api_provider,
         );
 
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url(
+            &self.base_url,
+            "chat/completions",
+            self.path_suffix.as_deref(),
+        );
         let open_timeout = stream_open_timeout();
         let response = match tokio_timeout(
             open_timeout,
@@ -239,7 +243,11 @@ impl DeepSeekClient {
             self.api_provider,
         );
 
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url(
+            &self.base_url,
+            "chat/completions",
+            self.path_suffix.as_deref(),
+        );
         let response = self
             .send_with_retry(|| self.http_client.post(&url).json(&body))
             .await?;
