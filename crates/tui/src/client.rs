@@ -125,6 +125,7 @@ pub struct DeepSeekClient {
     pub(super) http_client: reqwest::Client,
     api_key: String,
     pub(super) base_url: String,
+    api_path_suffix: Option<String>,
     pub(super) api_provider: ApiProvider,
     retry: RetryPolicy,
     default_model: String,
@@ -291,6 +292,7 @@ impl Clone for DeepSeekClient {
             http_client: self.http_client.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
+            api_path_suffix: self.api_path_suffix.clone(),
             api_provider: self.api_provider,
             retry: self.retry.clone(),
             default_model: self.default_model.clone(),
@@ -390,8 +392,25 @@ fn is_version_segment(segment: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
+#[cfg(test)]
 pub(super) fn api_url(base_url: &str, path: &str) -> String {
+    api_url_with_path_suffix(base_url, None, path)
+}
+
+pub(super) fn api_url_with_path_suffix(
+    base_url: &str,
+    path_suffix: Option<&str>,
+    path: &str,
+) -> String {
     let path = path.trim_start_matches('/');
+    if let Some(path_suffix) = path_suffix {
+        let base = base_url.trim_end_matches('/');
+        let suffix = path_suffix.trim().trim_matches('/');
+        if suffix.is_empty() {
+            return format!("{base}/{path}");
+        }
+        return format!("{base}/{suffix}/{path}");
+    }
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
     }
@@ -465,10 +484,15 @@ fn add_extra_root_certs(
 }
 
 impl DeepSeekClient {
+    fn api_url(&self, path: &str) -> String {
+        api_url_with_path_suffix(&self.base_url, self.api_path_suffix.as_deref(), path)
+    }
+
     /// Create a DeepSeek client from CLI configuration.
     pub fn new(config: &Config) -> Result<Self> {
         let api_key = config.deepseek_api_key()?;
         let base_url = config.deepseek_base_url();
+        let api_path_suffix = config.api_path_suffix();
         let api_provider = config.api_provider();
         validate_base_url_security(&base_url)?;
         let retry = config.retry_policy();
@@ -494,6 +518,7 @@ impl DeepSeekClient {
             http_client,
             api_key,
             base_url,
+            api_path_suffix,
             api_provider,
             retry,
             default_model,
@@ -585,7 +610,7 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = self.api_url("chat/completions");
         let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
@@ -632,7 +657,7 @@ impl DeepSeekClient {
 
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
-        let url = api_url(&self.base_url, "models");
+        let url = self.api_url("models");
         let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
 
         let status = response.status();
@@ -679,7 +704,7 @@ impl DeepSeekClient {
         if !should_probe {
             return;
         }
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = self.api_url("models");
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
@@ -790,7 +815,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = self.api_url("models");
         self.wait_for_rate_limit().await;
         let response = self.http_client.get(health_url).send().await;
         match response {
@@ -1096,7 +1121,7 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = self.api_url("beta/completions");
         let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
@@ -1233,6 +1258,34 @@ mod tests {
                 "chat/completions"
             ),
             "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_respects_explicit_path_suffix() {
+        assert_eq!(
+            api_url_with_path_suffix(
+                "https://openai-compatible.example",
+                Some(""),
+                "chat/completions"
+            ),
+            "https://openai-compatible.example/chat/completions"
+        );
+        assert_eq!(
+            api_url_with_path_suffix(
+                "https://openai-compatible.example",
+                Some("/openai/v2/"),
+                "chat/completions"
+            ),
+            "https://openai-compatible.example/openai/v2/chat/completions"
+        );
+        assert_eq!(
+            api_url_with_path_suffix(
+                "https://openai-compatible.example",
+                None,
+                "chat/completions"
+            ),
+            "https://openai-compatible.example/v1/chat/completions"
         );
     }
 

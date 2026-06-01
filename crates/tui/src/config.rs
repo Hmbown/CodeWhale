@@ -1663,6 +1663,7 @@ impl LspConfigToml {
 pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub path_suffix: Option<String>,
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
@@ -2164,6 +2165,13 @@ impl Config {
             .to_string()
         });
         normalize_base_url(&base)
+    }
+
+    #[must_use]
+    pub fn api_path_suffix(&self) -> Option<String> {
+        self.provider_config()
+            .and_then(|provider| provider.path_suffix.as_deref())
+            .map(|suffix| suffix.trim().trim_matches('/').to_string())
     }
 
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
@@ -3830,6 +3838,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
     ProviderConfig {
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
+        path_suffix: override_cfg.path_suffix.or(base.path_suffix),
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
@@ -7169,6 +7178,7 @@ model = "account-model-id"
 [providers.openai]
 api_key = "openai-table-key"
 base_url = "https://openai-compatible.example/api/coding/paas/v4"
+path_suffix = ""
 model = "glm-5"
 "#,
         )?;
@@ -7180,6 +7190,7 @@ model = "glm-5"
             config.deepseek_base_url(),
             "https://openai-compatible.example/api/coding/paas/v4"
         );
+        assert_eq!(config.api_path_suffix().as_deref(), Some(""));
         assert_eq!(config.default_model(), "glm-5");
         Ok(())
     }
