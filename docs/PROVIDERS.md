@@ -148,6 +148,18 @@ large models verified through OpenRouter's model metadata:
 `minimax/minimax-m3` was added from OpenRouter's May 31, 2026 listing as a 1M
 context multimodal model for coding, tool use, and long-horizon agentic work.
 
+### OpenRouter-Compatible Endpoints
+
+Use `provider = "openrouter"` for gateways that intentionally match
+OpenRouter's response shape, including `message.reasoning`, streamed
+`delta.reasoning`, `completion_tokens_details.reasoning_tokens`, and optional
+prompt-cache fields. Set the endpoint with `[providers.openrouter].base_url` or
+`OPENROUTER_BASE_URL`.
+
+Keep this route generic. CodeWhale does not ship proxy-specific branding,
+default hosts, or badges for OpenRouter-compatible gateways; the configured
+`base_url` decides which endpoint receives the request.
+
 ## Static Model Registry
 
 `codewhale model list` and `codewhale model resolve` use the static registry in
@@ -200,6 +212,11 @@ All shipped providers use the Chat Completions request payload mode today.
 | Generic `openai`, AtlasCloud, and Moonshot/Kimi | 128,000 | 4,096 | no in doctor capability metadata | no | not documented in code |
 | Ollama | 8,192 | 4,096 | no | no | not documented in code |
 | Other recognized DeepSeek model IDs | 128,000 unless the model name carries an explicit `Nk` hint | 4,096 | no unless V4/reasoner logic matches | DeepSeek/NIM only | DeepSeek beta only |
+
+The cache telemetry column is static capability metadata, not a live endpoint
+probe. OpenRouter-compatible responses can still include parser-supported cache
+fields such as `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, or
+`prompt_tokens_details.cached_tokens`; CodeWhale records them when present.
 
 Tool-call support is tracked separately by the static `ModelRegistry` and by
 the endpoint's ability to accept OpenAI-compatible `tools` payloads. A custom
