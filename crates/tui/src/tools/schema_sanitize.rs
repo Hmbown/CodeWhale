@@ -622,16 +622,14 @@ pub fn sanitize_for_kimi(schema: &mut serde_json::Value) {
         // each item and remove it from the parent. Otherwise leave it alone.
         let should_push =
             obj.contains_key("type") && (obj.contains_key("anyOf") || obj.contains_key("oneOf"));
-        if should_push {
-            if let Some(type_val) = obj.remove("type") {
-                for key in ["anyOf", "oneOf"] {
-                    if let Some(items) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
-                        for item in items {
-                            if let Some(item_obj) = item.as_object_mut() {
-                                if !item_obj.contains_key("type") {
-                                    item_obj.insert("type".to_string(), type_val.clone());
-                                }
-                            }
+        if should_push && let Some(type_val) = obj.remove("type") {
+            for key in ["anyOf", "oneOf"] {
+                if let Some(items) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+                    for item in items {
+                        if let Some(item_obj) = item.as_object_mut()
+                            && !item_obj.contains_key("type")
+                        {
+                            item_obj.insert("type".to_string(), type_val.clone());
                         }
                     }
                 }
