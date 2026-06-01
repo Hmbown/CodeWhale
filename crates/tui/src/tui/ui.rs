@@ -508,8 +508,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // switch), so a brand-new session would otherwise leave it None and both
     // exec_shell shell_env hooks and ToolCallBefore gate would silently no-op.
     if app.runtime_services.hook_executor.is_none() {
-        app.runtime_services.hook_executor =
-            Some(std::sync::Arc::new(app.hooks.clone()));
+        app.runtime_services.hook_executor = Some(std::sync::Arc::new(app.hooks.clone()));
     }
     app.runtime_services = RuntimeToolServices {
         shell_manager: Some(shell_manager),
