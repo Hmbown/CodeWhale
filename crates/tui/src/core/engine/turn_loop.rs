@@ -312,29 +312,32 @@ impl Engine {
             }
 
             // Three-zone prefix contract (#2264): freeze baseline on first
-            // turn, verify against frozen baseline on subsequent turns.
-            // Operates alongside PrefixStabilityManager — this is the
-            // diagnostic layer that never auto-re-pins (unlike check_and_update).
-            // Phase 2: warn-only, no request refusal.
+            // turn, verify against it on subsequent turns. Operates alongside
+            // PrefixStabilityManager as an independent diagnostic layer.
+            // Phase 2: warn-only, auto-re-freeze on drift.
             let system_text =
                 crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
-            let current_tools: Vec<crate::models::Tool> = active_tools.clone().unwrap_or_default();
+            let current_tools: &[crate::models::Tool] = active_tools.as_deref().unwrap_or_default();
 
             match &self.session.frozen_prefix {
                 Some(frozen) => {
-                    if let Err(drift) = frozen.verify(&system_text, &current_tools) {
+                    if let Err(drift) = frozen.verify(&system_text, current_tools) {
                         tracing::debug!(
                             target: "prefix_cache",
                             "three-zone drift: {drift}"
                         );
-                        let pinned =
-                            PinnedPrefix::new(self.session.system_prompt.as_ref(), current_tools);
+                        let pinned = PinnedPrefix::new(
+                            self.session.system_prompt.as_ref(),
+                            current_tools.to_vec(),
+                        );
                         self.session.frozen_prefix = Some(pinned.freeze());
                     }
                 }
                 None => {
-                    let pinned =
-                        PinnedPrefix::new(self.session.system_prompt.as_ref(), current_tools);
+                    let pinned = PinnedPrefix::new(
+                        self.session.system_prompt.as_ref(),
+                        current_tools.to_vec(),
+                    );
                     self.session.frozen_prefix = Some(pinned.freeze());
                 }
             }
