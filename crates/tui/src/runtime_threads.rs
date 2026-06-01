@@ -2026,6 +2026,7 @@ impl RuntimeThreadManager {
             workshop: self.config.workshop.clone(),
             search_provider: self.config.search_provider(),
             search_api_key: self.config.search.as_ref().and_then(|s| s.api_key.clone()),
+            search_base_url: self.config.search.as_ref().and_then(|s| s.base_url.clone()),
             tools_always_load: self.config.tools_always_load(),
             tools: self.config.tools.clone(),
         };

@@ -819,6 +819,11 @@ parseable results. Bing remains selectable for users who explicitly want it,
 and Tavily, Bocha, Metaso, or Baidu can be selected when an API-backed provider
 is preferred.
 
+For a private/internal search service that serves DuckDuckGo-compatible HTML,
+keep `provider = "duckduckgo"` and set `base_url`; CodeWhale appends the `q`
+query parameter to that endpoint and applies network policy to its host.
+Custom endpoints do not fall back to public Bing.
+
 **Metaso** ([metaso.cn](https://metaso.cn)) has a 100 searches/day free quota;
 set `METASO_API_KEY` or `[search] api_key` for a higher quota.
 
@@ -830,6 +835,7 @@ only; it does not add a Baidu model provider.
 ```toml
 [search]
 provider = "baidu" # duckduckgo | bing | tavily | bocha | metaso | baidu
+# base_url = "https://search.example/html/" # optional with provider = "duckduckgo"
 # api_key = "YOUR_KEY" # required for tavily, bocha, and baidu; optional for metaso
 ```
 

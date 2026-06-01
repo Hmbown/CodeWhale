@@ -182,6 +182,8 @@ pub struct EngineConfig {
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in key.
     /// Baidu also falls back to `BAIDU_SEARCH_API_KEY`.
     pub search_api_key: Option<String>,
+    /// Optional DuckDuckGo-compatible HTML endpoint override.
+    pub search_base_url: Option<String>,
     /// Per-step DeepSeek API timeout for sub-agent `create_message` requests.
     /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800)
     /// once at engine construction, then threaded onto every
@@ -241,6 +243,7 @@ impl Default for EngineConfig {
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            search_base_url: None,
             subagent_api_timeout: Duration::from_secs(
                 crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS,
             ),
@@ -1711,6 +1714,7 @@ impl Engine {
         // Wire search provider config.
         ctx.search_provider = self.config.search_provider;
         ctx.search_api_key = self.config.search_api_key.clone();
+        ctx.search_base_url = self.config.search_base_url.clone();
 
         let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);

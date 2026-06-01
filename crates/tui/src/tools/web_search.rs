@@ -7,6 +7,7 @@
 //!
 //! Set `[search]` in config.toml to switch providers:
 //!   provider = "duckduckgo"  # or tavily/bocha/metaso/baidu/volcengine
+//!   base_url = "https://search.example/html/"  # optional DDG-compatible URL
 //!   api_key = "tvly-..."
 
 use super::spec::{
@@ -22,7 +23,7 @@ use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-const DUCKDUCKGO_HOST: &str = "html.duckduckgo.com";
+const DUCKDUCKGO_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const BING_HOST: &str = "www.bing.com";
 const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
 const BOCHA_ENDPOINT: &str = "https://api.bochaai.com/v1/ai/search";
@@ -139,7 +140,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo with Bing fallback; set `[search] provider = \"bing\" | \"tavily\" | \"bocha\" | \"metaso\" | \"baidu\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
+        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo with Bing fallback; set `[search] provider = \"bing\" | \"tavily\" | \"bocha\" | \"metaso\" | \"baidu\"` in config.toml to switch backends, or `[search] base_url` for a DuckDuckGo-compatible endpoint. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
@@ -261,13 +262,16 @@ impl ToolSpec for WebSearchTool {
         }
 
         // Per-domain network policy gate (#135). The "host" for web search is
-        // the upstream search engine domain — DuckDuckGo first, Bing on
-        // fallback. We gate DuckDuckGo here; Bing is gated separately inside
-        // the fallback path so a deny on one engine doesn't block the other.
-        check_policy(decider, DUCKDUCKGO_HOST)?;
+        // the upstream search engine domain — DuckDuckGo-compatible first,
+        // Bing on fallback. We gate the configured endpoint here; Bing is
+        // gated separately inside the fallback path so a deny on one engine
+        // doesn't silently allow the other.
+        let (url, duckduckgo_host) =
+            duckduckgo_search_url(context.search_base_url.as_deref(), &query)?;
+        let allow_bing_fallback =
+            duckduckgo_allows_bing_fallback(context.search_base_url.as_deref());
+        check_policy(decider, &duckduckgo_host)?;
 
-        let encoded = url_encode(&query);
-        let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
         let resp = client
             .get(&url)
             .header(
@@ -302,7 +306,7 @@ impl ToolSpec for WebSearchTool {
             message_suffix = Some("Bing returned no results; used DuckDuckGo fallback");
         }
 
-        if results.is_empty() {
+        if results.is_empty() && allow_bing_fallback {
             let duckduckgo_blocked = is_duckduckgo_challenge(&body);
             // Bing is a separate host — gate it independently so a deny on
             // DuckDuckGo doesn't silently let Bing through (and vice versa).
@@ -1332,6 +1336,30 @@ fn normalize_bing_url(href: &str) -> String {
     href.to_string()
 }
 
+fn duckduckgo_search_url(
+    base_url: Option<&str>,
+    query: &str,
+) -> Result<(String, String), ToolError> {
+    let raw = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DUCKDUCKGO_ENDPOINT);
+    let mut url = reqwest::Url::parse(raw).map_err(|err| {
+        ToolError::invalid_input(format!(
+            "Invalid DuckDuckGo-compatible search base_url: {err}"
+        ))
+    })?;
+    url.query_pairs_mut().append_pair("q", query);
+    let host = url.host_str().ok_or_else(|| {
+        ToolError::invalid_input("DuckDuckGo-compatible search base_url must include a host")
+    })?;
+    Ok((url.to_string(), host.to_string()))
+}
+
+fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
+    base_url.is_none_or(|value| value.trim().is_empty())
+}
+
 fn normalize_text(text: &str) -> String {
     let stripped = strip_html_tags(text);
     let decoded = decode_html_entities(&stripped);
@@ -1435,9 +1463,9 @@ fn extract_query_param(url: &str, key: &str) -> Option<String> {
 mod tests {
     use super::{
         ERROR_BODY_PREVIEW_BYTES, WebSearchEntry, WebSearchTool, baidu_search_payload,
-        decode_html_entities, extract_search_query, is_likely_spam_results, normalize_bing_url,
-        optional_search_max_results, parse_baidu_results, root_domain, sanitize_error_body,
-        truncate_error_body, volcengine_extract_text,
+        decode_html_entities, duckduckgo_search_url, extract_search_query, is_likely_spam_results,
+        normalize_bing_url, optional_search_max_results, parse_baidu_results, root_domain,
+        sanitize_error_body, truncate_error_body, volcengine_extract_text,
     };
     use serde_json::json;
 
@@ -1968,5 +1996,29 @@ mod tests {
             !msg.contains("API key"),
             "should not complain about missing API key (built-in default); got `{msg}`"
         );
+    }
+
+    #[test]
+    fn duckduckgo_compatible_url_uses_custom_base_url_and_preserves_query() {
+        let (url, host) = duckduckgo_search_url(
+            Some("https://search.internal.example/html/?region=us"),
+            "rust async",
+        )
+        .expect("custom duckduckgo-compatible url");
+
+        assert_eq!(host, "search.internal.example");
+        assert_eq!(
+            url,
+            "https://search.internal.example/html/?region=us&q=rust+async"
+        );
+    }
+
+    #[test]
+    fn custom_duckduckgo_endpoint_disables_public_bing_fallback() {
+        assert!(super::duckduckgo_allows_bing_fallback(None));
+        assert!(super::duckduckgo_allows_bing_fallback(Some("   ")));
+        assert!(!super::duckduckgo_allows_bing_fallback(Some(
+            "https://search.internal.example/html/"
+        )));
     }
 }
