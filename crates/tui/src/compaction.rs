@@ -31,6 +31,28 @@ pub struct CompactionConfig {
     pub token_threshold: usize,
     pub model: String,
     pub cache_summary: bool,
+    /// Hard floor — `should_compact` returns `false` when total session
+    /// tokens fall below this number, regardless of `enabled` or
+    /// `token_threshold`. Defaults to [`MINIMUM_AUTO_COMPACTION_TOKENS`]
+    /// (500K) for v0.8.11+. Tests that want to exercise the threshold
+    /// logic at small fixture sizes can set this to `0` to disable the
+    /// floor.
+    pub auto_floor_tokens: usize,
+    /// Enable hard compaction mode. When enabled, `compact_messages_safe`
+    /// will replace the middle history with a single summary message
+    /// while preserving the system prompt segment and the last
+    /// `hard_keep_recent` messages. This is opt-in because it rewrites
+    /// the message array (unlike soft seams which append summary blocks).
+    ///
+    /// Hard compaction preserves prefix cache stability because the
+    /// system prompt segment (which is the largest stable block) is
+    /// never touched. The summary message replaces the middle history,
+    /// and the recent tail is preserved verbatim.
+    pub hard_enabled: bool,
+    /// Number of recent messages to preserve during hard compaction.
+    /// Defaults to [`HARD_COMPACT_KEEP_RECENT`] (8). Only used when
+    /// `hard_enabled` is true.
+    pub hard_keep_recent: usize,
 }
 
 impl Default for CompactionConfig {
@@ -55,11 +77,27 @@ impl Default for CompactionConfig {
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
             cache_summary: true,
+            auto_floor_tokens: MINIMUM_AUTO_COMPACTION_TOKENS,
+            // Hard compaction is opt-in. When enabled, it replaces the
+            // middle history with a summary while preserving the system
+            // prompt segment and recent tail.
+            hard_enabled: false,
+            hard_keep_recent: HARD_COMPACT_KEEP_RECENT,
         }
     }
 }
 
 pub const KEEP_RECENT_MESSAGES: usize = 4;
+/// Below this token count, automatic compaction refuses to fire
+/// regardless of `enabled` or `token_threshold`. Bumped to 500K in
+/// v0.8.11 so the dead-code default doesn't bias small fixtures toward
+/// "compact almost immediately". Tests can set the field to 0 to
+/// disable the floor.
+pub const MINIMUM_AUTO_COMPACTION_TOKENS: usize = 500_000;
+/// Number of recent messages to preserve during hard compaction. The hard
+/// compact keeps the last N messages verbatim so the model has ground-truth
+/// recent context. 8 turns ≈ 4 user + 4 assistant exchanges.
+pub const HARD_COMPACT_KEEP_RECENT: usize = 8;
 const RECENT_WORKING_SET_WINDOW: usize = 12;
 const MAX_WORKING_SET_PATHS: usize = 24;
 const MIN_SUMMARIZE_MESSAGES: usize = 6;
@@ -664,6 +702,65 @@ pub fn should_compact(
     token_estimate > effective_token_threshold
 }
 
+/// Plan a hard compaction that replaces the middle history with a summary
+/// while preserving the system prompt segment and the last `keep_recent`
+/// messages.
+///
+/// Unlike soft seams (which append `<archived_context>` blocks without
+/// removing messages), hard compaction replaces the middle messages with
+/// a single summary user message. This is more aggressive but preserves
+/// prefix cache stability because:
+///
+/// 1. The system prompt segment is never touched (it's stored separately
+///    in `session.system_prompt`, not in the messages array).
+/// 2. The recent tail is preserved verbatim so the model has ground-truth
+///    recent context.
+/// 3. The summary message replaces the middle, not the prefix.
+///
+/// Returns `None` if there aren't enough messages to compact (fewer than
+/// `keep_recent + MIN_SUMMARIZE_MESSAGES`).
+#[allow(dead_code)]
+pub fn plan_hard_compaction(
+    messages: &[Message],
+    keep_recent: usize,
+) -> Option<HardCompactionPlan> {
+    let len = messages.len();
+    if len < keep_recent + MIN_SUMMARIZE_MESSAGES {
+        return None;
+    }
+
+    let summarize_end = len.saturating_sub(keep_recent);
+    let summarize_indices: Vec<usize> = (0..summarize_end).collect();
+    let recent_indices: Vec<usize> = (summarize_end..len).collect();
+
+    Some(HardCompactionPlan {
+        summarize_indices,
+        recent_indices,
+    })
+}
+
+/// Plan for hard compaction: which messages to summarize and which to keep.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct HardCompactionPlan {
+    /// Indices of messages to summarize (the middle history).
+    pub summarize_indices: Vec<usize>,
+    /// Indices of messages to keep verbatim (the recent tail).
+    pub recent_indices: Vec<usize>,
+}
+
+/// Result of a hard compaction operation.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct HardCompactionResult {
+    /// The new message list: [summary_message, recent_messages...].
+    pub messages: Vec<Message>,
+    /// The summary prompt for the system (optional).
+    pub summary_prompt: Option<SystemPrompt>,
+    /// Messages that were removed.
+    pub removed_messages: Vec<usize>,
+}
+
 fn truncate_chars(text: &str, max_chars: usize) -> &str {
     if max_chars == 0 {
         return "";
@@ -988,6 +1085,101 @@ pub async fn compact_messages_safe(
 
     Err(last_error
         .unwrap_or_else(|| anyhow::anyhow!("Compaction failed after {MAX_RETRIES} retries")))
+}
+
+/// Execute a hard compaction: replace the middle history with a summary
+/// while preserving the system prompt segment and the last `keep_recent`
+/// messages.
+///
+/// This is the hard-compaction equivalent of `compact_messages_safe`. It
+/// uses the same LLM-based summarization but produces a different message
+/// structure: `[summary_message, recent_messages...]` instead of the
+/// soft-seam approach that appends `<archived_context>` blocks.
+///
+/// The system prompt segment (stored separately in `session.system_prompt`)
+/// is never touched, so the prefix cache remains stable after compaction.
+///
+/// # Arguments
+/// * `client` - LLM client for summarization
+/// * `messages` - Full conversation history
+/// * `config` - Compaction configuration (uses `hard_keep_recent`)
+/// * `workspace` - Workspace path for anchor extraction
+///
+/// # Returns
+/// `Ok(HardCompactionResult)` with the new message list, or `Err` if
+/// summarization fails after retries.
+#[allow(dead_code)]
+pub async fn compact_hard_safe(
+    client: &DeepSeekClient,
+    messages: &[Message],
+    config: &CompactionConfig,
+    _workspace: Option<&Path>,
+) -> Result<HardCompactionResult> {
+    const MAX_RETRIES: u32 = 3;
+    const BASE_DELAY_MS: u64 = 1000;
+
+    let plan = plan_hard_compaction(messages, config.hard_keep_recent)
+        .ok_or_else(|| anyhow::anyhow!("Not enough messages for hard compaction"))?;
+
+    let summarize_messages: Vec<Message> = plan
+        .summarize_indices
+        .iter()
+        .filter_map(|&idx| messages.get(idx).cloned())
+        .collect();
+    let recent_messages: Vec<Message> = plan
+        .recent_indices
+        .iter()
+        .filter_map(|&idx| messages.get(idx).cloned())
+        .collect();
+
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..MAX_RETRIES {
+        if attempt > 0 {
+            let delay = Duration::from_millis(BASE_DELAY_MS * (1 << (attempt - 1)));
+            tokio::time::sleep(delay).await;
+        }
+
+        match create_summary(client, &summarize_messages, &config.model).await {
+            Ok(summary_text) => {
+                let summary_msg = Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: format!(
+                            "<hard_compaction_summary>\n{summary_text}\n</hard_compaction_summary>"
+                        ),
+                        cache_control: None,
+                    }],
+                };
+
+                let mut new_messages = vec![summary_msg];
+                new_messages.extend(recent_messages);
+
+                let summary_prompt = if config.cache_summary {
+                    Some(SystemPrompt::Text(format!(
+                        "Previous conversation summary:\n{summary_text}"
+                    )))
+                } else {
+                    None
+                };
+
+                return Ok(HardCompactionResult {
+                    messages: new_messages,
+                    summary_prompt,
+                    removed_messages: plan.summarize_indices,
+                });
+            }
+            Err(e) => {
+                logging::warn(format!(
+                    "Hard compaction attempt {} failed: {e}",
+                    attempt + 1
+                ));
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("Hard compaction failed after {MAX_RETRIES} retries")))
 }
 
 fn read_workspace_anchors(workspace: Option<&Path>) -> Vec<String> {
@@ -2765,5 +2957,54 @@ mod tests {
             None,
         );
         assert!(plan.pinned_indices.contains(&0)); // src/main.rs mention
+    }
+
+    #[test]
+    fn plan_hard_compaction_returns_none_when_too_few_messages() {
+        // Need at least keep_recent + MIN_SUMMARIZE_MESSAGES messages.
+        let messages = vec![
+            msg("user", "hello"),
+            msg("assistant", "hi"),
+            msg("user", "how are you"),
+            msg("assistant", "good"),
+        ];
+        assert!(
+            plan_hard_compaction(&messages, HARD_COMPACT_KEEP_RECENT).is_none(),
+            "should return None when there aren't enough messages"
+        );
+    }
+
+    #[test]
+    fn plan_hard_compaction_preserves_recent_tail() {
+        let messages: Vec<Message> = (0..20)
+            .map(|i| {
+                msg(
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    &format!("message {i}"),
+                )
+            })
+            .collect();
+
+        let plan = plan_hard_compaction(&messages, HARD_COMPACT_KEEP_RECENT).expect("plan");
+        assert_eq!(plan.recent_indices.len(), HARD_COMPACT_KEEP_RECENT);
+        assert_eq!(plan.summarize_indices.len(), 20 - HARD_COMPACT_KEEP_RECENT);
+
+        // Recent indices should be the last HARD_COMPACT_KEEP_RECENT messages.
+        let expected_recent: Vec<usize> = (20 - HARD_COMPACT_KEEP_RECENT..20).collect();
+        assert_eq!(plan.recent_indices, expected_recent);
+
+        // Summarize indices should be the first messages.
+        let expected_summarize: Vec<usize> = (0..20 - HARD_COMPACT_KEEP_RECENT).collect();
+        assert_eq!(plan.summarize_indices, expected_summarize);
+    }
+
+    #[test]
+    fn hard_compaction_config_defaults() {
+        let config = CompactionConfig::default();
+        assert!(!config.hard_enabled, "hard compaction should be opt-in");
+        assert_eq!(
+            config.hard_keep_recent, HARD_COMPACT_KEEP_RECENT,
+            "hard_keep_recent should default to HARD_COMPACT_KEEP_RECENT"
+        );
     }
 }
