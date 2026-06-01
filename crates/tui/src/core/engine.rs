@@ -1438,9 +1438,21 @@ In {new} mode: {policy}\n\n\
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
     ) -> Message {
+        // Place the user text first and turn_meta last so that the leading
+        // bytes of each user message stay stable across date / model-route /
+        // working-set changes. DeepSeek's KV prefix cache matches byte
+        // sequences from the start of each message; when turn_meta (which
+        // contains the current date) sits at position 0 the entire user
+        // message prefix is invalidated at every date boundary. Moving it
+        // to the tail preserves the user-input prefix and limits cache
+        // invalidation to the trailing metadata block.
         Message {
             role: "user".to_string(),
             content: vec![
+                ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                },
                 self.turn_metadata_block(
                     routed_model,
                     mode,
@@ -1448,10 +1460,6 @@ In {new} mode: {policy}\n\n\
                     reasoning_effort,
                     reasoning_effort_auto,
                 ),
-                ContentBlock::Text {
-                    text,
-                    cache_control: None,
-                },
             ],
         }
     }

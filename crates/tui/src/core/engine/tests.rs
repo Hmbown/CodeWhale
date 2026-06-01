@@ -2123,11 +2123,11 @@ fn working_set_reaches_model_as_turn_metadata() {
     engine.session.add_message(user_msg);
 
     let messages = engine.messages_with_turn_metadata();
-    let first_block = messages
+    let last_block = messages
         .last()
-        .and_then(|message| message.content.first())
+        .and_then(|message| message.content.last())
         .expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(text.starts_with("<turn_meta>\n"));
@@ -2148,11 +2148,11 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     engine.session.add_message(user_msg);
 
     let messages = engine.messages_with_turn_metadata();
-    let first_block = messages
+    let last_block = messages
         .last()
-        .and_then(|message| message.content.first())
+        .and_then(|message| message.content.last())
         .expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2179,8 +2179,8 @@ fn turn_metadata_includes_auto_model_route() {
         Some("max"),
         true,
     );
-    let first_block = user_msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2207,8 +2207,11 @@ fn turn_metadata_includes_current_mode() {
         None,
         false,
     );
-    let first_block = user_msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    // turn_meta was relocated to the tail of the user message in #2517
+    // to keep the leading bytes (user input) stable across date / model
+    // route / working-set changes.
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2227,10 +2230,11 @@ fn turn_metadata_mode_updates_with_change_mode_op() {
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
 
-    // In agent mode by default
+    // In agent mode by default. The turn_meta block now sits at the
+    // *tail* of the user message (see #2517) so we read `content.last()`.
     let msg = engine.user_text_message_with_turn_metadata("hello".to_string());
-    let first_block = msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(
@@ -2241,8 +2245,8 @@ fn turn_metadata_mode_updates_with_change_mode_op() {
     // Switch to YOLO — user_text_message_with_turn_metadata should reflect the new mode
     engine.current_mode = AppMode::Yolo;
     let msg = engine.user_text_message_with_turn_metadata("hello again".to_string());
-    let first_block = msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(
@@ -2290,10 +2294,10 @@ fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
     let user_msg =
         engine.user_text_message_with_turn_metadata("explain the cache metrics".to_string());
 
-    let last_text = user_msg
+    // User text is now at position 0, turn_meta at position 1.
+    let first_text = user_msg
         .content
         .iter()
-        .rev()
         .find_map(|block| {
             if let ContentBlock::Text { text, .. } = block {
                 Some(text.as_str())
@@ -2302,7 +2306,7 @@ fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
             }
         })
         .expect("user text block");
-    assert_eq!(last_text, "explain the cache metrics");
+    assert_eq!(first_text, "explain the cache metrics");
 }
 
 #[test]
@@ -2401,15 +2405,59 @@ fn turn_metadata_skips_tool_result_messages() {
         Some(ContentBlock::ToolResult { .. })
     ));
 
-    // The earlier real user message already carries the turn_meta prefix.
+    // The earlier real user message carries user text first, turn_meta last.
     let real_user = messages.first().expect("first user message");
     assert_eq!(real_user.role, "user");
     let ContentBlock::Text { text, .. } = real_user.content.first().expect("user text content")
     else {
         panic!("expected Text block on real user message");
     };
-    assert!(text.starts_with("<turn_meta>\n"));
-    assert!(text.contains("src/lib.rs"));
+    assert_eq!(text, "inspect src/lib.rs");
+    // turn_meta is at the tail of the content array.
+    let last_block = real_user.content.last().expect("turn_meta block");
+    let ContentBlock::Text { text: meta, .. } = last_block else {
+        panic!("expected Text block for turn_meta at tail");
+    };
+    assert!(meta.starts_with("<turn_meta>\n"));
+}
+
+/// User text must appear before turn_meta in the content array so that
+/// the leading bytes of each user message stay stable across date changes.
+/// DeepSeek's KV prefix cache matches byte sequences from the start of
+/// each message; placing the volatile date-bearing turn_meta at position
+/// 0 would invalidate the entire user message prefix at every date
+/// boundary. Moving it to the tail preserves the user-input prefix.
+#[test]
+fn user_message_turn_meta_is_appended_not_prepended() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let msg = engine.user_text_message_with_turn_metadata("hello world".to_string());
+    assert_eq!(msg.role, "user");
+    assert_eq!(msg.content.len(), 2);
+
+    // First content block: user text.
+    let ContentBlock::Text { text, .. } = &msg.content[0] else {
+        panic!("expected Text block at position 0");
+    };
+    assert_eq!(text, "hello world");
+
+    // Second content block: turn_meta.
+    let ContentBlock::Text { text: meta, .. } = &msg.content[1] else {
+        panic!("expected Text block for turn_meta at position 1");
+    };
+    assert!(
+        meta.starts_with("<turn_meta>\n"),
+        "turn_meta must be at the tail"
+    );
+    assert!(
+        meta.contains("Current local date:"),
+        "turn_meta must contain the date"
+    );
 }
 
 /// When the turn is mid-execution and the trailing user message is a
@@ -3648,9 +3696,10 @@ async fn post_edit_hook_injects_diagnostics_message_before_next_request() {
 
     let last = engine.session.messages.last().expect("message appended");
     assert_eq!(last.role, "user");
-    let meta = match &last.content[0] {
-        crate::models::ContentBlock::Text { text, .. } => text.clone(),
-        other => panic!("expected text block, got {other:?}"),
+    // turn_meta is now at the tail of the content array (PR #2517).
+    let meta = match last.content.last() {
+        Some(crate::models::ContentBlock::Text { text, .. }) => text.clone(),
+        other => panic!("expected text block at tail, got {other:?}"),
     };
     assert!(meta.starts_with("<turn_meta>\n"));
     let diagnostic_text = last
