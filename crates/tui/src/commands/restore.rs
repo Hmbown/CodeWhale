@@ -1,19 +1,22 @@
 //! `/restore` slash command — roll back the workspace to a prior snapshot.
 //!
-//! `/restore` (no arg) lists the most recent snapshots so the user can
-//! see what's available. `/restore <N>` restores the *N*th-most-recent
-//! snapshot, where `N=1` is the newest. In non-YOLO mode we refuse to
-//! mutate files unless the user has explicitly trusted the workspace
-//! (`/trust on` or YOLO) — the user can always view the list, just not
-//! one-shot revert without a safety net.
+//! `/restore` (no arg) lists the 20 most recent snapshots so the user can
+//! see what's available. `/restore list [N]` lists more snapshots, capped
+//! at 100. `/restore <N>` restores the *N*th-most-recent snapshot, where
+//! `N=1` is the newest. In non-YOLO mode we refuse to mutate files unless
+//! the user has explicitly trusted the workspace (`/trust on` or YOLO) —
+//! the user can always view the list, just not one-shot revert without a
+//! safety net.
 
 use super::CommandResult;
-use crate::snapshot::SnapshotRepo;
+use crate::snapshot::{Snapshot, SnapshotRepo};
 use crate::tui::app::App;
+use chrono::TimeZone;
 
-const LIST_LIMIT: usize = 10;
+const DEFAULT_LIST_LIMIT: usize = 20;
+const MAX_LIST_LIMIT: usize = 100;
 
-/// Entry point for `/restore [N]`.
+/// Entry point for `/restore [N|list [N]]`.
 pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     let workspace = app.workspace.clone();
     let repo = match SnapshotRepo::open_or_init(&workspace) {
@@ -26,29 +29,46 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
     };
 
-    let snapshots = match repo.list(LIST_LIMIT) {
-        Ok(s) => s,
-        Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
-    };
-
-    if snapshots.is_empty() {
-        return CommandResult::message(
-            "No snapshots yet. Send a message to create the first pre-turn snapshot.",
-        );
-    }
-
     let Some(arg) = arg.map(str::trim).filter(|s| !s.is_empty()) else {
+        let snapshots = match repo.list(DEFAULT_LIST_LIMIT) {
+            Ok(s) => s,
+            Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+        };
+        if snapshots.is_empty() {
+            return no_snapshots_message();
+        }
         return CommandResult::message(format_listing(&snapshots));
     };
+
+    if let Some(limit) = match parse_list_arg(arg) {
+        Ok(limit) => limit,
+        Err(message) => return CommandResult::error(message),
+    } {
+        let snapshots = match repo.list(limit) {
+            Ok(s) => s,
+            Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+        };
+        if snapshots.is_empty() {
+            return no_snapshots_message();
+        }
+        return CommandResult::message(format_listing(&snapshots));
+    }
 
     let n: usize = match arg.parse() {
         Ok(n) if n >= 1 => n,
         _ => {
             return CommandResult::error(format!(
-                "Usage: /restore <N>  (N is 1-based; got '{arg}')",
+                "Usage: /restore <N> or /restore list [N]  (N is 1-based; got '{arg}')",
             ));
         }
     };
+    let snapshots = match repo.list(n.max(DEFAULT_LIST_LIMIT)) {
+        Ok(s) => s,
+        Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+    };
+    if snapshots.is_empty() {
+        return no_snapshots_message();
+    }
 
     if n > snapshots.len() {
         return CommandResult::error(format!(
@@ -81,17 +101,61 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     ))
 }
 
-fn format_listing(snapshots: &[crate::snapshot::Snapshot]) -> String {
-    let mut out = String::from("Recent snapshots (newest first; pass /restore <N> to revert):\n");
+fn parse_list_arg(arg: &str) -> Result<Option<usize>, String> {
+    let mut parts = arg.split_whitespace();
+    let action = match parts.next() {
+        Some(action) => action,
+        None => return Ok(None),
+    };
+    if action != "list" {
+        return Ok(None);
+    }
+    let Some(value) = parts.next() else {
+        return Ok(Some(DEFAULT_LIST_LIMIT));
+    };
+    if parts.next().is_some() {
+        return Err(format!(
+            "Usage: /restore list [N]  (got extra arguments in '{arg}')",
+        ));
+    }
+    let limit = match value.parse::<usize>() {
+        Ok(limit) if limit >= 1 => limit.min(MAX_LIST_LIMIT),
+        _ => {
+            return Err(format!(
+                "Usage: /restore list [N]  (N must be >= 1; got '{value}')",
+            ));
+        }
+    };
+    Ok(Some(limit))
+}
+
+fn no_snapshots_message() -> CommandResult {
+    CommandResult::message(
+        "No snapshots yet. Send a message to create the first pre-turn snapshot.",
+    )
+}
+
+fn format_listing(snapshots: &[Snapshot]) -> String {
+    let mut out = String::from(
+        "Recent snapshots (newest first; pass /restore <N> to revert; /restore list 50 shows more):\n",
+    );
     for (i, s) in snapshots.iter().enumerate() {
         out.push_str(&format!(
-            "  #{:<2}  {}  {}\n",
+            "  #{:<2}  {}  {}  {}\n",
             i + 1,
+            format_snapshot_time(s.timestamp),
             short_sha(s.id.as_str()),
             s.label,
         ));
     }
     out
+}
+
+fn format_snapshot_time(timestamp: i64) -> String {
+    match chrono::Utc.timestamp_opt(timestamp, 0).single() {
+        Some(dt) => dt.format("%Y-%m-%d %H:%M UTC").to_string(),
+        None => "unknown time".to_string(),
+    }
 }
 
 fn short_sha(sha: &str) -> &str {
@@ -193,6 +257,84 @@ mod tests {
         assert!(msg.contains("pre-turn:1"));
         assert!(msg.contains("#1"));
         assert!(msg.contains("#2"));
+    }
+
+    #[test]
+    fn restore_lists_more_than_ten_snapshots_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let mut app = make_app(&tmp, true);
+        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
+        for i in 0..12 {
+            std::fs::write(app.workspace.join("a.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+        }
+
+        let result = restore(&mut app, None);
+        let msg = result.message.expect("expected message");
+        assert!(msg.contains("#12"), "{msg}");
+        assert!(msg.contains("turn:0"), "{msg}");
+    }
+
+    #[test]
+    fn restore_listing_includes_snapshot_utc_time() {
+        let snapshots = [Snapshot {
+            id: crate::snapshot::SnapshotId("abcdef123456".to_string()),
+            label: "turn:demo".to_string(),
+            timestamp: 1_700_000_000,
+        }];
+
+        let msg = format_listing(&snapshots);
+
+        assert!(msg.contains("2023-11-14 22:13 UTC"), "{msg}");
+        assert!(msg.contains("abcdef12"), "{msg}");
+        assert!(msg.contains("turn:demo"), "{msg}");
+    }
+
+    #[test]
+    fn restore_list_subcommand_accepts_explicit_limit() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let mut app = make_app(&tmp, true);
+        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
+        for i in 0..15 {
+            std::fs::write(app.workspace.join("a.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+        }
+
+        let result = restore(&mut app, Some("list 12"));
+        let msg = result.message.expect("expected message");
+        assert!(msg.contains("#12"), "{msg}");
+        assert!(!msg.contains("#13"), "{msg}");
+    }
+
+    #[test]
+    fn restore_list_subcommand_rejects_invalid_limit() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let mut app = make_app(&tmp, true);
+
+        let result = restore(&mut app, Some("list nope"));
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("Usage: /restore list [N]"));
+    }
+
+    #[test]
+    fn restore_numeric_index_can_target_beyond_default_listing() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let mut app = make_app(&tmp, true);
+        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
+        let f = app.workspace.join("a.txt");
+        for i in 0..12 {
+            std::fs::write(&f, format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+        }
+        std::fs::write(&f, "changed").unwrap();
+
+        let result = restore(&mut app, Some("12"));
+        assert!(result.message.unwrap().contains("Restored"));
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v0");
     }
 
     #[test]

@@ -514,7 +514,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "restore",
         aliases: &[],
-        usage: "/restore [N]",
+        usage: "/restore [N|list [N]]",
         description_id: MessageId::CmdRestoreDescription,
     },
     // RLM command
