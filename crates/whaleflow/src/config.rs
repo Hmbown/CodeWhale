@@ -224,6 +224,26 @@ impl WorkflowConfig {
             }
         }
 
+        // ReadWrite tasks in parallel phases must declare file_scope
+        // (unless they use worktree isolation).
+        for phase in &self.phases {
+            if !phase.parallel || phase.tasks.len() < 2 {
+                continue;
+            }
+            for task in &phase.tasks {
+                if task.mode == TaskMode::ReadWrite
+                    && task.isolation != IsolationMode::Worktree
+                    && task.file_scope.is_empty()
+                {
+                    errors.push(format!(
+                        "task '{}' is ReadWrite with no file_scope in parallel phase '{}'. \
+                         Add file_scope, use isolation 'worktree', or make the phase sequential.",
+                        task.id, phase.name
+                    ));
+                }
+            }
+        }
+
         // Detect cycles in phase dependencies.
         if let Some(cycle) = detect_cycle(&self.phases) {
             errors.push(format!(
