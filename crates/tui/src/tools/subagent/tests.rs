@@ -1503,6 +1503,42 @@ async fn auto_approved_parent_runs_required_tools_in_subagent() {
 }
 
 #[test]
+fn subagent_request_budget_allows_large_write_file_arguments() {
+    assert_eq!(
+        SUBAGENT_RESPONSE_MAX_TOKENS, 16_384,
+        "non-streaming sub-agent tool calls need enough output budget for large write_file arguments"
+    );
+}
+
+#[test]
+fn truncated_subagent_tool_calls_return_model_visible_errors() {
+    let tool_uses = vec![(
+        "toolu_write".to_string(),
+        "write_file".to_string(),
+        json!({"path": "report.md", "content": "partial"}),
+    )];
+
+    let results = truncated_response_tool_results(&tool_uses);
+
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "toolu_write");
+            assert_eq!(is_error, &Some(true));
+            assert!(content.contains("truncated by max_tokens"));
+            assert!(content.contains("write_file"));
+            assert!(content.contains("smaller writes"));
+        }
+        other => panic!("expected tool error result, got {other:?}"),
+    }
+}
+
+#[test]
 fn child_cancellation_cascades_from_parent() {
     let parent = stub_runtime();
     let child = parent.child_runtime();

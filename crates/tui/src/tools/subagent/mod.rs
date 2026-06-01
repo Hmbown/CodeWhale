@@ -28,7 +28,7 @@ use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::events::Event;
 use crate::llm_client::LlmClient;
-use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
+use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool};
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{ToolRegistry, ToolRegistryBuilder};
@@ -69,6 +69,10 @@ fn release_resident_leases_for(agent_id: &str) {
 /// the `SubAgentManager`.
 const DEFAULT_MAX_STEPS: u32 = u32::MAX;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+// Non-streaming sub-agents need enough response budget to carry large tool-call
+// arguments, especially write_file content. The API bills generated tokens, not
+// the requested ceiling.
+const SUBAGENT_RESPONSE_MAX_TOKENS: u32 = 16_384;
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
 /// stuck API call from blocking the sub-agent indefinitely.
@@ -3644,6 +3648,24 @@ fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
+fn response_was_truncated(response: &MessageResponse) -> bool {
+    response.stop_reason.as_deref() == Some("length")
+}
+
+fn truncated_response_tool_results(tool_uses: &[(String, String, Value)]) -> Vec<ContentBlock> {
+    tool_uses
+        .iter()
+        .map(|(tool_id, tool_name, _)| ContentBlock::ToolResult {
+            tool_use_id: tool_id.clone(),
+            content: format!(
+                "Error: the model response was truncated by max_tokens before the tool call arguments for '{tool_name}' could be fully generated. Split large content into smaller writes and retry."
+            ),
+            is_error: Some(true),
+            content_blocks: None,
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_subagent_full_transcript_handle(
     runtime: &SubAgentRuntime,
@@ -3812,7 +3834,7 @@ async fn run_subagent(
         let request = MessageRequest {
             model: runtime.model.clone(),
             messages: messages.clone(),
-            max_tokens: 4096,
+            max_tokens: SUBAGENT_RESPONSE_MAX_TOKENS,
             system: Some(request_system.clone()),
             tools: Some(tools.clone()),
             tool_choice: Some(json!({ "type": "auto" })),
@@ -3923,6 +3945,23 @@ async fn run_subagent(
                 );
                 break;
             }
+            continue;
+        }
+
+        if response_was_truncated(&response) {
+            emit_agent_progress(
+                runtime.event_tx.as_ref(),
+                runtime.mailbox.as_ref(),
+                &agent_id,
+                format!(
+                    "step {steps}/{max_steps}: response truncated, returning {} tool error(s)",
+                    tool_uses.len()
+                ),
+            );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: truncated_response_tool_results(&tool_uses),
+            });
             continue;
         }
 
