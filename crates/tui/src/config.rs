@@ -3345,13 +3345,14 @@ fn apply_env_overrides(config: &mut Config) {
             .get_or_insert_with(SearchConfig::default)
             .api_key = Some(value);
     }
-    if let Ok(value) = std::env::var("DEEPSEEK_SEARCH_BASE_URL")
-        && !value.trim().is_empty()
-    {
-        config
-            .search
-            .get_or_insert_with(SearchConfig::default)
-            .base_url = Some(value);
+    match std::env::var("DEEPSEEK_SEARCH_BASE_URL") {
+        Ok(value) if !value.trim().is_empty() => {
+            config
+                .search
+                .get_or_insert_with(SearchConfig::default)
+                .base_url = Some(value);
+        }
+        _ => {}
     }
     if let Ok(value) = std::env::var("DEEPSEEK_REQUIREMENTS_PATH") {
         config.requirements_path = Some(value);

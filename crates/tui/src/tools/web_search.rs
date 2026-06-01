@@ -1357,7 +1357,10 @@ fn duckduckgo_search_url(
 }
 
 fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
-    base_url.is_none_or(|value| value.trim().is_empty())
+    match base_url {
+        Some(value) => value.trim().is_empty(),
+        None => true,
+    }
 }
 
 fn normalize_text(text: &str) -> String {
