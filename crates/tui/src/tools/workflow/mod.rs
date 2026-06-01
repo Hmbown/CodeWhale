@@ -61,7 +61,7 @@ impl AgentSpawner for WhaleFlowSpawner {
         agent_type: Option<String>,
         cwd: Option<PathBuf>,
         timeout_secs: Option<u64>,
-        _max_steps: Option<u32>,
+        max_steps: Option<u32>,
     ) -> Result<AgentResult, SpawnError> {
         // Build the future that does the real work — we'll wrap it in a
         // timeout below.
@@ -114,12 +114,21 @@ impl AgentSpawner for WhaleFlowSpawner {
             // Spawn via the shared sub-agent manager.
             let spawn_result = {
                 let mut mgr = self.manager.write().await;
-                mgr.spawn_background(
+                let opts = crate::tools::subagent::SubAgentSpawnOptions {
+                    max_steps,
+                    ..Default::default()
+                };
+                mgr.spawn_background_with_assignment_options(
                     Arc::clone(&self.manager),
                     child_runtime,
                     subagent_type,
-                    prompt,
+                    prompt.clone(),
+                    crate::tools::subagent::SubAgentAssignment {
+                        objective: prompt.clone(),
+                        role: None,
+                    },
                     None, // full tool access
+                    opts,
                 )
                 .map_err(|e| SpawnError::SpawnFailed(format!("{e}")))?
             };
@@ -155,35 +164,59 @@ impl AgentSpawner for WhaleFlowSpawner {
                         // remove the worktree. Best-effort — we already have
                         // the agent result, so worktree cleanup failures are
                         // logged but don't fail the task.
+                        let mut files_touched: Vec<String> = Vec::new();
                         if cwd.is_some() {
                             let ws = self.workspace.clone();
                             let tid = task_id.clone();
-                            let patch = tokio::task::spawn_blocking(move || {
+                            let patch_result = tokio::task::spawn_blocking(move || {
                                 WorktreeManager::extract_changes(&tid, &ws)
                             })
                             .await
                             .map_err(|e| {
                                 SpawnError::Internal(format!("spawn_blocking join: {e}"))
                             });
-                            if let Ok(Ok(patch)) = patch {
-                                if !patch.trim().is_empty() {
-                                    let ws = self.workspace.clone();
-                                    let p = patch.clone();
-                                    if let Err(e) = tokio::task::spawn_blocking(move || {
-                                        WorktreeManager::apply_patch(&ws, &p)
-                                    })
-                                    .await
-                                    .map_err(|e| {
-                                        SpawnError::Internal(format!(
-                                            "spawn_blocking join: {e}"
-                                        ))
-                                    }) {
-                                        tracing::warn!(
-                                            task_id = %task_id,
-                                            error = %e,
-                                            "Failed to apply worktree patch"
-                                        );
+                            match patch_result {
+                                Ok(Ok(patch)) => {
+                                    if !patch.trim().is_empty() {
+                                        // Parse changed file paths from the diff.
+                                        files_touched = patch
+                                            .lines()
+                                            .filter(|l| l.starts_with("+++ b/"))
+                                            .filter_map(|l| l.strip_prefix("+++ b/"))
+                                            .map(|s| s.to_string())
+                                            .collect();
+                                        let ws = self.workspace.clone();
+                                        let p = patch;
+                                        if let Err(e) = tokio::task::spawn_blocking(
+                                            move || WorktreeManager::apply_patch(&ws, &p),
+                                        )
+                                        .await
+                                        .map_err(|e| {
+                                            SpawnError::Internal(format!(
+                                                "spawn_blocking join: {e}"
+                                            ))
+                                        }) {
+                                            tracing::warn!(
+                                                task_id = %task_id,
+                                                error = %e,
+                                                "Failed to apply worktree patch"
+                                            );
+                                        }
                                     }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(
+                                        task_id = %task_id,
+                                        error = %e,
+                                        "Failed to extract worktree changes"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        task_id = %task_id,
+                                        error = %e,
+                                        "spawn_blocking failed during worktree extraction"
+                                    );
                                 }
                             }
                             let ws = self.workspace.clone();
@@ -207,7 +240,7 @@ impl AgentSpawner for WhaleFlowSpawner {
                             task_id,
                             success: true,
                             summary,
-                            files_touched: Vec::new(),
+                            files_touched,
                             raw_output: snapshot.result,
                             tokens_used: None,
                             cost_usd: None,

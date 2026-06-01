@@ -589,6 +589,11 @@ pub(crate) struct SubAgentSpawnOptions {
     pub model: Option<String>,
     pub nickname: Option<String>,
     pub fork_context: bool,
+    /// Per-spawn override for the max tool-call steps budget.
+    /// When `None` (default), the manager's global `max_steps` is used.
+    /// WhaleFlow passes the task-level `max_steps` here to bound
+    /// per-agent recursion without affecting other concurrent agents.
+    pub max_steps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1365,7 +1370,7 @@ impl SubAgentManager {
         agent.fork_context = options.fork_context;
         let agent_id = agent.id.clone();
         let started_at = agent.started_at;
-        let max_steps = self.max_steps;
+        let max_steps = options.max_steps.unwrap_or(self.max_steps);
 
         if let Some(event_tx) = runtime.event_tx.clone() {
             let _ = event_tx.try_send(Event::AgentSpawned {
@@ -2414,6 +2419,7 @@ impl ToolSpec for AgentSpawnTool {
                     model: Some(effective_model),
                     nickname: None,
                     fork_context: spawn_request.fork_context,
+                    max_steps: None,
                 },
             )
             .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;

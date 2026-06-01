@@ -33,7 +33,7 @@ pub mod tool;
 pub use config::{
     Conflict, ConflictKind, FailurePolicy, IsolationMode, Phase, Task, TaskMode, WorkflowConfig,
 };
-pub use result::{WorkflowResult, WorkflowStatus};
+pub use result::{TaskStatus, WorkflowResult, WorkflowStatus};
 pub use scheduler::Scheduler;
 pub use spawner::{AgentResult, AgentSpawner, SpawnError};
 pub use worktree::WorktreeManager;

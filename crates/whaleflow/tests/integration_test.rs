@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codewhale_whaleflow::{
     AgentResult, AgentSpawner, FailurePolicy, IsolationMode, Phase, Scheduler, SpawnError, Task,
-    TaskMode, WorkflowConfig,
+    TaskMode, TaskStatus, WorkflowConfig, WorkflowStatus,
 };
 
 /// A controllable mock spawner for integration testing.
@@ -189,7 +189,7 @@ async fn full_workflow_three_phases() {
     // Verify overall status.
     assert_eq!(
         result.status,
-        codewhale_whaleflow::WorkflowStatus::Completed
+        WorkflowStatus::Completed
     );
     assert_eq!(result.counts.total, 5);
     assert_eq!(result.counts.completed, 5);
@@ -243,7 +243,7 @@ async fn workflow_with_failure_skip_continue() {
     // Skip-continue means the workflow status is Partial, not Aborted.
     assert_eq!(
         result.status,
-        codewhale_whaleflow::WorkflowStatus::Partial
+        WorkflowStatus::Partial
     );
 }
 
@@ -283,4 +283,114 @@ async fn workflow_json_roundtrip() {
 
     assert!(result_json.contains("Quick audit"));
     assert!(result_json.contains("completed"));
+}
+
+#[tokio::test]
+async fn abort_policy_in_parallel_phase_stops_remaining_tasks() {
+    // Phase with two parallel tasks and Abort policy. One task fails —
+    // the other should be marked skipped, and the workflow status should
+    // be Aborted.
+    let config = WorkflowConfig {
+        goal: "abort test".into(),
+        max_concurrent: 4,
+        phases: vec![Phase {
+            name: "dangerous".into(),
+            depends_on: vec![],
+            parallel: true,
+            on_failure: FailurePolicy::Abort,
+            tasks: vec![
+                make_task("ok", "good task"),
+                make_task("fail", "bad task"),
+                make_task("never-runs", "should be skipped"),
+            ],
+        }],
+    };
+
+    let mut mock = MockSpawner::new();
+    mock.set("ok", Ok(make_result("ok", "all good", &[])));
+    mock.set(
+        "fail",
+        Err(SpawnError::SpawnFailed("boom".into())),
+    );
+
+    let spawner = Arc::new(mock);
+    let mut scheduler = Scheduler::new(config, spawner);
+    let result = scheduler.run().await;
+
+    // Workflow should be aborted (phase had Abort policy + failure).
+    assert_eq!(result.status, WorkflowStatus::Aborted);
+    assert_eq!(result.counts.total, 3);
+    assert!(result.counts.completed >= 1); // "ok" completed
+    assert_eq!(result.counts.failed, 1); // "fail" failed
+    assert!(result.counts.skipped >= 1); // "never-runs" skipped
+    // Phase 1 should be the only phase.
+    assert_eq!(result.phases.len(), 1);
+    let tasks = &result.phases[0].tasks;
+    let never_runs = tasks.iter().find(|t| t.id == "never-runs").unwrap();
+    assert_eq!(never_runs.status, TaskStatus::Skipped);
+}
+
+#[tokio::test]
+async fn abort_policy_stops_subsequent_phases() {
+    // Two phases: phase 1 with Abort + a failing task → phase 2 must not run.
+    let config = WorkflowConfig {
+        goal: "phase abort test".into(),
+        max_concurrent: 4,
+        phases: vec![
+            Phase {
+                name: "first".into(),
+                depends_on: vec![],
+                parallel: false,
+                on_failure: FailurePolicy::Abort,
+                tasks: vec![make_task("f1", "failing task")],
+            },
+            Phase {
+                name: "second".into(),
+                depends_on: vec!["first".into()],
+                parallel: false,
+                on_failure: FailurePolicy::SkipContinue,
+                tasks: vec![make_task("s1", "should not run")],
+            },
+        ],
+    };
+
+    let mut mock = MockSpawner::new();
+    mock.set(
+        "f1",
+        Err(SpawnError::SpawnFailed("fail".into())),
+    );
+
+    let spawner = Arc::new(mock);
+    let mut scheduler = Scheduler::new(config, spawner);
+    let result = scheduler.run().await;
+
+    assert_eq!(result.status, WorkflowStatus::Aborted);
+    // Phase 2 should not appear in results.
+    assert_eq!(result.phases.len(), 1);
+    assert_eq!(result.phases[0].name, "first");
+}
+
+#[test]
+fn timeout_secs_field_is_deserialized_correctly() {
+    let json = r#"{
+        "goal": "timeout test",
+        "phases": [
+            {
+                "name": "slow",
+                "tasks": [
+                    {
+                        "id": "t1",
+                        "prompt": "do work",
+                        "timeout_secs": 30,
+                        "max_steps": 10
+                    }
+                ]
+            }
+        ]
+    }"#;
+
+    let config: WorkflowConfig = serde_json::from_str(json).unwrap();
+    let task = &config.phases[0].tasks[0];
+    assert_eq!(task.timeout_secs, Some(30));
+    assert_eq!(task.max_steps, Some(10));
 }
