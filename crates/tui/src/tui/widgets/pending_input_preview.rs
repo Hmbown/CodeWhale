@@ -110,13 +110,27 @@ impl PendingInputPreview {
                 Line::from(vec![Span::raw("• "), Span::raw("Pending inputs")]),
             );
             for steer in &self.pending_steers {
-                push_truncated_item(&mut lines, steer, width, dim, "  ↳ ", "    ");
+                push_truncated_item(&mut lines, steer, width, dim, "  ↳ Steer pending: ", "    ");
             }
             for steer in &self.rejected_steers {
-                push_truncated_item(&mut lines, steer, width, dim, "  ↳ ", "    ");
+                push_truncated_item(
+                    &mut lines,
+                    steer,
+                    width,
+                    dim,
+                    "  ↳ Rejected steer: ",
+                    "    ",
+                );
             }
             for message in &self.queued_messages {
-                push_truncated_item(&mut lines, message, width, dim_italic, "  ↳ ", "    ");
+                push_truncated_item(
+                    &mut lines,
+                    message,
+                    width,
+                    dim_italic,
+                    "  ↳ Queued follow-up: ",
+                    "    ",
+                );
             }
             if !self.queued_messages.is_empty() {
                 lines.push(Line::from(vec![Span::styled(
@@ -421,6 +435,32 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("rejected")));
         assert!(rows.iter().any(|r| r.contains("queued")));
         assert!(rows.iter().any(|r| r.contains("↑")));
+    }
+
+    #[test]
+    fn pending_input_rows_label_each_delivery_mode() {
+        let mut preview = PendingInputPreview::new();
+        preview.pending_steers.push("steer".to_string());
+        preview.rejected_steers.push("rejected".to_string());
+        preview.queued_messages.push("queued".to_string());
+
+        let rows = render_to_string(&preview, 80);
+
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Steer pending") && r.contains("steer")),
+            "missing pending-steer label: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Rejected steer") && r.contains("rejected")),
+            "missing rejected-steer label: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Queued follow-up") && r.contains("queued")),
+            "missing queued-follow-up label: {rows:?}"
+        );
     }
 
     #[test]

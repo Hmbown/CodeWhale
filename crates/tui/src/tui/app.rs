@@ -1439,7 +1439,7 @@ pub struct App {
     /// cancelled cleanly). Surfaced in the pending-input preview so the user
     /// knows the steer was deferred to end-of-turn. Today no engine path
     /// produces these; the field is scaffolding for a future signalling
-    /// channel and the bucket renders identically when populated.
+    /// channel and the bucket renders with its own pending-input label.
     pub rejected_steers: VecDeque<String>,
     /// Legacy resend flag for pending steer recovery.
     pub submit_pending_steers_after_interrupt: bool,
