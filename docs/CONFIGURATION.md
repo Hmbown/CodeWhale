@@ -697,9 +697,9 @@ If you are upgrading from older releases:
   `false`. When `true`, the notification body includes the elapsed
   duration and the turn's cost in the configured display currency.
 - `[notifications].completion_sound` (string, optional): `off`, `beep`,
-  `bell`, or `file`. Defaults to `beep`. `file` plays the path from
+  `bell`, or `file`. Defaults to `beep`. `file` plays the WAV path from
   `[notifications].sound_file` on Windows.
-- `[notifications].sound_file` (path, optional): path to a custom sound file
+- `[notifications].sound_file` (path, optional): path to a custom WAV file
   used when `completion_sound = "file"`.
 - `tui.alternate_screen` (string, optional): `auto`, `always`, or `never`. This is retained for config compatibility, but interactive sessions now always use the TUI-owned alternate screen so host terminal scrollback cannot hijack the viewport.
 - `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text, removes visual wrap-column line breaks from paragraphs, and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right sidebar and include visual wraps because the terminal, not the TUI, owns the selection.
@@ -778,7 +778,7 @@ Windows users who run inside a known OSC-9 terminal (e.g. WezTerm on Windows) ke
 
 `completion_sound = "file"` is for Windows users who want a per-application
 completion sound without changing the global Windows sound scheme. It plays the
-configured `sound_file` asynchronously via the native Windows audio API.
+configured WAV `sound_file` asynchronously via the native Windows audio API.
 
 ### Parsed but currently unused (reserved for future versions)
 

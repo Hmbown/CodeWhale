@@ -739,7 +739,7 @@ pub enum CompletionSound {
     Beep,
     /// Terminal BEL character (`\x07`).
     Bell,
-    /// Play a configured sound file.
+    /// Play a configured WAV sound file.
     File,
 }
 
@@ -768,7 +768,7 @@ pub struct NotificationsConfig {
     #[serde(default)]
     pub completion_sound: CompletionSound,
 
-    /// Path to the sound file used when `completion_sound = "file"`.
+    /// Path to the WAV sound file used when `completion_sound = "file"`.
     #[serde(default)]
     pub sound_file: Option<PathBuf>,
 }

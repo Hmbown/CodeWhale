@@ -366,6 +366,9 @@ pub fn reset_title_on_interaction() {
 /// Completion sound mode (0 = off, 1 = beep, 2 = bell, 3 = file).
 static COMPLETION_SOUND_MODE: AtomicU8 = AtomicU8::new(1);
 static COMPLETION_SOUND_FILE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+#[cfg(not(target_os = "windows"))]
+static COMPLETION_SOUND_FILE_UNSUPPORTED_WARNED: AtomicBool = AtomicBool::new(false);
+static COMPLETION_SOUND_FILE_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
 
 fn completion_sound_file_slot() -> &'static Mutex<Option<PathBuf>> {
     COMPLETION_SOUND_FILE.get_or_init(|| Mutex::new(None))
@@ -444,13 +447,15 @@ fn play_sound_file(path: &Path) {
 
 #[cfg(not(target_os = "windows"))]
 fn play_sound_file(_path: &Path) {
-    tracing::warn!("completion_sound = \"file\" is currently supported on Windows only");
+    if !COMPLETION_SOUND_FILE_UNSUPPORTED_WARNED.swap(true, Ordering::SeqCst) {
+        tracing::warn!("completion_sound = \"file\" is currently supported on Windows only");
+    }
 }
 
 fn file_sound() {
     if let Some(path) = configured_sound_file() {
         play_sound_file(&path);
-    } else {
+    } else if !COMPLETION_SOUND_FILE_MISSING_WARNED.swap(true, Ordering::SeqCst) {
         tracing::warn!("completion_sound = \"file\" requires [notifications].sound_file");
     }
 }
