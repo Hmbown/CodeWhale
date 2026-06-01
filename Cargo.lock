@@ -1000,6 +1000,7 @@ dependencies = [
  "codewhale-release",
  "codewhale-secrets",
  "codewhale-tools",
+ "codewhale-whaleflow",
  "colored",
  "crossterm 0.28.1",
  "dirs",
@@ -1054,6 +1055,20 @@ dependencies = [
 [[package]]
 name = "codewhale-tui-core"
 version = "0.8.48"
+
+[[package]]
+name = "codewhale-whaleflow"
+version = "0.8.48"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "colorchoice"

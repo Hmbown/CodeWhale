@@ -54,6 +54,7 @@ use crate::tools::subagent::{
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
+use crate::tools::workflow::WhaleFlowSpawner;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::app::AppMode;
 use crate::utils::spawn_supervised;
@@ -1233,14 +1234,29 @@ impl Engine {
                     } else {
                         None
                     };
-                    Some(
-                        builder
-                            .with_subagent_tools(
+
+                    // Build the WhaleFlow spawner for the workflow_run tool.
+                    // It uses the same manager and runtime that drive
+                    // sub-agent management tools.
+                    let workflow_spawner = runtime
+                        .as_ref()
+                        .map(|rt| {
+                            Arc::new(WhaleFlowSpawner::new(
                                 self.subagent_manager.clone(),
-                                runtime.expect("sub-agent runtime should exist with active client"),
-                            )
-                            .build(tool_context),
-                    )
+                                rt.clone(),
+                                tool_context.workspace.clone(),
+                            ))
+                        });
+
+                    let mut builder = builder
+                        .with_subagent_tools(
+                            self.subagent_manager.clone(),
+                            runtime.expect("sub-agent runtime should exist with active client"),
+                        );
+                    if let Some(spawner) = workflow_spawner {
+                        builder = builder.with_workflow_tool(spawner);
+                    }
+                    Some(builder.build(tool_context))
                 } else {
                     Some(builder.build(tool_context))
                 }

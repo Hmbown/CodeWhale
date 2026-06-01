@@ -996,6 +996,16 @@ impl ToolRegistryBuilder {
         .with_tool(Arc::new(AgentCloseTool::new(manager)))
     }
 
+    /// Include the WhaleFlow workflow_run tool.
+    #[must_use]
+    pub fn with_workflow_tool(
+        self,
+        spawner: std::sync::Arc<super::workflow::WhaleFlowSpawner>,
+    ) -> Self {
+        use super::workflow::WorkflowRunTool;
+        self.with_tool(Arc::new(WorkflowRunTool::new(spawner)))
+    }
+
     /// Build the registry with the given context.
     #[must_use]
     pub fn build(self, context: ToolContext) -> ToolRegistry {

@@ -57,6 +57,7 @@ pub mod user_input;
 pub mod validate_data;
 pub mod web_run;
 pub mod web_search;
+pub mod workflow;
 
 pub use registry::{ToolRegistry, ToolRegistryBuilder};
 pub use review::ReviewOutput;

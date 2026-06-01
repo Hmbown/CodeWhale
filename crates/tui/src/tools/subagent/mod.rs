@@ -571,6 +571,12 @@ pub struct SubAgentResult {
     pub result: Option<String>,
     pub steps_taken: u32,
     pub duration_ms: u64,
+    /// Total tokens consumed (prompt + completion) by this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
+    /// Estimated cost in USD for this agent's API usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     /// `true` when this agent was loaded from a prior-session persisted
     /// state file rather than spawned in the current session (#405).
     /// Lets `agent_list` filter out historical noise by default while
@@ -589,6 +595,11 @@ pub(crate) struct SubAgentSpawnOptions {
     pub model: Option<String>,
     pub nickname: Option<String>,
     pub fork_context: bool,
+    /// Per-spawn override for the max tool-call steps budget.
+    /// When `None` (default), the manager's global `max_steps` is used.
+    /// WhaleFlow passes the task-level `max_steps` here to bound
+    /// per-agent recursion without affecting other concurrent agents.
+    pub max_steps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1006,6 +1017,10 @@ pub struct SubAgent {
     /// against the manager's `current_session_boot_id` to classify the
     /// agent as in-session vs prior-session at list time.
     pub session_boot_id: String,
+    /// Cumulative token counters updated each step.
+    pub tokens_used: u64,
+    /// Cumulative cost estimate updated each step.
+    pub cost_usd: f64,
     input_tx: Option<mpsc::UnboundedSender<SubAgentInput>>,
     task_handle: Option<JoinHandle<()>>,
 }
@@ -1042,6 +1057,8 @@ impl SubAgent {
             started_at: Instant::now(),
             allowed_tools,
             session_boot_id,
+            tokens_used: 0,
+            cost_usd: 0.0,
             input_tx: Some(input_tx),
             task_handle: None,
         }
@@ -1063,6 +1080,8 @@ impl SubAgent {
             result: self.result.clone(),
             steps_taken: self.steps_taken,
             duration_ms: u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+            tokens_used: if self.tokens_used > 0 { Some(self.tokens_used) } else { None },
+            cost_usd: if self.cost_usd > 0.0 { Some(self.cost_usd) } else { None },
             // Snapshots from the agent itself don't know the manager's
             // current boot id, so default to false. The manager fills
             // this in when it produces a snapshot via its own
@@ -1365,7 +1384,7 @@ impl SubAgentManager {
         agent.fork_context = options.fork_context;
         let agent_id = agent.id.clone();
         let started_at = agent.started_at;
-        let max_steps = self.max_steps;
+        let max_steps = options.max_steps.unwrap_or(self.max_steps);
 
         if let Some(event_tx) = runtime.event_tx.clone() {
             let _ = event_tx.try_send(Event::AgentSpawned {
@@ -2414,6 +2433,7 @@ impl ToolSpec for AgentSpawnTool {
                     model: Some(effective_model),
                     nickname: None,
                     fork_context: spawn_request.fork_context,
+                    max_steps: None,
                 },
             )
             .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;

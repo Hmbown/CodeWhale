@@ -15,6 +15,7 @@ members = [
     "crates/tools",
     "crates/tui",
     "crates/tui-core",
+    "crates/whaleflow",
 ]
 default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
