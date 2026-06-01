@@ -109,12 +109,12 @@ impl Engine {
             let compaction_pins = self
                 .session
                 .working_set
-                .pinned_message_indices(&self.session.messages, &self.session.workspace);
+                .pinned_message_indices(self.session.messages(), &self.session.workspace);
             let compaction_paths = self.session.working_set.top_paths(24);
 
             if self.config.compaction.enabled
                 && should_compact(
-                    &self.session.messages,
+                    self.session.messages(),
                     &self.config.compaction,
                     Some(&self.session.workspace),
                     Some(&compaction_pins),
@@ -132,10 +132,10 @@ impl Engine {
                     .tx_event
                     .send(Event::status("Auto-compacting context...".to_string()))
                     .await;
-                let auto_messages_before = self.session.messages.len();
+                let auto_messages_before = self.session.messages().len();
                 match compact_messages_safe(
                     &client,
-                    &self.session.messages,
+                    self.session.messages(),
                     &self.config.compaction,
                     Some(&self.session.workspace),
                     Some(&compaction_pins),
@@ -145,9 +145,9 @@ impl Engine {
                 {
                     Ok(result) => {
                         // Only update if we got valid messages (never corrupt state)
-                        if !result.messages.is_empty() || self.session.messages.is_empty() {
+                        if !result.messages.is_empty() || self.session.messages().is_empty() {
                             let auto_messages_after = result.messages.len();
-                            self.session.messages = result.messages;
+                            self.session.replace_messages(result.messages);
                             self.merge_compaction_summary(result.summary_prompt);
                             self.emit_session_updated().await;
                             let removed = auto_messages_before.saturating_sub(auto_messages_after);
@@ -254,7 +254,7 @@ impl Engine {
             // Resolve `auto` reasoning_effort to a concrete tier (#663).
             let effective_reasoning_effort = resolve_auto_effort(
                 self.session.reasoning_effort.as_deref(),
-                &self.session.messages,
+                self.session.messages(),
             );
 
             // Check prefix-cache stability before building the request.
@@ -1092,7 +1092,7 @@ impl Engine {
 
                     if let Some(final_val) = final_result {
                         // Replace the assistant's text with the FINAL answer.
-                        if let Some(last_msg) = self.session.messages.last_mut()
+                        if let Some(last_msg) = self.session.messages_mut().last_mut()
                             && last_msg.role == "assistant"
                         {
                             for block in &mut last_msg.content {
@@ -2121,7 +2121,7 @@ impl Engine {
         // appended. Do not rewrite historical messages at request time: doing
         // so makes the API prefix differ from the bytes sent in earlier turns
         // and destroys DeepSeek's KV prefix cache reuse.
-        self.session.messages.clone()
+        self.session.messages().to_vec()
     }
 }
 

@@ -179,7 +179,7 @@ impl Engine {
 
     pub(super) fn recent_tool_call_count(&self, message_window: usize) -> usize {
         self.session
-            .messages
+            .messages()
             .iter()
             .rev()
             .take(message_window)
@@ -203,7 +203,7 @@ impl Engine {
         turn: &TurnContext,
     ) -> usize {
         let mut refs = std::collections::HashSet::new();
-        for msg in self.session.messages.iter().rev().take(message_window) {
+        for msg in self.session.messages().iter().rev().take(message_window) {
             for block in &msg.content {
                 match block {
                     ContentBlock::ToolUse { id, .. } => {
@@ -393,13 +393,13 @@ impl Engine {
         let compaction_pins = self
             .session
             .working_set
-            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+            .pinned_message_indices(self.session.messages(), &self.session.workspace);
         let compaction_paths = self.session.working_set.top_paths(24);
 
         let mut refreshed = false;
         let should_run_summary_compaction = self.config.compaction.enabled
             && should_compact(
-                &self.session.messages,
+                self.session.messages(),
                 &self.config.compaction,
                 Some(&self.session.workspace),
                 Some(&compaction_pins),
@@ -408,7 +408,7 @@ impl Engine {
         if should_run_summary_compaction && let Some(client) = client {
             match compact_messages_safe(
                 client,
-                &self.session.messages,
+                self.session.messages(),
                 &self.config.compaction,
                 Some(&self.session.workspace),
                 Some(&compaction_pins),
@@ -417,8 +417,8 @@ impl Engine {
             .await
             {
                 Ok(result) => {
-                    if !result.messages.is_empty() || self.session.messages.is_empty() {
-                        self.session.messages = result.messages;
+                    if !result.messages.is_empty() || self.session.messages().is_empty() {
+                        self.session.replace_messages(result.messages);
                         self.merge_compaction_summary(result.summary_prompt);
                         refreshed = true;
                     }
@@ -660,7 +660,7 @@ impl Engine {
 
         let latest_user = self
             .session
-            .messages
+            .messages()
             .iter()
             .rev()
             .find(|msg| {
@@ -673,7 +673,7 @@ impl Engine {
             .cloned();
         let latest_verified = self
             .session
-            .messages
+            .messages()
             .iter()
             .rev()
             .find(|msg| {
@@ -687,12 +687,13 @@ impl Engine {
             })
             .cloned();
 
-        self.session.messages.clear();
+        let msgs = self.session.messages_mut();
+        msgs.clear();
         if let Some(msg) = latest_user {
-            self.session.messages.push(msg);
+            msgs.push(msg);
         }
         if let Some(msg) = latest_verified {
-            self.session.messages.push(msg);
+            msgs.push(msg);
         }
 
         self.merge_compaction_summary(Some(self.canonical_prompt(
@@ -766,7 +767,7 @@ impl Engine {
     ) -> CanonicalState {
         let goal = self
             .session
-            .messages
+            .messages()
             .iter()
             .rev()
             .find_map(|msg| {
@@ -789,7 +790,7 @@ impl Engine {
         }
 
         let mut confirmed_facts = Vec::new();
-        for msg in self.session.messages.iter().rev() {
+        for msg in self.session.messages().iter().rev() {
             for block in &msg.content {
                 if let ContentBlock::ToolResult { content, .. } = block {
                     if content.starts_with("Error:") {

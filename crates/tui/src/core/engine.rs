@@ -819,7 +819,7 @@ impl Engine {
                     } else if messages.is_empty() && system_prompt.is_none() {
                         self.session.id = uuid::Uuid::new_v4().to_string();
                     }
-                    self.session.messages = messages;
+                    self.session.replace_messages(messages);
                     self.session.compaction_summary_prompt =
                         extract_compaction_summary_prompt(system_prompt.clone());
                     self.session.system_prompt = system_prompt;
@@ -857,14 +857,14 @@ impl Engine {
                     // most recent user message and everything after it.
                     // First, find the last user message index.
                     let mut cut = None;
-                    for (idx, msg) in self.session.messages.iter().enumerate().rev() {
+                    for (idx, msg) in self.session.messages().iter().enumerate().rev() {
                         if msg.role == "user" {
                             cut = Some(idx);
                             break;
                         }
                     }
                     if let Some(idx) = cut {
-                        self.session.messages.truncate(idx);
+                        self.session.truncate_messages(idx);
                     }
                     // Now dispatch the new message as a normal send,
                     // reusing the engine's stored mode/model config.
@@ -909,7 +909,7 @@ impl Engine {
             .tx_event
             .send(Event::SessionUpdated {
                 session_id: self.session.id.clone(),
-                messages: self.session.messages.clone(),
+                messages: self.session.messages().to_vec(),
                 system_prompt: self.session.system_prompt.clone(),
                 model: self.session.model.clone(),
                 workspace: self.session.workspace.clone(),
@@ -1375,15 +1375,15 @@ impl Engine {
         let compaction_pins = self
             .session
             .working_set
-            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+            .pinned_message_indices(self.session.messages(), &self.session.workspace);
         let compaction_paths = self.session.working_set.top_paths(24);
-        let messages_before = self.session.messages.len();
+        let messages_before = self.session.messages().len();
         let mut turn_status = TurnOutcomeStatus::Completed;
         let mut turn_error = None;
 
         match compact_messages_safe(
             &client,
-            &self.session.messages,
+            self.session.messages(),
             &self.config.compaction,
             Some(&self.session.workspace),
             Some(&compaction_pins),
@@ -1392,9 +1392,9 @@ impl Engine {
         .await
         {
             Ok(result) => {
-                if !result.messages.is_empty() || self.session.messages.is_empty() {
+                if !result.messages.is_empty() || self.session.messages().is_empty() {
                     let messages_after = result.messages.len();
-                    self.session.messages = result.messages;
+                    self.session.replace_messages(result.messages);
                     self.merge_compaction_summary(result.summary_prompt);
                     self.emit_session_updated().await;
                     let removed = messages_before.saturating_sub(messages_after);
@@ -1477,11 +1477,11 @@ impl Engine {
             "Agent context purge in progress\u{2026}".to_string(),
         )
         .await;
-        let messages_before = self.session.messages.len();
+        let messages_before = self.session.messages().len();
 
         let (status, error) = match run_purge(
             &client,
-            &self.session.messages,
+            self.session.messages(),
             &self.session.model,
             self.session.reasoning_effort.clone(),
             effective_max_output_tokens(&self.session.model),
@@ -1490,7 +1490,7 @@ impl Engine {
         {
             Ok(result) => {
                 let messages_after = result.messages.len();
-                self.session.messages = result.messages;
+                self.session.replace_messages(result.messages);
                 self.emit_session_updated().await;
 
                 let summary = format!(
@@ -1529,17 +1529,17 @@ impl Engine {
 
     fn estimated_input_tokens(&self) -> usize {
         estimate_input_tokens_conservative(
-            &self.session.messages,
+            self.session.messages(),
             self.session.system_prompt.as_ref(),
         )
     }
 
     fn trim_oldest_messages_to_budget(&mut self, target_input_budget: usize) -> usize {
         let mut removed = 0usize;
-        while self.session.messages.len() > MIN_RECENT_MESSAGES_TO_KEEP
+        while self.session.messages().len() > MIN_RECENT_MESSAGES_TO_KEEP
             && self.estimated_input_tokens() > target_input_budget
         {
-            self.session.messages.remove(0);
+            self.session.remove_oldest_message();
             removed = removed.saturating_add(1);
         }
         removed
@@ -1556,11 +1556,11 @@ impl Engine {
             .await;
 
         let before_tokens = self.estimated_input_tokens();
-        let before_count = self.session.messages.len();
+        let before_count = self.session.messages().len();
 
         let mut retries_used = 0u32;
         let mut summary_prompt = None;
-        let mut compacted_messages = self.session.messages.clone();
+        let mut compacted_messages = self.session.messages().to_vec();
 
         let mut forced_config = self.config.compaction.clone();
         forced_config.enabled = true;
@@ -1575,7 +1575,7 @@ impl Engine {
 
         match compact_messages_safe(
             client,
-            &self.session.messages,
+            self.session.messages(),
             &forced_config,
             Some(&self.session.workspace),
             None,
@@ -1598,15 +1598,15 @@ impl Engine {
             }
         }
 
-        if !compacted_messages.is_empty() || self.session.messages.is_empty() {
-            self.session.messages = compacted_messages;
+        if !compacted_messages.is_empty() || self.session.messages().is_empty() {
+            self.session.replace_messages(compacted_messages);
         }
         self.merge_compaction_summary(summary_prompt);
 
         let trimmed = self.trim_oldest_messages_to_budget(target_budget);
         self.emit_session_updated().await;
         let after_tokens = self.estimated_input_tokens();
-        let after_count = self.session.messages.len();
+        let after_count = self.session.messages().len();
         let recovered = after_tokens <= target_budget
             && (after_tokens < before_tokens || after_count < before_count || trimmed > 0);
 
@@ -1673,7 +1673,7 @@ impl Engine {
             self.session.model.clone(),
             self.session.workspace.clone(),
             self.session.system_prompt.clone(),
-            self.session.messages.clone(),
+            self.session.messages().to_vec(),
         ))
         .with_cancel_token(self.cancel_token.clone())
         .with_trusted_external_paths(trusted_external_paths);
@@ -1782,7 +1782,7 @@ impl Engine {
         // Determine the message range to summarize: everything before the
         // verbatim window. The verbatim window (last ~16 turns) stays
         // untouched so the model always has ground-truth recent context.
-        let msg_count = self.session.messages.len();
+        let msg_count = self.session.messages().len();
         let verbatim_start = seam_mgr.verbatim_window_start(msg_count);
         if verbatim_start == 0 {
             return; // Not enough messages to summarize.
@@ -1792,7 +1792,7 @@ impl Engine {
         let pinned = self
             .session
             .working_set
-            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+            .pinned_message_indices(self.session.messages(), &self.session.workspace);
 
         let _ = self
             .tx_event
@@ -1802,11 +1802,11 @@ impl Engine {
             .await;
 
         // If we have existing seams, recompact; otherwise produce fresh.
-        let existing_seams = seam_mgr.collect_seam_texts(&self.session.messages).await;
+        let existing_seams = seam_mgr.collect_seam_texts(self.session.messages()).await;
         let seam_text = if existing_seams.is_empty() {
             match seam_mgr
                 .produce_soft_seam(
-                    &self.session.messages,
+                    self.session.messages(),
                     level,
                     0,
                     msg_range_end,
@@ -1823,7 +1823,7 @@ impl Engine {
             }
         } else {
             let recent: Vec<&Message> = (0..msg_range_end)
-                .filter_map(|i| self.session.messages.get(i))
+                .filter_map(|i| self.session.messages().get(i))
                 .collect();
             match seam_mgr
                 .recompact(&existing_seams, &recent, level, 0, msg_range_end)
@@ -1907,7 +1907,7 @@ impl Engine {
         //    manager (#159) for cost and speed; fall back to the main model
         //    (legacy produce_briefing) when the seam manager isn't available.
         let briefing_text = if let Some(ref seam_mgr) = self.seam_manager {
-            let seams = seam_mgr.collect_seam_texts(&self.session.messages).await;
+            let seams = seam_mgr.collect_seam_texts(self.session.messages()).await;
             let state_text = {
                 let s = StructuredState::capture(
                     mode.label(),
@@ -1933,7 +1933,7 @@ impl Engine {
                     match produce_briefing(
                         &client,
                         &self.session.model,
-                        &self.session.messages,
+                        self.session.messages(),
                         max_briefing_tokens,
                     )
                     .await
@@ -1958,7 +1958,7 @@ impl Engine {
             match produce_briefing(
                 &client,
                 &self.session.model,
-                &self.session.messages,
+                self.session.messages(),
                 max_briefing_tokens,
             )
             .await
@@ -1995,7 +1995,7 @@ impl Engine {
         match archive_cycle(
             &self.session.id,
             to,
-            &self.session.messages,
+            self.session.messages(),
             &self.session.model,
             archive_started,
         ) {
@@ -2031,7 +2031,7 @@ impl Engine {
         );
 
         // 5. Atomic swap.
-        self.session.messages = seed_messages;
+        self.session.replace_messages(seed_messages);
         self.session.cycle_count = to;
         self.session.current_cycle_started = now;
         self.session.cycle_briefings.push(briefing.clone());

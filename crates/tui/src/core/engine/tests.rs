@@ -1585,7 +1585,7 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     let first_user = engine.user_text_message_with_turn_metadata("inspect src/lib.rs".to_string());
     engine.session.add_message(first_user.clone());
     let first_request = engine.messages_with_turn_metadata();
-    assert_eq!(first_request, engine.session.messages);
+    assert_eq!(first_request.as_slice(), engine.session.messages());
 
     engine.session.add_message(Message {
         role: "assistant".to_string(),
@@ -1602,7 +1602,7 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     engine.session.add_message(second_user);
 
     let second_request = engine.messages_with_turn_metadata();
-    assert_eq!(second_request, engine.session.messages);
+    assert_eq!(second_request.as_slice(), engine.session.messages());
     assert_eq!(second_request.first(), Some(&first_user));
 }
 
@@ -1860,7 +1860,7 @@ async fn pre_request_refresh_skips_compaction_below_normal_threshold() {
     engine.config.model = "deepseek-v4-pro".to_string();
 
     for i in 0..20 {
-        engine.session.messages.push(Message {
+        engine.session.add_message(Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
                 text: format!("small message {i}"),
@@ -1870,7 +1870,7 @@ async fn pre_request_refresh_skips_compaction_below_normal_threshold() {
     }
 
     let before = engine.estimated_input_tokens();
-    let before_len = engine.session.messages.len();
+    let before_len = engine.session.messages().len();
     let turn = TurnContext::new(10);
     let applied = engine
         .run_capacity_pre_request_checkpoint(&turn, None, AppMode::Agent)
@@ -1879,7 +1879,7 @@ async fn pre_request_refresh_skips_compaction_below_normal_threshold() {
 
     assert!(!applied);
     assert_eq!(after, before);
-    assert_eq!(engine.session.messages.len(), before_len);
+    assert_eq!(engine.session.messages().len(), before_len);
 }
 
 #[tokio::test]
@@ -1907,7 +1907,7 @@ async fn pre_request_refresh_invoked_when_medium_risk() {
 
     let long = "x".repeat(5_000);
     for _ in 0..900 {
-        engine.session.messages.push(Message {
+        engine.session.add_message(Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
                 text: long.clone(),
@@ -1981,7 +1981,7 @@ async fn post_tool_replay_invoked_when_high_non_severe_risk() {
         .await;
 
     assert!(!restarted);
-    let has_verification_note = engine.session.messages.iter().any(|msg| {
+    let has_verification_note = engine.session.messages().iter().any(|msg| {
         msg.content.iter().any(|block| match block {
             ContentBlock::ToolResult { content, .. } => content.contains("[verification replay]"),
             _ => false,
@@ -2013,7 +2013,7 @@ async fn error_escalation_triggers_replan_when_severe_or_repeated_failures() {
         .mark_turn_start(engine.turn_counter);
 
     for i in 0..10 {
-        engine.session.messages.push(Message {
+        engine.session.add_message(Message {
             role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
             content: vec![ContentBlock::Text {
                 text: format!("noise message {i}"),
@@ -2021,7 +2021,7 @@ async fn error_escalation_triggers_replan_when_severe_or_repeated_failures() {
             }],
         });
     }
-    engine.session.messages.push(Message {
+    engine.session.add_message(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
             text: "Please finish task".to_string(),
@@ -2029,15 +2029,15 @@ async fn error_escalation_triggers_replan_when_severe_or_repeated_failures() {
         }],
     });
 
-    let before_len = engine.session.messages.len();
+    let before_len = engine.session.messages().len();
     let turn = TurnContext::new(10);
     let restarted = engine
         .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
         .await;
 
     assert!(restarted);
-    assert!(engine.session.messages.len() < before_len);
-    assert!(engine.session.messages.len() <= 2);
+    assert!(engine.session.messages().len() < before_len);
+    assert!(engine.session.messages().len() <= 2);
 
     let records = load_last_k_capacity_records(&engine.session.id, 1).expect("load memory");
     assert!(!records.is_empty());
@@ -2071,7 +2071,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
         .mark_turn_start(engine.turn_counter);
 
     for i in 0..10 {
-        engine.session.messages.push(Message {
+        engine.session.add_message(Message {
             role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
             content: vec![ContentBlock::Text {
                 text: format!("noise message {i}"),
@@ -2079,7 +2079,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
             }],
         });
     }
-    engine.session.messages.push(Message {
+    engine.session.add_message(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
             text: "Please finish task".to_string(),
@@ -2087,7 +2087,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
         }],
     });
 
-    let before_len = engine.session.messages.len();
+    let before_len = engine.session.messages().len();
     let turn = TurnContext::new(10);
     let restarted = engine
         .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
@@ -2095,7 +2095,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
 
     // Capacity is disabled → no replan, no message clear.
     assert!(!restarted);
-    assert_eq!(engine.session.messages.len(), before_len);
+    assert_eq!(engine.session.messages().len(), before_len);
 }
 
 #[tokio::test]
@@ -2115,7 +2115,7 @@ async fn controller_disabled_keeps_behavior_unchanged() {
 
     let long = "y".repeat(5_000);
     for _ in 0..120 {
-        engine.session.messages.push(Message {
+        engine.session.add_message(Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
                 text: long.clone(),
@@ -2125,13 +2125,13 @@ async fn controller_disabled_keeps_behavior_unchanged() {
     }
 
     let before = engine.estimated_input_tokens();
-    let before_len = engine.session.messages.len();
+    let before_len = engine.session.messages().len();
     let turn = TurnContext::new(10);
     let applied = engine
         .run_capacity_pre_request_checkpoint(&turn, None, AppMode::Agent)
         .await;
     let after = engine.estimated_input_tokens();
-    let after_len = engine.session.messages.len();
+    let after_len = engine.session.messages().len();
 
     assert!(!applied);
     assert_eq!(before, after);
@@ -2903,11 +2903,11 @@ async fn post_edit_hook_injects_diagnostics_message_before_next_request() {
     assert_eq!(engine.pending_lsp_blocks.len(), 1);
 
     // Flush prepares the synthetic message.
-    let messages_before = engine.session.messages.len();
+    let messages_before = engine.session.messages().len();
     engine.flush_pending_lsp_diagnostics().await;
-    assert_eq!(engine.session.messages.len(), messages_before + 1);
+    assert_eq!(engine.session.messages().len(), messages_before + 1);
 
-    let last = engine.session.messages.last().expect("message appended");
+    let last = engine.session.messages().last().expect("message appended");
     assert_eq!(last.role, "user");
     let meta = match &last.content[0] {
         crate::models::ContentBlock::Text { text, .. } => text.clone(),
@@ -2952,9 +2952,9 @@ async fn post_edit_hook_is_silent_when_lsp_disabled() {
     engine.run_post_edit_lsp_hook("edit_file", &input).await;
     assert!(engine.pending_lsp_blocks.is_empty());
 
-    let messages_before = engine.session.messages.len();
+    let messages_before = engine.session.messages().len();
     engine.flush_pending_lsp_diagnostics().await;
-    assert_eq!(engine.session.messages.len(), messages_before);
+    assert_eq!(engine.session.messages().len(), messages_before);
 }
 
 #[tokio::test]
