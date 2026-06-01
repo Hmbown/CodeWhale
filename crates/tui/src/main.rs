@@ -5006,13 +5006,32 @@ fn workspace_config_path_matches(raw_path: &str, workspace: &Path) -> bool {
 
 #[cfg(windows)]
 fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
-    left.to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy())
+    normalize_windows_config_path_for_compare(left)
+        == normalize_windows_config_path_for_compare(right)
 }
 
 #[cfg(not(windows))]
 fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
     left == right
+}
+
+#[cfg(windows)]
+fn normalize_windows_config_path_for_compare(path: &Path) -> String {
+    normalize_windows_config_path_str(&path.to_string_lossy())
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_config_path_str(path: &str) -> String {
+    let mut normalized = path.replace('/', "\\");
+    if let Some(rest) = normalized.strip_prefix(r"\\?\UNC\") {
+        normalized = format!("\\\\{rest}");
+    } else if let Some(rest) = normalized.strip_prefix(r"\\?\") {
+        normalized = rest.to_string();
+    }
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
 }
 
 async fn run_interactive(
@@ -6957,6 +6976,26 @@ allow_shell = false
         merge_user_workspace_config(&mut config, Some(config_path), &workspace);
 
         assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_mixed_separators() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo/")
+        );
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_verbatim_and_unc_prefixes() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo")
+        );
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\UNC\server\share\repo"),
+            normalize_windows_config_path_str(r"\\server/share/repo/")
+        );
     }
 
     #[test]
