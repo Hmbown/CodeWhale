@@ -40,6 +40,11 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 
 ### Shell
 
+Shell tools are part of the model-visible tool catalog only when shell access is
+enabled for the active session or profile. In Agent mode that usually means
+`allow_shell = true`; YOLO enables shell access automatically. Plan mode keeps
+shell execution off.
+
 | Tool | Niche |
 |---|---|
 | `exec_shell` | Run a shell command. Foreground runs are cancellable, but use them only for bounded commands; timeout kills the process and returns a background-rerun hint. |

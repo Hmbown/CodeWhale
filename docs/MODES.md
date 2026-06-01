@@ -22,6 +22,22 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 - **Agent**: multi-step tool use. Shell execution (`exec_shell`, `task_shell_start`, `task_shell_wait`) requires `allow_shell = true` in config; approval prompts gate each call. File writes are allowed without a prompt.
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 
+### Tool availability by mode
+
+| Tool family | Plan | Agent | YOLO |
+|---|---:|---:|---:|
+| Read-only file, search, and diagnostic tools | yes | yes | yes |
+| File write and patch tools | no | yes | yes |
+| Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | yes, when `allow_shell = true` | yes |
+| Paid or external-service tools | approval-gated | approval-gated | auto-approved |
+| Access outside the workspace root | no | only with trust mode | yes |
+
+If a shell tool is missing from the model-visible catalog in Agent mode, check
+`allow_shell` first. The setting can come from the active config/profile or from
+the runtime session. YOLO mode turns shell access on together with trust mode and
+auto-approval, which is why shell commands may work there even when the Agent
+mode catalog does not list them.
+
 All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
 
 The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
