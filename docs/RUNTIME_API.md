@@ -31,7 +31,7 @@ Use the mode that matches the surface your wrapper needs:
 | `codewhale serve --http` | Local apps, web/chat backends, mobile or desktop supervisors | Tools run through normal thread/turn execution under the configured policy, with approval APIs for gated calls | SSE events via `/v1/threads/{id}/events` and compatibility streaming via `/v1/stream` | Structured thread, turn, task, approval, and event records |
 | `codewhale exec --auto --output-format stream-json` | Non-interactive CLI wrappers and harnesses that need tool-backed output without running a daemon | Built-in tools plus configured MCP tools available to the non-interactive agent | Newline-delimited JSON on stdout | A single prompt string for the turn; role/history separation must be encoded by the caller |
 | `codewhale serve --acp` | Editors and ACP-compatible clients such as Zed | Not yet exposed through ACP | ACP `session/update` chunks | ACP session prompt/update messages |
-| `codewhale serve --mcp` | Other MCP clients that want to call CodeWhale as a tool server | Exposes CodeWhale tools to the external MCP client | MCP request/response over stdio | MCP tool-call payloads |
+| `codewhale serve --mcp` | Other MCP clients that want to call CodeWhale as a tool server | Exposes CodeWhale tools to the external MCP client | No streaming; single synchronous request/response over stdio | MCP tool-call payloads |
 
 For Feishu/Lark bots, custom web chats, or other long-running chat backends,
 prefer `serve --http` when the client needs structured conversations,
