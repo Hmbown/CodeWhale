@@ -39,6 +39,7 @@ mod features;
 mod handoff;
 mod hooks;
 mod llm_client;
+mod llm_response_cache;
 mod localization;
 mod logging;
 mod lsp;

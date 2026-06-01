@@ -91,6 +91,39 @@ impl DeepSeekClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
+        // Check response cache for non-streaming, tool-free requests.
+        // Streaming and tool-carrying requests bypass the cache.
+        let cacheable =
+            request.stream != Some(true) && request.tools.as_ref().is_none_or(|t| t.is_empty());
+        let cache_key = if cacheable {
+            let system_text = request
+                .system
+                .as_ref()
+                .map(|s| match s {
+                    crate::models::SystemPrompt::Text(t) => t.clone(),
+                    crate::models::SystemPrompt::Blocks(blocks) => blocks
+                        .iter()
+                        .map(|b| b.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                })
+                .unwrap_or_default();
+            let messages_json = serde_json::to_vec(&request.messages).unwrap_or_default();
+            let key = crate::llm_response_cache::LlmResponseCache::make_key(
+                &format!("{:?}", self.api_provider),
+                &request.model,
+                &self.base_url,
+                &system_text,
+                &messages_json,
+            );
+            if let Some(cached) = crate::llm_response_cache::response_cache().get(&key) {
+                return Ok(cached);
+            }
+            Some(key)
+        } else {
+            None
+        };
+
         let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
         let model = wire_model_for_provider(self.api_provider, &request.model);
         let mut body = json!({
@@ -174,7 +207,14 @@ impl DeepSeekClient {
         let response_text = response.text().await.unwrap_or_default();
         let value: Value =
             serde_json::from_str(&response_text).context("Failed to parse Chat API JSON")?;
-        parse_chat_message(&value)
+        let result = parse_chat_message(&value)?;
+
+        // Cache the response for future identical requests.
+        if let Some(key) = cache_key {
+            crate::llm_response_cache::response_cache().put(key, result.clone());
+        }
+
+        Ok(result)
     }
 }
 
