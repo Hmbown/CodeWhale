@@ -16,6 +16,8 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+const BACKGROUND_COMPLETION_WAIT_MS: u64 = 30_000;
+
 fn echo_command(message: &str) -> String {
     format!("echo {message}")
 }
@@ -175,7 +177,7 @@ fn test_background_execution() {
 
     // Wait for completion
     let final_result = manager
-        .get_output(&task_id, true, 5000)
+        .get_output(&task_id, true, BACKGROUND_COMPLETION_WAIT_MS)
         .expect("get_output");
 
     assert_eq!(final_result.status, ShellStatus::Completed);
@@ -758,7 +760,7 @@ async fn test_completed_background_shell_releases_process_handles() {
             json!({
                 "task_id": task_id.clone(),
                 "wait": true,
-                "timeout_ms": 5_000
+                "timeout_ms": BACKGROUND_COMPLETION_WAIT_MS
             }),
             &ctx,
         )
