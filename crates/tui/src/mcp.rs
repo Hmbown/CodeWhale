@@ -196,6 +196,22 @@ async fn bounded_body_excerpt(response: reqwest::Response, max_bytes: usize) -> 
     format!("{}{}", redact_body_preview(&one_line), suffix)
 }
 
+fn invalid_json_preview(bytes: &[u8]) -> String {
+    let body_text = String::from_utf8_lossy(bytes);
+    if body_text.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let trimmed: String = body_text.chars().take(ERROR_BODY_PREVIEW_BYTES).collect();
+    let suffix = if body_text.len() > trimmed.len() {
+        "…"
+    } else {
+        ""
+    };
+    let one_line = trimmed.replace(['\n', '\r'], " ");
+    format!("{}{}", redact_body_preview(&one_line), suffix)
+}
+
 // === Configuration Types ===
 
 /// Full MCP configuration from mcp.json
@@ -1824,7 +1840,11 @@ impl McpConnection {
                 self.state = ConnectionState::Disconnected;
             })?;
             let value: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| {
-                format!("Invalid MCP JSON-RPC message from server '{}'", self.name)
+                format!(
+                    "Invalid MCP JSON-RPC message from server '{}': {}",
+                    self.name,
+                    invalid_json_preview(&bytes)
+                )
             })?;
 
             // Check if this is a response with the expected id. We emit
@@ -3377,6 +3397,25 @@ mod tests {
         assert_eq!(sent[0]["jsonrpc"], "2.0");
         assert_eq!(sent[0]["id"], "1");
         assert_eq!(sent[0]["method"], "tools/call");
+    }
+
+    #[tokio::test]
+    async fn call_method_invalid_json_includes_server_output_preview() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([b"Allow Burp MCP connection? [y/N]".to_vec()]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+
+        let err = conn
+            .call_method("tools/call", serde_json::json!({"name": "burp"}), 1)
+            .await
+            .expect_err("non-json MCP stdout should fail");
+        let msg = err.to_string();
+
+        assert!(msg.contains("Invalid MCP JSON-RPC message from server 'mock'"));
+        assert!(msg.contains("Allow Burp MCP connection"));
     }
 
     #[tokio::test]
