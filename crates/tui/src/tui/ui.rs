@@ -2368,6 +2368,12 @@ async fn run_event_loop(
         } else {
             None
         };
+        // Merge the per-app full-repaint hint (set by theme switches)
+        // into the loop-level flag before the draw decision.
+        if app.force_next_full_repaint {
+            force_terminal_repaint = true;
+            app.force_next_full_repaint = false;
+        }
         if app.needs_redraw && draw_wait.is_none() {
             let was_full_repaint = force_terminal_repaint;
             draw_app_frame_inner(terminal, app, force_terminal_repaint)?;
@@ -6704,6 +6710,19 @@ async fn handle_view_events(
                 persist,
             } => {
                 let result = commands::set_config_value(app, &key, &value, persist);
+                // Theme / background changes require a full terminal repaint
+                // because ratatui's incremental diff may miss color-only
+                // changes in cells that were rendered with theme-resolved
+                // colors (sidebar panels) rather than palette constants that
+                // go through the backend remap layer.  A full repaint
+                // (terminal clear + all cells redrawn) guarantees every cell
+                // picks up the new theme immediately.
+                if matches!(
+                    key.as_str(),
+                    "theme" | "ui_theme" | "background_color" | "background" | "bg"
+                ) {
+                    app.force_next_full_repaint = true;
+                }
                 // Only surface the "key = value" confirmation when the
                 // change is being persisted. Live-preview events
                 // (`persist: false`, e.g. arrow keys in the theme picker)

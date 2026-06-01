@@ -1486,6 +1486,11 @@ pub struct App {
     pub session_started_at: chrono::DateTime<chrono::Utc>,
     /// Whether the UI needs to be redrawn.
     pub needs_redraw: bool,
+    /// When true, the next draw will be a full repaint (terminal clear +
+    /// all cells redrawn) instead of a ratatui incremental diff. Used by
+    /// theme switches where the diff engine may miss color-only changes
+    /// in sidebar cells that were previously rendered with palette constants.
+    pub force_next_full_repaint: bool,
     /// When the current thinking block started (for duration tracking).
     pub thinking_started_at: Option<Instant>,
     /// Whether context compaction is currently in progress.
@@ -2074,6 +2079,7 @@ impl App {
             decision_card: None,
             session_started_at: chrono::Utc::now(),
             needs_redraw: true,
+            force_next_full_repaint: false,
             thinking_started_at: None,
             is_compacting: false,
             is_purging: false,
