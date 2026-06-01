@@ -22,19 +22,11 @@ pub(super) fn handle_tool_call_started(
     name: &str,
     input: &serde_json::Value,
 ) {
-    // #455 (observer-only): fire `tool_call_before` hooks here, before
-    // any UI bookkeeping. Hooks are read-only observers in this slice
-    // — they can log, notify, or audit, but cannot mutate the args.
-    // Fast-path skip when no hooks are configured so per-tool
-    // dispatch doesn't pay for context construction in the common
-    // case (most users have no hooks).
-    if app.hooks.has_hooks_for_event(HookEvent::ToolCallBefore) {
-        let context = app
-            .base_hook_context()
-            .with_tool_name(name)
-            .with_tool_args(input);
-        let _ = app.execute_hooks(HookEvent::ToolCallBefore, &context);
-    }
+    // #2511: ToolCallBefore gate moved to turn-loop planning loop
+    // (Engine::handle_deepseek_turn). Removing observer-only firing
+    // here to avoid double-firing hooks for each tool call.
+    // Hooks that need observation can configure ToolCallBefore on
+    // the turn-loop gate — it processes the denial (exit code 2).
 
     let id = id.to_string();
 

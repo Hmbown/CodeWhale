@@ -1309,8 +1309,18 @@ impl Engine {
                         .with_workspace(self.session.workspace.clone())
                         .with_model(&self.config.model)
                         .with_session_id(&self.session.id);
-                    let hook_results = hook_executor
-                        .execute(crate::hooks::HookEvent::ToolCallBefore, &hook_context);
+                    // Run hooks off the Tokio worker thread: `execute()` calls
+                    // `child.wait_timeout()` which is a blocking syscall that
+                    // would stall all other async tasks on this thread.
+                    let executor = hook_executor.clone();
+                    let hook_results = tokio::task::spawn_blocking(move || {
+                        executor.execute(crate::hooks::HookEvent::ToolCallBefore, &hook_context)
+                    })
+                    .await
+                    .unwrap_or_else(|join_err| {
+                        tracing::error!("Hook executor task panicked: {join_err}");
+                        Vec::new()
+                    });
                     if let Some(denial) = hook_results
                         .iter()
                         .find(|result| result.exit_code == Some(2))
