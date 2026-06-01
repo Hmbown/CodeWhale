@@ -103,12 +103,24 @@ impl DeepSeekClient {
             body["top_p"] = json!(top_p);
         }
         if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(
-                tools
-                    .iter()
-                    .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
-                    .collect::<Vec<_>>()
-            );
+            let mut chat_tools: Vec<_> = tools
+                .iter()
+                .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
+                .collect();
+            // Kimi / Moonshot enforces stricter JSON Schema: `type` must be
+            // inside `anyOf` / `oneOf` items, not on the parent (#2438).
+            if matches!(self.api_provider, crate::config::ApiProvider::Moonshot) {
+                for t in &mut chat_tools {
+                    if let Some(fn_obj) = t
+                        .as_object_mut()
+                        .and_then(|t| t.get_mut("function"))
+                        .and_then(|f| f.get_mut("parameters"))
+                    {
+                        crate::tools::schema_sanitize::sanitize_for_kimi(fn_obj);
+                    }
+                }
+            }
+            body["tools"] = json!(chat_tools);
         }
         if let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
@@ -178,12 +190,24 @@ impl DeepSeekClient {
             body["top_p"] = json!(top_p);
         }
         if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(
-                tools
-                    .iter()
-                    .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
-                    .collect::<Vec<_>>()
-            );
+            let mut chat_tools: Vec<_> = tools
+                .iter()
+                .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
+                .collect();
+            // Kimi / Moonshot enforces stricter JSON Schema: `type` must be
+            // inside `anyOf` / `oneOf` items, not on the parent (#2438).
+            if matches!(self.api_provider, crate::config::ApiProvider::Moonshot) {
+                for t in &mut chat_tools {
+                    if let Some(fn_obj) = t
+                        .as_object_mut()
+                        .and_then(|t| t.get_mut("function"))
+                        .and_then(|f| f.get_mut("parameters"))
+                    {
+                        crate::tools::schema_sanitize::sanitize_for_kimi(fn_obj);
+                    }
+                }
+            }
+            body["tools"] = json!(chat_tools);
         }
         if let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
