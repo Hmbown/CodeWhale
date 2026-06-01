@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::client::DeepSeekClient;
 use crate::models::Tool;
 
+use super::schema_canonicalize;
 use super::schema_sanitize;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
@@ -224,6 +225,7 @@ impl ToolRegistry {
             .map(|tool| {
                 let mut schema = tool.input_schema();
                 schema_sanitize::sanitize(&mut schema);
+                schema_canonicalize::canonicalize_schema(&mut schema);
                 Tool {
                     tool_type: None,
                     name: tool.name().to_string(),
