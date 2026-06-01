@@ -10,9 +10,12 @@
 #[cfg(not(test))]
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-#[cfg(all(
-    any(target_os = "macos", target_os = "windows", target_os = "linux"),
-    not(test)
+#[cfg(any(
+    all(test, unix),
+    all(
+        any(target_os = "macos", target_os = "windows", target_os = "linux"),
+        not(test)
+    )
 ))]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -107,6 +110,11 @@ impl ClipboardHandler {
     /// `workspace` is used as a fallback location when `~/.codewhale/` cannot
     /// be resolved (e.g. running with a stripped HOME in CI sandboxes).
     pub fn read(&mut self, workspace: &Path) -> Option<ClipboardContent> {
+        #[cfg(all(target_os = "linux", not(test)))]
+        if let Ok(text) = read_text_with_wlpaste() {
+            return Some(ClipboardContent::Text(text));
+        }
+
         self.ensure_clipboard();
         let clipboard = self.clipboard.as_mut()?;
         if let Ok(text) = clipboard.get_text() {
@@ -210,6 +218,26 @@ fn write_text_with_stdin_command(
 #[cfg(all(target_os = "linux", not(test)))]
 fn write_text_with_wlcopy(text: &str) -> Result<()> {
     write_text_with_wlcopy_using_argv("wl-copy", text)
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn read_text_with_wlpaste() -> Result<String> {
+    read_text_with_wlpaste_using_argv("wl-paste")
+}
+
+#[cfg(any(all(test, unix), target_os = "linux"))]
+fn read_text_with_wlpaste_using_argv(program: &str) -> Result<String> {
+    let output = Command::new(program)
+        .arg("--type")
+        .arg("text/plain")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
+    if !output.status.success() {
+        bail!("{program} exited with {}", output.status);
+    }
+    String::from_utf8(output.stdout).context("wl-paste returned non-UTF-8 text")
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -332,6 +360,8 @@ fn save_image_as_png_in(dir: &Path, image: &ImageData) -> Result<PastedImage> {
 mod tests {
     use super::*;
     use std::borrow::Cow;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn solid_rgba(width: u16, height: u16, rgba: [u8; 4]) -> ImageData<'static> {
         let mut bytes = Vec::with_capacity((width as usize) * (height as usize) * 4);
@@ -418,5 +448,21 @@ mod tests {
             err.to_string().contains("too large"),
             "unexpected error: {err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wl_paste_helper_reads_text_from_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("wl-paste");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'from-wayland'\n").unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let text = read_text_with_wlpaste_using_argv(script.to_str().unwrap())
+            .expect("read text through wl-paste helper");
+
+        assert_eq!(text, "from-wayland");
     }
 }
