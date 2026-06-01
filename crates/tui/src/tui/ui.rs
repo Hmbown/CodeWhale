@@ -503,6 +503,14 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         .shell_manager
         .clone()
         .unwrap_or_else(|| crate::tools::shell::new_shared_shell_manager(app.workspace.clone()));
+    // #2511: ensure hook_executor is initialized for fresh sessions — it is
+    // only set by apply_workspace_runtime_state (session resume / workspace
+    // switch), so a brand-new session would otherwise leave it None and both
+    // exec_shell shell_env hooks and ToolCallBefore gate would silently no-op.
+    if app.runtime_services.hook_executor.is_none() {
+        app.runtime_services.hook_executor =
+            Some(std::sync::Arc::new(app.hooks.clone()));
+    }
     app.runtime_services = RuntimeToolServices {
         shell_manager: Some(shell_manager),
         task_manager: Some(task_manager.clone()),
