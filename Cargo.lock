@@ -1014,6 +1014,7 @@ dependencies = [
  "multimap",
  "objc2",
  "objc2-foundation",
+ "parking_lot",
  "pdf-extract",
  "portable-pty",
  "pretty_assertions",

@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+
+use parking_lot::RwLock;
 
 const MAX_RESULTS: usize = 10;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
@@ -26,7 +28,23 @@ const MAX_PAGES_PER_SESSION: usize = 256;
 const WEB_RUN_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
-static WEB_RUN_STATE: OnceLock<Mutex<WebRunState>> = OnceLock::new();
+/// Split-state cache: sessions and pages are protected by separate RwLocks
+/// so that concurrent `get_page` calls (read path) don't block each other.
+static WEB_RUN_STATE: OnceLock<WebRunCache> = OnceLock::new();
+
+struct WebRunCache {
+    sessions: RwLock<HashMap<String, WebRunSessionState>>,
+    pages: RwLock<HashMap<String, StoredWebPage>>,
+}
+
+impl Default for WebRunCache {
+    fn default() -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            pages: RwLock::new(HashMap::new()),
+        }
+    }
+}
 
 #[derive(Default)]
 struct WebRunState {
@@ -576,7 +594,7 @@ impl ToolSpec for WebRunTool {
                 let page = resolve_or_fetch_page(&ref_id, DEFAULT_OPEN_TIMEOUT_MS, context).await?;
                 view_counter += 1;
                 let view_ref = format!("{scope}turn{turn}view{view_counter}");
-                store_page(&context.state_namespace, &view_ref, page.clone());
+                store_page(&context.state_namespace, &view_ref, (*page).clone());
 
                 let view = render_view(&view_ref, &page, lineno, response_length);
                 views.push(view);
@@ -607,7 +625,7 @@ impl ToolSpec for WebRunTool {
                     resolve_or_fetch_page(&target, DEFAULT_OPEN_TIMEOUT_MS, context).await?;
                 click_counter += 1;
                 let click_ref = format!("{scope}turn{turn}click{click_counter}");
-                store_page(&context.state_namespace, &click_ref, fetched.clone());
+                store_page(&context.state_namespace, &click_ref, (*fetched).clone());
                 let view = render_view(&click_ref, &fetched, 1, response_length);
                 views.push(view);
             }
@@ -653,12 +671,22 @@ impl ToolSpec for WebRunTool {
 }
 
 fn with_state<T>(f: impl FnOnce(&mut WebRunState) -> T) -> T {
-    let lock = WEB_RUN_STATE.get_or_init(|| Mutex::new(WebRunState::default()));
-    let mut state = lock
-        .lock()
-        .expect("web run state mutex should not be poisoned");
+    let cache = WEB_RUN_STATE.get_or_init(WebRunCache::default);
+    // Take exclusive locks on both maps to maintain the same semantics as
+    // the original single-Mutex design. The split is beneficial for the
+    // read path (`get_page`) which uses read locks instead.
+    let mut sessions = cache.sessions.write();
+    let mut pages = cache.pages.write();
+    let mut state = WebRunState {
+        sessions: std::mem::take(&mut *sessions),
+        pages: std::mem::take(&mut *pages),
+    };
     state.cleanup();
-    f(&mut state)
+    let result = f(&mut state);
+    // Write back.
+    *sessions = state.sessions;
+    *pages = state.pages;
+    result
 }
 
 fn scoped_ref_prefix(namespace: &str) -> String {
@@ -673,8 +701,12 @@ fn store_page(namespace: &str, ref_id: &str, page: WebPage) {
     });
 }
 
-fn get_page(ref_id: &str) -> Option<WebPage> {
-    with_state(|state| state.get_page(ref_id))
+/// Retrieve a cached page by ref_id.
+///
+/// Returns `Arc<WebPage>` so callers share the same allocation instead of
+/// cloning the (potentially large) page content on every read.
+fn get_page(ref_id: &str) -> Option<Arc<WebPage>> {
+    with_state(|state| state.get_page(ref_id).map(Arc::new))
 }
 
 #[cfg(test)]
@@ -693,13 +725,13 @@ async fn resolve_or_fetch_page(
     ref_id: &str,
     timeout_ms: u64,
     context: &ToolContext,
-) -> Result<WebPage, ToolError> {
+) -> Result<Arc<WebPage>, ToolError> {
     if let Some(page) = get_page(ref_id) {
         return Ok(page);
     }
     if looks_like_url(ref_id) {
         check_network_policy(ref_id, context)?;
-        return fetch_page(ref_id, timeout_ms).await;
+        return fetch_page(ref_id, timeout_ms).await.map(Arc::new);
     }
     Err(ToolError::invalid_input(format!(
         "Unknown ref_id '{ref_id}'"
