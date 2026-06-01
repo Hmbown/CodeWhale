@@ -107,6 +107,29 @@ environment. Project-local config overlays intentionally cannot set those keys,
 so a repository cannot silently redirect prompts or credentials to another
 endpoint.
 
+## Choosing Between `openai`, `vllm`, `sglang`, And `ollama`
+
+Use the provider ID that describes the service boundary you are actually
+calling. All four routes speak an OpenAI-compatible Chat Completions shape, but
+CodeWhale applies different defaults, auth expectations, and reasoning-control
+metadata per provider.
+
+| Situation | Provider ID | Why |
+| --- | --- | --- |
+| A hosted gateway or proxy exposes an OpenAI-compatible `/v1/chat/completions` endpoint | `openai` | Generic route for third-party gateways. Set `[providers.openai].base_url` and `model`, or `OPENAI_BASE_URL` / `OPENAI_MODEL`. |
+| A local or private vLLM server exposes OpenAI-compatible chat completions | `vllm` | Uses vLLM defaults, optional auth, loopback HTTP allowance, and vLLM-specific reasoning toggles. |
+| A local or private SGLang server exposes OpenAI-compatible chat completions | `sglang` | Uses SGLang defaults and model aliases for self-hosted DeepSeek-compatible serving. |
+| An Ollama server exposes its OpenAI-compatible endpoint | `ollama` | Sends Ollama model tags through unchanged and defaults to `http://localhost:11434/v1`. |
+
+If a hosted service says it is "OpenAI-compatible" but is not specifically a
+vLLM, SGLang, or Ollama deployment you control, start with `provider = "openai"`.
+If you are pointing directly at your own local vLLM or SGLang server, use the
+dedicated provider so diagnostics and reasoning metadata match that runtime.
+
+CodeWhale's LLM provider paths do not send OpenAI Responses API payloads today.
+They use Chat Completions endpoints; a service that only exposes
+`/v1/responses` needs an adapter or gateway that accepts Chat Completions.
+
 ## Shipped Providers
 
 | Provider ID | TOML table | Auth env | Base URL env and default | Default or static models | Notes |

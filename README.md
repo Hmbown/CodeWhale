@@ -298,6 +298,8 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 
 For the full shipped provider registry, including model IDs, auth variables,
 base URLs, and capability boundaries, see [docs/PROVIDERS.md](docs/PROVIDERS.md).
+That page also covers when to choose `openai` versus self-hosted `vllm`,
+`sglang`, or `ollama`, and notes the current Chat Completions API boundary.
 
 ```bash
 # NVIDIA NIM
