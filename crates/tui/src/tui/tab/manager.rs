@@ -272,7 +272,6 @@ impl TabManager {
             };
             self.delegator.pending_tasks.push(task);
         }
-        self.delegator.advance_next_id_past_existing_tasks();
 
         // Restore groups AFTER tabs so tab_ids can reference real tabs
         for g in &state.groups {
@@ -288,7 +287,6 @@ impl TabManager {
                 self.groups.tab_to_group.insert(*tab_id, g.id.clone());
             }
         }
-        self.groups.advance_next_id_past_existing_groups();
 
         if let Some(idx) = state.active_tab_index {
             if idx < self.tabs.len() {
@@ -998,70 +996,5 @@ mod tests {
         assert_eq!(restored_tasks.len(), 1);
         assert_eq!(restored_tasks[0].status, DelegationStatus::InProgress);
         assert_eq!(restored_tasks[0].task_id, task_id);
-    }
-
-    #[test]
-    fn test_restore_advances_delegation_ids() {
-        use super::super::Priority;
-
-        let mut manager = TabManager::new();
-        let from = manager
-            .create_tab("Source".to_string(), TabType::Chat)
-            .unwrap();
-        let to = manager
-            .create_tab("Target".to_string(), TabType::Chat)
-            .unwrap();
-
-        let restored_id = manager
-            .delegate_task(from, to, "restored".to_string(), Priority::Normal)
-            .unwrap();
-        assert_eq!(restored_id, "delegation_1");
-
-        let snapshot = manager.snapshot();
-        let mut restored = TabManager::new();
-        restored.restore_from_snapshot(&snapshot);
-
-        let fresh_id = restored
-            .delegate_task(from, to, "fresh".to_string(), Priority::Normal)
-            .unwrap();
-        assert_eq!(fresh_id, "delegation_2");
-    }
-
-    #[test]
-    fn test_restore_advances_group_ids() {
-        use super::super::group::GroupColor;
-
-        let mut manager = TabManager::new();
-        let tab = manager
-            .create_tab("Grouped".to_string(), TabType::Chat)
-            .unwrap();
-        let restored_group = manager.create_group("Restored".to_string(), GroupColor::Blue);
-        assert_eq!(restored_group, "group_1");
-        assert!(manager.assign_tab_to_group(tab, &restored_group));
-
-        let snapshot = manager.snapshot();
-        let mut restored = TabManager::new();
-        restored.restore_from_snapshot(&snapshot);
-
-        let fresh_group = restored.create_group("Fresh".to_string(), GroupColor::Green);
-        assert_eq!(fresh_group, "group_2");
-        assert!(
-            restored
-                .groups()
-                .all_groups()
-                .iter()
-                .any(|g| g.id == "group_1")
-        );
-        assert!(
-            restored
-                .groups()
-                .all_groups()
-                .iter()
-                .any(|g| g.id == "group_2")
-        );
-        assert_eq!(
-            restored.tab_group(tab).map(|g| g.id.as_str()),
-            Some("group_1")
-        );
     }
 }
