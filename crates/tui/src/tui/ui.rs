@@ -1287,6 +1287,13 @@ async fn run_event_loop(
                                 threshold,
                                 turn_elapsed,
                             );
+                            // Notification hook (Claude Code `Notification`
+                            // analog): mirror the user-facing notification to
+                            // any configured external notifier.
+                            if app.hooks.has_hooks_for_event(HookEvent::Notification) {
+                                let ctx = app.base_hook_context().with_message(&msg);
+                                let _ = app.execute_hooks(HookEvent::Notification, &ctx);
+                            }
                         }
 
                         // Auto-save completed turn and clear crash checkpoint.
@@ -1298,6 +1305,20 @@ async fn run_event_loop(
                             persistence_actor::persist(PersistRequest::SessionSnapshot(session));
                         }
                         persistence_actor::persist(PersistRequest::ClearCheckpoint);
+
+                        // Stop hook: the assistant finished a turn (Claude Code
+                        // `Stop` analog). Fires for completed / interrupted /
+                        // failed so user-configured notifiers, auto-format, or
+                        // auto-test can run on completion.
+                        if app.hooks.has_hooks_for_event(HookEvent::Stop) {
+                            let status_label = match status {
+                                crate::core::events::TurnOutcomeStatus::Completed => "completed",
+                                crate::core::events::TurnOutcomeStatus::Interrupted => "interrupted",
+                                crate::core::events::TurnOutcomeStatus::Failed => "failed",
+                            };
+                            let ctx = app.base_hook_context().with_turn_status(status_label);
+                            let _ = app.execute_hooks(HookEvent::Stop, &ctx);
+                        }
 
                         if app.mode == AppMode::Plan
                             && app.plan_tool_used_in_turn
@@ -1375,6 +1396,13 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::CompactionStarted { message, .. } => {
+                        // PreCompact hook (Claude Code analog): fires as
+                        // compaction begins, before the summary replaces the
+                        // transcript. Covers manual /compact and auto-compaction.
+                        if app.hooks.has_hooks_for_event(HookEvent::PreCompact) {
+                            let ctx = app.base_hook_context();
+                            let _ = app.execute_hooks(HookEvent::PreCompact, &ctx);
+                        }
                         app.is_compacting = true;
                         app.status_message = Some(message);
                     }
@@ -1493,6 +1521,14 @@ async fn run_event_loop(
                             "Sub-agent {id} completed: {}",
                             summarize_tool_output(&result)
                         ));
+                        // SubagentStop hook (Claude Code analog): fires when a
+                        // sub-agent finishes, carrying its id and result summary.
+                        if app.hooks.has_hooks_for_event(HookEvent::SubagentStop) {
+                            let ctx = app
+                                .base_hook_context()
+                                .with_message(&format!("subagent {id}: {}", summarize_tool_output(&result)));
+                            let _ = app.execute_hooks(HookEvent::SubagentStop, &ctx);
+                        }
                         let should_recapture_terminal =
                             !has_other_running_subagents && app.use_alt_screen;
                         if !has_other_running_subagents

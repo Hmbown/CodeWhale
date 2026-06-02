@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Four new lifecycle hook events — `stop`, `subagent_stop`,
+  `pre_compact`, `notification`** — bringing the hook surface in line
+  with Claude Code's most-used lifecycle hooks. `stop` fires when the
+  assistant finishes a turn (with `DEEPSEEK_TURN_STATUS` =
+  `completed`/`interrupted`/`failed`), the natural place to hang
+  auto-format, auto-test, or a custom notifier. `subagent_stop` fires
+  when a sub-agent completes. `pre_compact` fires as context
+  compaction begins (manual `/compact` or auto), before the summary
+  replaces the transcript — use it to snapshot first. `notification`
+  mirrors user-facing desktop notifications to external notifiers.
+  All are configurable via `[[hooks.hooks]]` and listed by `/hooks`.
+
+### Documentation
+
+- **`CLAUDE_CODE_GAP_ANALYSIS.md`** — a grounded comparison of the
+  agent against the latest Claude Code across prompts, tools,
+  skills/subagents, and lifecycle, with a prioritized modernization
+  roadmap.
+
+### Changed
+
+- **System prompt: behavioral alignment with current Claude Code
+  norms** — added Engineering Altitude (solve at the right level; no
+  over/under-engineering), Acting Safely (confirm irreversible &
+  outward-facing actions; look before overwrite), Editing Code: Fit In
+  (match surrounding style, reuse first, no drive-by churn),
+  clickable `path:line`/PR references, scheduling discipline, and
+  sharper plan-mode etiquette. Additions land above the locale closer
+  and keep the prompt byte-stable for unchanged workspaces.
+
+### Repository
+
+- **Enforce LF line endings via `.gitattributes`** — the working tree
+  had drifted to CRLF on every text file, rendering diffs unreviewable
+  (467 files of pure line-ending noise). Diffs now reflect real
+  changes only.
+
 ## [0.8.32] - 2026-05-12
 
 A "more useful tools" release. v0.8.31 made the tool surface

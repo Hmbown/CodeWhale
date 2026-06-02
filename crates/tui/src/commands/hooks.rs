@@ -63,6 +63,22 @@ fn events() -> CommandResult {
             HookEvent::OnError,
             "fires on transport / capacity / tool errors",
         ),
+        (
+            HookEvent::Stop,
+            "fires when the assistant finishes a turn (DEEPSEEK_TURN_STATUS = completed/interrupted/failed)",
+        ),
+        (
+            HookEvent::SubagentStop,
+            "fires when a sub-agent finishes (DEEPSEEK_MESSAGE carries id + result summary)",
+        ),
+        (
+            HookEvent::PreCompact,
+            "fires as context compaction begins (manual /compact or auto)",
+        ),
+        (
+            HookEvent::Notification,
+            "fires when a user-facing notification is surfaced (DEEPSEEK_MESSAGE)",
+        ),
     ];
     for (event, desc) in ordered {
         out.push_str(&format!("  - `{}` — {desc}\n", event_label(event)));
@@ -139,6 +155,10 @@ fn event_label(event: HookEvent) -> &'static str {
         HookEvent::ModeChange => "mode_change",
         HookEvent::OnError => "on_error",
         HookEvent::ShellEnv => "shell_env",
+        HookEvent::Stop => "stop",
+        HookEvent::SubagentStop => "subagent_stop",
+        HookEvent::PreCompact => "pre_compact",
+        HookEvent::Notification => "notification",
     }
 }
 
@@ -298,6 +318,10 @@ mod tests {
         assert_eq!(event_label(HookEvent::MessageSubmit), "message_submit");
         assert_eq!(event_label(HookEvent::ModeChange), "mode_change");
         assert_eq!(event_label(HookEvent::OnError), "on_error");
+        assert_eq!(event_label(HookEvent::Stop), "stop");
+        assert_eq!(event_label(HookEvent::SubagentStop), "subagent_stop");
+        assert_eq!(event_label(HookEvent::PreCompact), "pre_compact");
+        assert_eq!(event_label(HookEvent::Notification), "notification");
     }
 
     #[test]

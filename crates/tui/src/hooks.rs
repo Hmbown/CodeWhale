@@ -46,6 +46,21 @@ pub enum HookEvent {
     /// fail or time out are logged but do *not* abort the shell call; they
     /// simply contribute no env vars.
     ShellEnv,
+    /// Triggered when the assistant finishes a turn (response complete,
+    /// interrupted, or failed). The Claude Code `Stop` analog — the most
+    /// common place to hang auto-format, auto-test, or a desktop notification.
+    /// `DEEPSEEK_TURN_STATUS` carries `completed` / `interrupted` / `failed`.
+    Stop,
+    /// Triggered when a sub-agent finishes. The `SubagentStop` analog.
+    SubagentStop,
+    /// Triggered as context compaction begins, before the summary replaces
+    /// the transcript — covers both manual `/compact` and auto-compaction.
+    /// The `PreCompact` analog; use it to snapshot or checkpoint first.
+    PreCompact,
+    /// Triggered when DeepSeek surfaces a user-facing notification (e.g. the
+    /// long-turn desktop notification). The `Notification` analog — route it
+    /// to your own notifier (Slack, ntfy, system tray).
+    Notification,
 }
 
 impl HookEvent {
@@ -61,6 +76,10 @@ impl HookEvent {
             HookEvent::ModeChange => "mode_change",
             HookEvent::OnError => "on_error",
             HookEvent::ShellEnv => "shell_env",
+            HookEvent::Stop => "stop",
+            HookEvent::SubagentStop => "subagent_stop",
+            HookEvent::PreCompact => "pre_compact",
+            HookEvent::Notification => "notification",
         }
     }
 }
@@ -251,6 +270,8 @@ pub struct HookContext {
     pub total_tokens: Option<u32>,
     /// Session cost in USD
     pub session_cost: Option<f64>,
+    /// Turn outcome for `Stop`: `completed` / `interrupted` / `failed`
+    pub turn_status: Option<String>,
 }
 
 impl HookContext {
@@ -328,6 +349,11 @@ impl HookContext {
         self
     }
 
+    pub fn with_turn_status(mut self, status: &str) -> Self {
+        self.turn_status = Some(status.to_string());
+        self
+    }
+
     /// Convert to environment variables
     pub fn to_env_vars(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
@@ -397,6 +423,9 @@ impl HookContext {
         }
         if let Some(cost) = self.session_cost {
             env.insert("DEEPSEEK_SESSION_COST".to_string(), format!("{cost:.6}"));
+        }
+        if let Some(ref status) = self.turn_status {
+            env.insert("DEEPSEEK_TURN_STATUS".to_string(), status.clone());
         }
 
         env
