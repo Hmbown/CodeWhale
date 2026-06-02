@@ -1228,6 +1228,7 @@ fn parse_env_lines(stdout: &str) -> HashMap<String, String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    #[cfg(not(windows))]
     use std::fs;
     use std::path::PathBuf;
 
