@@ -7,7 +7,6 @@ release_crates=(
   codewhale-config
   codewhale-protocol
   codewhale-state
-  codewhale-agent
   codewhale-execpolicy
   codewhale-hooks
   codewhale-mcp

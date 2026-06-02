@@ -17,7 +17,7 @@ Sources to keep in sync:
 - `crates/config/src/lib.rs` - shared provider IDs, defaults, env precedence.
 - `crates/tui/src/config.rs` - TUI provider IDs, provider capability metadata,
   and provider-specific env handling.
-- `crates/agent/src/lib.rs` - static `ModelRegistry` used by
+- `crates/config/src/model_registry.rs` - static `ModelRegistry` used by
   `codewhale model list` and `codewhale model resolve`.
 - `config.example.toml` and `docs/CONFIGURATION.md` - user-facing config
   examples and environment variable reference.
@@ -151,7 +151,8 @@ context multimodal model for coding, tool use, and long-horizon agentic work.
 ## Static Model Registry
 
 `codewhale model list` and `codewhale model resolve` use the static registry in
-`crates/agent/src/lib.rs`. This is not the same as live `/models` discovery.
+`crates/config/src/model_registry.rs`. This is not the same as live `/models`
+discovery.
 Use `/models` or `codewhale models` to fetch model IDs from the active API
 endpoint when the endpoint supports model listing.
 
@@ -226,7 +227,7 @@ The check fails when:
   `ProviderKind::as_str()` except for the explicit `deepseek-cn` legacy alias.
 - The shipped-provider table omits or adds a `[providers.*]` TOML table.
 - The static model registry table drifts from providers used by
-  `crates/agent/src/lib.rs`.
+  `crates/config/src/model_registry.rs`.
 - A provider default model or base URL constant in `crates/tui/src/config.rs`
   is no longer mentioned here.
 
@@ -235,10 +236,10 @@ The check fails when:
 These items belong to the v0.8.48+ provider-abstraction milestone or related
 provider docs work, but they are not native shipped behavior in this checkout:
 
-- A unified `Provider` trait in `codewhale-agent` that owns env precedence,
-  secret resolution, base URL normalization, auth-header construction, and
-  provider metadata. Those responsibilities are still split across
-  `crates/config`, `crates/secrets`, and `crates/tui/src/client.rs`.
+- A unified provider abstraction that owns env precedence, secret resolution,
+  base URL normalization, auth-header construction, and provider metadata.
+  Those responsibilities are still split across `crates/config`,
+  `crates/secrets`, and `crates/tui/src/client.rs`.
 - A native Hugging Face provider such as `[providers.huggingface]`.
 - Native Hugging Face auth envs such as `HF_TOKEN` or `HUGGINGFACE_API_KEY`.
 - A default Hugging Face router base URL such as

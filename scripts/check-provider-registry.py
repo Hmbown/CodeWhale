@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_RS = ROOT / "crates" / "config" / "src" / "lib.rs"
 TUI_CONFIG_RS = ROOT / "crates" / "tui" / "src" / "config.rs"
-AGENT_RS = ROOT / "crates" / "agent" / "src" / "lib.rs"
+MODEL_REGISTRY_RS = ROOT / "crates" / "config" / "src" / "model_registry.rs"
 PROVIDERS_MD = ROOT / "docs" / "PROVIDERS.md"
 
 
@@ -126,8 +126,8 @@ def static_registry_provider_rows(providers_md: str) -> set[str]:
     return set(re.findall(r"^\|\s*`([^`]+)`\s*\|", table, flags=re.MULTILINE))
 
 
-def model_registry_providers(agent_rs: str, variant_to_id: dict[str, str]) -> set[str]:
-    variants = set(re.findall(r"provider:\s*ProviderKind::(\w+)", agent_rs))
+def model_registry_providers(model_registry_rs: str, variant_to_id: dict[str, str]) -> set[str]:
+    variants = set(re.findall(r"provider:\s*ProviderKind::(\w+)", model_registry_rs))
     missing = variants - set(variant_to_id)
     if missing:
         raise ValueError(f"ModelRegistry uses unknown provider variants: {sorted(missing)}")
@@ -199,7 +199,7 @@ def main() -> int:
     try:
         config_rs = read(CONFIG_RS)
         tui_config_rs = read(TUI_CONFIG_RS)
-        agent_rs = read(AGENT_RS)
+        model_registry_rs = read(MODEL_REGISTRY_RS)
         providers_md = read(PROVIDERS_MD)
 
         variant_to_id = provider_kind_ids(config_rs)
@@ -222,7 +222,7 @@ def main() -> int:
         )
         errors += report_set(
             "static ModelRegistry rows",
-            model_registry_providers(agent_rs, variant_to_id),
+            model_registry_providers(model_registry_rs, variant_to_id),
             static_registry_provider_rows(providers_md),
         )
 

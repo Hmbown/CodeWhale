@@ -9,10 +9,10 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-use codewhale_config::ModelRegistry;
 use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
+use codewhale_config::ModelRegistry;
 use codewhale_config::{
     CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
 };

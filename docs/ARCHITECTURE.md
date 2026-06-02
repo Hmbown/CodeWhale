@@ -88,7 +88,7 @@ Current boundary note (v0.8.6):
 ### Workspace Crates
 
 - **`crates/tools`** - Shared tool invocation primitives, including tool result/error/capability types used by the TUI runtime.
-- **`crates/agent`** - Model/provider registry (ModelRegistry) for resolving model IDs to provider endpoints.
+- **`crates/config/src/model_registry.rs`** - Static model/provider registry (ModelRegistry) for resolving model IDs to provider endpoints.
 - **`crates/app-server`** - HTTP/SSE + JSON-RPC app server transport for headless agent workflows.
 - **`crates/config`** - Config loading, profiles, environment variable precedence, CLI runtime overrides.
 - **`crates/core`** - Agent loop, session management, turn orchestration, capacity flow guardrails.

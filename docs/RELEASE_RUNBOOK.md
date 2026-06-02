@@ -17,7 +17,6 @@ Current packaging note:
   - `codewhale-config`
   - `codewhale-protocol`
   - `codewhale-state`
-  - `codewhale-agent`
   - `codewhale-execpolicy`
   - `codewhale-hooks`
   - `codewhale-mcp`
@@ -123,7 +122,6 @@ configured.
    - `codewhale-config`
    - `codewhale-protocol`
    - `codewhale-state`
-   - `codewhale-agent`
    - `codewhale-execpolicy`
    - `codewhale-hooks`
    - `codewhale-mcp`
