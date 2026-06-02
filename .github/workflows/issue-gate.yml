@@ -55,7 +55,6 @@ jobs:
             const allowlist = await readAllowlist();
             const login = issue.user.login.toLowerCase();
             if (
-              allowlist.has(login) ||
               allowlist.has(`all:${login}`) ||
               allowlist.has(`issue:${login}`)
             ) {

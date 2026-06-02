@@ -42,6 +42,15 @@ jobs:
               });
               return;
             }
+            if (scope === 'issue' && issue.pull_request) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: '`/lgtmi` grants issue access and must be used on an issue. Use `/lgtm` to grant PR access.',
+              });
+              return;
+            }
 
             const path = '.github/APPROVED_CONTRIBUTORS';
             const targetLogin = issue.user.login;

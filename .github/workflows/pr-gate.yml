@@ -24,7 +24,6 @@ jobs:
 
             if (privileged.has(pr.author_association)) return;
             if (pr.user.login === 'github-actions[bot]') return;
-            if ((pr.head.ref || '').startsWith('contribution-gate/')) return;
 
             function parseAllowlist(content) {
               return new Set(
@@ -56,7 +55,6 @@ jobs:
             const allowlist = await readAllowlist();
             const login = pr.user.login.toLowerCase();
             if (
-              allowlist.has(login) ||
               allowlist.has(`all:${login}`) ||
               allowlist.has(`pr:${login}`)
             ) {
