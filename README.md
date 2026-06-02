@@ -401,6 +401,10 @@ codewhale mcp-server                              # run dispatcher MCP stdio ser
 codewhale update                                  # check for and apply binary updates
 ```
 
+Inside the interactive TUI composer, prefix a line with `!` to run a shell
+command through the normal approval, sandbox, and output surfaces, for example
+`! cargo test -p codewhale-tui sidebar`.
+
 ### Branching Conversations
 
 Saved sessions are intentionally branchable. `codewhale fork <SESSION_ID>` copies

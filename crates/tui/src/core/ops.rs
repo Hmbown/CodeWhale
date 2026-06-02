@@ -9,6 +9,9 @@ use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use std::path::PathBuf;
 
+/// Prefix used for tool-call ids created by local composer shell shortcuts.
+pub const USER_SHELL_TOOL_ID_PREFIX: &str = "user_shell_";
+
 /// Operations that can be submitted to the engine.
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -35,6 +38,17 @@ pub enum Op {
         /// Tool restriction from custom slash command frontmatter.
         /// `None` means the current turn may use the normal tool set.
         allowed_tools: Option<Vec<String>>,
+    },
+
+    /// Execute a user-submitted composer shell command (`! <command>`) without
+    /// sending a model turn. This still routes through `exec_shell`, approval,
+    /// sandbox, and command-safety handling.
+    RunShellCommand {
+        command: String,
+        mode: AppMode,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: ApprovalMode,
     },
 
     /// Cancel the current request

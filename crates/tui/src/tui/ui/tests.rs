@@ -2912,6 +2912,65 @@ fn event_poll_timeout_has_nonzero_floor() {
     );
 }
 
+#[tokio::test]
+async fn bang_shell_input_dispatches_shell_op_instead_of_model_message() {
+    let mut app = create_test_app();
+    app.mode = AppMode::Agent;
+    app.trust_mode = false;
+
+    let mut engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "! pwd")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Shell command submitted: pwd")
+    );
+
+    let op = engine.rx_op.recv().await.expect("engine op");
+    match op {
+        Op::RunShellCommand {
+            command,
+            mode,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        } => {
+            assert_eq!(command, "pwd");
+            assert_eq!(mode, AppMode::Agent);
+            assert!(!trust_mode);
+            assert!(!auto_approve);
+            assert_eq!(approval_mode, ApprovalMode::Suggest);
+        }
+        other => panic!("expected RunShellCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn empty_bang_shell_input_is_consumed_with_usage_error() {
+    let mut app = create_test_app();
+    let engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "!   ")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Error: Usage: ! <shell command>")
+    );
+}
+
+#[test]
+fn local_bang_shell_tool_ids_are_not_model_visible() {
+    assert!(!is_model_visible_tool_call("user_shell_1"));
+    assert!(is_model_visible_tool_call("toolu_01abc"));
+}
+
 fn complete_release_json(tag: &str) -> serde_json::Value {
     let assets = REQUIRED_RELEASE_ASSETS
         .iter()

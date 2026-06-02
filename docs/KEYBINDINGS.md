@@ -45,6 +45,7 @@ Editing the message you're about to send.
 | `Alt-R`                    | Search prompt history (Alt-R to exit)                  |
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
 | `Ctrl-O`                    | Open external editor for the composer draft when it has focus |
+| `! command`                 | Run a shell command through normal approval, sandbox, and output surfaces |
 
 ### `@` mentions
 
