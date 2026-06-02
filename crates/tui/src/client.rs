@@ -361,12 +361,33 @@ fn validate_base_url_security(base_url: &str) -> Result<()> {
     )
 }
 
-pub(super) fn versioned_base_url(base_url: &str, version: &str) -> String {
+fn normalize_version(version: &str) -> String {
+    version.trim_start_matches('/').to_string()
+}
+
+pub(super) fn versioned_base_url(base_url: &str, version: Option<&str>) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    if base_url_has_version_suffix(trimmed) {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}{version}")
+    let has_version = base_url_has_version_suffix(trimmed);
+    let end_with_beta = trimmed.ends_with("/beta");
+    match (version, has_version, end_with_beta) {
+        // cover version when version is some
+        (Some(version), _, _) => {
+            let base = unversioned_base_url(trimmed);
+            format!("{}/{}", base, version)
+        }
+        // The /beta suffix is not a real API version — it is an
+        // opt-in surface for beta features.  Only paths with an
+        // explicit `beta/` prefix should hit the beta surface;
+        // everything else (models, chat/completions, health, …)
+        // must go to the standard /v1 surface.
+        (None, _, true) => {
+            let base = unversioned_base_url(trimmed);
+            format!("{base}/v1")
+        }
+        // not add v1 when base_url has version suffix
+        (None, true, false) => trimmed.to_string(),
+        // add v1 when base_url does not have version suffix
+        (None, false, false) => format!("{trimmed}/v1"),
     }
 }
 
@@ -397,19 +418,10 @@ pub(super) fn api_url(base_url: &str, path: &str, path_suffix: Option<&str>) -> 
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
     }
-    let mut versioned = versioned_base_url(base_url, path_suffix.unwrap_or("/v1"));
-    // The /beta suffix is not a real API version — it is an
-    // opt-in surface for beta features.  Only paths with an
-    // explicit `beta/` prefix should hit the beta surface;
-    // everything else (models, chat/completions, health, …)
-    // must go to the standard /v1 surface.
-    if versioned.ends_with("beta") {
-        versioned = format!(
-            "{}{}",
-            unversioned_base_url(base_url),
-            path_suffix.unwrap_or("/v1")
-        );
-    }
+    let version = path_suffix.map(normalize_version);
+
+    let versioned = versioned_base_url(base_url, version.as_deref());
+
     format!("{}/{}", versioned.trim_end_matches('/'), path)
 }
 
@@ -1243,7 +1255,7 @@ mod tests {
         );
         assert_eq!(
             api_url("https://api.deepseek.com/v1", "chat/completions", Some("")),
-            "https://api.deepseek.com/v1/chat/completions"
+            "https://api.deepseek.com/chat/completions"
         );
         // Non-beta paths from a /beta base URL route to /v1.
         // Only paths with an explicit beta/ prefix use the beta surface.
@@ -1343,7 +1355,51 @@ mod tests {
                 "models",
                 Some("")
             ),
-            "https://openai-compatible.example/api/coding/paas/v4/models"
+            "https://openai-compatible.example/api/coding/paas/models"
+        );
+    }
+
+    #[test]
+    fn api_url_with_path_suffix() {
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("")),
+            "https://api.deepseek.com/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("v2")),
+            "https://api.deepseek.com/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("/v2")),
+            "https://api.deepseek.com/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("foo/v2")),
+            "https://api.deepseek.com/foo/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models", Some("/foo/v2")),
+            "https://api.deepseek.com/foo/v2/models"
+        );
+    }
+
+    #[test]
+    fn api_url_path_suffix_cover_version() {
+        assert_eq!(
+            api_url("https://api.deepseek.com/v1", "models", Some("v2")),
+            "https://api.deepseek.com/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/foo/v1", "models", Some("v2")),
+            "https://api.deepseek.com/foo/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/beta", "models", Some("v2")),
+            "https://api.deepseek.com/v2/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/foo/beta", "models", Some("v2")),
+            "https://api.deepseek.com/foo/v2/models"
         );
     }
 
