@@ -33,6 +33,8 @@ use tracing;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMode};
 
+use tokio::sync::mpsc::error::TryRecvError;
+
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
 use crate::client::{
@@ -89,7 +91,6 @@ use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
 use crate::tui::scrolling::TranscriptScroll;
-use tokio::sync::mpsc::error::TryRecvError;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
 use crate::tui::shell_job_routing::{
@@ -2242,7 +2243,9 @@ async fn run_event_loop(
             // The while-let loop above exits silently on Err, so we must
             // check post-loop and recover the UI state immediately instead
             // of waiting for the 300-second TURN_STALL_WATCHDOG_TIMEOUT.
-            if app.is_loading && matches!(rx.try_recv(), Err(TryRecvError::Disconnected)) {
+            if (app.is_loading || app.is_compacting || app.is_purging)
+                && matches!(rx.try_recv(), Err(TryRecvError::Disconnected))
+            {
                 streaming_thinking::finalize_current(app);
                 app.finalize_streaming_assistant_as_interrupted();
                 app.finalize_active_cell_as_interrupted();
@@ -2251,6 +2254,11 @@ async fn run_event_loop(
                 app.streaming_thinking_active_entry = None;
 
                 app.is_loading = false;
+                app.is_compacting = false;
+                app.is_purging = false;
+                app.active_allowed_tools = None;
+                app.agent_progress.clear();
+                app.agent_activity_started_at = None;
                 app.turn_started_at = None;
                 app.turn_last_activity_at = None;
                 app.runtime_turn_status = None;
@@ -2262,6 +2270,7 @@ async fn run_event_loop(
                     StatusToastLevel::Error,
                     None,
                 );
+                app.needs_redraw = true;
             }
         }
         if let Some(index) = app.streaming_message_index {
