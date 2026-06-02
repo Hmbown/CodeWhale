@@ -136,6 +136,7 @@ pub enum ApiProvider {
     Novita,
     Fireworks,
     Siliconflow,
+    SiliconflowCn,
     Moonshot,
     Sglang,
     Vllm,
@@ -164,6 +165,7 @@ impl ApiProvider {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
+            "siliconflow-cn" | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => Some(Self::SiliconflowCn),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
@@ -187,6 +189,7 @@ impl ApiProvider {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
+            Self::SiliconflowCn => "siliconflow-cn",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
@@ -210,6 +213,7 @@ impl ApiProvider {
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
             Self::Siliconflow => "SiliconFlow",
+            Self::SiliconflowCn => "SiliconFlow (China)",
             Self::Moonshot => "Moonshot/Kimi",
             Self::Sglang => "SGLang",
             Self::Vllm => "vLLM",
@@ -232,6 +236,7 @@ impl ApiProvider {
             Self::Novita,
             Self::Fireworks,
             Self::Siliconflow,
+            Self::SiliconflowCn,
             Self::Moonshot,
             Self::Sglang,
             Self::Vllm,
@@ -661,7 +666,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
-        ApiProvider::Siliconflow => {
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
             vec![DEFAULT_SILICONFLOW_MODEL, DEFAULT_SILICONFLOW_FLASH_MODEL]
         }
         ApiProvider::Moonshot => vec![DEFAULT_MOONSHOT_MODEL],
@@ -1923,7 +1928,7 @@ impl Config {
             ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
-            ApiProvider::Siliconflow => "providers.siliconflow",
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "providers.siliconflow",
             ApiProvider::Moonshot => "providers.moonshot",
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
@@ -2068,7 +2073,7 @@ impl Config {
             ApiProvider::XiaomiMimo => &providers.xiaomi_mimo,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
-            ApiProvider::Siliconflow => &providers.siliconflow,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &providers.siliconflow,
             ApiProvider::Moonshot => &providers.moonshot,
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
@@ -2161,7 +2166,7 @@ impl Config {
             ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
-            ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_MODEL,
             ApiProvider::Moonshot => DEFAULT_MOONSHOT_MODEL,
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
@@ -2216,6 +2221,7 @@ impl Config {
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
                 ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+                ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
                 ApiProvider::Moonshot => {
                     if self
                         .provider_config()
@@ -2268,6 +2274,7 @@ impl Config {
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
             ApiProvider::Siliconflow => "siliconflow",
+            ApiProvider::SiliconflowCn => "siliconflow-cn",
             ApiProvider::Moonshot => "moonshot",
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
@@ -2366,6 +2373,10 @@ impl Config {
             ),
             ApiProvider::Siliconflow => anyhow::bail!(
                 "SiliconFlow API key not found. Run 'codewhale auth set --provider siliconflow', \
+                 set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.codewhale/config.toml."
+            ),
+            ApiProvider::SiliconflowCn => anyhow::bail!(
+                "SiliconFlow (China) API key not found. Run 'codewhale auth set --provider siliconflow-cn', \
                  set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::Moonshot => anyhow::bail!(
@@ -3032,7 +3043,7 @@ fn apply_env_overrides(config: &mut Config) {
                     .fireworks
                     .base_url = Some(value);
             }
-            ApiProvider::Siliconflow => {
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
                 config
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
@@ -3234,7 +3245,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
-            ApiProvider::Siliconflow => &mut providers.siliconflow,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &mut providers.siliconflow,
             ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
@@ -3361,7 +3372,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
-                ApiProvider::Siliconflow => &mut providers.siliconflow,
+                ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &mut providers.siliconflow,
                 ApiProvider::Moonshot => &mut providers.moonshot,
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
@@ -3674,6 +3685,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+        ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
         ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
@@ -3683,7 +3695,9 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
 }
 
 fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
-    if provider == ApiProvider::Siliconflow && siliconflow_base_url_is_official(base_url) {
+    if (provider == ApiProvider::Siliconflow || provider == ApiProvider::SiliconflowCn)
+        && siliconflow_base_url_is_official(base_url)
+    {
         return false;
     }
     normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
@@ -4380,7 +4394,7 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Fireworks => {
             std::env::var("FIREWORKS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
-        ApiProvider::Siliconflow => {
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
             std::env::var("SILICONFLOW_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
         ApiProvider::Moonshot => {
@@ -4418,7 +4432,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
-        ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "SILICONFLOW_API_KEY",
         ApiProvider::Moonshot => "MOONSHOT_API_KEY",
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
@@ -4521,7 +4535,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
-        ApiProvider::Siliconflow => "providers.siliconflow",
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "providers.siliconflow",
         ApiProvider::Moonshot => "providers.moonshot",
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
@@ -4561,7 +4575,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::XiaomiMimo => "xiaomi_mimo",
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
-        ApiProvider::Siliconflow => "siliconflow",
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "siliconflow",
         ApiProvider::Moonshot => "moonshot",
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
@@ -4654,7 +4668,7 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::XiaomiMimo => Ok("xiaomi_mimo"),
         ApiProvider::Novita => Ok("novita"),
         ApiProvider::Fireworks => Ok("fireworks"),
-        ApiProvider::Siliconflow => Ok("siliconflow"),
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => Ok("siliconflow"),
         ApiProvider::Moonshot => Ok("moonshot"),
         ApiProvider::Sglang => Ok("sglang"),
         ApiProvider::Vllm => Ok("vllm"),
