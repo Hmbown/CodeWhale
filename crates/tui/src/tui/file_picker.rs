@@ -1,10 +1,10 @@
 //! Fuzzy file-picker modal (Ctrl+P).
 //!
 //! Opens an overlay populated with workspace-relative paths discovered by a
-//! single-pass `WalkBuilder` walk (depth 6, hidden=true, follow_links=false,
-//! `.gitignore` honored). Subsequent keystrokes filter the cached candidate
-//! list in memory using a small subsequence + first-letter-bonus scorer — no
-//! per-keystroke disk traversal.
+//! single-pass `WalkBuilder` walk (default depth 6, hidden=true,
+//! follow_links=false, `.gitignore` honored). Subsequent keystrokes filter the
+//! cached candidate list in memory using a small subsequence +
+//! first-letter-bonus scorer — no per-keystroke disk traversal.
 //!
 //! Enter emits a [`ViewEvent::FilePickerSelected`] which the UI handler turns
 //! into an `@<path>` insertion at the composer cursor.
@@ -32,6 +32,7 @@ use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_di
 const MAX_CANDIDATES: usize = 20_000;
 
 /// Walk depth for the initial scan. Mirrors the `Workspace` fuzzy index.
+#[cfg(test)]
 const WALK_DEPTH: usize = 6;
 
 /// Visible candidate rows in the overlay.
@@ -122,8 +123,19 @@ pub struct FilePickerView {
 
 impl FilePickerView {
     /// Build a picker with working-set relevance hints.
+    #[cfg(test)]
     pub fn new_with_relevance(workspace_root: &Path, relevance: FilePickerRelevance) -> Self {
-        let candidates = collect_candidates(workspace_root);
+        Self::new_with_relevance_and_depth(workspace_root, relevance, WALK_DEPTH)
+    }
+
+    /// Build a picker with an explicit workspace walk depth. A depth of `0`
+    /// disables the cap, matching `mention_walk_depth` for `@` completions.
+    pub fn new_with_relevance_and_depth(
+        workspace_root: &Path,
+        relevance: FilePickerRelevance,
+        walk_depth: usize,
+    ) -> Self {
+        let candidates = collect_candidates(workspace_root, walk_depth);
         let mut view = Self {
             candidates,
             relevance,
@@ -406,16 +418,27 @@ fn truncate_path(path: &str, max: usize) -> String {
     format!("…{truncated}")
 }
 
+fn normalize_walk_depth(depth: usize) -> Option<usize> {
+    if depth == 0 { None } else { Some(depth) }
+}
+
+fn child_walk_depth(depth: Option<usize>) -> Option<usize> {
+    depth.map(|depth| depth.saturating_sub(1))
+}
+
 /// Single-pass walk that collects workspace-relative paths.
-fn collect_candidates(root: &Path) -> Vec<String> {
+fn collect_candidates(root: &Path, walk_depth: usize) -> Vec<String> {
+    let max_depth = normalize_walk_depth(walk_depth);
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(true)
         .follow_links(false)
-        .max_depth(Some(WALK_DEPTH))
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true);
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
+    }
 
     let mut out: Vec<String> = Vec::new();
     for entry in builder.build().flatten() {
@@ -448,8 +471,10 @@ fn collect_candidates(root: &Path) -> Vec<String> {
             .hidden(true)
             .follow_links(false)
             .git_ignore(false)
-            .ignore(false)
-            .max_depth(Some(WALK_DEPTH.saturating_sub(1)));
+            .ignore(false);
+        if let Some(depth) = child_walk_depth(max_depth) {
+            dot_builder.max_depth(Some(depth));
+        }
         for entry in dot_builder.build().flatten() {
             // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
             if path_is_excluded_from_discovery(root, entry.path()) {
@@ -736,6 +761,37 @@ mod tests {
     }
 
     #[test]
+    fn picker_honors_configured_unlimited_walk_depth() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        let deep_dir = root.join("a/b/c/d/e/f/g/h");
+        fs::create_dir_all(&deep_dir).unwrap();
+        fs::write(deep_dir.join("room_chat_shell.dart"), "").unwrap();
+
+        let mut default_view =
+            FilePickerView::new_with_relevance(root, FilePickerRelevance::default());
+        for ch in "room_chat_shell".chars() {
+            default_view.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(
+            default_view.visible_count(),
+            0,
+            "default picker depth should not scan very deep files"
+        );
+
+        let mut unlimited_view =
+            FilePickerView::new_with_relevance_and_depth(root, FilePickerRelevance::default(), 0);
+        for ch in "room_chat_shell".chars() {
+            unlimited_view.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        assert_eq!(
+            unlimited_view.selected_for_test(),
+            Some("a/b/c/d/e/f/g/h/room_chat_shell.dart")
+        );
+    }
+
+    #[test]
     fn picker_skips_generated_worktree_bulk_inside_unignored_dot_dirs() {
         let dir = TempDir::new().expect("tempdir");
         let root = dir.path();
@@ -760,7 +816,7 @@ mod tests {
         )
         .unwrap();
 
-        let candidates = collect_candidates(root);
+        let candidates = collect_candidates(root, WALK_DEPTH);
 
         assert!(candidates.iter().any(|path| path == "src/main.rs"));
         assert!(

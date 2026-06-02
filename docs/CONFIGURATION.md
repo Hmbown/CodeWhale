@@ -528,8 +528,9 @@ Common settings keys:
   `@`-mention popup candidates retained before the composer renders the
   visible window. The visible rows still depend on terminal height.
 - `mention_walk_depth` (integer, default `6`): maximum workspace depth for
-  `@`-mention completion walks. Set to `0` for unlimited depth in deeply
-  nested workspaces; keep the default in very large repos unless needed.
+  `@`-mention completion and Ctrl+P file-picker walks. Set to `0` for
+  unlimited depth in deeply nested workspaces; keep the default in very large
+  repos unless needed.
 - `mention_menu_behavior` (`fuzzy`, `browser`; default `fuzzy`): controls how
   `@`-mention completions are populated. `fuzzy` searches the workspace and
   applies mention frecency. `browser` lists only the immediate children of the
