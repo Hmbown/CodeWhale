@@ -1217,8 +1217,8 @@ impl Engine {
             AppMode::Agent => (
                 "read-only operations run silently; writes, patches, and shell \
                  commands require user approval",
-                "If you previously deferred operations because of YOLO-mode hesitation, \
-                 those operations now require approval before executing.",
+                "Any operations you ran automatically under YOLO mode now require \
+                 explicit user approval before executing.",
             ),
             AppMode::Plan => (
                 "all writes and patches are blocked; shell and code execution are unavailable",

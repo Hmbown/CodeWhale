@@ -1617,6 +1617,61 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
     assert!(prompt.contains("Approval Policy: Auto"));
 }
 
+#[tokio::test]
+async fn change_mode_op_injects_runtime_event_into_session_messages() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+
+    let run = tokio::spawn(engine.run());
+    // Switch from default Agent → YOLO
+    handle
+        .send(Op::ChangeMode {
+            mode: AppMode::Yolo,
+        })
+        .await
+        .expect("send change mode");
+
+    // Collect session-updated events until we see the injected message
+    let messages = {
+        let mut rx = handle.rx_event.write().await;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("session update after mode switch")
+                .expect("event");
+            if let Event::SessionUpdated { messages, .. } = event {
+                // The last message should be our runtime event
+                if let Some(last) = messages.last()
+                    && let ContentBlock::Text { text, .. } =
+                        last.content.first().expect("text block")
+                    && text.contains("kind=\"mode_change\"")
+                {
+                    break messages;
+                }
+            }
+        }
+    };
+    run.abort();
+
+    let last = messages.last().expect("at least one message");
+    let ContentBlock::Text { text, .. } = last.content.first().expect("text block") else {
+        panic!("expected text block");
+    };
+    assert!(
+        text.contains("Agent mode") && text.contains("YOLO mode"),
+        "should contain both previous and new mode: {text}"
+    );
+    assert!(
+        text.contains("Re-evaluate"),
+        "should tell agent to re-evaluate: {text}"
+    );
+}
+
 #[test]
 fn detects_context_length_errors_from_provider_payloads() {
     let msg = r#"SSE stream request failed: HTTP 400 Bad Request: {"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 153056 tokens (148960 in the messages, 4096 in the completion).","type":"invalid_request_error"}}"#;
