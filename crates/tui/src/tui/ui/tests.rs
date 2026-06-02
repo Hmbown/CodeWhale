@@ -2616,18 +2616,20 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
     let (tx_event, mut rx) = tokio::sync::mpsc::channel::<EngineEvent>(256);
     drop(tx_event);
 
-    // Confirm the channel is disconnected
-    assert!(matches!(rx.try_recv(), Err(TryRecvError::Disconnected)));
+    // Confirm the channel is closed
+    assert!(rx.is_closed());
 
     let mut app = create_test_app();
     app.is_loading = true;
+    app.is_compacting = false;
+    app.is_purging = false;
     app.runtime_turn_status = Some("in_progress".to_string());
     app.runtime_turn_id = Some("turn-42".to_string());
     app.streaming_message_index = Some(0);
     app.user_scrolled_during_stream = true;
 
     // Apply the same post-loop logic from ui.rs
-    if app.is_loading && matches!(rx.try_recv(), Err(TryRecvError::Disconnected)) {
+    if (app.is_loading || app.is_compacting || app.is_purging) && rx.is_closed() {
         streaming_thinking::finalize_current(&mut app);
         app.finalize_streaming_assistant_as_interrupted();
         app.finalize_active_cell_as_interrupted();
@@ -2636,6 +2638,11 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
         app.streaming_thinking_active_entry = None;
 
         app.is_loading = false;
+        app.is_compacting = false;
+        app.is_purging = false;
+        app.active_allowed_tools = None;
+        app.agent_progress.clear();
+        app.agent_activity_started_at = None;
         app.turn_started_at = None;
         app.turn_last_activity_at = None;
         app.runtime_turn_status = None;
@@ -2647,14 +2654,21 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
             StatusToastLevel::Error,
             None,
         );
+        app.needs_redraw = true;
     }
 
     // Verify the fix: UI state is fully recovered
     assert!(!app.is_loading, "loading must be cleared");
+    assert!(!app.is_compacting, "compacting must be cleared");
+    assert!(!app.is_purging, "purging must be cleared");
+    assert!(app.active_allowed_tools.is_none());
+    assert!(app.agent_progress.is_empty());
+    assert!(app.agent_activity_started_at.is_none());
     assert!(app.runtime_turn_status.is_none(), "turn status cleared");
     assert!(app.runtime_turn_id.is_none(), "turn id cleared");
     assert!(app.streaming_message_index.is_none());
     assert!(!app.user_scrolled_during_stream);
+    assert!(app.needs_redraw, "needs_redraw must be set");
     let toast = app.status_toasts.back().expect("error toast pushed");
     assert_eq!(toast.level, StatusToastLevel::Error);
     assert!(toast.text.contains("Engine process has terminated"));

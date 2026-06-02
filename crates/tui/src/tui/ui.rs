@@ -2242,9 +2242,7 @@ async fn run_event_loop(
             // UI state immediately instead of waiting for the 300-second
             // TURN_STALL_WATCHDOG_TIMEOUT.  Use is_closed() rather than
             // try_recv() so the probe never consumes a valid event.
-            if (app.is_loading || app.is_compacting || app.is_purging)
-                && rx.is_closed()
-            {
+            if (app.is_loading || app.is_compacting || app.is_purging) && rx.is_closed() {
                 streaming_thinking::finalize_current(app);
                 app.finalize_streaming_assistant_as_interrupted();
                 app.finalize_active_cell_as_interrupted();
