@@ -1964,18 +1964,34 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(primary)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigMigration {
+    pub legacy_path: PathBuf,
+    pub primary_path: PathBuf,
+}
+
+impl ConfigMigration {
+    pub fn user_notice(&self) -> String {
+        format!(
+            "Migrated legacy config from {} to {}. Use the .codewhale path for future edits; the .deepseek file remains only as a compatibility fallback.",
+            self.legacy_path.display(),
+            self.primary_path.display()
+        )
+    }
+}
+
 /// v0.8.44: one-time migration from `~/.deepseek/config.toml` to
 /// `~/.codewhale/config.toml`. Called on first launch after the config
 /// is loaded; copies the legacy file if the primary doesn't exist yet.
 /// Never overwrites an existing primary config.
-pub fn migrate_config_if_needed() -> Result<()> {
+pub fn migrate_config_if_needed() -> Result<Option<ConfigMigration>> {
     let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
     if primary.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
     if !legacy.exists() {
-        return Ok(());
+        return Ok(None);
     }
     // Copy the config to the new home.
     if let Some(parent) = primary.parent() {
@@ -1988,7 +2004,10 @@ pub fn migrate_config_if_needed() -> Result<()> {
         legacy.display(),
         primary.display()
     );
-    Ok(())
+    Ok(Some(ConfigMigration {
+        legacy_path: legacy,
+        primary_path: primary,
+    }))
 }
 
 fn parse_bool(raw: &str) -> Result<bool> {
@@ -3110,6 +3129,83 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             values.get("api_key").map(String::as_str),
             Some("密钥密钥***6789")
         );
+    }
+
+    #[test]
+    fn migrate_config_reports_copied_legacy_path() {
+        let _lock = env_lock();
+        struct HomeEnvGuard {
+            home: Option<OsString>,
+            userprofile: Option<OsString>,
+            codewhale_home: Option<OsString>,
+        }
+
+        impl Drop for HomeEnvGuard {
+            fn drop(&mut self) {
+                // Safety: test-only environment mutation is serialized by env_lock().
+                unsafe {
+                    match self.home.take() {
+                        Some(value) => env::set_var("HOME", value),
+                        None => env::remove_var("HOME"),
+                    }
+                    match self.userprofile.take() {
+                        Some(value) => env::set_var("USERPROFILE", value),
+                        None => env::remove_var("USERPROFILE"),
+                    }
+                    match self.codewhale_home.take() {
+                        Some(value) => env::set_var("CODEWHALE_HOME", value),
+                        None => env::remove_var("CODEWHALE_HOME"),
+                    }
+                }
+            }
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "codewhale-config-migration-{}-{unique}",
+            std::process::id()
+        ));
+        let legacy_dir = home.join(LEGACY_APP_DIR);
+        let primary_dir = home.join(CODEWHALE_APP_DIR);
+        fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        fs::write(
+            legacy_dir.join(CONFIG_FILE_NAME),
+            "provider = \"deepseek\"\n",
+        )
+        .expect("legacy config");
+
+        let _env = HomeEnvGuard {
+            home: env::var_os("HOME"),
+            userprofile: env::var_os("USERPROFILE"),
+            codewhale_home: env::var_os("CODEWHALE_HOME"),
+        };
+        // Safety: test-only environment mutation is serialized by env_lock().
+        unsafe {
+            env::set_var("HOME", &home);
+            env::set_var("USERPROFILE", &home);
+            env::remove_var("CODEWHALE_HOME");
+        }
+
+        let migration = migrate_config_if_needed()
+            .expect("migration")
+            .expect("legacy config should be copied");
+
+        assert_eq!(migration.legacy_path, legacy_dir.join(CONFIG_FILE_NAME));
+        assert_eq!(migration.primary_path, primary_dir.join(CONFIG_FILE_NAME));
+        let notice = migration.user_notice();
+        assert!(notice.contains(&legacy_dir.join(CONFIG_FILE_NAME).display().to_string()));
+        assert!(notice.contains(&primary_dir.join(CONFIG_FILE_NAME).display().to_string()));
+        assert!(notice.contains(".codewhale path for future edits"));
+        assert!(notice.contains(".deepseek file remains only as a compatibility fallback"));
+        assert_eq!(
+            fs::read_to_string(primary_dir.join(CONFIG_FILE_NAME)).expect("primary config"),
+            "provider = \"deepseek\"\n"
+        );
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]

@@ -4985,8 +4985,12 @@ async fn run_interactive(
 
     // v0.8.44: migrate config from ~/.deepseek/ to ~/.codewhale/ on first
     // launch. Non-fatal — existing installs keep working either way.
-    if let Err(err) = codewhale_config::migrate_config_if_needed() {
-        logging::warn(format!("Config migration skipped: {err}"));
+    match codewhale_config::migrate_config_if_needed() {
+        Ok(Some(migration)) => {
+            eprintln!("{}", migration.user_notice());
+        }
+        Ok(None) => {}
+        Err(err) => logging::warn(format!("Config migration skipped: {err}")),
     }
 
     let model = config.default_model();
