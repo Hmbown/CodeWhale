@@ -308,6 +308,46 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "mimo-v2.5-tts".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec![
+                    "tts".to_string(),
+                    "speech".to_string(),
+                    "mimo-tts".to_string(),
+                ],
+                supports_tools: false,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "mimo-v2.5-tts-voicedesign".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec![
+                    "voicedesign".to_string(),
+                    "voice-design".to_string(),
+                    "mimo-voice-design".to_string(),
+                ],
+                supports_tools: false,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "mimo-v2.5-tts-voiceclone".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec![
+                    "voiceclone".to_string(),
+                    "voice-clone".to_string(),
+                    "mimo-voice-clone".to_string(),
+                ],
+                supports_tools: false,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "mimo-v2-tts".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec!["mimo-v2-speech".to_string()],
+                supports_tools: false,
+                supports_reasoning: false,
+            },
+            ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Novita,
                 aliases: vec![
@@ -647,6 +687,22 @@ mod tests {
         assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
         assert_eq!(resolved.resolved.id, "mimo-v2.5-pro");
         assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn xiaomi_mimo_tts_aliases_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("tts"), Some(ProviderKind::XiaomiMimo));
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "mimo-v2.5-tts");
+        assert!(!resolved.resolved.supports_tools);
+        assert!(!resolved.resolved.supports_reasoning);
+
+        let resolved = registry.resolve(Some("voice-design"), Some(ProviderKind::XiaomiMimo));
+        assert_eq!(resolved.resolved.id, "mimo-v2.5-tts-voicedesign");
+
+        let resolved = registry.resolve(Some("voiceclone"), Some(ProviderKind::XiaomiMimo));
+        assert_eq!(resolved.resolved.id, "mimo-v2.5-tts-voiceclone");
     }
 
     #[test]

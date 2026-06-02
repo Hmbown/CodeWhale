@@ -36,9 +36,13 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let model = match model_arg {
         None => None,
+        Some(raw) if matches!(target, ApiProvider::XiaomiMimo) => {
+            let expanded = expand_model_alias_for_provider(target, raw);
+            Some(normalize_model_name_for_provider(target, &expanded).unwrap_or(expanded))
+        }
         Some(raw) if provider_passes_model_through(target) => Some(raw.trim().to_string()),
         Some(raw) => {
-            let expanded = expand_model_alias(raw);
+            let expanded = expand_model_alias_for_provider(target, raw);
             let normalized = if matches!(target, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
                 normalize_model_name_for_provider(target, &expanded)
             } else {
@@ -48,7 +52,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
                 Some(normalized) => Some(normalized),
                 None => {
                     return CommandResult::error(format!(
-                        "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro."
+                        "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro, or xiaomi-mimo tts."
                     ));
                 }
             }
@@ -65,8 +69,24 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     })
 }
 
-fn expand_model_alias(name: &str) -> String {
-    match name.trim().to_ascii_lowercase().as_str() {
+fn expand_model_alias_for_provider(provider: ApiProvider, name: &str) -> String {
+    let lower = name.trim().to_ascii_lowercase();
+    if matches!(provider, ApiProvider::XiaomiMimo) {
+        return match lower.as_str() {
+            "pro" | "mimo" => "mimo-v2.5-pro".to_string(),
+            "text" => "mimo-v2.5".to_string(),
+            "tts" | "speech" | "mimo-tts" => "mimo-v2.5-tts".to_string(),
+            "voicedesign" | "voice-design" | "mimo-voice-design" => {
+                "mimo-v2.5-tts-voicedesign".to_string()
+            }
+            "voiceclone" | "voice-clone" | "mimo-voice-clone" => {
+                "mimo-v2.5-tts-voiceclone".to_string()
+            }
+            other => other.to_string(),
+        };
+    }
+
+    match lower.as_str() {
         "pro" | "v4-pro" => "deepseek-v4-pro".to_string(),
         "flash" | "v4-flash" => "deepseek-v4-flash".to_string(),
         other => other.to_string(),
@@ -149,6 +169,28 @@ mod tests {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::XiaomiMimo);
                 assert_eq!(model, None);
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_xiaomi_mimo_accepts_tts_shorthands() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("xiaomi-mimo tts"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::XiaomiMimo);
+                assert_eq!(model.as_deref(), Some("mimo-v2.5-tts"));
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+
+        let result = provider(&mut app, Some("xiaomi-mimo voiceclone"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::XiaomiMimo);
+                assert_eq!(model.as_deref(), Some("mimo-v2.5-tts-voiceclone"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
         }

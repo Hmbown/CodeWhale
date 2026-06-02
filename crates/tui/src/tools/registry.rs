@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -772,6 +772,22 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RevertTurnTool))
     }
 
+    /// Include Xiaomi MiMo speech/TTS tools (`speech`, `tts`).
+    #[must_use]
+    pub fn with_speech_tools(
+        self,
+        client: Option<DeepSeekClient>,
+        output_dir: Option<PathBuf>,
+    ) -> Self {
+        use super::speech::SpeechTool;
+        self.with_tool(Arc::new(SpeechTool::new(
+            "speech",
+            client.clone(),
+            output_dir.clone(),
+        )))
+        .with_tool(Arc::new(SpeechTool::new("tts", client, output_dir)))
+    }
+
     /// Include persistent RLM session tools.
     #[must_use]
     pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, _root_model: String) -> Self {
@@ -954,11 +970,13 @@ impl ToolRegistryBuilder {
         todo_list: super::todo::SharedTodoList,
         plan_state: super::plan::SharedPlanState,
     ) -> Self {
+        let speech_client = client.clone();
         self.with_agent_tools(allow_shell)
             .with_todo_tool(todo_list)
             .with_plan_tool(plan_state)
             .with_review_tool(client.clone(), model.clone())
             .with_rlm_tool(client, model)
+            .with_speech_tools(speech_client, None)
             .with_recall_archive_tool()
             .with_subagent_tools(manager, runtime)
     }
@@ -1212,6 +1230,18 @@ mod tests {
 
         assert!(!registry.contains("read_file"));
         assert!(registry.contains("list_dir"));
+    }
+
+    #[test]
+    fn builder_registers_speech_alias_tools() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let registry = ToolRegistryBuilder::new()
+            .with_speech_tools(None, None)
+            .build(ctx);
+
+        assert!(registry.contains("speech"));
+        assert!(registry.contains("tts"));
     }
 
     #[test]

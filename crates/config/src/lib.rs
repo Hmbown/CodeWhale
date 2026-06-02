@@ -42,6 +42,10 @@ const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
 const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
+const XIAOMI_MIMO_TTS_MODEL: &str = "mimo-v2.5-tts";
+const XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL: &str = "mimo-v2.5-tts-voicedesign";
+const XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL: &str = "mimo-v2.5-tts-voiceclone";
+const XIAOMI_MIMO_V2_TTS_MODEL: &str = "mimo-v2-tts";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
@@ -1426,6 +1430,12 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
+    if matches!(provider, ProviderKind::XiaomiMimo)
+        && let Some(canonical) = canonical_xiaomi_mimo_model_id(model)
+    {
+        return canonical.to_string();
+    }
+
     if matches!(
         provider,
         ProviderKind::Atlascloud
@@ -1497,6 +1507,38 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
         ) => DEFAULT_VLLM_FLASH_MODEL.to_string(),
         _ => model.to_string(),
+    }
+}
+
+fn canonical_xiaomi_mimo_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        "mimo"
+        | DEFAULT_XIAOMI_MIMO_MODEL
+        | "mimo-v2-5-pro"
+        | "xiaomi-mimo-v2.5-pro"
+        | "xiaomi-mimo-v2-5-pro" => Some(DEFAULT_XIAOMI_MIMO_MODEL),
+        "mimo-v2.5" | "mimo-v25" | "mimo-v2-5" | "xiaomi-mimo-v2.5" | "xiaomi-mimo-v2-5" => {
+            Some("mimo-v2.5")
+        }
+        "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" | "tts" | "speech" => {
+            Some(XIAOMI_MIMO_TTS_MODEL)
+        }
+        "mimo-tts-voicedesign"
+        | "mimo-voice-design"
+        | "mimo-v25-tts-voicedesign"
+        | "mimo-v2.5-tts-voicedesign"
+        | "voicedesign"
+        | "voice-design" => Some(XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL),
+        "mimo-tts-voiceclone"
+        | "mimo-voice-clone"
+        | "mimo-v25-tts-voiceclone"
+        | "mimo-v2.5-tts-voiceclone"
+        | "voiceclone"
+        | "voice-clone" => Some(XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL),
+        "mimo-v2-tts" => Some(XIAOMI_MIMO_V2_TTS_MODEL),
+        _ => None,
     }
 }
 
@@ -3261,6 +3303,26 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
         assert_eq!(resolved.base_url, DEFAULT_XIAOMI_MIMO_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_XIAOMI_MIMO_MODEL);
+    }
+
+    #[test]
+    fn xiaomi_mimo_tts_aliases_resolve_to_canonical_models() {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::XiaomiMimo, "tts"),
+            "mimo-v2.5-tts"
+        );
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::XiaomiMimo, "voice-design"),
+            "mimo-v2.5-tts-voicedesign"
+        );
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::XiaomiMimo, "voiceclone"),
+            "mimo-v2.5-tts-voiceclone"
+        );
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::XiaomiMimo, "custom-mimo-model"),
+            "custom-mimo-model"
+        );
     }
 
     #[test]

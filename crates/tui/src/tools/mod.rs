@@ -47,6 +47,7 @@ pub mod shell;
 mod shell_output;
 pub mod skill;
 pub mod spec;
+pub mod speech;
 pub mod subagent;
 pub mod tasks;
 pub mod test_runner;

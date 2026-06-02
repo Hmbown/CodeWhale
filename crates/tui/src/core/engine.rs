@@ -161,6 +161,8 @@ pub struct EngineConfig {
     /// Path to the user memory file (#489). Always populated; only
     /// consulted when `memory_enabled` is `true`.
     pub memory_path: PathBuf,
+    /// Default directory for Xiaomi MiMo speech/TTS tool outputs.
+    pub speech_output_dir: Option<PathBuf>,
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub goal_objective: Option<String>,
     /// Tool restriction from custom slash command frontmatter.
@@ -233,6 +235,7 @@ impl Default for EngineConfig {
             subagent_model_overrides: HashMap::new(),
             memory_enabled: false,
             memory_path: PathBuf::from("./memory.md"),
+            speech_output_dir: None,
             vision_config: None,
             strict_tool_mode: false,
             goal_objective: None,

@@ -332,6 +332,9 @@ fn picker_model_hint(id: &str) -> &'static str {
         }
         "arcee-ai/trinity-large-thinking" => "large thinking",
         "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => "long context",
+        "mimo-v2.5-tts" | "mimo-v2-tts" => "speech / TTS",
+        "mimo-v2.5-tts-voicedesign" => "voice design",
+        "mimo-v2.5-tts-voiceclone" => "voice clone",
         "minimax/minimax-m3" => "1M multimodal",
         _ => "provider model",
     }

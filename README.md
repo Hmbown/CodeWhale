@@ -321,6 +321,7 @@ codewhale --provider openrouter --model minimax/minimax-m3
 # Xiaomi MiMo
 codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_KEY"
 codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
+codewhale --provider xiaomi-mimo speech "Hello from MiMo" --model tts -o hello.wav
 
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
