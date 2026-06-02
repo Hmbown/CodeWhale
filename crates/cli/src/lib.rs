@@ -1585,6 +1585,9 @@ fn build_tui_command(
     if let Some(base_url) = cli.base_url.as_ref() {
         cmd.env("DEEPSEEK_BASE_URL", base_url);
     }
+    if let Some(path_suffix) = cli.path_suffix.as_ref() {
+        cmd.env("DEEPSEEK_PATH_SUFFIX", path_suffix);
+    }
 
     Ok(cmd)
 }

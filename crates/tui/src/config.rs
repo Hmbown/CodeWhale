@@ -2901,6 +2901,18 @@ fn codewhale_env_var(
         .ok_or(std::env::VarError::NotPresent)
 }
 
+/// Read a CodeWhale env var, preferring the `CODEWHALE_*` form over the
+/// legacy `DEEPSEEK_*` form. Empty values are allowed.
+fn codewhale_env_var_allow_empty(
+    codewhale_name: &str,
+    legacy_name: &str,
+) -> Result<String, std::env::VarError> {
+    std::env::var(codewhale_name)
+        .ok()
+        .or_else(|| std::env::var(legacy_name).ok())
+        .ok_or(std::env::VarError::NotPresent)
+}
+
 fn apply_env_overrides(config: &mut Config) {
     if let Ok(value) = codewhale_env_var("CODEWHALE_PROVIDER", "DEEPSEEK_PROVIDER") {
         config.provider = Some(value);
@@ -3007,6 +3019,113 @@ fn apply_env_overrides(config: &mut Config) {
                     .get_or_insert_with(ProvidersConfig::default)
                     .atlascloud
                     .base_url = Some(value);
+            }
+        }
+    }
+    if let Ok(value) =
+        codewhale_env_var_allow_empty("CODEWHALE_PATH_SUFFIX", "DEEPSEEK_PATH_SUFFIX")
+    {
+        match config.api_provider() {
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+                config.path_suffix = Some(value);
+            }
+            ApiProvider::NvidiaNim => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .nvidia_nim
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Openai => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .openai
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Openrouter => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .openrouter
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::XiaomiMimo => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .xiaomi_mimo
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::WanjieArk => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .wanjie_ark
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Novita => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .novita
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Fireworks => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .fireworks
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Siliconflow => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .siliconflow
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Moonshot => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .moonshot
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Sglang => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .sglang
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Vllm => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .vllm
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Ollama => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .ollama
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Volcengine => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .volcengine
+                    .path_suffix = Some(value);
+            }
+            ApiProvider::Atlascloud => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .atlascloud
+                    .path_suffix = Some(value);
             }
         }
     }
@@ -3181,6 +3300,141 @@ fn apply_env_overrides(config: &mut Config) {
             .get_or_insert_with(ProvidersConfig::default)
             .ollama
             .base_url = Some(value);
+    }
+    // Provider-specific PATH_SUFFIX environment variables
+    if matches!(config.api_provider(), ApiProvider::NvidiaNim)
+        && let Ok(value) = std::env::var("NVIDIA_NIM_PATH_SUFFIX")
+            .or_else(|_| std::env::var("NIM_PATH_SUFFIX"))
+            .or_else(|_| std::env::var("NVIDIA_PATH_SUFFIX"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .nvidia_nim
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Openai)
+        && let Ok(value) = std::env::var("OPENAI_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .openai
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Atlascloud)
+        && let Ok(value) = std::env::var("ATLASCLOUD_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .atlascloud
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Volcengine)
+        && let Ok(value) = std::env::var("VOLCENGINE_PATH_SUFFIX")
+            .or_else(|_| std::env::var("VOLCENGINE_ARK_PATH_SUFFIX"))
+            .or_else(|_| std::env::var("ARK_PATH_SUFFIX"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .volcengine
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::WanjieArk)
+        && let Ok(value) = std::env::var("WANJIE_ARK_PATH_SUFFIX")
+            .or_else(|_| std::env::var("WANJIE_PATH_SUFFIX"))
+            .or_else(|_| std::env::var("WANJIE_MAAS_PATH_SUFFIX"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .wanjie_ark
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Openrouter)
+        && let Ok(value) = std::env::var("OPENROUTER_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .openrouter
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::XiaomiMimo)
+        && let Ok(value) =
+            std::env::var("XIAOMI_MIMO_PATH_SUFFIX").or_else(|_| std::env::var("MIMO_PATH_SUFFIX"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .xiaomi_mimo
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Novita)
+        && let Ok(value) = std::env::var("NOVITA_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .novita
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Fireworks)
+        && let Ok(value) = std::env::var("FIREWORKS_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .fireworks
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Siliconflow)
+        && let Ok(value) = std::env::var("SILICONFLOW_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .siliconflow
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Moonshot)
+        && let Ok(value) =
+            std::env::var("MOONSHOT_PATH_SUFFIX").or_else(|_| std::env::var("KIMI_PATH_SUFFIX"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .moonshot
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Sglang)
+        && let Ok(value) = std::env::var("SGLANG_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .sglang
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Vllm)
+        && let Ok(value) = std::env::var("VLLM_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .vllm
+            .path_suffix = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Ollama)
+        && let Ok(value) = std::env::var("OLLAMA_PATH_SUFFIX")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .ollama
+            .path_suffix = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Sglang)
         && let Ok(value) = std::env::var("SGLANG_MODEL")
@@ -5123,6 +5377,31 @@ mod tests {
         ollama_api_key: Option<OsString>,
         ollama_base_url: Option<OsString>,
         ollama_model: Option<OsString>,
+        // PATH_SUFFIX environment variables
+        deepseek_path_suffix: Option<OsString>,
+        codewhale_path_suffix: Option<OsString>,
+        nvidia_nim_path_suffix: Option<OsString>,
+        nim_path_suffix: Option<OsString>,
+        nvidia_path_suffix: Option<OsString>,
+        openai_path_suffix: Option<OsString>,
+        atlascloud_path_suffix: Option<OsString>,
+        volcengine_path_suffix: Option<OsString>,
+        volcengine_ark_path_suffix: Option<OsString>,
+        ark_path_suffix: Option<OsString>,
+        wanjie_ark_path_suffix: Option<OsString>,
+        wanjie_path_suffix: Option<OsString>,
+        wanjie_maas_path_suffix: Option<OsString>,
+        openrouter_path_suffix: Option<OsString>,
+        xiaomi_mimo_path_suffix: Option<OsString>,
+        mimo_path_suffix: Option<OsString>,
+        novita_path_suffix: Option<OsString>,
+        fireworks_path_suffix: Option<OsString>,
+        siliconflow_path_suffix: Option<OsString>,
+        moonshot_path_suffix: Option<OsString>,
+        kimi_path_suffix: Option<OsString>,
+        sglang_path_suffix: Option<OsString>,
+        vllm_path_suffix: Option<OsString>,
+        ollama_path_suffix: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -5202,6 +5481,31 @@ mod tests {
             let ollama_api_key_prev = env::var_os("OLLAMA_API_KEY");
             let ollama_base_url_prev = env::var_os("OLLAMA_BASE_URL");
             let ollama_model_prev = env::var_os("OLLAMA_MODEL");
+            // PATH_SUFFIX environment variables
+            let deepseek_path_suffix_prev = env::var_os("DEEPSEEK_PATH_SUFFIX");
+            let codewhale_path_suffix_prev = env::var_os("CODEWHALE_PATH_SUFFIX");
+            let nvidia_nim_path_suffix_prev = env::var_os("NVIDIA_NIM_PATH_SUFFIX");
+            let nim_path_suffix_prev = env::var_os("NIM_PATH_SUFFIX");
+            let nvidia_path_suffix_prev = env::var_os("NVIDIA_PATH_SUFFIX");
+            let openai_path_suffix_prev = env::var_os("OPENAI_PATH_SUFFIX");
+            let atlascloud_path_suffix_prev = env::var_os("ATLASCLOUD_PATH_SUFFIX");
+            let volcengine_path_suffix_prev = env::var_os("VOLCENGINE_PATH_SUFFIX");
+            let volcengine_ark_path_suffix_prev = env::var_os("VOLCENGINE_ARK_PATH_SUFFIX");
+            let ark_path_suffix_prev = env::var_os("ARK_PATH_SUFFIX");
+            let wanjie_ark_path_suffix_prev = env::var_os("WANJIE_ARK_PATH_SUFFIX");
+            let wanjie_path_suffix_prev = env::var_os("WANJIE_PATH_SUFFIX");
+            let wanjie_maas_path_suffix_prev = env::var_os("WANJIE_MAAS_PATH_SUFFIX");
+            let openrouter_path_suffix_prev = env::var_os("OPENROUTER_PATH_SUFFIX");
+            let xiaomi_mimo_path_suffix_prev = env::var_os("XIAOMI_MIMO_PATH_SUFFIX");
+            let mimo_path_suffix_prev = env::var_os("MIMO_PATH_SUFFIX");
+            let novita_path_suffix_prev = env::var_os("NOVITA_PATH_SUFFIX");
+            let fireworks_path_suffix_prev = env::var_os("FIREWORKS_PATH_SUFFIX");
+            let siliconflow_path_suffix_prev = env::var_os("SILICONFLOW_PATH_SUFFIX");
+            let moonshot_path_suffix_prev = env::var_os("MOONSHOT_PATH_SUFFIX");
+            let kimi_path_suffix_prev = env::var_os("KIMI_PATH_SUFFIX");
+            let sglang_path_suffix_prev = env::var_os("SGLANG_PATH_SUFFIX");
+            let vllm_path_suffix_prev = env::var_os("VLLM_PATH_SUFFIX");
+            let ollama_path_suffix_prev = env::var_os("OLLAMA_PATH_SUFFIX");
             // Safety: test-only environment mutation guarded by a global mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
@@ -5276,6 +5580,31 @@ mod tests {
                 env::remove_var("OLLAMA_API_KEY");
                 env::remove_var("OLLAMA_BASE_URL");
                 env::remove_var("OLLAMA_MODEL");
+                // PATH_SUFFIX environment variables
+                env::remove_var("DEEPSEEK_PATH_SUFFIX");
+                env::remove_var("CODEWHALE_PATH_SUFFIX");
+                env::remove_var("NVIDIA_NIM_PATH_SUFFIX");
+                env::remove_var("NIM_PATH_SUFFIX");
+                env::remove_var("NVIDIA_PATH_SUFFIX");
+                env::remove_var("OPENAI_PATH_SUFFIX");
+                env::remove_var("ATLASCLOUD_PATH_SUFFIX");
+                env::remove_var("VOLCENGINE_PATH_SUFFIX");
+                env::remove_var("VOLCENGINE_ARK_PATH_SUFFIX");
+                env::remove_var("ARK_PATH_SUFFIX");
+                env::remove_var("WANJIE_ARK_PATH_SUFFIX");
+                env::remove_var("WANJIE_PATH_SUFFIX");
+                env::remove_var("WANJIE_MAAS_PATH_SUFFIX");
+                env::remove_var("OPENROUTER_PATH_SUFFIX");
+                env::remove_var("XIAOMI_MIMO_PATH_SUFFIX");
+                env::remove_var("MIMO_PATH_SUFFIX");
+                env::remove_var("NOVITA_PATH_SUFFIX");
+                env::remove_var("FIREWORKS_PATH_SUFFIX");
+                env::remove_var("SILICONFLOW_PATH_SUFFIX");
+                env::remove_var("MOONSHOT_PATH_SUFFIX");
+                env::remove_var("KIMI_PATH_SUFFIX");
+                env::remove_var("SGLANG_PATH_SUFFIX");
+                env::remove_var("VLLM_PATH_SUFFIX");
+                env::remove_var("OLLAMA_PATH_SUFFIX");
             }
             Self {
                 home: home_prev,
@@ -5350,6 +5679,31 @@ mod tests {
                 ollama_api_key: ollama_api_key_prev,
                 ollama_base_url: ollama_base_url_prev,
                 ollama_model: ollama_model_prev,
+                // PATH_SUFFIX environment variables
+                deepseek_path_suffix: deepseek_path_suffix_prev,
+                codewhale_path_suffix: codewhale_path_suffix_prev,
+                nvidia_nim_path_suffix: nvidia_nim_path_suffix_prev,
+                nim_path_suffix: nim_path_suffix_prev,
+                nvidia_path_suffix: nvidia_path_suffix_prev,
+                openai_path_suffix: openai_path_suffix_prev,
+                atlascloud_path_suffix: atlascloud_path_suffix_prev,
+                volcengine_path_suffix: volcengine_path_suffix_prev,
+                volcengine_ark_path_suffix: volcengine_ark_path_suffix_prev,
+                ark_path_suffix: ark_path_suffix_prev,
+                wanjie_ark_path_suffix: wanjie_ark_path_suffix_prev,
+                wanjie_path_suffix: wanjie_path_suffix_prev,
+                wanjie_maas_path_suffix: wanjie_maas_path_suffix_prev,
+                openrouter_path_suffix: openrouter_path_suffix_prev,
+                xiaomi_mimo_path_suffix: xiaomi_mimo_path_suffix_prev,
+                mimo_path_suffix: mimo_path_suffix_prev,
+                novita_path_suffix: novita_path_suffix_prev,
+                fireworks_path_suffix: fireworks_path_suffix_prev,
+                siliconflow_path_suffix: siliconflow_path_suffix_prev,
+                moonshot_path_suffix: moonshot_path_suffix_prev,
+                kimi_path_suffix: kimi_path_suffix_prev,
+                sglang_path_suffix: sglang_path_suffix_prev,
+                vllm_path_suffix: vllm_path_suffix_prev,
+                ollama_path_suffix: ollama_path_suffix_prev,
             }
         }
     }
@@ -5439,6 +5793,43 @@ mod tests {
                 Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
                 Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
                 Self::restore_var("OLLAMA_MODEL", self.ollama_model.take());
+                // PATH_SUFFIX environment variables
+                Self::restore_var("DEEPSEEK_PATH_SUFFIX", self.deepseek_path_suffix.take());
+                Self::restore_var("CODEWHALE_PATH_SUFFIX", self.codewhale_path_suffix.take());
+                Self::restore_var("NVIDIA_NIM_PATH_SUFFIX", self.nvidia_nim_path_suffix.take());
+                Self::restore_var("NIM_PATH_SUFFIX", self.nim_path_suffix.take());
+                Self::restore_var("NVIDIA_PATH_SUFFIX", self.nvidia_path_suffix.take());
+                Self::restore_var("OPENAI_PATH_SUFFIX", self.openai_path_suffix.take());
+                Self::restore_var("ATLASCLOUD_PATH_SUFFIX", self.atlascloud_path_suffix.take());
+                Self::restore_var("VOLCENGINE_PATH_SUFFIX", self.volcengine_path_suffix.take());
+                Self::restore_var(
+                    "VOLCENGINE_ARK_PATH_SUFFIX",
+                    self.volcengine_ark_path_suffix.take(),
+                );
+                Self::restore_var("ARK_PATH_SUFFIX", self.ark_path_suffix.take());
+                Self::restore_var("WANJIE_ARK_PATH_SUFFIX", self.wanjie_ark_path_suffix.take());
+                Self::restore_var("WANJIE_PATH_SUFFIX", self.wanjie_path_suffix.take());
+                Self::restore_var(
+                    "WANJIE_MAAS_PATH_SUFFIX",
+                    self.wanjie_maas_path_suffix.take(),
+                );
+                Self::restore_var("OPENROUTER_PATH_SUFFIX", self.openrouter_path_suffix.take());
+                Self::restore_var(
+                    "XIAOMI_MIMO_PATH_SUFFIX",
+                    self.xiaomi_mimo_path_suffix.take(),
+                );
+                Self::restore_var("MIMO_PATH_SUFFIX", self.mimo_path_suffix.take());
+                Self::restore_var("NOVITA_PATH_SUFFIX", self.novita_path_suffix.take());
+                Self::restore_var("FIREWORKS_PATH_SUFFIX", self.fireworks_path_suffix.take());
+                Self::restore_var(
+                    "SILICONFLOW_PATH_SUFFIX",
+                    self.siliconflow_path_suffix.take(),
+                );
+                Self::restore_var("MOONSHOT_PATH_SUFFIX", self.moonshot_path_suffix.take());
+                Self::restore_var("KIMI_PATH_SUFFIX", self.kimi_path_suffix.take());
+                Self::restore_var("SGLANG_PATH_SUFFIX", self.sglang_path_suffix.take());
+                Self::restore_var("VLLM_PATH_SUFFIX", self.vllm_path_suffix.take());
+                Self::restore_var("OLLAMA_PATH_SUFFIX", self.ollama_path_suffix.take());
             }
         }
     }
@@ -6937,11 +7328,13 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "nvidia-nim");
             env::set_var("NIM_BASE_URL", "https://short-nim.example/v1");
+            env::set_var("NVIDIA_PATH_SUFFIX", "/v2");
         }
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
         assert_eq!(config.deepseek_base_url(), "https://short-nim.example/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         Ok(())
     }
 
@@ -6964,6 +7357,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "nvidia-nim");
             env::set_var("DEEPSEEK_BASE_URL", "https://forwarded-nim.example/v1");
+            env::set_var("NVIDIA_PATH_SUFFIX", "/v2");
         }
 
         let config = Config::load(None, None)?;
@@ -6972,6 +7366,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             config.deepseek_base_url(),
             "https://forwarded-nim.example/v1"
         );
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         Ok(())
     }
 
@@ -7023,6 +7418,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             env::set_var("DEEPSEEK_PROVIDER", "mimo");
             env::set_var("MIMO_API_KEY", "mimo-env-key");
             env::set_var("MIMO_BASE_URL", "https://mimo-gateway.example/v1");
+            env::set_var("MIMO_PATH_SUFFIX", "/v2");
             env::set_var("MIMO_MODEL", "mimo-v2.5");
         }
 
@@ -7034,6 +7430,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             "https://mimo-gateway.example/v1"
         );
         assert_eq!(config.default_model(), "mimo-v2.5");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         Ok(())
     }
 
@@ -7070,6 +7467,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             env::set_var("DEEPSEEK_PROVIDER", "atlascloud");
             env::set_var("ATLASCLOUD_API_KEY", "atlascloud-env-key");
             env::set_var("ATLASCLOUD_BASE_URL", "https://api.atlascloud.ai/v1");
+            env::set_var("ATLASCLOUD_PATH_SUFFIX", "/v2");
             env::set_var("ATLASCLOUD_MODEL", "deepseek-ai/deepseek-v4-flash");
         }
 
@@ -7077,6 +7475,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         assert_eq!(config.api_provider(), ApiProvider::Atlascloud);
         assert_eq!(config.deepseek_api_key()?, "atlascloud-env-key");
         assert_eq!(config.deepseek_base_url(), "https://api.atlascloud.ai/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "deepseek-ai/deepseek-v4-flash");
         Ok(())
     }
@@ -7114,6 +7513,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             env::set_var("DEEPSEEK_PROVIDER", "ark-wanjie");
             env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
             env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
+            env::set_var("WANJIE_ARK_PATH_SUFFIX", "/v2");
             env::set_var("WANJIE_ARK_MODEL", "wanjie-model-id");
         }
 
@@ -7121,6 +7521,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         assert_eq!(config.api_provider(), ApiProvider::WanjieArk);
         assert_eq!(config.deepseek_api_key()?, "wanjie-env-key");
         assert_eq!(config.deepseek_base_url(), "https://wanjie.example/api/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "wanjie-model-id");
         Ok(())
     }
@@ -7281,6 +7682,7 @@ model = "glm-5"
             env::set_var("DEEPSEEK_PROVIDER", "openai");
             env::set_var("OPENAI_API_KEY", "openai-env-key");
             env::set_var("OPENAI_BASE_URL", "https://openai-compatible.example/v4");
+            env::set_var("OPENAI_PATH_SUFFIX", "/v2");
             env::set_var("OPENAI_MODEL", "glm-5");
         }
 
@@ -7291,6 +7693,7 @@ model = "glm-5"
             config.deepseek_base_url(),
             "https://openai-compatible.example/v4"
         );
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "glm-5");
         Ok(())
     }
@@ -7315,6 +7718,7 @@ model = "glm-5"
             env::set_var("DEEPSEEK_PROVIDER", "openai");
             env::set_var("OPENAI_API_KEY", "forwarded-openai-key");
             env::set_var("DEEPSEEK_BASE_URL", "https://forwarded-openai.example/v4");
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "/v2");
             env::set_var("DEEPSEEK_MODEL", "glm-5");
         }
 
@@ -7325,6 +7729,7 @@ model = "glm-5"
             config.deepseek_base_url(),
             "https://forwarded-openai.example/v4"
         );
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "glm-5");
         Ok(())
     }
@@ -7546,19 +7951,24 @@ model = "qwen2.5-coder:7b"
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "ollama");
             env::set_var("DEEPSEEK_BASE_URL", "http://ollama.remote:11434/v1");
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "/v2");
         }
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Ollama);
         assert_eq!(config.deepseek_base_url(), "http://ollama.remote:11434/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
 
         // Safety: test-only environment mutation guarded by a global mutex.
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "vllm");
             env::set_var("DEEPSEEK_BASE_URL", "http://vllm.remote:8000/v1");
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "");
         }
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Vllm);
         assert_eq!(config.deepseek_base_url(), "http://vllm.remote:8000/v1");
+
+        assert_eq!(config.path_suffix().as_deref(), Some(""));
         Ok(())
     }
 
@@ -7581,6 +7991,7 @@ model = "qwen2.5-coder:7b"
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "vllm");
             env::set_var("VLLM_BASE_URL", "http://192.168.0.110:8000/v1");
+            env::set_var("VLLM_PATH_SUFFIX", "/v2");
             env::set_var("DEEPSEEK_MODEL", "deepseek-v4-flash");
         }
 
@@ -7588,6 +7999,7 @@ model = "qwen2.5-coder:7b"
         assert_eq!(config.api_provider(), ApiProvider::Vllm);
         assert_eq!(config.deepseek_base_url(), "http://192.168.0.110:8000/v1");
         assert_eq!(config.default_model(), "deepseek-v4-flash");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         Ok(())
     }
 
@@ -7610,12 +8022,14 @@ model = "qwen2.5-coder:7b"
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "ollama-local");
             env::set_var("OLLAMA_BASE_URL", "http://ollama.example/v1");
+            env::set_var("OLLAMA_PATH_SUFFIX", "/v2");
             env::set_var("OLLAMA_MODEL", "deepseek-coder-v2:16b");
         }
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Ollama);
         assert_eq!(config.deepseek_base_url(), "http://ollama.example/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "deepseek-coder-v2:16b");
         Ok(())
     }
@@ -7694,6 +8108,7 @@ model = "qwen2.5-coder:7b"
             env::set_var("CODEWHALE_PROVIDER", "siliconflow");
             env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
             env::set_var("SILICONFLOW_BASE_URL", "https://sf-mirror.example/v1");
+            env::set_var("SILICONFLOW_PATH_SUFFIX", "/v2");
             env::set_var("SILICONFLOW_MODEL", "deepseek-v4-flash");
         }
 
@@ -7701,6 +8116,7 @@ model = "qwen2.5-coder:7b"
         assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
         assert_eq!(config.deepseek_api_key()?, "sf-env-key");
         assert_eq!(config.deepseek_base_url(), "https://sf-mirror.example/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), "deepseek-v4-flash");
         Ok(())
     }
@@ -7725,6 +8141,7 @@ model = "qwen2.5-coder:7b"
             env::set_var("CODEWHALE_PROVIDER", "siliconflow");
             env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
             env::set_var("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1");
+            env::set_var("SILICONFLOW_PATH_SUFFIX", "/v2");
             env::set_var("SILICONFLOW_MODEL", "deepseek-reasoner");
         }
 
@@ -7732,6 +8149,7 @@ model = "qwen2.5-coder:7b"
         assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
         assert_eq!(config.deepseek_api_key()?, "sf-env-key");
         assert_eq!(config.deepseek_base_url(), "https://api.siliconflow.cn/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.default_model(), DEFAULT_SILICONFLOW_MODEL);
         Ok(())
     }
@@ -7755,11 +8173,56 @@ model = "qwen2.5-coder:7b"
         unsafe {
             env::set_var("DEEPSEEK_PROVIDER", "openrouter");
             env::set_var("OPENROUTER_BASE_URL", "https://or-mirror.example/v1");
+            env::set_var("OPENROUTER_PATH_SUFFIX", "/v2");
         }
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Openrouter);
         assert_eq!(config.deepseek_base_url(), "https://or-mirror.example/v1");
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
+        Ok(())
+    }
+
+    #[test]
+    fn path_suffix_env_overrides_default() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-or-path-suffix-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::remove_var("DEEPSEEK_PATH_SUFFIX");
+        }
+        let config = Config::load(None, None)?;
+        assert_eq!(config.path_suffix().as_deref(), None);
+
+        unsafe {
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "/v2");
+        }
+        let config = Config::load(None, None)?;
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
+
+        unsafe {
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "");
+        }
+        let config = Config::load(None, None)?;
+        assert_eq!(config.path_suffix().as_deref(), Some(""));
+
+        unsafe {
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "foo/v2");
+        }
+        let config = Config::load(None, None)?;
+        assert_eq!(config.path_suffix().as_deref(), Some("foo/v2"));
+
         Ok(())
     }
 
@@ -8025,12 +8488,14 @@ api_key = "kimi-code-env-key"
         unsafe {
             env::set_var("CODEWHALE_PROVIDER", "moonshot");
             env::set_var("CODEWHALE_BASE_URL", "https://api.kimi.com/coding/v1");
+            env::set_var("CODEWHALE_PATH_SUFFIX", "/v2");
         }
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Moonshot);
         assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
         assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.path_suffix().as_deref(), Some("/v2"));
         assert_eq!(config.deepseek_api_key()?, "kimi-code-env-key");
         assert!(has_api_key_for(&config, ApiProvider::Moonshot));
         Ok(())

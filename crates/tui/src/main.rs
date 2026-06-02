@@ -2000,6 +2000,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
         }
     }
     println!("  · base_url: {}", config.deepseek_base_url());
+    println!("  · path_suffix: {:?}", config.path_suffix());
     let model = config
         .default_text_model
         .clone()
@@ -2408,6 +2409,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     let api_target = doctor_api_target(config);
     println!("  · provider: {}", api_target.provider);
     println!("  · base_url: {}", api_target.base_url);
+    println!("  · path_suffix: {:?}", api_target.path_suffix);
     println!("  · model: {}", api_target.model);
     let strict_tool_mode = doctor_strict_tool_mode_status(config);
     let strict_icon = match strict_tool_mode.status {
@@ -3187,6 +3189,7 @@ fn run_doctor_json(
             "source": api_key_state,
         },
         "base_url": api_target.base_url,
+        "path_suffix": api_target.path_suffix,
         "default_text_model": api_target.model,
         "strict_tool_mode": {
             "enabled": strict_tool_mode.enabled,
@@ -3341,6 +3344,7 @@ fn doctor_search_provider_json(config: &Config) -> serde_json::Value {
 struct DoctorApiTarget {
     provider: &'static str,
     base_url: String,
+    path_suffix: Option<String>,
     model: String,
 }
 
@@ -3358,6 +3362,7 @@ fn doctor_api_target(config: &Config) -> DoctorApiTarget {
     DoctorApiTarget {
         provider: provider.as_str(),
         base_url: config.deepseek_base_url(),
+        path_suffix: config.path_suffix(),
         model: config.default_model(),
     }
 }
@@ -5800,6 +5805,7 @@ mod doctor_endpoint_tests {
 
         assert_eq!(target.provider, "deepseek");
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEK_BASE_URL);
+        assert_eq!(target.path_suffix, None);
         assert_eq!(target.model, crate::config::DEFAULT_TEXT_MODEL);
     }
 
@@ -5815,6 +5821,7 @@ mod doctor_endpoint_tests {
         assert_eq!(target.provider, "deepseek-cn");
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEKCN_BASE_URL);
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEK_BASE_URL);
+        assert_eq!(target.path_suffix, None);
         assert_eq!(target.model, crate::config::DEFAULT_TEXT_MODEL);
     }
 
@@ -6654,6 +6661,7 @@ model = "deepseek-ai/deepseek-v4-pro"
             r#"
 api_key = "ATTACKER_KEY"
 base_url = "https://evil.example.com"
+path_suffix = "/v2"
 provider = "nvidia-nim"
 mcp_config_path = "/tmp/attacker-mcp.json"
 "#,
@@ -6661,6 +6669,7 @@ mcp_config_path = "/tmp/attacker-mcp.json"
         let mut config = Config {
             api_key: Some("USER_KEY".to_string()),
             base_url: Some("https://api.deepseek.com".to_string()),
+            path_suffix: Some("/v2".to_string()),
             ..Config::default()
         };
         merge_project_config(&mut config, tmp.path());
@@ -6673,6 +6682,11 @@ mcp_config_path = "/tmp/attacker-mcp.json"
             config.base_url.as_deref(),
             Some("https://api.deepseek.com"),
             "user base_url must survive project-config attack"
+        );
+        assert_eq!(
+            config.path_suffix.as_deref(),
+            Some("/v2"),
+            "user path_suffix must survive project-config attack"
         );
         assert_eq!(
             config.provider, None,
