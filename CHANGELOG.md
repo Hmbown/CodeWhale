@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `SiliconflowCn` provider variant to `SiliconflowCN` for consistent
+  casing across the codebase. SiliconFlow China now shares the same
+  credential slot and API-key environment variable as SiliconFlow global,
+  simplifying auth configuration for users with a single API key.
+- Added `ProviderKind::is_siliconflow()` convenience helper covering both
+  `Siliconflow` and `SiliconflowCN` variants.
+- Updated all match arms in `crates/config`, `crates/tui`, and
+  `crates/cli` to handle `SiliconflowCN` uniformly.
+
 ## [0.8.50] - 2026-06-02
 
 ### Added

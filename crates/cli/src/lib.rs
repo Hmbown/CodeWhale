@@ -741,7 +741,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::XiaomiMimo => "xiaomi-mimo",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
-        ProviderKind::Siliconflow => "siliconflow",
+        ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => "siliconflow",
         ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
@@ -750,7 +750,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 15] = [
+const PROVIDER_LIST: [ProviderKind; 16] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -762,6 +762,7 @@ const PROVIDER_LIST: [ProviderKind; 15] = [
     ProviderKind::Novita,
     ProviderKind::Fireworks,
     ProviderKind::Siliconflow,
+    ProviderKind::SiliconflowCN,
     ProviderKind::Moonshot,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
@@ -818,7 +819,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Novita => &["NOVITA_API_KEY"],
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
         ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
-        ProviderKind::Siliconflow => &["SILICONFLOW_API_KEY"],
+        ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &["SILICONFLOW_API_KEY"],
         ProviderKind::Moonshot => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],

@@ -2001,7 +2001,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "FIREWORKS_API_KEY",
                     "codewhale auth set --provider fireworks --api-key \"...\"",
                 ),
-                crate::config::ApiProvider::Siliconflow => (
+                crate::config::ApiProvider::Siliconflow | crate::config::ApiProvider::SiliconflowCn => (
                     "SILICONFLOW_API_KEY",
                     "codewhale auth set --provider siliconflow --api-key \"...\"",
                 ),
@@ -2041,7 +2041,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::XiaomiMimo => "xiaomi_mimo",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
-                    crate::config::ApiProvider::Siliconflow => "siliconflow",
+                    crate::config::ApiProvider::Siliconflow | crate::config::ApiProvider::SiliconflowCn => "siliconflow",
                     crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",

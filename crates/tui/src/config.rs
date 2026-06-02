@@ -165,7 +165,10 @@ impl ApiProvider {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
-            "siliconflow-cn" | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => Some(Self::SiliconflowCn),
+            "siliconflow-cn" | "siliconflow-CN"
+            | "silicon-flow-cn" | "silicon-flow-CN"
+            | "silicon_flow_cn" | "silicon_flow_CN"
+            | "siliconflow-china" => Some(Self::SiliconflowCn),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
@@ -189,7 +192,7 @@ impl ApiProvider {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
-            Self::SiliconflowCn => "siliconflow-cn",
+            Self::SiliconflowCn => "siliconflow-CN",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
@@ -2201,7 +2204,7 @@ impl Config {
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
-            | ApiProvider::Siliconflow
+            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
             | ApiProvider::Moonshot
             | ApiProvider::Sglang
             | ApiProvider::Vllm
@@ -2274,7 +2277,7 @@ impl Config {
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
             ApiProvider::Siliconflow => "siliconflow",
-            ApiProvider::SiliconflowCn => "siliconflow-cn",
+            ApiProvider::SiliconflowCn => "siliconflow-CN",
             ApiProvider::Moonshot => "moonshot",
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
@@ -2376,7 +2379,7 @@ impl Config {
                  set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::SiliconflowCn => anyhow::bail!(
-                "SiliconFlow (China) API key not found. Run 'codewhale auth set --provider siliconflow-cn', \
+                "SiliconFlow (China) API key not found. Run 'codewhale auth set --provider siliconflow-CN', \
                  set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::Moonshot => anyhow::bail!(

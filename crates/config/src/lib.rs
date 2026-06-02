@@ -105,8 +105,8 @@ pub enum ProviderKind {
     Fireworks,
     #[serde(alias = "silicon-flow", alias = "silicon_flow")]
     Siliconflow,
-    #[serde(alias = "siliconflow-china", alias = "silicon-flow-cn", alias = "silicon_flow_cn")]
-    SiliconflowCn,
+    #[serde(alias = "siliconflow-cn", alias = "siliconflow-CN")]
+    SiliconflowCN,
     Moonshot,
     Sglang,
     Vllm,
@@ -128,12 +128,17 @@ impl ProviderKind {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
-            Self::SiliconflowCn => "siliconflow-cn",
+            Self::SiliconflowCN => "siliconflow-CN",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
         }
+    }
+
+    #[must_use]
+    pub fn is_siliconflow(self) -> bool {
+        matches!(self, Self::Siliconflow | Self::SiliconflowCN)
     }
 
     #[must_use]
@@ -155,7 +160,7 @@ impl ProviderKind {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
-            "siliconflow-cn" | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => Some(Self::SiliconflowCn),
+            "siliconflow-cn" | "siliconflow-CN" => Some(Self::SiliconflowCN),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
@@ -242,7 +247,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &self.xiaomi_mimo,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
-            ProviderKind::Siliconflow => &self.siliconflow,
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &self.siliconflow,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
@@ -262,7 +267,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &mut self.xiaomi_mimo,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
-            ProviderKind::Siliconflow => &mut self.siliconflow,
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &mut self.siliconflow,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
@@ -1257,6 +1262,7 @@ impl ConfigToml {
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
                 ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
+                ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL.to_string(),
                 ProviderKind::Moonshot => {
                     if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
                         DEFAULT_KIMI_CODE_BASE_URL.to_string()
@@ -1629,7 +1635,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
         ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
-        ProviderKind::SiliconflowCn => DEFAULT_SILICONFLOW_MODEL,
+        ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_MODEL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
@@ -1650,7 +1656,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
-        ProviderKind::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
+        ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
@@ -1666,7 +1672,7 @@ fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
 }
 
 fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
-    if provider == ProviderKind::Siliconflow && siliconflow_base_url_is_official(base_url) {
+    if provider.is_siliconflow() && siliconflow_base_url_is_official(base_url) {
         return false;
     }
     let actual = base_url.trim_end_matches('/');
@@ -2362,6 +2368,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
             ProviderKind::Siliconflow => self.siliconflow_base_url.clone(),
+            ProviderKind::SiliconflowCN => self.siliconflow_base_url.clone(),
             ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
