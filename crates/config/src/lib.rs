@@ -3137,6 +3137,10 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         struct HomeEnvGuard {
             home: Option<OsString>,
             userprofile: Option<OsString>,
+            #[cfg(windows)]
+            homedrive: Option<OsString>,
+            #[cfg(windows)]
+            homepath: Option<OsString>,
             codewhale_home: Option<OsString>,
         }
 
@@ -3151,6 +3155,16 @@ unix_socket_path = "/tmp/cw-hooks.sock"
                     match self.userprofile.take() {
                         Some(value) => env::set_var("USERPROFILE", value),
                         None => env::remove_var("USERPROFILE"),
+                    }
+                    #[cfg(windows)]
+                    match self.homedrive.take() {
+                        Some(value) => env::set_var("HOMEDRIVE", value),
+                        None => env::remove_var("HOMEDRIVE"),
+                    }
+                    #[cfg(windows)]
+                    match self.homepath.take() {
+                        Some(value) => env::set_var("HOMEPATH", value),
+                        None => env::remove_var("HOMEPATH"),
                     }
                     match self.codewhale_home.take() {
                         Some(value) => env::set_var("CODEWHALE_HOME", value),
@@ -3180,12 +3194,24 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         let _env = HomeEnvGuard {
             home: env::var_os("HOME"),
             userprofile: env::var_os("USERPROFILE"),
+            #[cfg(windows)]
+            homedrive: env::var_os("HOMEDRIVE"),
+            #[cfg(windows)]
+            homepath: env::var_os("HOMEPATH"),
             codewhale_home: env::var_os("CODEWHALE_HOME"),
         };
         // Safety: test-only environment mutation is serialized by env_lock().
         unsafe {
             env::set_var("HOME", &home);
             env::set_var("USERPROFILE", &home);
+            #[cfg(windows)]
+            {
+                let mut components = home.components();
+                if let Some(std::path::Component::Prefix(prefix)) = components.next() {
+                    env::set_var("HOMEDRIVE", prefix.as_os_str());
+                    env::set_var("HOMEPATH", components.as_path());
+                }
+            }
             env::remove_var("CODEWHALE_HOME");
         }
 
