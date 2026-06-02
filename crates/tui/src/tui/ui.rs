@@ -49,7 +49,7 @@ use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEve
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
-use crate::hooks::{HookEvent, HookExecutor};
+use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals, turn_end_payload};
 use crate::llm_client::LlmClient;
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
@@ -1572,15 +1572,8 @@ async fn run_event_loop(
                         // turn's chunks pull the view down again until the
                         // user opts out by scrolling up.
                         app.user_scrolled_during_stream = false;
-                        app.runtime_turn_status = Some(match status {
-                            crate::core::events::TurnOutcomeStatus::Completed => {
-                                "completed".to_string()
-                            }
-                            crate::core::events::TurnOutcomeStatus::Interrupted => {
-                                "interrupted".to_string()
-                            }
-                            crate::core::events::TurnOutcomeStatus::Failed => "failed".to_string(),
-                        });
+                        app.runtime_turn_status =
+                            Some(turn_outcome_status_label(status).to_string());
                         if matches!(
                             status,
                             crate::core::events::TurnOutcomeStatus::Interrupted
@@ -1635,7 +1628,7 @@ async fn run_event_loop(
                             reasoning_replay_tokens: usage.reasoning_replay_tokens,
                             recorded_at: Instant::now(),
                         });
-                        if let Some(error) = error {
+                        if let Some(error) = error.as_deref() {
                             // Only show "Turn failed:" in the composer status
                             // area when an EngineEvent::Error has NOT already
                             // posted the same message into the transcript.
@@ -1804,6 +1797,35 @@ async fn run_event_loop(
                             for msg in app.drain_pending_steers() {
                                 app.queue_message(msg);
                             }
+                        }
+
+                        if app.hooks.has_hooks_for_event(HookEvent::TurnEnd) {
+                            let context = app.base_hook_context();
+                            let payload = turn_end_payload(TurnEndPayloadInput {
+                                context: &context,
+                                turn_id: app.runtime_turn_id.as_deref(),
+                                status: turn_outcome_status_label(status),
+                                error: error.as_deref(),
+                                duration_ms: u64::try_from(turn_elapsed.as_millis())
+                                    .unwrap_or(u64::MAX),
+                                usage: &usage,
+                                totals: TurnEndTotals {
+                                    session_tokens: app.session.total_tokens,
+                                    conversation_tokens: app.session.total_conversation_tokens,
+                                    input_tokens: app.session.total_input_tokens,
+                                    output_tokens: app.session.total_output_tokens,
+                                },
+                                tool_count: app.tool_evidence.len(),
+                                queued_message_count: app.queued_message_count(),
+                            });
+                            let hooks = app.hooks.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let _ = hooks.execute_structured_observer(
+                                    HookEvent::TurnEnd,
+                                    &context,
+                                    payload,
+                                );
+                            });
                         }
 
                         if queued_to_send.is_none() {
@@ -4117,6 +4139,14 @@ fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
     QueuedMessage {
         display: msg.display,
         skill_instruction: msg.skill_instruction,
+    }
+}
+
+fn turn_outcome_status_label(status: crate::core::events::TurnOutcomeStatus) -> &'static str {
+    match status {
+        crate::core::events::TurnOutcomeStatus::Completed => "completed",
+        crate::core::events::TurnOutcomeStatus::Interrupted => "interrupted",
+        crate::core::events::TurnOutcomeStatus::Failed => "failed",
     }
 }
 

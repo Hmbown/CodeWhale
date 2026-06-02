@@ -484,6 +484,59 @@ the message. Existing environment variables remain available.
 `shell_env` hooks keep their existing `KEY=VALUE` stdout contract;
 the JSON stdout contract applies only to `message_submit`.
 
+### Observer `turn_end` hooks
+
+`turn_end` hooks run after a model turn reaches a terminal outcome and
+the TUI has updated visible state, token counters, cost estimates,
+receipts, and session persistence scheduling. They are observer-only:
+stdout is ignored, failures are logged as warnings, and hook execution
+does not block the next input or queued-message dispatch.
+
+```toml
+[[hooks.hooks]]
+event = "turn_end"
+command = "~/.codewhale/hooks/turn-end.sh"
+timeout_secs = 5
+continue_on_error = true
+```
+
+The hook receives JSON on stdin:
+
+```json
+{
+  "event": "turn_end",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "turn_id": "turn_123",
+  "status": "completed",
+  "error": null,
+  "duration_ms": 4200,
+  "usage": {
+    "input_tokens": 1000,
+    "output_tokens": 250,
+    "prompt_cache_hit_tokens": 128,
+    "prompt_cache_miss_tokens": 872,
+    "reasoning_replay_tokens": null
+  },
+  "totals": {
+    "session_tokens": 1250,
+    "conversation_tokens": 1250,
+    "input_tokens": 1000,
+    "output_tokens": 250
+  },
+  "tool_count": 2,
+  "queued_message_count": 0,
+  "stop_hook_active": false
+}
+```
+
+`status` is `completed`, `interrupted`, or `failed`. `error` is set
+only when the same error is already visible to the user. Payloads do
+not include full transcript text, assistant response text, tool
+arguments, tool outputs, provider headers, or secrets.
+
 ### Composer stash (`/stash`, Ctrl+S)
 
 Press **Ctrl+S** in the composer to park the current draft to

@@ -33,6 +33,8 @@ pub enum HookEvent {
     SessionEnd,
     /// Triggered before a user message is sent to the LLM
     MessageSubmit,
+    /// Triggered after a model turn reaches a terminal outcome
+    TurnEnd,
     /// Triggered before a tool is executed
     ToolCallBefore,
     /// Triggered after a tool completes (success or failure)
@@ -58,6 +60,7 @@ impl HookEvent {
             HookEvent::SessionStart => "session_start",
             HookEvent::SessionEnd => "session_end",
             HookEvent::MessageSubmit => "message_submit",
+            HookEvent::TurnEnd => "turn_end",
             HookEvent::ToolCallBefore => "tool_call_before",
             HookEvent::ToolCallAfter => "tool_call_after",
             HookEvent::ModeChange => "mode_change",
@@ -467,6 +470,28 @@ impl MessageSubmitOutcome {
     }
 }
 
+/// Post-update token totals included in `turn_end` payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnEndTotals {
+    pub session_tokens: u32,
+    pub conversation_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+/// Input used to build the structured JSON payload for `turn_end` hooks.
+pub struct TurnEndPayloadInput<'a> {
+    pub context: &'a HookContext,
+    pub turn_id: Option<&'a str>,
+    pub status: &'a str,
+    pub error: Option<&'a str>,
+    pub duration_ms: u64,
+    pub usage: &'a crate::models::Usage,
+    pub totals: TurnEndTotals,
+    pub tool_count: usize,
+    pub queued_message_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MessageSubmitStdout {
     Unchanged,
@@ -662,6 +687,55 @@ impl HookExecutor {
         } else {
             MessageSubmitOutcome::replaced(current_text).with_warning(warning)
         }
+    }
+
+    /// Run observer-only hooks with a structured JSON stdin payload.
+    ///
+    /// The caller is responsible for invoking this off the UI-critical path.
+    /// Unlike `message_submit`, observer hooks ignore stdout and can never
+    /// mutate or block the caller's state.
+    pub fn execute_structured_observer(
+        &self,
+        event: HookEvent,
+        context: &HookContext,
+        payload: serde_json::Value,
+    ) -> Vec<HookResult> {
+        if !self.config.enabled {
+            return Vec::new();
+        }
+
+        let hooks = self.config.hooks_for_event(event);
+        if hooks.is_empty() {
+            return Vec::new();
+        }
+
+        let env_vars = context.to_env_vars();
+        let mut results = Vec::new();
+
+        for hook in hooks {
+            if !self.matches_condition(hook, context) {
+                continue;
+            }
+
+            let result = self.execute_sync_with_stdin(hook, &env_vars, &payload);
+            if !result.success {
+                let label = result.name.as_deref().unwrap_or("(unnamed)");
+                tracing::warn!(
+                    target: "hooks",
+                    hook = label,
+                    event = event.as_str(),
+                    exit_code = ?result.exit_code,
+                    duration_ms = result.duration.as_millis() as u64,
+                    error = result.error.as_deref().unwrap_or(""),
+                    stderr_head = %result.stderr.lines().next().unwrap_or(""),
+                    "structured observer hook failed"
+                );
+            }
+
+            results.push(result);
+        }
+
+        results
     }
 
     /// Run every `ShellEnv` hook for this context and merge their stdout
@@ -1015,6 +1089,30 @@ fn message_submit_payload(context: &HookContext, text: &str) -> serde_json::Valu
     })
 }
 
+pub fn turn_end_payload(input: TurnEndPayloadInput<'_>) -> serde_json::Value {
+    json!({
+        "event": HookEvent::TurnEnd.as_str(),
+        "session_id": input.context.session_id,
+        "workspace": input.context.workspace.as_ref().map(|p| p.display().to_string()),
+        "mode": input.context.mode,
+        "model": input.context.model,
+        "turn_id": input.turn_id,
+        "status": input.status,
+        "error": input.error,
+        "duration_ms": input.duration_ms,
+        "usage": input.usage,
+        "totals": {
+            "session_tokens": input.totals.session_tokens,
+            "conversation_tokens": input.totals.conversation_tokens,
+            "input_tokens": input.totals.input_tokens,
+            "output_tokens": input.totals.output_tokens,
+        },
+        "tool_count": input.tool_count,
+        "queued_message_count": input.queued_message_count,
+        "stop_hook_active": false,
+    })
+}
+
 fn parse_message_submit_stdout(stdout: &str) -> MessageSubmitStdout {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -1130,6 +1228,7 @@ fn parse_env_lines(stdout: &str) -> HashMap<String, String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::fs;
     use std::path::PathBuf;
 
     /// #456 — `parse_env_lines` covers the formats users actually emit from
@@ -1235,8 +1334,61 @@ NOEQUAL line dropped
     #[test]
     fn test_hook_event_as_str() {
         assert_eq!(HookEvent::SessionStart.as_str(), "session_start");
+        assert_eq!(HookEvent::TurnEnd.as_str(), "turn_end");
         assert_eq!(HookEvent::ToolCallAfter.as_str(), "tool_call_after");
         assert_eq!(HookEvent::ModeChange.as_str(), "mode_change");
+    }
+
+    #[test]
+    fn turn_end_payload_contains_post_turn_observer_fields() {
+        let context = HookContext::new()
+            .with_session_id("sess_test")
+            .with_workspace(PathBuf::from("/tmp/workspace"))
+            .with_mode("agent")
+            .with_model("deepseek-test");
+        let usage = crate::models::Usage {
+            input_tokens: 100,
+            output_tokens: 25,
+            prompt_cache_hit_tokens: Some(10),
+            prompt_cache_miss_tokens: Some(90),
+            reasoning_replay_tokens: Some(12),
+            ..Default::default()
+        };
+
+        let payload = turn_end_payload(TurnEndPayloadInput {
+            context: &context,
+            turn_id: Some("turn_test"),
+            status: "completed",
+            error: None,
+            duration_ms: 42,
+            usage: &usage,
+            totals: TurnEndTotals {
+                session_tokens: 125,
+                conversation_tokens: 125,
+                input_tokens: 100,
+                output_tokens: 25,
+            },
+            tool_count: 2,
+            queued_message_count: 1,
+        });
+
+        assert_eq!(payload["event"], "turn_end");
+        assert_eq!(payload["session_id"], "sess_test");
+        assert_eq!(payload["workspace"], "/tmp/workspace");
+        assert_eq!(payload["mode"], "agent");
+        assert_eq!(payload["model"], "deepseek-test");
+        assert_eq!(payload["turn_id"], "turn_test");
+        assert_eq!(payload["status"], "completed");
+        assert!(payload["error"].is_null());
+        assert_eq!(payload["duration_ms"], 42);
+        assert_eq!(payload["usage"]["input_tokens"], 100);
+        assert_eq!(payload["usage"]["output_tokens"], 25);
+        assert_eq!(payload["usage"]["reasoning_replay_tokens"], 12);
+        assert_eq!(payload["totals"]["session_tokens"], 125);
+        assert_eq!(payload["totals"]["conversation_tokens"], 125);
+        assert_eq!(payload["tool_count"], 2);
+        assert_eq!(payload["queued_message_count"], 1);
+        assert_eq!(payload["stop_hook_active"], false);
     }
 
     #[test]
@@ -1396,6 +1548,89 @@ printf '\ndone:%s\n' "${#payload}"
         assert!(result.success, "hook should complete: {result:?}");
         assert!(result.stdout.contains("done:"), "stdout was drained");
         assert!(result.stderr.len() >= 256 * 1024, "stderr was drained");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn structured_observer_receives_stdin_json_and_ignores_stdout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "turn_end_observer.sh",
+            r#"#!/bin/sh
+payload=$(cat)
+printf '%s' "$payload" > observed.json
+printf '{"text":"must be ignored"}'
+"#,
+        );
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![Hook::new(HookEvent::TurnEnd, &command)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let context = HookContext::new().with_session_id("sess_test");
+        let payload = json!({
+            "event": "turn_end",
+            "status": "completed",
+        });
+
+        let results = executor.execute_structured_observer(HookEvent::TurnEnd, &context, payload);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success, "observer should succeed: {results:?}");
+        assert!(
+            results[0].stdout.contains("must be ignored"),
+            "stdout is captured for diagnostics only"
+        );
+        let observed = fs::read_to_string(dir.path().join("observed.json")).expect("payload file");
+        let observed: serde_json::Value = serde_json::from_str(&observed).expect("json payload");
+        assert_eq!(observed["event"], "turn_end");
+        assert_eq!(observed["status"], "completed");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn structured_observer_failure_does_not_stop_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let failing = write_hook_script(
+            &dir,
+            "failing_observer.sh",
+            r#"#!/bin/sh
+printf 'failed\n' >&2
+exit 1
+"#,
+        );
+        let later = write_hook_script(
+            &dir,
+            "later_observer.sh",
+            r#"#!/bin/sh
+cat > later.json
+"#,
+        );
+        let mut fail_hook = Hook::new(HookEvent::TurnEnd, &failing);
+        fail_hook.continue_on_error = false;
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![fail_hook, Hook::new(HookEvent::TurnEnd, &later)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+
+        let results = executor.execute_structured_observer(
+            HookEvent::TurnEnd,
+            &HookContext::new(),
+            json!({"event": "turn_end"}),
+        );
+
+        assert_eq!(results.len(), 2, "observer failures are warn-only");
+        assert!(!results[0].success);
+        assert!(results[1].success);
+        assert!(dir.path().join("later.json").exists());
     }
 
     #[test]
@@ -1699,6 +1934,7 @@ exit 7
             HookEvent::SessionStart,
             HookEvent::SessionEnd,
             HookEvent::MessageSubmit,
+            HookEvent::TurnEnd,
             HookEvent::ToolCallBefore,
             HookEvent::ToolCallAfter,
             HookEvent::ModeChange,
@@ -1731,6 +1967,7 @@ exit 7
             enabled: true,
             hooks: vec![
                 Hook::new(HookEvent::SessionStart, "echo start"),
+                Hook::new(HookEvent::TurnEnd, "echo turn"),
                 Hook::new(HookEvent::ToolCallBefore, "echo before"),
             ],
             ..HooksConfig::default()
@@ -1738,6 +1975,7 @@ exit 7
         let executor = HookExecutor::new(config, PathBuf::from("."));
         // Configured events return true.
         assert!(executor.has_hooks_for_event(HookEvent::SessionStart));
+        assert!(executor.has_hooks_for_event(HookEvent::TurnEnd));
         assert!(executor.has_hooks_for_event(HookEvent::ToolCallBefore));
         // Unconfigured events return false even when other events are present.
         assert!(!executor.has_hooks_for_event(HookEvent::ToolCallAfter));

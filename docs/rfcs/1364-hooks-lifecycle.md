@@ -1,239 +1,42 @@
 # RFC: Hook Lifecycle Data Flow
 
 **Issue:** #1364
-**Status:** Draft
-**Date:** 2026-05-28
+**Status:** Phase 1 landed, Phase 2/3 spec
+**Date:** 2026-06-02
+**Baseline:** `main` at `31f34c5df2363316f23a23398a81cf2d363cd19a`
 
-## 1. Problem
+## 1. Current State
 
-CodeWhale already has lifecycle hooks and MCP support, but the current hook
-surface is mostly observer-only. This blocks portable extensions that need to
-participate in the agent data flow:
+CodeWhale has MCP support and configurable hooks. Phase 1 of #1364 landed via
+#2434, which harvested the mutable `message_submit` slice from #2318.
 
-- memory/context injection before a user message reaches the model
-- post-turn background analysis that prepares context for the next turn
-- sub-agent lifecycle visibility for orchestration and audit extensions
+Implemented in Phase 1:
 
-The current `message_submit` event fires before dispatch, but its output is
-ignored. `TurnComplete`, `AgentSpawned`, and `AgentComplete` exist internally,
-but they are not exposed as configurable hook events.
+- non-background `message_submit` hooks receive JSON on stdin
+- stdout JSON with a non-empty string `text` field replaces submitted text
+- exit code `2` blocks submission before a model turn starts
+- multiple `message_submit` hooks run serially in config order
+- background `message_submit` hooks remain observer-only
+- transformed text is used by history, file mention expansion, API messages,
+  and engine dispatch
+- `continue_on_error = true` surfaces stderr/stdout/internal errors as a
+  transient TUI warning instead of silently swallowing continued failures
 
-## 2. PR split
+Remaining #1364 work:
 
-This issue should be implemented as three PRs. Each PR should be independently
-reviewable and should leave the hook system in a useful state.
+- Phase 2: expose a post-turn `turn_end` lifecycle hook
+- Phase 3: expose observer-only subagent lifecycle hooks
 
-### PR 1: Mutable `message_submit`
+Future work should start from current `main`; #2318 is now a reference branch,
+not the Phase 1 merge target.
 
-Add a structured hook execution path for `message_submit` that can transform or
-block the user's submitted text before it is sent to the engine.
+## 2. Shared Design Rules
 
-Scope:
+All remaining hooks should preserve the existing `[[hooks.hooks]]` config
+shape, existing env vars, and existing condition matching.
 
-- keep the existing `[[hooks.hooks]]` config shape
-- pass a JSON payload to the hook on stdin
-- interpret stdout JSON containing `text` as the replacement user text
-- treat exit code `2` as an intentional block
-- run multiple submit hooks serially in config order
-- keep existing env vars for compatibility
-- keep `shell_env` stdout parsing unchanged
-
-Non-goals:
-
-- no tool argument mutation
-- no global stdout JSON semantics for all hook events
-- no transcript or model response mutation
-
-### PR 2: `turn_end`
-
-Expose the existing turn completion lifecycle as a hook event.
-
-Scope:
-
-- add `HookEvent::TurnEnd` with event name `turn_end`
-- fire from the UI's `EngineEvent::TurnComplete` branch after core app state,
-  usage, cost, notifications, and receipt state have been updated
-- pass turn metadata on stdin as JSON
-- make failures non-blocking and warn-only
-- include a `stop_hook_active` field in the payload, initially `false`, so the
-  contract can support re-entry protection later
-
-Non-goals:
-
-- no change to turn status
-- no blocking of user input
-- no transcript mutation from `turn_end`
-
-### PR 3: Subagent lifecycle observer hooks
-
-Expose subagent start and completion as observer-only hook events.
-
-Scope:
-
-- add `HookEvent::SubagentSpawn` with event name `subagent_spawn`
-- add `HookEvent::SubagentComplete` with event name `subagent_complete`
-- fire from the existing `AgentSpawned` and `AgentComplete` UI branches
-- pass subagent metadata on stdin as JSON
-- make failures non-blocking and warn-only
-
-Non-goals:
-
-- no subagent spawn gating in the first version
-- no subagent prompt/result mutation
-- no changes to subagent scheduling
-
-## 3. PR 1 detailed plan
-
-### 3.1 Contract
-
-Configuration:
-
-```toml
-[[hooks.hooks]]
-event = "message_submit"
-command = "~/.deepseek/hooks/inject-memory.sh"
-timeout_secs = 2
-continue_on_error = true
-```
-
-Input payload on stdin:
-
-```json
-{
-  "event": "message_submit",
-  "text": "original user text",
-  "session_id": "sess_xxxx",
-  "workspace": "/path/to/workspace",
-  "mode": "agent",
-  "model": "deepseek-chat",
-  "total_tokens": 1234
-}
-```
-
-Output payload on stdout:
-
-```json
-{ "text": "replacement user text" }
-```
-
-Rules:
-
-- exit `0` with stdout JSON containing `text: string` replaces the current text
-- exit `0` with empty stdout leaves the current text unchanged
-- exit `0` with JSON that does not contain `text` leaves the current text
-  unchanged
-- exit `2` blocks submission before the message is appended to history or sent
-  to the engine
-- other non-zero exits follow `continue_on_error`
-  - `true`: warn, keep the current text, continue later hooks
-  - `false`: stop later hooks and block submission with an error message
-- `background = true` on `message_submit` remains observer-only and cannot
-  transform or block submission
-
-Multiple hooks:
-
-- hooks run in config order
-- each hook receives the latest transformed text
-- the final transformed text is the only text used by file mention expansion,
-  skill wrapping, auto routing, history, and `api_messages`
-
-### 3.2 Implementation steps
-
-1. Add structured submit outcome types in `crates/tui/src/hooks.rs`:
-
-```rust
-pub enum MessageSubmitOutcome {
-    Unchanged,
-    Replaced(String),
-    Blocked { reason: String },
-}
-```
-
-2. Add a stdin-capable sync executor:
-
-```rust
-fn execute_sync_with_stdin(
-    &self,
-    hook: &Hook,
-    env_vars: &HashMap<String, String>,
-    stdin_json: &serde_json::Value,
-) -> HookResult
-```
-
-This should reuse the existing timeout, working directory, stdout, stderr, and
-error handling behavior from `execute_sync`.
-
-3. Add a `message_submit` transform entrypoint:
-
-```rust
-pub fn execute_message_submit_transform(
-    &self,
-    context: &HookContext,
-    original_text: &str,
-) -> MessageSubmitOutcome
-```
-
-This method should:
-
-- filter configured `MessageSubmit` hooks through existing condition matching
-- build a JSON payload for each hook using the current text
-- run non-background hooks through `execute_sync_with_stdin`
-- run background hooks with the existing observer-only path
-- parse stdout JSON only for non-background hooks
-- return the final text or a block result
-
-4. Apply the transformed message in `dispatch_user_message`:
-
-- run the transform before `last_submitted_prompt`, file mentions, history, and
-  `api_messages`
-- create a local mutable `QueuedMessage` or replacement display text
-- if blocked, show a status message or toast and return without dispatch
-
-5. Update `/hooks events`:
-
-- keep `message_submit` listed
-- update description to say it can transform or block user text
-
-6. Update user-facing docs:
-
-- document the stdin/stdout contract
-- document exit code `2`
-- document that `shell_env` still uses `KEY=VALUE` stdout
-
-### 3.3 Test plan
-
-Unit tests in `crates/tui/src/hooks.rs`:
-
-- parses stdout `{"text":"changed"}` as replacement
-- empty stdout means unchanged
-- JSON without `text` means unchanged
-- malformed stdout means unchanged with warning semantics
-- exit `2` maps to blocked
-- multiple hooks apply transforms in order
-- background `message_submit` hook cannot transform
-- `continue_on_error = false` blocks on non-zero failure
-
-TUI integration or focused dispatch tests:
-
-- transformed text is written to `api_messages`
-- transformed text is written to visible history
-- transformed text is used by file mention expansion
-- blocked submit does not append user history
-- blocked submit does not push an API message
-- blocked submit leaves loading state false
-
-Manual smoke test:
-
-1. Add a config hook that prepends `[hooked] ` to every submitted message.
-2. Submit `hello`.
-3. Verify the transcript and model input use `[hooked] hello`.
-4. Replace the hook with one that exits `2`.
-5. Submit `hello`.
-6. Verify no turn starts and the TUI shows the block reason.
-
-## 4. Shared payload conventions
-
-All new structured hook payloads should include:
+Structured payloads should be written to hook stdin as JSON and should include
+the stable shared fields:
 
 - `event`
 - `session_id`
@@ -241,36 +44,438 @@ All new structured hook payloads should include:
 - `mode`
 - `model`
 
-Event-specific payloads should add only fields that are stable and useful for
-extension authors. Avoid leaking secrets, full tool outputs, or unbounded
-transcript content in the first version.
+Observer lifecycle hooks must not:
 
-## 5. Compatibility
+- mutate transcript content
+- mutate submitted user text
+- mutate tool arguments or tool results
+- block user input or subagent scheduling
+- expose secrets, full tool outputs, or unbounded transcript content
 
-- Existing hook config remains valid.
-- Existing observer-only hooks keep working.
-- Existing env vars remain available.
-- `shell_env` keeps its existing stdout `KEY=VALUE` contract.
-- Structured stdout is interpreted only by `message_submit` in PR 1.
+For Phase 2 and Phase 3, stdout is ignored. The stdout JSON mutation contract
+remains specific to `message_submit`.
 
-## 6. Review checkpoints
+## 3. PR Split
 
-PR 1 should be accepted only if:
+### PR 1: Mutable `message_submit`
 
-- submit mutation is covered by tests
-- submit blocking is covered by tests
-- the unchanged path preserves current behavior
-- `shell_env` tests still prove the old stdout contract
-- the docs clearly mark `message_submit` as the only mutable hook
+Status: landed in #2434.
 
-PR 2 should be accepted only if:
+No further Phase 1 development should be based on #2318 unless the maintainer
+explicitly asks for it. Follow-up behavior should build on `main`.
 
-- `turn_end` fires after `TurnComplete` app state updates
-- failure is warn-only
-- payload contains status and usage
+### PR 2: `turn_end`
 
-PR 3 should be accepted only if:
+Expose turn completion as a post-turn observer hook. This is the next focused
+slice.
+
+Scope:
+
+- add `HookEvent::TurnEnd` with event name `turn_end`
+- add a structured observer hook execution path that accepts a JSON payload
+- fire from the `EngineEvent::TurnComplete` UI branch after core user-visible
+  state has been updated
+- run hooks without blocking the next user action
+- treat hook failures as warn/log only
+- include `stop_hook_active`, initially `false`, to reserve the re-entry guard
+  contract
+- document the payload and non-blocking semantics
+- update `/hooks events`, `docs/CONFIGURATION.md`, and web docs
+
+Non-goals:
+
+- no blocking or replacement behavior
+- no transcript mutation
+- no model response mutation
+- no tool output or full transcript payload
+- no subagent lifecycle hook in this PR
+
+### PR 3: Subagent Lifecycle Observer Hooks
+
+Expose subagent start and completion as observer-only lifecycle hooks.
+
+Scope:
+
+- add `HookEvent::SubagentSpawn` with event name `subagent_spawn`
+- add `HookEvent::SubagentComplete` with event name `subagent_complete`
+- reuse the structured observer execution path from Phase 2
+- fire from the existing `EngineEvent::AgentSpawned` and
+  `EngineEvent::AgentComplete` UI branches
+- pass bounded subagent metadata on stdin as JSON
+- run hooks without blocking subagent scheduling or parent-turn progress
+- treat hook failures as warn/log only
+- document the payload and observer-only semantics
+
+Non-goals:
+
+- no subagent spawn gating in the first version
+- no subagent prompt or result mutation
+- no full prompt/result payload by default
+- no changes to subagent scheduling
+- no new subagent type matcher unless a later review asks for it
+
+## 4. Phase 2 Technical Spec: `turn_end`
+
+### 4.1 Hook Configuration
+
+```toml
+[[hooks.hooks]]
+event = "turn_end"
+command = "~/.codewhale/hooks/turn-end.sh"
+timeout_secs = 5
+continue_on_error = true
+```
+
+The hook should be treated as observer-only even when `background = false`.
+The UI must not wait for it before accepting input, dispatching queued
+messages, or repainting the idle state.
+
+### 4.2 Trigger Point
+
+The trigger point is `crates/tui/src/tui/ui.rs`, inside the
+`EngineEvent::TurnComplete` branch.
+
+The hook should fire after these state updates have happened:
+
+- loading and streaming state cleared
+- turn duration recorded
+- runtime turn status set
+- session token counters updated
+- cache telemetry updated
+- turn cost accrued
+- user-facing notification/receipt state updated
+- session snapshot persistence has been scheduled
+
+The hook should fire before any automatically queued message starts a new turn,
+so the completed turn is observable even when the queue immediately continues.
+The hook itself must be fire-and-forget; it must not delay the queued message.
+
+`turn_end` should fire for all terminal turn outcomes:
+
+- `completed`
+- `interrupted`
+- `failed`
+
+It should not fire on app startup, session startup, or session shutdown without
+a completed engine turn.
+
+### 4.3 Payload
+
+Example payload:
+
+```json
+{
+  "event": "turn_end",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "turn_id": "turn_123",
+  "status": "completed",
+  "error": null,
+  "duration_ms": 4200,
+  "usage": {
+    "input_tokens": 1000,
+    "output_tokens": 250,
+    "prompt_cache_hit_tokens": 128,
+    "prompt_cache_miss_tokens": 872,
+    "reasoning_replay_tokens": null
+  },
+  "totals": {
+    "session_tokens": 1250,
+    "conversation_tokens": 1250,
+    "input_tokens": 1000,
+    "output_tokens": 250
+  },
+  "tool_count": 2,
+  "queued_message_count": 0,
+  "stop_hook_active": false
+}
+```
+
+Payload rules:
+
+- `status` is one of `completed`, `interrupted`, or `failed`
+- `error` is the turn error string only when already visible to the user
+- `duration_ms` is wall-clock turn duration from `app.turn_started_at`
+- `usage` mirrors `EngineEvent::TurnComplete.usage`
+- `totals` are the post-update app/session counters
+- `tool_count` is the number of tool evidence entries, not full tool output
+- `queued_message_count` is informational and must not change queue behavior
+- `stop_hook_active` is always `false` in this PR
+
+Do not include:
+
+- full transcript text
+- full tool arguments or outputs
+- API keys or provider headers
+- raw assistant response text
+
+### 4.4 Implementation Plan
+
+1. Extend `HookEvent` in `crates/tui/src/hooks.rs`.
+
+```rust
+TurnEnd,
+```
+
+Map it in `HookEvent::as_str()` as `"turn_end"`.
+
+2. Add a structured observer execution helper in `crates/tui/src/hooks.rs`.
+
+Suggested shape:
+
+```rust
+pub fn execute_structured_observer(
+    &self,
+    event: HookEvent,
+    context: &HookContext,
+    payload: serde_json::Value,
+)
+```
+
+This helper should:
+
+- filter hooks with `hooks_for_event(event)`
+- apply existing condition matching
+- pass existing env vars
+- write `payload` to stdin using the existing stdin-capable executor path
+- ignore stdout
+- log failures with `tracing::warn!`
+- never return a blocking outcome to the caller
+
+The caller should invoke this helper from a background task/thread so UI event
+handling remains non-blocking. If that requires cloning `HookExecutor`, keep the
+payload owned and avoid borrowing `App`.
+
+3. Add a `turn_end_payload(...)` builder.
+
+Keep it private to `hooks.rs` if all fields can be passed through
+`HookContext`, or place it near the UI call site if it needs direct `App`
+access. Prefer a small explicit payload builder over ad hoc JSON construction
+inside the event branch.
+
+4. Wire the UI event branch.
+
+In `crates/tui/src/tui/ui.rs`, after the `TurnComplete` branch finishes the
+core app-state updates, build the payload and dispatch the observer hook.
+
+5. Update command and docs.
+
+- `crates/tui/src/commands/hooks.rs`
+- `docs/CONFIGURATION.md`
+- `web/app/[locale]/docs/page.tsx`
+
+### 4.5 Tests
+
+Hook unit tests:
+
+- `HookEvent::TurnEnd` serializes/deserializes as `turn_end`
+- configured `turn_end` hooks receive stdin JSON
+- stdout is ignored
+- non-zero exit logs/warns but does not produce a blocking result
+- timeout does not block the caller path
+
+TUI tests:
+
+- completed turn fires one `turn_end` hook
+- failed turn fires one `turn_end` hook with `status = "failed"` and `error`
+- interrupted turn fires one `turn_end` hook with `status = "interrupted"`
+- payload contains post-update token totals
+- queued messages still dispatch after `TurnComplete`
+
+Manual smoke test:
+
+1. Configure a `turn_end` hook that appends stdin JSON to a temp file.
+2. Run one successful turn.
+3. Confirm the file contains `event = "turn_end"` and `status = "completed"`.
+4. Configure a slow hook with `timeout_secs = 1`.
+5. Confirm the TUI returns to idle and accepts input without waiting.
+
+## 5. Phase 3 Technical Spec: Subagent Lifecycle Hooks
+
+### 5.1 Hook Configuration
+
+```toml
+[[hooks.hooks]]
+event = "subagent_spawn"
+command = "~/.codewhale/hooks/subagent-spawn.sh"
+timeout_secs = 3
+continue_on_error = true
+
+[[hooks.hooks]]
+event = "subagent_complete"
+command = "~/.codewhale/hooks/subagent-complete.sh"
+timeout_secs = 3
+continue_on_error = true
+```
+
+Both events are observer-only. Their hooks must not gate spawn, cancel
+subagents, or rewrite prompts/results.
+
+### 5.2 Trigger Points
+
+Trigger from `crates/tui/src/tui/ui.rs`:
+
+- `EngineEvent::AgentSpawned { id, prompt }` -> `subagent_spawn`
+- `EngineEvent::AgentComplete { id, result }` -> `subagent_complete`
+
+Fire after the existing UI state/status updates for each branch have been
+applied. Hook failures must not affect:
+
+- `app.agent_progress`
+- `app.status_message`
+- `Op::ListSubAgents`
+- subagent cards or mailbox routing
+- parent turn completion
+
+### 5.3 Payloads
+
+Spawn payload:
+
+```json
+{
+  "event": "subagent_spawn",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "agent_id": "agent_abc",
+  "prompt_preview": "Investigate failing tests",
+  "prompt_truncated": false
+}
+```
+
+Complete payload:
+
+```json
+{
+  "event": "subagent_complete",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "agent_id": "agent_abc",
+  "status": "completed",
+  "result_preview": "Found the failing assertion in parser tests",
+  "result_truncated": false
+}
+```
+
+Payload rules:
+
+- use bounded previews, not full prompt/result text
+- use the same truncation helper for prompt and result previews
+- if agent type or assignment metadata is available without extra blocking
+  lookups, include it as optional `agent_type` / `assignment` fields
+- do not add blocking lookups only to enrich hook payloads
+- do not include full subagent transcript
+
+### 5.4 Implementation Plan
+
+1. Extend `HookEvent` in `crates/tui/src/hooks.rs`.
+
+```rust
+SubagentSpawn,
+SubagentComplete,
+```
+
+Map them as:
+
+- `"subagent_spawn"`
+- `"subagent_complete"`
+
+2. Reuse the Phase 2 structured observer helper.
+
+Subagent lifecycle hooks should not create a second observer execution path.
+Reuse the `execute_structured_observer` helper and payload writing behavior.
+
+3. Add bounded preview helpers.
+
+Keep prompt/result payloads bounded. Reuse an existing truncation helper if one
+is already available in the TUI layer; otherwise add a small private helper
+that truncates by chars and returns both preview text and a boolean
+`*_truncated` flag.
+
+4. Wire the UI branches.
+
+In the `AgentSpawned` branch, build the spawn payload from `id` and the
+existing `prompt_summary`/bounded prompt preview.
+
+In the `AgentComplete` branch, build the complete payload from `id` and a
+bounded result preview.
+
+5. Update docs and `/hooks events`.
+
+- `crates/tui/src/commands/hooks.rs`
+- `docs/CONFIGURATION.md`
+- `web/app/[locale]/docs/page.tsx`
+
+### 5.5 Tests
+
+Hook unit tests:
+
+- `HookEvent::SubagentSpawn` serializes/deserializes as `subagent_spawn`
+- `HookEvent::SubagentComplete` serializes/deserializes as
+  `subagent_complete`
+- subagent observer hooks receive stdin JSON
+- stdout is ignored
+- non-zero exits do not affect caller state
+
+TUI tests:
+
+- `AgentSpawned` fires one `subagent_spawn` hook
+- `AgentComplete` fires one `subagent_complete` hook
+- payload previews are truncated and marked when input is long
+- hook failure does not prevent `Op::ListSubAgents`
+- hook failure does not alter `app.agent_progress`
+- hook failure does not alter `app.status_message`
+
+Manual smoke test:
+
+1. Configure both subagent hooks to append stdin JSON to a temp file.
+2. Trigger a subagent.
+3. Confirm `subagent_spawn` appears before `subagent_complete`.
+4. Confirm prompts/results are bounded previews, not full transcripts.
+
+## 6. Contribution Workflow
+
+For Phase 2 and Phase 3:
+
+- create a fresh branch from current `main`
+- keep each PR focused on one behavior boundary
+- use `Refs #1364 (partial)` unless a maintainer reopens or re-scopes the issue
+- do not use `Closes #1364` for either follow-up slice unless the maintainer
+  confirms the issue should be fully closed by that PR
+- include local validation evidence in the PR body
+- keep PRs ready for the direct-merge path: rebased, non-draft, green CI, and
+  backed by focused tests
+
+Suggested PR body shape:
+
+```text
+Summary:
+Scope:
+Not in this slice:
+Builds on: #2434
+Issues: Refs #1364 (partial)
+Validation:
+```
+
+## 7. Review Checkpoints
+
+Phase 2 is ready for review only if:
+
+- `turn_end` fires after post-turn app state is updated
+- all terminal turn statuses are covered by tests
+- hook execution is non-blocking from the UI perspective
+- payload excludes transcript/tool-output content
+- docs specify that stdout is ignored
+
+Phase 3 is ready for review only if:
 
 - subagent hooks are observer-only
-- failures do not affect subagent lifecycle
-- payloads do not include unbounded or secret data
+- spawn and completion are both covered by tests
+- failures do not affect subagent state or scheduling
+- payload previews are bounded and tested
+- docs clearly state that gating/mutation are out of scope

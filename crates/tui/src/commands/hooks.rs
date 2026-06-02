@@ -48,6 +48,10 @@ fn events() -> CommandResult {
             "fires before model dispatch; can transform or block submitted text",
         ),
         (
+            HookEvent::TurnEnd,
+            "fires after a turn ends; observer-only and receives JSON on stdin",
+        ),
+        (
             HookEvent::ToolCallBefore,
             "fires before each tool call (read-only observer for now)",
         ),
@@ -134,6 +138,7 @@ fn event_label(event: HookEvent) -> &'static str {
         HookEvent::SessionStart => "session_start",
         HookEvent::SessionEnd => "session_end",
         HookEvent::MessageSubmit => "message_submit",
+        HookEvent::TurnEnd => "turn_end",
         HookEvent::ToolCallBefore => "tool_call_before",
         HookEvent::ToolCallAfter => "tool_call_after",
         HookEvent::ModeChange => "mode_change",
@@ -257,6 +262,7 @@ mod tests {
             "session_start",
             "session_end",
             "message_submit",
+            "turn_end",
             "tool_call_before",
             "tool_call_after",
             "mode_change",
@@ -296,6 +302,7 @@ mod tests {
         assert_eq!(event_label(HookEvent::ToolCallBefore), "tool_call_before");
         assert_eq!(event_label(HookEvent::ToolCallAfter), "tool_call_after");
         assert_eq!(event_label(HookEvent::MessageSubmit), "message_submit");
+        assert_eq!(event_label(HookEvent::TurnEnd), "turn_end");
         assert_eq!(event_label(HookEvent::ModeChange), "mode_change");
         assert_eq!(event_label(HookEvent::OnError), "on_error");
     }

@@ -179,7 +179,7 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # 也支持: tool_call_before / tool_call_after
-command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / turn_end / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
                   完整参考：<Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>。
@@ -187,6 +187,7 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                 <p className="mt-3 text-sm text-ink-soft leading-[1.9]">
                   <code className="inline">message_submit</code> hooks run before a user message is sent to the model. A non-background hook can print
                   <code className="inline">{'{"text":"replacement"}'}</code> on stdout to replace the message; <code className="inline">text</code> must be non-empty. Exit with code <code className="inline">2</code> to block the submission.
+                  <code className="inline">turn_end</code> hooks run after a turn finishes, receive JSON on stdin, ignore stdout, and never block the next input.
                   <code className="inline">shell_env</code> keeps its existing <code className="inline">KEY=VALUE</code> stdout contract.
                 </p>
               </section>
@@ -434,7 +435,7 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # or: tool_call_before / tool_call_after
-command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / turn_end / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
                   Full reference: <Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>.
@@ -442,6 +443,7 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                 <p className="mt-3 text-sm text-ink-soft leading-relaxed">
                   <code className="inline">message_submit</code> hooks run before a user message is sent to the model. A non-background hook can print
                   <code className="inline">{'{"text":"replacement"}'}</code> on stdout to replace the message; <code className="inline">text</code> must be non-empty. Exit with code <code className="inline">2</code> to block the submission.
+                  <code className="inline">turn_end</code> hooks run after a turn finishes, receive JSON on stdin, ignore stdout, and never block the next input.
                   <code className="inline">shell_env</code> keeps its existing <code className="inline">KEY=VALUE</code> stdout contract.
                 </p>
               </section>
