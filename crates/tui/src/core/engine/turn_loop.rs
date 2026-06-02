@@ -314,7 +314,7 @@ impl Engine {
             // Three-zone prefix contract (#2264): freeze baseline on first
             // turn, verify against it on subsequent turns. Operates alongside
             // PrefixStabilityManager as an independent diagnostic layer.
-            // Phase 2: warn-only, auto-re-freeze on drift.
+            // Phase 3: emit PrefixCacheChange events for user visibility.
             let system_text =
                 crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
             let current_tools: &[crate::models::Tool] = active_tools.as_deref().unwrap_or_default();
@@ -326,6 +326,17 @@ impl Engine {
                             target: "prefix_cache",
                             "three-zone drift: {drift}"
                         );
+                        let _ = self
+                            .tx_event
+                            .send(Event::PrefixCacheChange {
+                                description: drift.to_string(),
+                                system_prompt_changed: drift.system_changed,
+                                tools_changed: drift.tools_changed,
+                                stability_pct: 0,
+                                changed: true,
+                                pinned_combined_hash: frozen.hash().to_string(),
+                            })
+                            .await;
                         let pinned = PinnedPrefix::new(
                             self.session.system_prompt.as_ref(),
                             current_tools.to_vec(),
@@ -338,7 +349,19 @@ impl Engine {
                         self.session.system_prompt.as_ref(),
                         current_tools.to_vec(),
                     );
-                    self.session.frozen_prefix = Some(pinned.freeze());
+                    let frozen = pinned.freeze();
+                    let _ = self
+                        .tx_event
+                        .send(Event::PrefixCacheChange {
+                            description: format!("frozen: {}", frozen.short_id()),
+                            system_prompt_changed: false,
+                            tools_changed: false,
+                            stability_pct: 100,
+                            changed: false,
+                            pinned_combined_hash: frozen.hash().to_string(),
+                        })
+                        .await;
+                    self.session.frozen_prefix = Some(frozen);
                 }
             }
 
