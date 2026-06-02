@@ -8,11 +8,16 @@ permissions:
   contents: read
   issues: write
 
+env:
+  # Keep new gates observable first. Switch to "enforce" only after maintainers
+  # have seeded active contributors and reviewed the dry-run signal.
+  CONTRIBUTION_GATE_MODE: dry-run
+
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - name: Close unapproved external issues
+      - name: Gate unapproved external issues
         uses: actions/github-script@v7
         with:
           script: |
@@ -20,6 +25,12 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const privileged = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const gateMode = (process.env.CONTRIBUTION_GATE_MODE || 'dry-run').trim().toLowerCase();
+            const enforceGate = gateMode === 'enforce';
+
+            if (!['dry-run', 'enforce'].includes(gateMode)) {
+              core.warning(`Unknown CONTRIBUTION_GATE_MODE "${gateMode}"; defaulting to dry-run.`);
+            }
 
             if (privileged.has(issue.author_association)) return;
             if (issue.user.login === 'github-actions[bot]') return;
@@ -60,6 +71,10 @@ jobs:
               return;
             }
 
+            const gateMessage = enforceGate
+              ? 'This repository currently uses a maintainer-managed contribution gate, so issues from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.'
+              : 'This repository is currently observing a maintainer-managed contribution gate in dry-run mode, so this issue is staying open. When enforcement is enabled, issues from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS` will be closed automatically.';
+
             await github.rest.issues.createComment({
               owner,
               repo,
@@ -67,11 +82,13 @@ jobs:
               body: [
                 `Thanks @${issue.user.login} for the report.`,
                 '',
-                'This repository currently uses a maintainer-managed contribution gate, so issues from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.',
+                gateMessage,
                 '',
                 'Please read `CONTRIBUTING.md` for the expected issue shape. A maintainer can grant issue access by commenting `/lgtmi` on an issue.',
               ].join('\n'),
             });
+
+            if (!enforceGate) return;
 
             await github.rest.issues.update({
               owner,

@@ -170,9 +170,18 @@ Validation:
 ## Contribution Gate
 
 CodeWhale uses a maintainer-managed contribution gate for the community front
-door. Maintainers and collaborators bypass this gate automatically. External
-contributors must be listed in `.github/APPROVED_CONTRIBUTORS` before their
-issues or pull requests remain open.
+door. Maintainers and collaborators bypass this gate automatically. The gate
+workflows default to dry-run / comment-only mode so maintainers can observe the
+signal before closing contributor work. In dry-run mode, unapproved external
+issues and pull requests receive a short thank-you / CONTRIBUTING pointer and
+remain open.
+
+When maintainers are ready to enforce the gate, set
+`CONTRIBUTION_GATE_MODE: enforce` in the PR and issue gate workflows. In enforce
+mode, external contributors must be listed in
+`.github/APPROVED_CONTRIBUTORS` before their issues or pull requests remain
+open. Before enabling enforcement, seed the allowlist broadly enough for active
+external contributors who should not be interrupted by the rollout.
 
 The allowlist is scoped:
 
@@ -180,16 +189,20 @@ The allowlist is scoped:
 - `issue:username` allows issues.
 - `all:username` allows both.
 
-When an unapproved external contributor opens an issue or pull request, the
-matching gate workflow leaves a short thank-you / CONTRIBUTING pointer and
-closes it. A maintainer can approve someone by commenting `/lgtm` on a pull
-request for PR access, or `/lgtmi` on an issue for issue access. The exact bare
-commands `lgtm` and `lgtmi` are also accepted for compatibility, but the
-prefixed forms are preferred because they are harder to trigger accidentally in
-ordinary review discussion.
+A maintainer can approve someone by commenting `/lgtm` on a pull request for PR
+access, or `/lgtmi` on an issue for issue access. The exact bare commands
+`lgtm` and `lgtmi` are also accepted for compatibility, but the prefixed forms
+are preferred because they are harder to trigger accidentally in ordinary review
+discussion.
 
 Approvals do not edit `main` directly. The approval workflow opens a small
 allowlist update PR so the new entry is reviewable before it takes effect.
+
+If the gate fires on a good contributor incorrectly, use the same approval flow
+to restore them: comment `/lgtm` or `/lgtmi`, merge the generated allowlist PR,
+then reopen the affected issue or pull request. If GitHub will not allow the
+closed item to be reopened, ask the contributor to resubmit after the allowlist
+PR is merged.
 
 ## Agent-Assisted Improvements
 

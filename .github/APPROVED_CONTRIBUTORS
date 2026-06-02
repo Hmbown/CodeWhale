@@ -2,9 +2,10 @@
 #
 # Maintainers and collaborators bypass the gate automatically. Use this file
 # for external contributors who are allowed through the automated front door.
+# Seed active contributors here before switching the gate workflows to enforce mode.
 #
 # Supported entries:
 #   pr:username
 #   issue:username
 #   all:username
-all:Hmbown
+all:hmbown

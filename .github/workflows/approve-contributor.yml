@@ -9,6 +9,10 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: contribution-gate-approval
+  cancel-in-progress: false
+
 jobs:
   approve:
     runs-on: ubuntu-latest
@@ -56,12 +60,14 @@ jobs:
             const targetLogin = issue.user.login;
             const normalizedLogin = targetLogin.toLowerCase();
             const entry = `${scope}:${normalizedLogin}`;
+            const branchSlug = normalizedLogin.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'contributor';
 
             const defaultContent = [
               '# Scoped contribution-gate allowlist.',
               '#',
               '# Maintainers and collaborators bypass the gate automatically. Use this file',
               '# for external contributors who are allowed through the automated front door.',
+              '# Seed active contributors here before switching the gate workflows to enforce mode.',
               '#',
               '# Supported entries:',
               '#   pr:username',
@@ -119,6 +125,29 @@ jobs:
               return;
             }
 
+            const { data: openPrs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const repoFullName = `${owner}/${repo}`.toLowerCase();
+            const pendingPr = openPrs.find(openPr => {
+              const sameRepo = (openPr.head?.repo?.full_name || '').toLowerCase() === repoFullName;
+              const body = openPr.body || '';
+              return sameRepo && body.includes(`Adds \`${entry}\` to \`${path}\`.`);
+            });
+
+            if (pendingPr) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `@${targetLogin} already has a pending allowlist update PR for ${scope} contributions: ${pendingPr.html_url}`,
+              });
+              return;
+            }
+
             const nextContent = `${content.trimEnd()}\n${entry}\n`;
             const { data: blob } = await github.rest.git.createBlob({
               owner,
@@ -140,7 +169,6 @@ jobs:
               ],
             });
 
-            const branchSlug = normalizedLogin.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'contributor';
             const branchName = `contribution-gate/${scope}-${branchSlug}-${Date.now()}`;
             await github.rest.git.createRef({
               owner,
