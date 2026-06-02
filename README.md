@@ -307,6 +307,10 @@ codewhale --provider nvidia-nim
 # AtlasCloud
 codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
 codewhale --provider atlascloud
+# AtlasCloud provider-hinted resolution also supports the validated Atlas chat
+# model pool in the static registry, for example:
+codewhale --provider atlascloud --model openai/gpt-5.2-chat
+codewhale --provider atlascloud --model qwen/qwen3-vl-235b-a22b-thinking
 
 # Wanjie Ark
 codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"

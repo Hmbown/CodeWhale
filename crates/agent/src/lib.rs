@@ -49,10 +49,92 @@ pub struct ModelRegistry {
     alias_map: HashMap<String, usize>,
 }
 
+const ATLASCLOUD_VALIDATED_MODELS: &[&str] = &[
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/deepseek-r1-0528",
+    "moonshotai/Kimi-K2-Instruct",
+    "Qwen/Qwen3-Coder",
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "deepseek-ai/DeepSeek-V3.1",
+    "moonshotai/Kimi-K2-Instruct-0905",
+    "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "Qwen/Qwen3-Next-80B-A3B-Thinking",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "deepseek-ai/DeepSeek-V3.1-Terminus",
+    "deepseek-ai/DeepSeek-V3.2-Exp",
+    "zai-org/GLM-4.6",
+    "MiniMaxAI/MiniMax-M2",
+    "Qwen/Qwen3-VL-235B-A22B-Instruct",
+    "moonshotai/Kimi-K2-Thinking",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "openai/gpt-5.1",
+    "openai/gpt-5.1-chat",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1-nano",
+    "openai/o1",
+    "openai/o3",
+    "openai/o3-mini",
+    "openai/o4-mini",
+    "anthropic/claude-sonnet-4.5-20250929",
+    "deepseek-ai/deepseek-v3.2",
+    "openai/gpt-5",
+    "openai/gpt-5-chat",
+    "openai/gpt-5-mini",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.2",
+    "openai/gpt-5.2-chat",
+    "google/gemini-2.5-pro",
+    "anthropic/claude-opus-4.5-20251101",
+    "google/gemini-3-flash-preview",
+    "zai-org/glm-4.7",
+    "minimaxai/minimax-m2.1",
+    "google/gemini-2.0-flash",
+    "qwen/qwen3-8b",
+    "qwen/qwen3-235b-a22b-thinking-2507",
+    "qwen/qwen3-vl-235b-a22b-thinking",
+    "qwen/qwen3-30b-a3b",
+    "qwen/qwen3-30b-a3b-thinking-2507",
+    "deepseek-ai/deepseek-ocr",
+    "xai/grok-4-0709",
+];
+
+fn atlascloud_model(id: &str, aliases: &[&str]) -> ModelInfo {
+    ModelInfo {
+        id: id.to_string(),
+        provider: ProviderKind::Atlascloud,
+        aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+        supports_tools: true,
+        supports_reasoning: true,
+    }
+}
+
+fn atlascloud_models() -> Vec<ModelInfo> {
+    let mut models = vec![
+        atlascloud_model(
+            "deepseek-ai/deepseek-v4-flash",
+            &["deepseek-v4-flash", "atlascloud-deepseek-v4-flash"],
+        ),
+        atlascloud_model(
+            "deepseek-ai/deepseek-v4-pro",
+            &["deepseek-v4-pro", "atlascloud-deepseek-v4-pro"],
+        ),
+    ];
+    models.extend(
+        ATLASCLOUD_VALIDATED_MODELS
+            .iter()
+            .map(|model_id| atlascloud_model(model_id, &[])),
+    );
+    models
+}
+
 /// Creates a registry pre-populated with all built-in models and their aliases.
 impl Default for ModelRegistry {
     fn default() -> Self {
-        let models = vec![
+        let mut models = vec![
             ModelInfo {
                 id: "deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Deepseek,
@@ -108,26 +190,6 @@ impl Default for ModelRegistry {
                 id: "deepseek-v4-flash".to_string(),
                 provider: ProviderKind::Openai,
                 aliases: vec!["openai-compatible-deepseek-v4-flash".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek-ai/deepseek-v4-flash".to_string(),
-                provider: ProviderKind::Atlascloud,
-                aliases: vec![
-                    "deepseek-v4-flash".to_string(),
-                    "atlascloud-deepseek-v4-flash".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek-ai/deepseek-v4-pro".to_string(),
-                provider: ProviderKind::Atlascloud,
-                aliases: vec![
-                    "deepseek-v4-pro".to_string(),
-                    "atlascloud-deepseek-v4-pro".to_string(),
-                ],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -426,6 +488,7 @@ impl Default for ModelRegistry {
                 supports_reasoning: false,
             },
         ];
+        models.splice(6..6, atlascloud_models());
         Self::new(models)
     }
 }
@@ -619,6 +682,28 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Atlascloud);
         assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn atlascloud_validated_model_resolves_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved =
+            registry.resolve(Some("openai/gpt-5.2-chat"), Some(ProviderKind::Atlascloud));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Atlascloud);
+        assert_eq!(resolved.resolved.id, "openai/gpt-5.2-chat");
+    }
+
+    #[test]
+    fn atlascloud_registry_includes_validated_model_pool() {
+        let registry = ModelRegistry::default();
+        let atlas_count = registry
+            .list()
+            .into_iter()
+            .filter(|model| model.provider == ProviderKind::Atlascloud)
+            .count();
+
+        assert!(atlas_count >= ATLASCLOUD_VALIDATED_MODELS.len() + 2);
     }
 
     #[test]
