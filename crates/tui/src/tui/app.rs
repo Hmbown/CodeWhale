@@ -1509,6 +1509,8 @@ pub struct App {
     pub todos: SharedTodoList,
     /// Durable runtime services exposed to model-visible task/automation tools.
     pub runtime_services: RuntimeToolServices,
+    /// Tab manager for multi-tab and cross-tab collaboration system
+    pub tab_manager: crate::tui::tab::TabManager,
     /// Last MCP manager/discovery snapshot shown in the UI.
     pub mcp_snapshot: Option<crate::mcp::McpManagerSnapshot>,
     /// Number of MCP servers declared in the user's config at app boot.
@@ -2217,6 +2219,7 @@ impl App {
                 shell_manager: Some(shell_manager),
                 ..RuntimeToolServices::default()
             },
+            tab_manager: crate::tui::tab::TabManager::new(),
             mcp_snapshot: None,
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
@@ -2303,6 +2306,34 @@ impl App {
             receipt_started_at: None,
             tool_evidence: Vec::new(),
         }
+    }
+
+    /// Create a minimal App for testing - no config loading, no engine setup.
+    /// Only the fields that render tests need (tab_manager, etc.) are populated.
+    pub fn new_for_test() -> App {
+        use std::path::PathBuf;
+        let options = TuiOptions {
+            model: "test-model".to_string(),
+            workspace: PathBuf::from("."),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        App::new(options, &Config::default())
     }
 
     fn discover_cached_skills(

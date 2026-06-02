@@ -5,12 +5,11 @@
 
 // Cross-tab collaboration APIs (delegator, meeting, cross_tab, group,
 // mention) are intentionally exposed here as a public surface for the
-// narrow tab-core harvest. They are not yet wired into the TUI host
-// (that lands in a follow-up UI pass) and therefore trip `dead_code`
-// inside the binary crate. The `pub use manager::TabManager` re-export
-// is the public entry point for that follow-up wiring, so it is also
-// marked `unused_imports`-tolerated in the meantime.
-#![allow(dead_code, unused_imports)]
+// narrow tab-core harvest in PR #2753. They are not yet wired into the
+// TUI host (that lands in a follow-up UI pass) and therefore trip
+// `dead_code` inside the binary crate. See the PR description for the
+// v0.9 harvest plan agreed with @Hmbown.
+#![allow(dead_code)]
 
 #[cfg(test)]
 mod benches;
@@ -23,8 +22,12 @@ mod manager;
 pub mod meeting;
 pub mod mention;
 pub mod persistence;
+#[cfg(test)]
+mod render_tests;
+mod tab_bar;
 
 pub use manager::TabManager;
+pub use tab_bar::{TAB_BAR_HEIGHT, render_tab_bar};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

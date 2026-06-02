@@ -364,17 +364,6 @@ impl TaskDelegator {
         self.next_id += 1;
         format!("delegation_{}", id)
     }
-
-    pub(crate) fn advance_next_id_past_existing_tasks(&mut self) {
-        let max_seen = self
-            .pending_tasks
-            .iter()
-            .filter_map(|task| task.task_id.strip_prefix("delegation_"))
-            .filter_map(|suffix| suffix.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0);
-        self.next_id = self.next_id.max(max_seen + 1);
-    }
 }
 
 impl Default for TaskDelegator {
@@ -406,7 +395,7 @@ mod tests {
 
         let results_to = delegator.results_for_tab(to);
         assert_eq!(results_to.len(), 1);
-        assert!(results_to[0].was_successful);
+        assert_eq!(results_to[0].was_successful, true);
     }
 
     #[test]
@@ -549,29 +538,5 @@ mod tests {
         // Pruning to a larger count is a no-op
         delegator.prune_results(10);
         assert_eq!(delegator.results_for_tab(to).len(), 3);
-    }
-
-    #[test]
-    fn test_advance_next_id_after_restore() {
-        let mut delegator = TaskDelegator::new();
-        delegator.pending_tasks.push(DelegationTask::new(
-            "delegation_42".to_string(),
-            TabId::new(1),
-            TabId::new(2),
-            "restored".to_string(),
-            Priority::Normal,
-        ));
-
-        delegator.advance_next_id_past_existing_tasks();
-        let new_id = delegator
-            .create_delegation(
-                TabId::new(1),
-                TabId::new(2),
-                "fresh".to_string(),
-                Priority::Normal,
-            )
-            .unwrap();
-
-        assert_eq!(new_id, "delegation_43");
     }
 }
