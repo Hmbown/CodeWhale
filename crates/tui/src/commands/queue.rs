@@ -31,8 +31,8 @@ fn list_queue(app: &mut App) -> CommandResult {
     let queued = app.queued_message_count();
 
     if let Some(draft) = app.queued_draft.as_ref() {
-        let header = tr(locale, MessageId::CmdQueueDraftHeader);
-        lines.push(format!("{} {}", header, truncate_preview(&draft.display)));
+        lines.push(tr(locale, MessageId::CmdQueueDraftHeader).to_string());
+        lines.push(format!("- {}", truncate_preview(&draft.display)));
     }
 
     if queued == 0 {
