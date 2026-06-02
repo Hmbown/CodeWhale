@@ -71,6 +71,12 @@ pub struct Message {
     pub content: Vec<ContentBlock>,
 }
 
+/// OpenAI-compatible image URL payload inside a multimodal message.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
 /// A single content block inside a message.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
@@ -81,6 +87,8 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "tool_use")]

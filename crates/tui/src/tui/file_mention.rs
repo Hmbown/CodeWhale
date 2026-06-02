@@ -25,8 +25,10 @@ use std::fmt::Write;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
+use crate::models::{ContentBlock, ImageUrlContent};
 use crate::tui::app::{App, MentionCompletionCache};
 use crate::working_set::Workspace;
 
@@ -611,6 +613,69 @@ pub fn media_attachment_references(input: &str) -> Vec<MediaAttachmentReference>
     out
 }
 
+/// Convert `/attach` image placeholders in composer text into multimodal
+/// content blocks for OpenAI-compatible chat-completions payloads.
+///
+/// The visible transcript intentionally stays compact (`[Attached image: ...]`),
+/// but the model request must carry the actual image bytes as a `data:` URL.
+#[must_use]
+pub fn media_attachment_content_blocks(input: &str) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for reference in extract_media_attachment_references(input) {
+        if !reference.kind.eq_ignore_ascii_case("image") {
+            continue;
+        }
+        if !seen.insert(reference.path.clone()) {
+            continue;
+        }
+
+        let path = Path::new(&reference.path);
+        let Some(mime_type) = image_mime_type_for_path(path) else {
+            blocks.push(ContentBlock::Text {
+                text: format!(
+                    "<unsupported-attachment kind=\"image\" path=\"{}\" />",
+                    reference.path
+                ),
+                cache_control: None,
+            });
+            continue;
+        };
+
+        match std::fs::read(path) {
+            Ok(bytes) => blocks.push(ContentBlock::ImageUrl {
+                image_url: ImageUrlContent {
+                    url: format!("data:{mime_type};base64,{}", BASE64.encode(bytes)),
+                },
+            }),
+            Err(err) => blocks.push(ContentBlock::Text {
+                text: format!(
+                    "<unreadable-attachment kind=\"image\" path=\"{}\">\n{err}\n</unreadable-attachment>",
+                    reference.path
+                ),
+                cache_control: None,
+            }),
+        }
+    }
+
+    blocks
+}
+
+fn image_mime_type_for_path(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "ppm" => Some("image/x-portable-pixmap"),
+        _ => None,
+    }
+}
+
 fn extract_media_attachment_references(input: &str) -> Vec<MediaAttachmentReference> {
     media_attachment_references(input)
 }
@@ -1045,6 +1110,22 @@ mod tests {
             &input[reference.start_byte..reference.end_byte],
             "[Attached image: 8x4 PNG at /tmp/pasted.png]\n"
         );
+    }
+
+    #[test]
+    fn media_attachment_content_blocks_embed_image_as_data_url() {
+        let tmp = TempDir::new().expect("tempdir");
+        let image_path = tmp.path().join("photo.png");
+        std::fs::write(&image_path, b"abc").expect("write png fixture");
+        let input = format!("what is this?\n[Attached image: {}]", image_path.display());
+
+        let blocks = media_attachment_content_blocks(&input);
+
+        assert_eq!(blocks.len(), 1);
+        let ContentBlock::ImageUrl { image_url } = &blocks[0] else {
+            panic!("expected image_url block, got {blocks:?}");
+        };
+        assert_eq!(image_url.url, "data:image/png;base64,YWJj");
     }
 
     #[test]

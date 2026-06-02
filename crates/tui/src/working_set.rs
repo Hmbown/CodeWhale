@@ -1042,6 +1042,7 @@ fn extract_paths_from_message(message: &Message) -> Vec<String> {
                 paths.extend(extract_paths_from_text(content));
             }
             ContentBlock::Thinking { .. }
+            | ContentBlock::ImageUrl { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
             | ContentBlock::CodeExecutionToolResult { .. } => {}
@@ -1207,6 +1208,7 @@ fn message_mentions_any_path(message: &Message, needles: &[String], max_scan_cha
                 }
             }
             ContentBlock::Thinking { .. }
+            | ContentBlock::ImageUrl { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
             | ContentBlock::CodeExecutionToolResult { .. } => {}

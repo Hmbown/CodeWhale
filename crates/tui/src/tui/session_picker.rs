@@ -770,6 +770,7 @@ fn message_text_for_history(message: &crate::models::Message) -> String {
                 }
             }
             crate::models::ContentBlock::Thinking { .. } => String::new(),
+            crate::models::ContentBlock::ImageUrl { .. } => "[Attached image]".to_string(),
             crate::models::ContentBlock::ToolUse { name, input, .. } => {
                 format!("tool call: {name} {}", truncate(&input.to_string(), 180))
             }

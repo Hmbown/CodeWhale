@@ -250,6 +250,9 @@ fn message_text(message: &Message) -> String {
             ContentBlock::Thinking { thinking } => {
                 push(&format!("[thinking] {thinking}"));
             }
+            ContentBlock::ImageUrl { .. } => {
+                push("[image_url]");
+            }
             ContentBlock::ServerToolUse { name, input, .. } => {
                 push(&format!("[server_tool_use {name}] {input}"));
             }

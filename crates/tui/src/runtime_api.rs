@@ -895,6 +895,14 @@ fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
                         }
                         obj
                     }
+                    crate::models::ContentBlock::ImageUrl { image_url } => {
+                        json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url.url.clone(),
+                            }
+                        })
+                    }
                     crate::models::ContentBlock::ServerToolUse { id, name, input } => {
                         json!({ "type": "tool_use", "id": id, "name": name, "input": input })
                     }

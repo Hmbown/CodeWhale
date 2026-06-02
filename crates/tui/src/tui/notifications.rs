@@ -694,6 +694,7 @@ pub fn latest_assistant_text(messages: &[Message]) -> Option<String> {
                 .filter_map(|block| match block {
                     ContentBlock::Text { text, .. } => Some(text.as_str()),
                     ContentBlock::Thinking { .. }
+                    | ContentBlock::ImageUrl { .. }
                     | ContentBlock::ToolUse { .. }
                     | ContentBlock::ToolResult { .. }
                     | ContentBlock::ServerToolUse { .. }

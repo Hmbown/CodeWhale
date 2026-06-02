@@ -385,6 +385,11 @@ fn compact_content_block(block: &ContentBlock) -> Value {
                 "content_blocks": content_blocks,
             })
         }
+        ContentBlock::ImageUrl { image_url } => json!({
+            "type": "image_url",
+            "url_chars": image_url.url.chars().count(),
+            "url_sha256": sha256_hex(image_url.url.as_bytes()),
+        }),
         ContentBlock::ServerToolUse { id, name, input } => json!({
             "type": "server_tool_use",
             "id": id,

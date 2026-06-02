@@ -1249,20 +1249,25 @@ impl Engine {
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
     ) -> Message {
+        let mut content = vec![
+            self.turn_metadata_block(
+                routed_model,
+                auto_model,
+                reasoning_effort,
+                reasoning_effort_auto,
+            ),
+            ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            },
+        ];
+        content.extend(crate::tui::file_mention::media_attachment_content_blocks(
+            &text,
+        ));
+
         Message {
             role: "user".to_string(),
-            content: vec![
-                self.turn_metadata_block(
-                    routed_model,
-                    auto_model,
-                    reasoning_effort,
-                    reasoning_effort_auto,
-                ),
-                ContentBlock::Text {
-                    text,
-                    cache_control: None,
-                },
-            ],
+            content,
         }
     }
 

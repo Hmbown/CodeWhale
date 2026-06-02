@@ -288,12 +288,26 @@ fn message_text(msg: &Message) -> String {
             ContentBlock::ToolResult { content, .. } => {
                 let _ = writeln!(text, "{content}");
             }
+            ContentBlock::ImageUrl { image_url } => {
+                let _ = writeln!(
+                    text,
+                    "[image_url:{}]",
+                    image_url_summary_for_compaction(&image_url.url)
+                );
+            }
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
             | ContentBlock::CodeExecutionToolResult { .. } => {}
         }
     }
     text
+}
+
+fn image_url_summary_for_compaction(url: &str) -> String {
+    let Some((prefix, encoded)) = url.split_once(";base64,") else {
+        return truncate_chars(url, 96).to_string();
+    };
+    format!("{prefix};base64,<{} chars>", encoded.len())
 }
 
 fn is_user_text_query(msg: &Message) -> bool {
@@ -312,6 +326,7 @@ fn extract_paths_from_message(message: &Message, workspace: Option<&Path>) -> Ve
             ContentBlock::ToolResult { content, .. } => extract_paths_from_text(content, workspace),
             ContentBlock::ToolUse { input, .. } => extract_paths_from_tool_input(input, workspace),
             ContentBlock::Thinking { .. } => Vec::new(),
+            ContentBlock::ImageUrl { .. } => Vec::new(),
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
             | ContentBlock::CodeExecutionToolResult { .. } => Vec::new(),
@@ -585,6 +600,7 @@ fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usi
                 .map(|s| s.len() / 4)
                 .unwrap_or(100),
             ContentBlock::ToolResult { content, .. } => content.len() / 4,
+            ContentBlock::ImageUrl { image_url } => (image_url.url.len() / 4).max(1),
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
             | ContentBlock::CodeExecutionToolResult { .. } => 0,
@@ -1380,6 +1396,13 @@ fn build_formatted_summary_request(
                 ContentBlock::ToolResult { content, .. } => {
                     let snippet = truncate_chars(content, limits.tool_result_snippet_chars);
                     let _ = write!(conversation_text, "Tool result: {snippet}\n\n");
+                }
+                ContentBlock::ImageUrl { image_url } => {
+                    let _ = write!(
+                        conversation_text,
+                        "{role}: [Attached image: {}]\n\n",
+                        image_url_summary_for_compaction(&image_url.url)
+                    );
                 }
                 ContentBlock::Thinking { .. } => {
                     // Skip thinking blocks in summary

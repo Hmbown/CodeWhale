@@ -476,6 +476,9 @@ impl SeamManager {
                     ContentBlock::Thinking { .. } => {
                         // Skip thinking in seam summaries.
                     }
+                    ContentBlock::ImageUrl { .. } => {
+                        let _ = write!(conversation, "{role}: [Attached image]\n\n");
+                    }
                     ContentBlock::ServerToolUse { .. }
                     | ContentBlock::ToolSearchToolResult { .. }
                     | ContentBlock::CodeExecutionToolResult { .. } => {}
