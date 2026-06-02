@@ -687,7 +687,12 @@ fn execute_subagent_observer_hook(
         );
     }
 
-    let _ = app.hooks.execute_json_observer(event, &context, &payload);
+    let hooks = app.hooks.clone();
+    let _ = std::thread::Builder::new()
+        .name(format!("{}-observer-hook", event.as_str()))
+        .spawn(move || {
+            let _ = hooks.execute_json_observer(event, &context, &payload);
+        });
 }
 
 fn bounded_subagent_hook_preview(text: &str) -> (String, bool) {
@@ -707,16 +712,31 @@ fn subagent_completion_status(result: &str) -> Option<String> {
     const START: &str = "<codewhale:subagent.done>";
     const END: &str = "</codewhale:subagent.done>";
 
-    let start = result.find(START)? + START.len();
-    let end = result[start..].find(END)? + start;
-    serde_json::from_str::<serde_json::Value>(&result[start..end])
-        .ok()
-        .and_then(|value| {
-            value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
+    if let Some(start) = result.find(START).map(|idx| idx + START.len())
+        && let Some(end) = result[start..].find(END).map(|idx| idx + start)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&result[start..end])
+        && let Some(status) = value.get("status").and_then(serde_json::Value::as_str)
+    {
+        return Some(status.to_string());
+    }
+
+    let summary = result.lines().find_map(|line| {
+        let trimmed = line.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })?;
+    let summary = summary.to_ascii_lowercase();
+    if matches!(summary.as_str(), "cancelled" | "canceled")
+        || summary.starts_with("cancelled:")
+        || summary.starts_with("canceled:")
+    {
+        Some("cancelled".to_string())
+    } else if summary == "failed" || summary.starts_with("failed:") {
+        Some("failed".to_string())
+    } else if summary == "interrupted" || summary.starts_with("interrupted:") {
+        Some("interrupted".to_string())
+    } else {
+        None
+    }
 }
 
 struct TerminalCleanupGuard {

@@ -709,7 +709,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # # Observe sub-agent lifecycle events. These hooks receive bounded JSON
 # # metadata on stdin and are warn-only: failures do not affect sub-agent
-# # scheduling, prompts, or results.
+# # scheduling, prompts, or results. continue_on_error has no effect for
+# # these observer events; later matching hooks always continue.
 # [[hooks.hooks]]
 # name = "subagent-audit"
 # event = "subagent_complete"

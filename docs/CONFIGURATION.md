@@ -489,7 +489,9 @@ the JSON stdout contract applies only to `message_submit`.
 `subagent_spawn` and `subagent_complete` hooks observe sub-agent lifecycle
 events. They receive bounded JSON metadata on stdin and are observer-only:
 hook failures are logged as warnings and do not block sub-agent scheduling,
-change prompts, or change results.
+change prompts, or change results. For these observer events,
+`continue_on_error` has no effect: later matching hooks still run even when an
+earlier hook exits non-zero.
 
 ```toml
 [[hooks.hooks]]

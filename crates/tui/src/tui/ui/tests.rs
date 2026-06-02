@@ -2816,6 +2816,22 @@ fn subagent_completion_status_reads_done_sentinel() {
 }
 
 #[test]
+fn subagent_completion_status_reads_summary_fallbacks() {
+    assert_eq!(
+        subagent_completion_status("Cancelled").as_deref(),
+        Some("cancelled")
+    );
+    assert_eq!(
+        subagent_completion_status("Failed: tool timed out").as_deref(),
+        Some("failed")
+    );
+    assert_eq!(
+        subagent_completion_status("Interrupted: process restarted").as_deref(),
+        Some("interrupted")
+    );
+}
+
+#[test]
 fn running_agent_count_unions_cache_and_progress() {
     let mut app = create_test_app();
     app.subagent_cache = vec![
