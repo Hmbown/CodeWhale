@@ -125,12 +125,18 @@ jobs:
               return;
             }
 
-            const { data: openPrs } = await github.rest.pulls.list({
-              owner,
-              repo,
-              state: 'open',
-              per_page: 100,
-            });
+            const openPrs = [];
+            for (let page = 1; ; page++) {
+              const { data: pagePrs } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100,
+                page,
+              });
+              openPrs.push(...pagePrs);
+              if (pagePrs.length < 100) break;
+            }
             const repoFullName = `${owner}/${repo}`.toLowerCase();
             const pendingPr = openPrs.find(openPr => {
               const sameRepo = (openPr.head?.repo?.full_name || '').toLowerCase() === repoFullName;
