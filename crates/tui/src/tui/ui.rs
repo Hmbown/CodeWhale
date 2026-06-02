@@ -33,8 +33,6 @@ use tracing;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMode};
 
-use tokio::sync::mpsc::error::TryRecvError;
-
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
 use crate::client::{
@@ -2239,12 +2237,13 @@ async fn run_event_loop(
             // Detect engine task death mid-turn.  When the engine task
             // panics (caught by spawn_supervised's catch_unwind) or exits
             // unexpectedly between TurnStarted and TurnComplete, the event
-            // channel's sender is dropped and try_recv returns Disconnected.
-            // The while-let loop above exits silently on Err, so we must
-            // check post-loop and recover the UI state immediately instead
-            // of waiting for the 300-second TURN_STALL_WATCHDOG_TIMEOUT.
+            // channel's sender is dropped.  The while-let loop above exits
+            // silently on Err, so we must check post-loop and recover the
+            // UI state immediately instead of waiting for the 300-second
+            // TURN_STALL_WATCHDOG_TIMEOUT.  Use is_closed() rather than
+            // try_recv() so the probe never consumes a valid event.
             if (app.is_loading || app.is_compacting || app.is_purging)
-                && matches!(rx.try_recv(), Err(TryRecvError::Disconnected))
+                && rx.is_closed()
             {
                 streaming_thinking::finalize_current(app);
                 app.finalize_streaming_assistant_as_interrupted();
