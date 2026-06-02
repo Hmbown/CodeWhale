@@ -3137,10 +3137,6 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         struct HomeEnvGuard {
             home: Option<OsString>,
             userprofile: Option<OsString>,
-            #[cfg(windows)]
-            homedrive: Option<OsString>,
-            #[cfg(windows)]
-            homepath: Option<OsString>,
             codewhale_home: Option<OsString>,
         }
 
@@ -3156,19 +3152,37 @@ unix_socket_path = "/tmp/cw-hooks.sock"
                         Some(value) => env::set_var("USERPROFILE", value),
                         None => env::remove_var("USERPROFILE"),
                     }
-                    #[cfg(windows)]
-                    match self.homedrive.take() {
-                        Some(value) => env::set_var("HOMEDRIVE", value),
-                        None => env::remove_var("HOMEDRIVE"),
-                    }
-                    #[cfg(windows)]
-                    match self.homepath.take() {
-                        Some(value) => env::set_var("HOMEPATH", value),
-                        None => env::remove_var("HOMEPATH"),
-                    }
                     match self.codewhale_home.take() {
                         Some(value) => env::set_var("CODEWHALE_HOME", value),
                         None => env::remove_var("CODEWHALE_HOME"),
+                    }
+                }
+            }
+        }
+
+        struct LegacyConfigGuard {
+            path: PathBuf,
+            original: Option<Vec<u8>>,
+        }
+
+        impl LegacyConfigGuard {
+            fn install(path: PathBuf, contents: &[u8]) -> Self {
+                let original = fs::read(&path).ok();
+                fs::create_dir_all(path.parent().expect("legacy config parent"))
+                    .expect("legacy dir");
+                fs::write(&path, contents).expect("legacy config");
+                Self { path, original }
+            }
+        }
+
+        impl Drop for LegacyConfigGuard {
+            fn drop(&mut self) {
+                if let Some(original) = self.original.take() {
+                    let _ = fs::write(&self.path, original);
+                } else {
+                    let _ = fs::remove_file(&self.path);
+                    if let Some(parent) = self.path.parent() {
+                        let _ = fs::remove_dir(parent);
                     }
                 }
             }
@@ -3182,44 +3196,32 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             "codewhale-config-migration-{}-{unique}",
             std::process::id()
         ));
+        #[cfg(windows)]
+        let legacy_dir = legacy_deepseek_home().expect("legacy home");
+        #[cfg(not(windows))]
         let legacy_dir = home.join(LEGACY_APP_DIR);
         let primary_dir = home.join(CODEWHALE_APP_DIR);
-        fs::create_dir_all(&legacy_dir).expect("legacy dir");
-        fs::write(
-            legacy_dir.join(CONFIG_FILE_NAME),
-            "provider = \"deepseek\"\n",
-        )
-        .expect("legacy config");
+        let legacy_config = legacy_dir.join(CONFIG_FILE_NAME);
+        let _legacy =
+            LegacyConfigGuard::install(legacy_config.clone(), b"provider = \"deepseek\"\n");
 
         let _env = HomeEnvGuard {
             home: env::var_os("HOME"),
             userprofile: env::var_os("USERPROFILE"),
-            #[cfg(windows)]
-            homedrive: env::var_os("HOMEDRIVE"),
-            #[cfg(windows)]
-            homepath: env::var_os("HOMEPATH"),
             codewhale_home: env::var_os("CODEWHALE_HOME"),
         };
         // Safety: test-only environment mutation is serialized by env_lock().
         unsafe {
             env::set_var("HOME", &home);
             env::set_var("USERPROFILE", &home);
-            #[cfg(windows)]
-            {
-                let mut components = home.components();
-                if let Some(std::path::Component::Prefix(prefix)) = components.next() {
-                    env::set_var("HOMEDRIVE", prefix.as_os_str());
-                    env::set_var("HOMEPATH", components.as_path());
-                }
-            }
-            env::remove_var("CODEWHALE_HOME");
+            env::set_var("CODEWHALE_HOME", &primary_dir);
         }
 
         let migration = migrate_config_if_needed()
             .expect("migration")
             .expect("legacy config should be copied");
 
-        assert_eq!(migration.legacy_path, legacy_dir.join(CONFIG_FILE_NAME));
+        assert_eq!(migration.legacy_path, legacy_config);
         assert_eq!(migration.primary_path, primary_dir.join(CONFIG_FILE_NAME));
         let notice = migration.user_notice();
         assert!(notice.contains(&legacy_dir.join(CONFIG_FILE_NAME).display().to_string()));
