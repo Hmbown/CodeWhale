@@ -3,7 +3,7 @@
 **Issue:** #1364
 **Status:** Phase 1 landed, Phase 2/3 spec
 **Date:** 2026-06-02
-**Baseline:** `main` at `31f34c5df2363316f23a23398a81cf2d363cd19a`
+**Baseline:** `main` at `0072209d0096c0b583efeb3da6c6f2ac452bd572`
 
 ## 1. Current State
 
