@@ -728,6 +728,7 @@ impl Engine {
                     )
                     .with_max_spawn_depth(self.config.max_spawn_depth)
                     .with_step_api_timeout(self.config.subagent_api_timeout)
+                    .with_speech_output_dir(self.config.speech_output_dir.clone())
                     .with_mcp_pool(mcp_pool)
                     .background_runtime();
                     let route = resolve_subagent_assignment_route(
@@ -1222,6 +1223,7 @@ impl Engine {
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_step_api_timeout(self.config.subagent_api_timeout)
+                        .with_speech_output_dir(self.config.speech_output_dir.clone())
                         .with_mcp_pool(mcp_pool.clone())
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {

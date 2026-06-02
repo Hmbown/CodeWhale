@@ -971,12 +971,13 @@ impl ToolRegistryBuilder {
         plan_state: super::plan::SharedPlanState,
     ) -> Self {
         let speech_client = client.clone();
+        let speech_output_dir = runtime.speech_output_dir.clone();
         self.with_agent_tools(allow_shell)
             .with_todo_tool(todo_list)
             .with_plan_tool(plan_state)
             .with_review_tool(client.clone(), model.clone())
             .with_rlm_tool(client, model)
-            .with_speech_tools(speech_client, None)
+            .with_speech_tools(speech_client, speech_output_dir)
             .with_recall_archive_tool()
             .with_subagent_tools(manager, runtime)
     }

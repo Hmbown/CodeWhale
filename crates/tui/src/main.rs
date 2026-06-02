@@ -6,7 +6,6 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::{Engine as _, engine::general_purpose};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use dotenvy::dotenv;
@@ -3566,7 +3565,12 @@ async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
 
 async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     use crate::client::{DeepSeekClient, SpeechSynthesisRequest};
-    use crate::config::{ApiProvider, normalize_model_name_for_provider};
+    use crate::config::ApiProvider;
+    use crate::tools::speech::{
+        DEFAULT_VOICE, SPEECH_MODEL_EXAMPLES, combine_speech_instructions,
+        default_speech_output_name, describe_speech_voice, encode_voice_clone_sample_data_uri,
+        infer_speech_model, normalize_speech_format,
+    };
 
     let SpeechArgs {
         text,
@@ -3598,24 +3602,16 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     if clone_voice.is_some() && voice.is_some() {
         bail!("Use either --clone-voice or --voice for cloned voice data, not both");
     }
-    let model = match model {
-        Some(value) => {
-            normalize_model_name_for_provider(ApiProvider::XiaomiMimo, &value).unwrap_or(value)
-        }
-        None => {
-            if clone_voice.is_some() || voice_is_data_uri {
-                "mimo-v2.5-tts-voiceclone".to_string()
-            } else if voice_prompt.is_some() {
-                "mimo-v2.5-tts-voicedesign".to_string()
-            } else {
-                "mimo-v2.5-tts".to_string()
-            }
-        }
-    };
+    let model = infer_speech_model(
+        model.as_deref(),
+        clone_voice.is_some() || voice_is_data_uri,
+        voice_prompt.is_some(),
+    );
     let model_lower = model.to_ascii_lowercase();
     if !model_lower.contains("tts") {
         bail!(
-            "speech requires a TTS model (examples: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone); got {model}"
+            "speech requires a TTS model (examples: {}); got {model}",
+            SPEECH_MODEL_EXAMPLES.join(", ")
         );
     }
     let is_voice_design = model_lower.contains("voicedesign");
@@ -3633,7 +3629,7 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     }
 
     let voice = if let Some(clone_path) = clone_voice {
-        Some(encode_voice_clone_data_uri(&clone_path)?)
+        Some(encode_voice_clone_sample_data_uri(&clone_path)?)
     } else if is_voice_design {
         None
     } else if let Some(value) = voice.filter(|value| !value.trim().is_empty()) {
@@ -3641,16 +3637,17 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     } else if is_voice_clone {
         bail!("mimo-v2.5-tts-voiceclone requires --clone-voice <mp3|wav> or --voice <data-uri>");
     } else {
-        Some("mimo_default".to_string())
+        Some(DEFAULT_VOICE.to_string())
     };
     let format = normalize_speech_format(&format).with_context(|| {
         format!("Unsupported speech format '{format}' (allowed: wav, mp3, pcm16)")
     })?;
-    let output = resolve_speech_output_path(
-        output,
-        output_dir.or_else(|| config.speech_output_dir()),
-        &format,
-    );
+    let output = output.unwrap_or_else(|| {
+        output_dir
+            .or_else(|| config.speech_output_dir())
+            .unwrap_or_default()
+            .join(default_speech_output_name(&format))
+    });
 
     let client = DeepSeekClient::new(config)?;
     let response = client
@@ -3697,99 +3694,12 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     Ok(())
 }
 
-fn combine_speech_instructions(
-    instruction: Option<String>,
-    voice_prompt: Option<String>,
-) -> Option<String> {
-    match (instruction, voice_prompt) {
-        (Some(instruction), Some(voice_prompt)) => {
-            let instruction = instruction.trim();
-            let voice_prompt = voice_prompt.trim();
-            if instruction.is_empty() {
-                Some(voice_prompt.to_string()).filter(|value| !value.is_empty())
-            } else if voice_prompt.is_empty() {
-                Some(instruction.to_string()).filter(|value| !value.is_empty())
-            } else {
-                Some(format!("{voice_prompt}\n\n{instruction}"))
-            }
-        }
-        (Some(value), None) | (None, Some(value)) => {
-            let value = value.trim().to_string();
-            if value.is_empty() { None } else { Some(value) }
-        }
-        (None, None) => None,
-    }
-}
-
-const VOICE_CLONE_BASE64_MAX_BYTES: usize = 10 * 1024 * 1024;
-
-fn normalize_speech_format(format: &str) -> Option<String> {
-    let normalized = format.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "wav" | "mp3" | "pcm16" => Some(normalized),
-        "pcm" => Some("pcm16".to_string()),
-        _ => None,
-    }
-}
-
-fn default_speech_output_name(format: &str) -> String {
-    format!(
-        "speech.{}",
-        normalize_speech_format(format).as_deref().unwrap_or("wav")
-    )
-}
-
-fn resolve_speech_output_path(
-    output: Option<PathBuf>,
-    output_dir: Option<PathBuf>,
-    format: &str,
-) -> PathBuf {
-    output.unwrap_or_else(|| {
-        output_dir
-            .unwrap_or_default()
-            .join(default_speech_output_name(format))
-    })
-}
-
-fn encode_voice_clone_data_uri(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("Failed to read voice clone sample {}", path.display()))?;
-    let base64_audio = general_purpose::STANDARD.encode(bytes);
-    if base64_audio.len() > VOICE_CLONE_BASE64_MAX_BYTES {
-        bail!(
-            "Voice clone sample is too large after base64 encoding ({} bytes > 10 MB)",
-            base64_audio.len()
-        );
-    }
-
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let mime = match extension.as_str() {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        other => bail!(
-            "Unsupported voice clone sample extension '{}'. Use .mp3 or .wav.",
-            other
-        ),
-    };
-
-    Ok(format!("data:{mime};base64,{base64_audio}"))
-}
-
-fn describe_speech_voice(voice: &str) -> String {
-    if voice.starts_with("data:") {
-        "embedded voice clone sample".to_string()
-    } else {
-        voice.to_string()
-    }
-}
-
 #[cfg(test)]
 mod speech_cli_tests {
     use super::*;
+    use crate::tools::speech::{
+        default_speech_output_name, infer_speech_model, normalize_speech_format,
+    };
 
     #[test]
     fn normalizes_documented_speech_formats() {
@@ -3802,17 +3712,51 @@ mod speech_cli_tests {
     #[test]
     fn default_speech_output_tracks_requested_format() {
         assert_eq!(
-            resolve_speech_output_path(None, None, "mp3"),
+            PathBuf::from(default_speech_output_name("mp3")),
             PathBuf::from("speech.mp3")
         );
         assert_eq!(
-            resolve_speech_output_path(None, Some(PathBuf::from("audio")), "pcm"),
+            PathBuf::from("audio").join(default_speech_output_name("pcm")),
             PathBuf::from("audio").join("speech.pcm16")
         );
         assert_eq!(
-            resolve_speech_output_path(Some(PathBuf::from("custom.wav")), None, "mp3"),
+            Some(PathBuf::from("custom.wav"))
+                .unwrap_or_else(|| PathBuf::from(default_speech_output_name("mp3"))),
             PathBuf::from("custom.wav")
         );
+    }
+
+    #[test]
+    fn speech_command_parses_cli_passthrough_smoke() {
+        let cli = Cli::try_parse_from([
+            "codewhale-tui",
+            "speech",
+            "hello",
+            "--model",
+            "tts",
+            "--format",
+            "pcm",
+            "--output-dir",
+            "audio",
+            "--voice",
+            "Mia",
+        ])
+        .expect("speech command parses");
+
+        let Some(Commands::Speech(args)) = cli.command else {
+            panic!("expected speech command");
+        };
+        assert_eq!(args.text, "hello");
+        assert_eq!(
+            infer_speech_model(args.model.as_deref(), false, false),
+            "mimo-v2.5-tts"
+        );
+        assert_eq!(
+            normalize_speech_format(&args.format).as_deref(),
+            Some("pcm16")
+        );
+        assert_eq!(args.output_dir, Some(PathBuf::from("audio")));
+        assert_eq!(args.voice.as_deref(), Some("Mia"));
     }
 }
 

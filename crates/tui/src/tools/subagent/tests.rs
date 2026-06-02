@@ -1738,6 +1738,7 @@ fn stub_runtime() -> SubAgentRuntime {
         fork_context: None,
         mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+        speech_output_dir: None,
     }
 }
 
@@ -1967,6 +1968,16 @@ fn emit_parent_completion_fires_for_direct_child() {
     assert_eq!(received.agent_id, "agent_abc");
     assert_eq!(received.payload, "summary line\n<sentinel/>");
     assert!(rx.try_recv().is_err(), "should be exactly one message");
+}
+
+#[test]
+fn child_runtime_inherits_speech_output_dir() {
+    let output_dir = PathBuf::from("configured-speech-output");
+    let runtime = stub_runtime().with_speech_output_dir(Some(output_dir.clone()));
+
+    let child = runtime.child_runtime();
+
+    assert_eq!(child.speech_output_dir, Some(output_dir));
 }
 
 #[test]

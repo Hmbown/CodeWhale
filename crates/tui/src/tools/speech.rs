@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use serde_json::{Value, json};
@@ -19,23 +20,19 @@ use super::spec::{
     optional_bool, optional_str, required_str,
 };
 
-const DEFAULT_FORMAT: &str = "wav";
-const DEFAULT_VOICE: &str = "mimo_default";
+pub(crate) const DEFAULT_FORMAT: &str = "wav";
+pub(crate) const DEFAULT_VOICE: &str = "mimo_default";
 const VOICE_CLONE_BASE64_MAX_BYTES: usize = 10 * 1024 * 1024;
-const SUPPORTED_SPEECH_FORMATS: &[&str] = &["wav", "mp3", "pcm16"];
+pub(crate) const SUPPORTED_SPEECH_FORMATS: &[&str] = &["wav", "mp3", "pcm16"];
 
 pub const SUPPORTED_XIAOMI_MIMO_SPEECH_MODELS: &[&str] = &[
-    "mimo-v2.5-pro",
-    "mimo-v2.5",
     "mimo-v2.5-tts-voiceclone",
     "mimo-v2.5-tts-voicedesign",
     "mimo-v2.5-tts",
-    "mimo-v2-pro",
-    "mimo-v2-omni",
     "mimo-v2-tts",
 ];
 
-const SPEECH_MODEL_EXAMPLES: &[&str] = &[
+pub(crate) const SPEECH_MODEL_EXAMPLES: &[&str] = &[
     "mimo-v2.5-tts",
     "mimo-v2.5-tts-voicedesign",
     "mimo-v2.5-tts-voiceclone",
@@ -302,7 +299,7 @@ impl ToolSpec for SpeechTool {
     }
 }
 
-fn infer_speech_model(
+pub(crate) fn infer_speech_model(
     model: Option<&str>,
     has_clone_voice: bool,
     has_voice_prompt: bool,
@@ -316,7 +313,7 @@ fn infer_speech_model(
     }
 }
 
-fn combine_speech_instructions(
+pub(crate) fn combine_speech_instructions(
     instruction: Option<String>,
     voice_prompt: Option<String>,
 ) -> Option<String> {
@@ -340,7 +337,7 @@ fn combine_speech_instructions(
     }
 }
 
-fn normalize_speech_format(format: &str) -> Option<String> {
+pub(crate) fn normalize_speech_format(format: &str) -> Option<String> {
     let normalized = format.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "wav" | "mp3" | "pcm16" => Some(normalized),
@@ -349,7 +346,7 @@ fn normalize_speech_format(format: &str) -> Option<String> {
     }
 }
 
-fn default_speech_output_name(format: &str) -> String {
+pub(crate) fn default_speech_output_name(format: &str) -> String {
     format!(
         "speech.{}",
         normalize_speech_format(format)
@@ -391,12 +388,25 @@ async fn encode_voice_clone_data_uri(path: &Path) -> Result<String, ToolError> {
             path.display()
         ))
     })?;
+
+    voice_clone_data_uri_from_bytes(path, &bytes)
+        .map_err(|err| ToolError::invalid_input(err.to_string()))
+}
+
+pub(crate) fn encode_voice_clone_sample_data_uri(path: &Path) -> anyhow::Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("Failed to read voice clone sample {}", path.display()))?;
+
+    voice_clone_data_uri_from_bytes(path, &bytes)
+}
+
+fn voice_clone_data_uri_from_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<String> {
     let base64_audio = general_purpose::STANDARD.encode(bytes);
     if base64_audio.len() > VOICE_CLONE_BASE64_MAX_BYTES {
-        return Err(ToolError::invalid_input(format!(
+        anyhow::bail!(
             "voice clone sample is too large after base64 encoding ({} bytes > 10 MB)",
             base64_audio.len()
-        )));
+        );
     }
 
     let extension = path
@@ -408,16 +418,14 @@ async fn encode_voice_clone_data_uri(path: &Path) -> Result<String, ToolError> {
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         other => {
-            return Err(ToolError::invalid_input(format!(
-                "unsupported voice clone sample extension '{other}'. Use .mp3 or .wav."
-            )));
+            anyhow::bail!("unsupported voice clone sample extension '{other}'. Use .mp3 or .wav.");
         }
     };
 
     Ok(format!("data:{mime};base64,{base64_audio}"))
 }
 
-fn describe_speech_voice(voice: &str) -> String {
+pub(crate) fn describe_speech_voice(voice: &str) -> String {
     if voice.starts_with("data:") {
         "embedded voice clone sample".to_string()
     } else {
@@ -500,6 +508,37 @@ mod tests {
         assert_eq!(normalize_speech_format("pcm16").as_deref(), Some("pcm16"));
         assert_eq!(normalize_speech_format("pcm").as_deref(), Some("pcm16"));
         assert_eq!(normalize_speech_format("flac"), None);
+    }
+
+    #[test]
+    fn supported_xiaomi_mimo_speech_models_are_tts_only() {
+        assert!(
+            SUPPORTED_XIAOMI_MIMO_SPEECH_MODELS
+                .iter()
+                .all(|model| model.to_ascii_lowercase().contains("tts")),
+            "model-visible speech list must not include chat-only MiMo models"
+        );
+        assert!(SUPPORTED_XIAOMI_MIMO_SPEECH_MODELS.contains(&"mimo-v2.5-tts"));
+        assert!(!SUPPORTED_XIAOMI_MIMO_SPEECH_MODELS.contains(&"mimo-v2.5-pro"));
+        assert!(!SUPPORTED_XIAOMI_MIMO_SPEECH_MODELS.contains(&"mimo-v2.5"));
+    }
+
+    #[test]
+    fn configured_output_dir_is_used_for_default_tool_output() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = ToolContext::new(tmp.path().to_path_buf());
+        let configured = tmp.path().join("speech-artifacts");
+
+        let output = resolve_speech_output_path(
+            &json!({"text": "hello"}),
+            &context,
+            None,
+            "pcm",
+            Some(&configured),
+        )
+        .expect("output path");
+
+        assert_eq!(output, configured.join("speech.pcm16"));
     }
 
     #[test]

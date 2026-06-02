@@ -476,6 +476,31 @@ fn parse_speech_audio_response(payload: &Value) -> Result<(Vec<u8>, Option<Strin
     Ok((audio_bytes, transcript))
 }
 
+fn build_speech_synthesis_body(
+    model: &str,
+    text: &str,
+    instruction: Option<&str>,
+    audio: Value,
+) -> Value {
+    let mut messages = Vec::new();
+    if let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) {
+        messages.push(json!({
+            "role": "user",
+            "content": instruction,
+        }));
+    }
+    messages.push(json!({
+        "role": "assistant",
+        "content": text,
+    }));
+
+    json!({
+        "model": model,
+        "messages": messages,
+        "audio": audio,
+    })
+}
+
 // === DeepSeekClient ===
 
 /// Returns true when DEEPSEEK_FORCE_HTTP1 is set to a truthy value
@@ -773,20 +798,7 @@ impl DeepSeekClient {
             audio["voice"] = json!(voice);
         }
 
-        let body = json!({
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": instruction.unwrap_or(""),
-                },
-                {
-                    "role": "assistant",
-                    "content": text,
-                }
-            ],
-            "audio": audio,
-        });
+        let body = build_speech_synthesis_body(&model, &text, instruction, audio);
 
         let url = api_url(&self.base_url, "chat/completions");
         let response = self
@@ -1364,6 +1376,53 @@ mod tests {
         let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
         assert_eq!(audio, b"wav");
         assert_eq!(transcript, None);
+    }
+
+    #[test]
+    fn speech_synthesis_body_omits_user_message_without_instruction() {
+        let body =
+            build_speech_synthesis_body("mimo-v2.5-tts", "hello", None, json!({"format": "wav"}));
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "hello");
+        assert!(
+            messages
+                .iter()
+                .all(|message| message["content"].as_str() != Some(""))
+        );
+    }
+
+    #[test]
+    fn speech_synthesis_body_ignores_blank_instruction() {
+        let body = build_speech_synthesis_body(
+            "mimo-v2.5-tts",
+            "hello",
+            Some("  \t\n  "),
+            json!({"format": "wav"}),
+        );
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+    }
+
+    #[test]
+    fn speech_synthesis_body_includes_non_empty_instruction_first() {
+        let body = build_speech_synthesis_body(
+            "mimo-v2.5-tts-voicedesign",
+            "hello",
+            Some("warm and calm"),
+            json!({"format": "wav"}),
+        );
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "warm and calm");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "hello");
     }
 
     #[test]

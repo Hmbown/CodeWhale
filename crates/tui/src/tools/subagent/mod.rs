@@ -794,6 +794,10 @@ pub struct SubAgentRuntime {
     /// false-timeout the child mid-thinking. `child_runtime()` and
     /// `background_runtime()` preserve the parent's value (#1806, #1808).
     pub step_api_timeout: Duration,
+    /// Default directory for Xiaomi MiMo speech/TTS tool outputs inherited by
+    /// child registries. Keeps parent and sub-agent `speech` / `tts` tools on
+    /// the same `[speech].output_dir` / env override.
+    pub speech_output_dir: Option<PathBuf>,
 }
 
 impl SubAgentRuntime {
@@ -829,6 +833,7 @@ impl SubAgentRuntime {
             fork_context: None,
             mcp_pool: None,
             step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+            speech_output_dir: None,
         }
     }
 
@@ -849,6 +854,13 @@ impl SubAgentRuntime {
     #[must_use]
     pub fn with_step_api_timeout(mut self, timeout: Duration) -> Self {
         self.step_api_timeout = timeout;
+        self
+    }
+
+    /// Preserve the configured speech output directory for sub-agent tools.
+    #[must_use]
+    pub fn with_speech_output_dir(mut self, output_dir: Option<PathBuf>) -> Self {
+        self.speech_output_dir = output_dir;
         self
     }
 
@@ -974,6 +986,7 @@ impl SubAgentRuntime {
             fork_context: self.fork_context.clone(),
             mcp_pool: self.mcp_pool.clone(),
             step_api_timeout: self.step_api_timeout,
+            speech_output_dir: self.speech_output_dir.clone(),
         }
     }
 
