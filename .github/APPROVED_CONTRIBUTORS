@@ -1,0 +1,10 @@
+# Scoped contribution-gate allowlist.
+#
+# Maintainers and collaborators bypass the gate automatically. Use this file
+# for external contributors who are allowed through the automated front door.
+#
+# Supported entries:
+#   pr:username
+#   issue:username
+#   all:username
+all:Hmbown

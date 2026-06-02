@@ -1,0 +1,175 @@
+name: Approve gated contributor
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open allowlist update PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const privileged = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const command = (comment.body || '').trim().toLowerCase();
+            const scopeByCommand = new Map([
+              ['/lgtm', 'pr'],
+              ['lgtm', 'pr'],
+              ['/lgtmi', 'issue'],
+              ['lgtmi', 'issue'],
+            ]);
+            const scope = scopeByCommand.get(command);
+
+            if (!scope) return;
+            if (!privileged.has(comment.author_association)) return;
+            if (scope === 'pr' && !issue.pull_request) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: '`/lgtm` grants PR access and must be used on a pull request. Use `/lgtmi` to grant issue access.',
+              });
+              return;
+            }
+
+            const path = '.github/APPROVED_CONTRIBUTORS';
+            const targetLogin = issue.user.login;
+            const normalizedLogin = targetLogin.toLowerCase();
+            const entry = `${scope}:${normalizedLogin}`;
+
+            const defaultContent = [
+              '# Scoped contribution-gate allowlist.',
+              '#',
+              '# Maintainers and collaborators bypass the gate automatically. Use this file',
+              '# for external contributors who are allowed through the automated front door.',
+              '#',
+              '# Supported entries:',
+              '#   pr:username',
+              '#   issue:username',
+              '#   all:username',
+              '',
+            ].join('\n');
+
+            function parseAllowlist(content) {
+              return new Set(
+                content
+                  .split(/\r?\n/)
+                  .map(line => line.replace(/#.*/, '').trim().toLowerCase())
+                  .filter(Boolean)
+              );
+            }
+
+            const { data: repoData } = await github.rest.repos.get({ owner, repo });
+            const defaultBranch = repoData.default_branch;
+            const { data: baseRef } = await github.rest.git.getRef({
+              owner,
+              repo,
+              ref: `heads/${defaultBranch}`,
+            });
+            const baseSha = baseRef.object.sha;
+            const { data: baseCommit } = await github.rest.git.getCommit({
+              owner,
+              repo,
+              commit_sha: baseSha,
+            });
+
+            let content = defaultContent;
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path,
+                ref: defaultBranch,
+              });
+              if (!Array.isArray(data) && data.type === 'file') {
+                content = Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            const existing = parseAllowlist(content);
+            if (existing.has(entry) || existing.has(`all:${normalizedLogin}`)) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `@${targetLogin} is already approved for ${scope} contributions in \`${path}\`.`,
+              });
+              return;
+            }
+
+            const nextContent = `${content.trimEnd()}\n${entry}\n`;
+            const { data: blob } = await github.rest.git.createBlob({
+              owner,
+              repo,
+              content: nextContent,
+              encoding: 'utf-8',
+            });
+            const { data: tree } = await github.rest.git.createTree({
+              owner,
+              repo,
+              base_tree: baseCommit.tree.sha,
+              tree: [
+                {
+                  path,
+                  mode: '100644',
+                  type: 'blob',
+                  sha: blob.sha,
+                },
+              ],
+            });
+
+            const branchSlug = normalizedLogin.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'contributor';
+            const branchName = `contribution-gate/${scope}-${branchSlug}-${Date.now()}`;
+            await github.rest.git.createRef({
+              owner,
+              repo,
+              ref: `refs/heads/${branchName}`,
+              sha: baseSha,
+            });
+
+            const { data: commit } = await github.rest.git.createCommit({
+              owner,
+              repo,
+              message: `chore: approve @${targetLogin} for ${scope} contributions`,
+              tree: tree.sha,
+              parents: [baseSha],
+            });
+            await github.rest.git.updateRef({
+              owner,
+              repo,
+              ref: `heads/${branchName}`,
+              sha: commit.sha,
+            });
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: `chore: approve @${targetLogin} for ${scope} contributions`,
+              head: branchName,
+              base: defaultBranch,
+              body: [
+                `Adds \`${entry}\` to \`${path}\`.`,
+                '',
+                `Requested by @${comment.user.login} in #${issue.number}.`,
+              ].join('\n'),
+            });
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issue.number,
+              body: `Created allowlist update PR: ${pr.html_url}`,
+            });

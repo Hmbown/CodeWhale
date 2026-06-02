@@ -167,6 +167,30 @@ Issues:
 Validation:
 ```
 
+## Contribution Gate
+
+CodeWhale uses a maintainer-managed contribution gate for the community front
+door. Maintainers and collaborators bypass this gate automatically. External
+contributors must be listed in `.github/APPROVED_CONTRIBUTORS` before their
+issues or pull requests remain open.
+
+The allowlist is scoped:
+
+- `pr:username` allows pull requests.
+- `issue:username` allows issues.
+- `all:username` allows both.
+
+When an unapproved external contributor opens an issue or pull request, the
+matching gate workflow leaves a short thank-you / CONTRIBUTING pointer and
+closes it. A maintainer can approve someone by commenting `/lgtm` on a pull
+request for PR access, or `/lgtmi` on an issue for issue access. The exact bare
+commands `lgtm` and `lgtmi` are also accepted for compatibility, but the
+prefixed forms are preferred because they are harder to trigger accidentally in
+ordinary review discussion.
+
+Approvals do not edit `main` directly. The approval workflow opens a small
+allowlist update PR so the new entry is reviewable before it takes effect.
+
 ## Agent-Assisted Improvements
 
 CodeWhale is allowed to help improve CodeWhale, but the contribution still has
