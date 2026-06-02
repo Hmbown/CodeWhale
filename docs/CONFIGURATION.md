@@ -491,6 +491,9 @@ the TUI has updated visible state, token counters, cost estimates,
 receipts, and session persistence scheduling. They are observer-only:
 stdout is ignored, failures are logged as warnings, and hook execution
 does not block the next input or queued-message dispatch.
+Because observer hooks cannot block caller state, `continue_on_error`
+does not stop later `turn_end` hooks; all matching hooks are attempted
+even when an earlier hook fails.
 
 ```toml
 [[hooks.hooks]]

@@ -242,6 +242,7 @@ This helper should:
 - write `payload` to stdin using the existing stdin-capable executor path
 - ignore stdout
 - log failures with `tracing::warn!`
+- ignore `continue_on_error` for observer sequencing; attempt all matching hooks
 - never return a blocking outcome to the caller
 
 The caller should invoke this helper from a background task/thread so UI event
