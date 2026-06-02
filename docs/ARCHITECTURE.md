@@ -90,7 +90,6 @@ Current boundary note (v0.8.6):
 - **`crates/tools`** - Shared tool invocation primitives, including tool result/error/capability types used by the TUI runtime.
 - **`crates/config`** - Config loading, profiles, environment variable precedence, CLI runtime overrides, and the static model/provider registry (`ModelRegistry`).
 - **`crates/app-server`** - HTTP/SSE + JSON-RPC app server transport for headless agent workflows.
-- **`crates/config`** - Config loading, profiles, environment variable precedence, CLI runtime overrides.
 - **`crates/core`** - Agent loop, session management, turn orchestration, capacity flow guardrails.
 - **`crates/execpolicy`** - Approval/sandbox policy engine for tool execution decisions.
 - **`crates/hooks`** - Lifecycle hooks (stdout, jsonl, webhook) for pre/post tool events.
