@@ -342,10 +342,19 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         return vec![text.to_string()];
     }
     let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
 
-    for word in text.split_whitespace() {
+    // Preserve leading whitespace (indentation is semantic in diffs)
+    let lead: String = text.chars().take_while(|c| c.is_whitespace()).collect();
+    let trimmed = text.trim_start();
+
+    if trimmed.is_empty() {
+        return vec![text.to_string()];
+    }
+
+    let mut current = lead.clone();
+    let mut current_width = current.width();
+
+    for word in trimmed.split_whitespace() {
         let word_width = word.width();
         if word_width > width {
             if !current.is_empty() {
@@ -464,6 +473,86 @@ diff --git a/src/a.rs b/src/a.rs
         assert!(
             text.iter().any(|line| line.contains(" - old")),
             "deleted line should carry - gutter: {text:?}"
+        );
+    }
+
+    #[test]
+    fn render_diff_preserves_leading_whitespace() {
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,11 @@
+ fn main() {
+     let x = 1;
++    let y = 2;
++    if x > 0 {
++        println!(\"positive\");
++    }
+     do_work();
+-    cleanup();
++    finalize();
+ }
+";
+
+        let rendered = render_diff(diff, 80);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        // Added lines must preserve leading whitespace
+        assert!(
+            text.iter().any(|line| line.contains("    let y = 2;")),
+            "added indented line should keep 4-space indent: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("        println!")),
+            "added double-indented line should keep 8-space indent: {text:?}"
+        );
+        // Modified line preserves its indentation
+        assert!(
+            text.iter().any(|line| line.contains("    finalize();")),
+            "modified line should keep indent: {text:?}"
+        );
+    }
+
+    #[test]
+    fn render_diff_preserves_indent_with_existing_context() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,7 +10,9 @@
+ impl Foo {
+     fn bar(&self) {
+         let items = vec![1, 2, 3];
+-        old_thing();
++        for item in &items {
++            process(item);
++        }
+         more_stuff();
+     }
+ }
+";
+        let rendered = render_diff(diff, 80);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        // Context lines (space-prefixed in diff) keep leading whitespace
+        assert!(
+            text.iter().any(|line| line.contains("impl Foo {")),
+            "context header should be visible in rendered output"
+        );
+        // Added block preserves nested indentation
+        assert!(
+            text.iter().any(|line| line.contains("        for item")),
+            "added line with 8-space indent: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("            process")),
+            "added line with 12-space indent: {text:?}"
+        );
+        // Deleted line keeps its indentation
+        assert!(
+            text.iter().any(|line| line.contains("        old_thing")),
+            "deleted line keeps indent: {text:?}"
         );
     }
 
