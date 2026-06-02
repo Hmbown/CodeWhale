@@ -484,6 +484,58 @@ the message. Existing environment variables remain available.
 `shell_env` hooks keep their existing `KEY=VALUE` stdout contract;
 the JSON stdout contract applies only to `message_submit`.
 
+### Sub-agent lifecycle hooks
+
+`subagent_spawn` and `subagent_complete` hooks observe sub-agent lifecycle
+events. They receive bounded JSON metadata on stdin and are observer-only:
+hook failures are logged as warnings and do not block sub-agent scheduling,
+change prompts, or change results.
+
+```toml
+[[hooks.hooks]]
+event = "subagent_complete"
+command = "~/.codewhale/hooks/subagent-audit.sh"
+timeout_secs = 2
+continue_on_error = true
+```
+
+`subagent_spawn` receives:
+
+```json
+{
+  "event": "subagent_spawn",
+  "agent_id": "agent_12345678",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "total_tokens": 1234,
+  "prompt_preview": "bounded prompt preview",
+  "prompt_truncated": false
+}
+```
+
+`subagent_complete` receives the same common fields plus terminal metadata:
+
+```json
+{
+  "event": "subagent_complete",
+  "agent_id": "agent_12345678",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "total_tokens": 1234,
+  "status": "completed",
+  "result_preview": "bounded result preview",
+  "result_truncated": false
+}
+```
+
+Previews are capped before delivery so lifecycle hooks do not receive full
+sub-agent prompts, transcripts, or unbounded results. Use `agent_eval` from a
+normal model/tool flow when full sub-agent details are needed.
+
 ### Composer stash (`/stash`, Ctrl+S)
 
 Press **Ctrl+S** in the composer to park the current draft to

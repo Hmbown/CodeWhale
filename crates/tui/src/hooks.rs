@@ -41,6 +41,10 @@ pub enum HookEvent {
     ModeChange,
     /// Triggered when an error occurs
     OnError,
+    /// Triggered when a sub-agent is spawned
+    SubagentSpawn,
+    /// Triggered when a sub-agent reaches a terminal state
+    SubagentComplete,
     /// Triggered immediately before each `exec_shell` invocation. The hook's
     /// stdout is parsed as `KEY=VALUE\n` lines and merged on top of the
     /// shell command's environment — useful for ephemeral credentials,
@@ -62,6 +66,8 @@ impl HookEvent {
             HookEvent::ToolCallAfter => "tool_call_after",
             HookEvent::ModeChange => "mode_change",
             HookEvent::OnError => "on_error",
+            HookEvent::SubagentSpawn => "subagent_spawn",
+            HookEvent::SubagentComplete => "subagent_complete",
             HookEvent::ShellEnv => "shell_env",
         }
     }
@@ -777,6 +783,59 @@ impl HookExecutor {
         results
     }
 
+    /// Execute observer hooks with a structured JSON stdin payload.
+    ///
+    /// Unlike `message_submit`, stdout is deliberately ignored by callers:
+    /// these hooks are lifecycle observers and cannot mutate or block the
+    /// underlying action.
+    pub fn execute_json_observer(
+        &self,
+        event: HookEvent,
+        context: &HookContext,
+        payload: &serde_json::Value,
+    ) -> Vec<HookResult> {
+        if !self.config.enabled {
+            return Vec::new();
+        }
+
+        let hooks = self.config.hooks_for_event(event);
+        if hooks.is_empty() {
+            return Vec::new();
+        }
+
+        let env_vars = context.to_env_vars();
+        let mut results = Vec::new();
+        for hook in hooks {
+            if !self.matches_condition(hook, context) {
+                continue;
+            }
+
+            let result = if hook.background {
+                self.execute_background_with_stdin(hook, &env_vars, payload)
+            } else {
+                self.execute_sync_with_stdin(hook, &env_vars, payload)
+            };
+
+            if !result.success {
+                let label = result.name.as_deref().unwrap_or("(unnamed)");
+                tracing::warn!(
+                    target: "hooks",
+                    hook = label,
+                    event = event.as_str(),
+                    exit_code = ?result.exit_code,
+                    duration_ms = result.duration.as_millis() as u64,
+                    error = result.error.as_deref().unwrap_or(""),
+                    stderr_head = %result.stderr.lines().next().unwrap_or(""),
+                    "observer hook failed"
+                );
+            }
+
+            results.push(result);
+        }
+
+        results
+    }
+
     /// Check if a hook's condition matches the context
     #[allow(clippy::only_used_in_recursion)]
     fn matches_condition(&self, hook: &Hook, context: &HookContext) -> bool {
@@ -949,6 +1008,24 @@ impl HookExecutor {
 
     /// Execute a hook in the background (non-blocking)
     fn execute_background(&self, hook: &Hook, env_vars: &HashMap<String, String>) -> HookResult {
+        self.execute_background_inner(hook, env_vars, None)
+    }
+
+    fn execute_background_with_stdin(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: &serde_json::Value,
+    ) -> HookResult {
+        self.execute_background_inner(hook, env_vars, Some(stdin_json))
+    }
+
+    fn execute_background_inner(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: Option<&serde_json::Value>,
+    ) -> HookResult {
         let started = Instant::now();
         let working_dir = self
             .config
@@ -956,16 +1033,45 @@ impl HookExecutor {
             .clone()
             .unwrap_or_else(|| self.default_working_dir.clone());
 
+        let stdin_bytes = match stdin_json.map(serde_json::to_vec).transpose() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to encode hook stdin: {e}")),
+                };
+            }
+        };
         let cmd = hook.command.clone();
         let env = env_vars.clone();
         let wd = working_dir.clone();
 
         // Spawn in a detached thread
         std::thread::spawn(move || {
-            let _ = HookExecutor::build_shell_command(&cmd)
+            let mut command = HookExecutor::build_shell_command(&cmd);
+            command
                 .current_dir(&wd)
                 .envs(&env)
-                .output();
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if stdin_bytes.is_some() {
+                command.stdin(Stdio::piped());
+            }
+
+            let Ok(mut child) = command.spawn() else {
+                return;
+            };
+            if let (Some(mut bytes), Some(mut stdin)) = (stdin_bytes, child.stdin.take()) {
+                bytes.push(b'\n');
+                let _ = stdin.write_all(&bytes);
+                let _ = stdin.flush();
+            }
+            let _ = child.wait();
         });
 
         // Return immediately with success (background execution is fire-and-forget)
@@ -1237,6 +1343,8 @@ NOEQUAL line dropped
         assert_eq!(HookEvent::SessionStart.as_str(), "session_start");
         assert_eq!(HookEvent::ToolCallAfter.as_str(), "tool_call_after");
         assert_eq!(HookEvent::ModeChange.as_str(), "mode_change");
+        assert_eq!(HookEvent::SubagentSpawn.as_str(), "subagent_spawn");
+        assert_eq!(HookEvent::SubagentComplete.as_str(), "subagent_complete");
     }
 
     #[test]
@@ -1421,6 +1529,107 @@ printf '\ndone:%s\n' "${#payload}"
             .with_mode("agent")
             .with_model("deepseek-test")
             .with_tokens(42)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn json_observer_hook_receives_structured_stdin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("payload.json");
+        let command = write_hook_script(
+            &dir,
+            "capture_observer.sh",
+            &format!(
+                r#"#!/bin/sh
+cat > "{}"
+"#,
+                out.display()
+            ),
+        );
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![Hook::new(HookEvent::SubagentSpawn, &command)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let payload = json!({
+            "event": "subagent_spawn",
+            "agent_id": "agent_123",
+            "prompt_preview": "inspect this",
+            "prompt_truncated": false,
+        });
+
+        let results = executor.execute_json_observer(
+            HookEvent::SubagentSpawn,
+            &submit_context(&dir),
+            &payload,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+        let captured: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out).expect("payload written"))
+                .expect("valid JSON payload");
+        assert_eq!(captured["event"], "subagent_spawn");
+        assert_eq!(captured["agent_id"], "agent_123");
+        assert_eq!(captured["prompt_preview"], "inspect this");
+        assert_eq!(captured["prompt_truncated"], false);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn json_observer_hook_failure_does_not_stop_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("later-ran");
+        let failing = write_hook_script(
+            &dir,
+            "failing_observer.sh",
+            r#"#!/bin/sh
+echo boom >&2
+exit 1
+"#,
+        );
+        let later = write_hook_script(
+            &dir,
+            "later_observer.sh",
+            &format!(
+                r#"#!/bin/sh
+cat > "{}"
+"#,
+                marker.display()
+            ),
+        );
+        let mut first = Hook::new(HookEvent::SubagentComplete, &failing);
+        first.continue_on_error = false;
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![first, Hook::new(HookEvent::SubagentComplete, &later)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let payload = json!({
+            "event": "subagent_complete",
+            "agent_id": "agent_456",
+            "status": "completed",
+        });
+
+        let results = executor.execute_json_observer(
+            HookEvent::SubagentComplete,
+            &submit_context(&dir),
+            &payload,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].success);
+        assert!(results[1].success);
+        assert!(
+            marker.exists(),
+            "observer failures must be warn-only and non-blocking"
+        );
     }
 
     #[cfg(not(windows))]
@@ -1703,6 +1912,8 @@ exit 7
             HookEvent::ToolCallAfter,
             HookEvent::ModeChange,
             HookEvent::OnError,
+            HookEvent::SubagentSpawn,
+            HookEvent::SubagentComplete,
         ] {
             assert!(
                 !executor.has_hooks_for_event(event),

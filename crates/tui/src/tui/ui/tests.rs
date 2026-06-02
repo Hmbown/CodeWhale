@@ -2792,6 +2792,30 @@ fn sort_subagents_orders_running_before_terminal_statuses() {
 }
 
 #[test]
+fn subagent_hook_preview_is_bounded_on_char_boundaries() {
+    let text = format!("{}{}", "鲸".repeat(900), "tail");
+
+    let (preview, truncated) = bounded_subagent_hook_preview(&text);
+
+    assert!(truncated);
+    assert!(preview.ends_with("...[truncated]"));
+    assert!(preview.len() <= SUBAGENT_HOOK_PREVIEW_LIMIT + "...[truncated]".len());
+    assert!(preview.is_char_boundary(preview.len()));
+}
+
+#[test]
+fn subagent_completion_status_reads_done_sentinel() {
+    let result = r#"done
+<codewhale:subagent.done>{"agent_id":"agent_x","status":"completed"}</codewhale:subagent.done>"#;
+
+    assert_eq!(
+        subagent_completion_status(result).as_deref(),
+        Some("completed")
+    );
+    assert_eq!(subagent_completion_status("no sentinel"), None);
+}
+
+#[test]
 fn running_agent_count_unions_cache_and_progress() {
     let mut app = create_test_app();
     app.subagent_cache = vec![

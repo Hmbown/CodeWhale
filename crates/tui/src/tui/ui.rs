@@ -148,6 +148,7 @@ const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const UI_IDLE_POLL_MS: u64 = 48;
 const UI_ACTIVE_POLL_MS: u64 = 24;
+const SUBAGENT_HOOK_PREVIEW_LIMIT: usize = 2_048;
 const WEB_CONFIG_POLL_MS: u64 = 16;
 const DISPATCH_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum wall-clock time a turn may stay in `"in_progress"` before the UI
@@ -645,6 +646,77 @@ fn terminal_probe_timeout(config: &Config) -> Duration {
         .unwrap_or(DEFAULT_TERMINAL_PROBE_TIMEOUT_MS)
         .clamp(100, 5_000);
     Duration::from_millis(timeout_ms)
+}
+
+fn execute_subagent_observer_hook(
+    app: &App,
+    event: HookEvent,
+    agent_id: &str,
+    text_field: &str,
+    text: &str,
+) {
+    if !app.hooks.has_hooks_for_event(event) {
+        return;
+    }
+
+    let (preview, truncated) = bounded_subagent_hook_preview(text);
+    let context = app.base_hook_context().with_message(&preview);
+    let mut payload = serde_json::json!({
+        "event": event.as_str(),
+        "agent_id": agent_id,
+        "session_id": context.session_id.as_deref(),
+        "workspace": context.workspace.as_ref().map(|path| path.display().to_string()),
+        "mode": context.mode.as_deref(),
+        "model": context.model.as_deref(),
+        "total_tokens": context.total_tokens,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            format!("{text_field}_preview"),
+            serde_json::Value::String(preview),
+        );
+        object.insert(
+            format!("{text_field}_truncated"),
+            serde_json::Value::Bool(truncated),
+        );
+    }
+
+    if event == HookEvent::SubagentComplete {
+        payload["status"] = serde_json::Value::String(
+            subagent_completion_status(text).unwrap_or_else(|| "unknown".to_string()),
+        );
+    }
+
+    let _ = app.hooks.execute_json_observer(event, &context, &payload);
+}
+
+fn bounded_subagent_hook_preview(text: &str) -> (String, bool) {
+    if text.len() <= SUBAGENT_HOOK_PREVIEW_LIMIT {
+        return (text.to_string(), false);
+    }
+    let safe_end = text
+        .char_indices()
+        .take_while(|(idx, ch)| idx + ch.len_utf8() <= SUBAGENT_HOOK_PREVIEW_LIMIT)
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    (format!("{}...[truncated]", &text[..safe_end]), true)
+}
+
+fn subagent_completion_status(result: &str) -> Option<String> {
+    const START: &str = "<codewhale:subagent.done>";
+    const END: &str = "</codewhale:subagent.done>";
+
+    let start = result.find(START)? + START.len();
+    let end = result[start..].find(END)? + start;
+    serde_json::from_str::<serde_json::Value>(&result[start..end])
+        .ok()
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
 }
 
 struct TerminalCleanupGuard {
@@ -1969,6 +2041,13 @@ async fn run_event_loop(
                     }
                     EngineEvent::AgentSpawned { id, prompt } => {
                         let prompt_summary = summarize_tool_output(&prompt);
+                        execute_subagent_observer_hook(
+                            app,
+                            HookEvent::SubagentSpawn,
+                            &id,
+                            "prompt",
+                            &prompt,
+                        );
                         app.agent_progress
                             .insert(id.clone(), format!("starting: {prompt_summary}"));
                         if app.agent_activity_started_at.is_none() {
@@ -1993,6 +2072,13 @@ async fn run_event_loop(
                         app.status_message = Some(format!("Sub-agent {id}: {display}"));
                     }
                     EngineEvent::AgentComplete { id, result } => {
+                        execute_subagent_observer_hook(
+                            app,
+                            HookEvent::SubagentComplete,
+                            &id,
+                            "result",
+                            &result,
+                        );
                         let subagent_elapsed = app
                             .agent_activity_started_at
                             .or(app.turn_started_at)

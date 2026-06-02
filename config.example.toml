@@ -678,7 +678,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # Configure as `[[hooks.hooks]]` under a `[hooks]` table.
 #
 # Available events: session_start, session_end, message_submit,
-# tool_call_before, tool_call_after, mode_change, on_error, shell_env.
+# tool_call_before, tool_call_after, mode_change, on_error,
+# subagent_spawn, subagent_complete, shell_env.
 #
 # `shell_env` (#456) is special: the hook runs immediately before each
 # `exec_shell` invocation and its stdout is parsed as `KEY=VALUE\n` lines.
@@ -705,6 +706,14 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # command = "aws-vault export my-profile --format=env"
 # # Optionally limit to specific tool names / categories:
 # # condition = { type = "tool_category", category = "shell" }
+#
+# # Observe sub-agent lifecycle events. These hooks receive bounded JSON
+# # metadata on stdin and are warn-only: failures do not affect sub-agent
+# # scheduling, prompts, or results.
+# [[hooks.hooks]]
+# name = "subagent-audit"
+# event = "subagent_complete"
+# command = "~/.codewhale/hooks/subagent-audit.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Runtime API (`deepseek serve --http`) (#561)
