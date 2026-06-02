@@ -73,6 +73,7 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 // arguments, especially write_file content. The API bills generated tokens, not
 // the requested ceiling.
 const SUBAGENT_RESPONSE_MAX_TOKENS: u32 = 16_384;
+const MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES: u32 = 5;
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
 /// stuck API call from blocking the sub-agent indefinitely.
@@ -3666,6 +3667,28 @@ fn truncated_response_tool_results(tool_uses: &[(String, String, Value)]) -> Vec
         .collect()
 }
 
+fn truncated_response_text_retry_message() -> Vec<ContentBlock> {
+    vec![ContentBlock::Text {
+        text: "Error: the model response was truncated by max_tokens. No complete tool call was available, so the partial response was not accepted as the sub-agent result. Retry with a shorter response or split the work into smaller steps.".to_string(),
+        cache_control: None,
+    }]
+}
+
+fn record_truncated_subagent_response(consecutive: &mut u32) -> Result<()> {
+    *consecutive = consecutive.saturating_add(1);
+    if *consecutive > MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES {
+        return Err(anyhow!(
+            "Sub-agent response was truncated by max_tokens {count} consecutive times; stopping to avoid an unbounded retry loop.",
+            count = *consecutive
+        ));
+    }
+    Ok(())
+}
+
+fn reset_truncated_subagent_responses(consecutive: &mut u32) {
+    *consecutive = 0;
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_subagent_full_transcript_handle(
     runtime: &SubAgentRuntime,
@@ -3750,6 +3773,7 @@ async fn run_subagent(
     let mut steps = 0;
     let mut final_result: Option<String> = None;
     let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
+    let mut consecutive_truncated_responses = 0;
 
     for _step in 0..max_steps {
         // Cooperative cancellation: bail if this session's token was cancelled
@@ -3929,6 +3953,35 @@ async fn run_subagent(
             content: response.content.clone(),
         });
 
+        if response_was_truncated(&response) {
+            final_result = None;
+            record_truncated_subagent_response(&mut consecutive_truncated_responses)?;
+            let progress = if tool_uses.is_empty() {
+                "response truncated, returning retry instruction".to_string()
+            } else {
+                format!(
+                    "response truncated, returning {} tool error(s)",
+                    tool_uses.len()
+                )
+            };
+            emit_agent_progress(
+                runtime.event_tx.as_ref(),
+                runtime.mailbox.as_ref(),
+                &agent_id,
+                format!("step {steps}/{max_steps}: {progress}"),
+            );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: if tool_uses.is_empty() {
+                    truncated_response_text_retry_message()
+                } else {
+                    truncated_response_tool_results(&tool_uses)
+                },
+            });
+            continue;
+        }
+        reset_truncated_subagent_responses(&mut consecutive_truncated_responses);
+
         if tool_uses.is_empty() {
             while let Ok(input) = input_rx.try_recv() {
                 if input.interrupt {
@@ -3945,23 +3998,6 @@ async fn run_subagent(
                 );
                 break;
             }
-            continue;
-        }
-
-        if response_was_truncated(&response) {
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
-                &agent_id,
-                format!(
-                    "step {steps}/{max_steps}: response truncated, returning {} tool error(s)",
-                    tool_uses.len()
-                ),
-            );
-            messages.push(Message {
-                role: "user".to_string(),
-                content: truncated_response_tool_results(&tool_uses),
-            });
             continue;
         }
 

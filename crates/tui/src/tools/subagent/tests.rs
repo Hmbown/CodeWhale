@@ -1539,6 +1539,39 @@ fn truncated_subagent_tool_calls_return_model_visible_errors() {
 }
 
 #[test]
+fn truncated_subagent_text_response_returns_model_visible_error() {
+    let results = truncated_response_text_retry_message();
+
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        ContentBlock::Text { text, .. } => {
+            assert!(text.contains("truncated by max_tokens"));
+            assert!(text.contains("No complete tool call was available"));
+            assert!(text.contains("Retry with a shorter response"));
+        }
+        other => panic!("expected text retry message, got {other:?}"),
+    }
+}
+
+#[test]
+fn consecutive_truncated_subagent_responses_are_capped() {
+    let mut consecutive = 0;
+
+    for _ in 0..MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES {
+        record_truncated_subagent_response(&mut consecutive).expect("within truncation cap");
+    }
+
+    let err = record_truncated_subagent_response(&mut consecutive)
+        .expect_err("one more truncation should stop the sub-agent");
+    assert!(err.to_string().contains("truncated by max_tokens"));
+    assert!(err.to_string().contains("consecutive"));
+
+    reset_truncated_subagent_responses(&mut consecutive);
+    record_truncated_subagent_response(&mut consecutive).expect("reset should allow recovery");
+    assert_eq!(consecutive, 1);
+}
+
+#[test]
 fn child_cancellation_cascades_from_parent() {
     let parent = stub_runtime();
     let child = parent.child_runtime();
