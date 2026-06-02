@@ -130,6 +130,7 @@ pub struct DeepSeekClient {
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
+    path_suffix: Option<String>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -296,6 +297,7 @@ impl Clone for DeepSeekClient {
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            path_suffix: self.path_suffix.clone(),
         }
     }
 }
@@ -391,9 +393,16 @@ fn is_version_segment(segment: &str) -> bool {
 }
 
 pub(super) fn api_url(base_url: &str, path: &str) -> String {
+    api_url_with_suffix(base_url, path, None)
+}
+
+pub(super) fn api_url_with_suffix(base_url: &str, path: &str, path_suffix: Option<&str>) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
+    }
+    if let Some(suffix) = path_suffix {
+        return format!("{}/{}", base_url.trim_end_matches('/'), suffix.trim_start_matches('/'));
     }
     let mut versioned = versioned_base_url(base_url);
     // The /beta suffix is not a real API version — it is an
@@ -474,9 +483,15 @@ impl DeepSeekClient {
         let retry = config.retry_policy();
         let default_model = config.default_model();
         let http_headers = config.http_headers();
+        let path_suffix = config
+            .provider_config_for(api_provider)
+            .and_then(|p| p.path_suffix.clone());
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!("API base URL: {base_url}"));
+        if let Some(suffix) = &path_suffix {
+            logging::info(format!("API path suffix override: {suffix}"));
+        }
         if !http_headers.is_empty() {
             logging::info(format!(
                 "{} custom HTTP header(s) configured",
@@ -499,6 +514,7 @@ impl DeepSeekClient {
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
+            path_suffix,
         })
     }
 
@@ -585,7 +601,7 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url_with_suffix(&self.base_url, "chat/completions", self.path_suffix.as_deref());
         let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
@@ -632,7 +648,7 @@ impl DeepSeekClient {
 
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
-        let url = api_url(&self.base_url, "models");
+        let url = api_url_with_suffix(&self.base_url, "models", self.path_suffix.as_deref());
         let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
 
         let status = response.status();
@@ -679,7 +695,7 @@ impl DeepSeekClient {
         if !should_probe {
             return;
         }
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url_with_suffix(&self.base_url, "models", self.path_suffix.as_deref());
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
@@ -790,7 +806,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url_with_suffix(&self.base_url, "models", self.path_suffix.as_deref());
         self.wait_for_rate_limit().await;
         let response = self.http_client.get(health_url).send().await;
         match response {
@@ -1096,7 +1112,7 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = api_url_with_suffix(&self.base_url, "beta/completions", self.path_suffix.as_deref());
         let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
@@ -3117,8 +3133,40 @@ mod tests {
             unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
             assert!(
                 !force_http1_from_env(),
-                "{value:?} should NOT be parsed as truthy",
+                "{value:?} should NOT be parsed as truthy"
             );
         }
+    }
+
+    #[test]
+    fn api_url_with_suffix_uses_suffix_path() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_handles_leading_slash() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_default_behavior_without_suffix() {
+        assert_eq!(
+            api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
     }
 }

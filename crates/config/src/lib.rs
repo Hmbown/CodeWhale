@@ -162,6 +162,7 @@ pub struct ProviderConfigToml {
     pub auth_mode: Option<String>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
+    pub path_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1357,6 +1358,9 @@ impl ConfigToml {
 fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
     if source.model.is_some() {
         target.model = source.model.clone();
+    }
+    if source.path_suffix.is_some() {
+        target.path_suffix = source.path_suffix.clone();
     }
 }
 

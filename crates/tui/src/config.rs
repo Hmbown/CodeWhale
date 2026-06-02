@@ -1666,6 +1666,7 @@ pub struct ProviderConfig {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
+    pub path_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -3833,6 +3834,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
+        path_suffix: override_cfg.path_suffix.or(base.path_suffix),
     }
 }
 
