@@ -40,7 +40,7 @@ jobs:
                   owner,
                   repo,
                   path: '.github/APPROVED_CONTRIBUTORS',
-                  ref: pr.base.ref,
+                  ref: context.payload.repository.default_branch,
                 });
                 if (Array.isArray(data) || data.type !== 'file') return new Set();
                 return parseAllowlist(
