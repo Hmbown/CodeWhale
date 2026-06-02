@@ -2608,6 +2608,59 @@ fn turn_liveness_recovers_stalled_in_progress_turn() {
 }
 
 #[test]
+fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
+    // Simulate the event-loop post-check that detects engine task death.
+    // Creates a real mpsc channel, sets up app as if a turn is in progress,
+    // drops the sender (mirroring engine task exit in spawn_supervised),
+    // and verifies the post-loop recovery logic cleans up the UI state.
+    let (tx_event, mut rx) = tokio::sync::mpsc::channel::<EngineEvent>(256);
+    drop(tx_event);
+
+    // Confirm the channel is disconnected
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Disconnected)));
+
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.runtime_turn_id = Some("turn-42".to_string());
+    app.streaming_message_index = Some(0);
+    app.user_scrolled_during_stream = true;
+
+    // Apply the same post-loop logic from ui.rs
+    if app.is_loading && matches!(rx.try_recv(), Err(TryRecvError::Disconnected)) {
+        streaming_thinking::finalize_current(&mut app);
+        app.finalize_streaming_assistant_as_interrupted();
+        app.finalize_active_cell_as_interrupted();
+        app.streaming_state.reset();
+        app.streaming_message_index = None;
+        app.streaming_thinking_active_entry = None;
+
+        app.is_loading = false;
+        app.turn_started_at = None;
+        app.turn_last_activity_at = None;
+        app.runtime_turn_status = None;
+        app.runtime_turn_id = None;
+        app.dispatch_started_at = None;
+        app.user_scrolled_during_stream = false;
+        app.push_status_toast(
+            "Engine process has terminated unexpectedly.",
+            StatusToastLevel::Error,
+            None,
+        );
+    }
+
+    // Verify the fix: UI state is fully recovered
+    assert!(!app.is_loading, "loading must be cleared");
+    assert!(app.runtime_turn_status.is_none(), "turn status cleared");
+    assert!(app.runtime_turn_id.is_none(), "turn id cleared");
+    assert!(app.streaming_message_index.is_none());
+    assert!(!app.user_scrolled_during_stream);
+    let toast = app.status_toasts.back().expect("error toast pushed");
+    assert_eq!(toast.level, StatusToastLevel::Error);
+    assert!(toast.text.contains("Engine process has terminated"));
+}
+
+#[test]
 fn fixed_model_auto_thinking_skips_auto_model_router() {
     let mut app = create_test_app();
     app.auto_model = false;

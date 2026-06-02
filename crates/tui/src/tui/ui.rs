@@ -89,6 +89,7 @@ use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
 use crate::tui::scrolling::TranscriptScroll;
+use tokio::sync::mpsc::error::TryRecvError;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
 use crate::tui::shell_job_routing::{
@@ -2233,6 +2234,34 @@ async fn run_event_loop(
                         }
                     }
                 }
+            }
+            // Detect engine task death mid-turn.  When the engine task
+            // panics (caught by spawn_supervised's catch_unwind) or exits
+            // unexpectedly between TurnStarted and TurnComplete, the event
+            // channel's sender is dropped and try_recv returns Disconnected.
+            // The while-let loop above exits silently on Err, so we must
+            // check post-loop and recover the UI state immediately instead
+            // of waiting for the 300-second TURN_STALL_WATCHDOG_TIMEOUT.
+            if app.is_loading && matches!(rx.try_recv(), Err(TryRecvError::Disconnected)) {
+                streaming_thinking::finalize_current(app);
+                app.finalize_streaming_assistant_as_interrupted();
+                app.finalize_active_cell_as_interrupted();
+                app.streaming_state.reset();
+                app.streaming_message_index = None;
+                app.streaming_thinking_active_entry = None;
+
+                app.is_loading = false;
+                app.turn_started_at = None;
+                app.turn_last_activity_at = None;
+                app.runtime_turn_status = None;
+                app.runtime_turn_id = None;
+                app.dispatch_started_at = None;
+                app.user_scrolled_during_stream = false;
+                app.push_status_toast(
+                    "Engine process has terminated unexpectedly.",
+                    StatusToastLevel::Error,
+                    None,
+                );
             }
         }
         if let Some(index) = app.streaming_message_index {
