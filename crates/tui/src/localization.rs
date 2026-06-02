@@ -488,6 +488,8 @@ pub enum MessageId {
     CtxMenuContextInspectorDesc,
     CtxMenuHelp,
     CtxMenuHelpDesc,
+    // Agent fanout card.
+    FanoutCounts,
 }
 
 #[allow(dead_code)]
@@ -752,6 +754,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuContextInspectorDesc,
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
+    MessageId::FanoutCounts,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1319,6 +1322,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxMenuContextInspectorDesc => "active context and cache hints",
         MessageId::CtxMenuHelp => "Help",
         MessageId::CtxMenuHelpDesc => "keybindings and commands",
+        MessageId::FanoutCounts => {
+            "{done} done · {running} running · {failed} failed · {pending} pending"
+        }
     }
 }
 
@@ -1754,6 +1760,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "ngữ cảnh đang hoạt động và gợi ý bộ nhớ đệm",
         MessageId::CtxMenuHelp => "Trợ giúp",
         MessageId::CtxMenuHelpDesc => "phím tắt và lệnh",
+        MessageId::FanoutCounts => {
+            "{done} hoàn thành · {running} đang chạy · {failed} thất bại · {pending} chờ"
+        }
     })
 }
 
@@ -1767,6 +1776,9 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::TranslationComplete => "翻譯完成",
         MessageId::TranslationFailed => "翻譯失敗",
         MessageId::FooterBalancePrefix => "餘額",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 運行中 · {failed} 失敗 · {pending} 等待中"
+        }
         other => chinese_simplified(other)?,
     })
 }
@@ -2163,6 +2175,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "アクティブなコンテキストとキャッシュヒント",
         MessageId::CtxMenuHelp => "ヘルプ",
         MessageId::CtxMenuHelpDesc => "キー操作とコマンド",
+        MessageId::FanoutCounts => {
+            "{done} 完了 · {running} 実行中 · {failed} 失敗 · {pending} 待機"
+        }
     })
 }
 
@@ -2500,6 +2515,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "活动上下文和缓存提示",
         MessageId::CtxMenuHelp => "帮助",
         MessageId::CtxMenuHelpDesc => "快捷键和命令",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
+        }
     })
 }
 
@@ -2919,6 +2937,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto ativo e dicas de cache",
         MessageId::CtxMenuHelp => "Ajuda",
         MessageId::CtxMenuHelpDesc => "atalhos de teclado e comandos",
+        MessageId::FanoutCounts => {
+            "{done} concluído · {running} executando · {failed} falhou · {pending} pendente"
+        }
     })
 }
 
@@ -3346,6 +3367,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto activo y sugerencias de caché",
         MessageId::CtxMenuHelp => "Ayuda",
         MessageId::CtxMenuHelpDesc => "atajos de teclado y comandos",
+        MessageId::FanoutCounts => {
+            "{done} completado · {running} ejecutando · {failed} falló · {pending} pendiente"
+        }
     })
 }
 
