@@ -21,7 +21,6 @@ jobs:
             const repo = context.repo.repo;
             const privileged = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
-            if (issue.pull_request) return;
             if (privileged.has(issue.author_association)) return;
             if (issue.user.login === 'github-actions[bot]') return;
 
