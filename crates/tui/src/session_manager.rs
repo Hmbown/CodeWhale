@@ -957,6 +957,7 @@ fn truncate_title(s: &str, max_len: usize) -> String {
 /// Format a session for display in a picker
 pub fn format_session_line(meta: &SessionMetadata) -> String {
     let age = format_age(&meta.updated_at);
+    let updated = format_session_updated_at(&meta.updated_at, &age);
     let truncated_title = truncate_title(extract_title(&meta.title), 40);
     let fork_label = meta
         .parent_session_id
@@ -970,8 +971,12 @@ pub fn format_session_line(meta: &SessionMetadata) -> String {
         truncated_title,
         meta.message_count,
         fork_label,
-        age
+        updated
     )
+}
+
+pub(crate) fn format_session_updated_at(dt: &DateTime<Utc>, age: &str) -> String {
+    format!("{} ({age})", dt.format("%Y-%m-%d %H:%M UTC"))
 }
 
 /// Format a datetime as relative age
@@ -1478,6 +1483,27 @@ mod tests {
 
         let day_ago = now - chrono::Duration::days(3);
         assert_eq!(format_age(&day_ago), "3d ago");
+    }
+
+    #[test]
+    fn format_session_line_includes_absolute_updated_timestamp() {
+        let mut session = create_saved_session(
+            &[make_test_message("user", "Find Friday work")],
+            "test-model",
+            Path::new("/tmp/project"),
+            100,
+            None,
+        );
+        session.metadata.updated_at = DateTime::parse_from_rfc3339("2026-06-01T12:34:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+
+        let line = format_session_line(&session.metadata);
+
+        assert!(
+            line.contains("2026-06-01 12:34 UTC"),
+            "session list should include an absolute timestamp, got {line:?}"
+        );
     }
 
     #[test]

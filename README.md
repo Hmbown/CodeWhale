@@ -387,7 +387,7 @@ codewhale doctor --json                           # machine-readable diagnostics
 codewhale setup --status                          # read-only setup status
 codewhale setup --tools --plugins                 # scaffold tool/plugin dirs
 codewhale models                                  # list live API models
-codewhale sessions                                # list saved sessions
+codewhale sessions                                # list saved sessions with timestamps
 codewhale resume --last                           # resume the most recent session in this workspace
 codewhale resume <SESSION_ID>                     # resume a specific session by UUID
 codewhale fork <SESSION_ID>                       # fork a saved session into a sibling path
@@ -408,6 +408,11 @@ an existing saved session into a new sibling session, records the parent session
 id in metadata, and opens that fork so you can explore an alternate direction
 without polluting the original path. The session picker and `codewhale sessions`
 mark forked sessions with their parent id.
+
+`codewhale sessions` lists saved sessions across workspaces and includes the
+last-updated timestamp. `codewhale resume --last` and `codewhale --continue`
+choose the latest session for the current workspace; pass an explicit session id
+when resuming work from another directory.
 
 Inside the TUI, Esc-Esc backtrack can rewind the active transcript to a prior
 user prompt and put that prompt back in the composer for editing. `/restore`

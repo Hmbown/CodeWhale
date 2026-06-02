@@ -497,6 +497,11 @@ CodeWhale saves sessions. Use the session picker or resume/continue CLI paths
 documented in the README and modes guide. For a risky experiment, fork the
 session before changing direction.
 
+The `/sessions` picker starts scoped to the current workspace so resumes stay
+attached to the project you opened. Press `a` in the picker to show sessions
+from every workspace, or run `codewhale sessions` to list all saved sessions
+with last-updated timestamps before resuming a specific id.
+
 ### What should I do when the model gets confused?
 
 Stop and restate the goal, constraints, and current evidence. If the transcript
