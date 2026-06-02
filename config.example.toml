@@ -16,7 +16,7 @@
 # `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
 # `--provider siliconflow`, `/provider moonshot`, `/provider sglang`,
 # `/provider vllm`, `/provider ollama`) toggle without having to re-enter keys. Top-level
-# `api_key` / `base_url` are
+# `api_key` / `base_url` / `path_suffix` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
 provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | moonshot | sglang | vllm | ollama
@@ -24,6 +24,7 @@ api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
 # base_url = "https://api.deepseek.com"         # opt out of DeepSeek beta features
+# path_suffix = "v2"                            # overwrite or add the version to base_url, set to "" if accept only like `/chat/completions`
 # Optional custom model request headers for OpenAI-compatible gateways.
 # Authorization and Content-Type are managed by the client and cannot be overridden here.
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" }
@@ -204,26 +205,33 @@ max_subagents = 10 # optional (1-20)
 # `--provider wanjie-ark` / `/provider volcengine` / `/provider fireworks` /
 # `--provider siliconflow` / `/provider moonshot`
 # switches between them without having to re-enter keys. Env vars override anything set here:
-#   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+#   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_PATH_SUFFIX, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
-#             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
-#   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
-#   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
-#   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL, VOLCENGINE_MODEL
-#   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
-#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
-#   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
-#   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
-#   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
-#   Moonshot/Kimi: MOONSHOT_API_KEY (or KIMI_API_KEY), MOONSHOT_BASE_URL, MOONSHOT_MODEL
-#   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
-#   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
-#   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NIM_PATH_SUFFIX
+#             (or NVIDIA_NIM_PATH_SUFFIX / NVIDIA_PATH_SUFFIX), NVIDIA_NIM_MODEL
+#   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_PATH_SUFFIX, OPENAI_MODEL
+#   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL
+#             (or WANJIE_BASE_URL / WANJIE_MAAS_BASE_URL), WANJIE_ARK_PATH_SUFFIX
+#             (or WANJIE_PATH_SUFFIX / WANJIE_MAAS_PATH_SUFFIX)WANJIE_ARK_MODEL
+#   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL
+#             (or VOLCENGINE_ARK_BASE_URL, ARK_BASE_URL), VOLCENGINE_PATH_SUFFIX
+#             (or VOLCENGINE_ARK_PATH_SUFFIX, ARK_PATH_SUFFIX), VOLCENGINE_MODEL
+#   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_PATH_SUFFIX, OPENROUTER_MODEL
+#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL
+#             (or MIMO_BASE_URL), XIAOMI_MIMO_PATH_SUFFIX(or MIMO_PATH_SUFFIX), XIAOMI_MIMO_MODEL
+#   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_PATH_SUFFIX, NOVITA_MODEL
+#   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL, FIREWORKS_PATH_SUFFIX
+#   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_PATH_SUFFIX, SILICONFLOW_MODEL
+#   Moonshot/Kimi: MOONSHOT_API_KEY (or KIMI_API_KEY), MOONSHOT_BASE_URL(or KIMI_BASE_URL), 
+#              MOONSHOT_PATH_SUFFIX(or KIMI_PATH_SUFFIX), MOONSHOT_MODEL
+#   SGLang:    SGLANG_BASE_URL, SGLANG_PATH_SUFFIX, SGLANG_MODEL, optional SGLANG_API_KEY
+#   vLLM:      VLLM_BASE_URL, VLLM_PATH_SUFFIX, VLLM_MODEL, optional VLLM_API_KEY
+#   Ollama:    OLLAMA_BASE_URL, OLLAMA_PATH_SUFFIX, OLLAMA_MODEL, optional OLLAMA_API_KEY
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
-# set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
+# set `provider = "deepseek"` and override [providers.deepseek].base_url/path_suffix/model.
 # For generic OpenAI-compatible gateways, use `provider = "openai"` and the
-# [providers.openai] table below. Keep provider/api_key/base_url in user config
+# [providers.openai] table below. Keep provider/api_key/base_url/path_suffix in user config
 # or environment variables; project overlays are not allowed to set them.
 
 # DeepSeek Platform (https://platform.deepseek.com)
@@ -333,6 +341,11 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+
+# Some third-party endpoints not surport url with version
+# [providers.foo]                           # set foo to real provider type
+# base_url = "http://www.example.com/"
+# path_suffix = ""                          # set it empty string to disable adding `v1` to base_url without version
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider

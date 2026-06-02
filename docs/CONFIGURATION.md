@@ -39,6 +39,7 @@ Supported keys in the project overlay (top-level fields only):
 | `model` | override `default_text_model` |
 | `api_key` | use a per-repo key (typically read from `.env`, **not committed**) |
 | `base_url` | point at a self-hosted endpoint |
+| `path_suffix` | cover the version of base_url |
 | `reasoning_effort` | force `"high"` / `"max"` for a complex repo |
 | `approval_policy` | `"never"` / `"on-request"` / `"untrusted"` for opinionated repos |
 | `sandbox_mode` | `"read-only"` / `"workspace-write"` / `"danger-full-access"` |
@@ -279,6 +280,7 @@ aliases. When both forms are set the `CODEWHALE_*` value wins; the
   `deepseek|nvidia-nim|openai|atlascloud|wanjie-ark|openrouter|xiaomi-mimo|novita|fireworks|siliconflow|moonshot|sglang|vllm|ollama`
 - `CODEWHALE_MODEL` (preferred) / `DEEPSEEK_MODEL` (legacy alias) — default model for the active provider
 - `CODEWHALE_BASE_URL` (preferred) / `DEEPSEEK_BASE_URL` (legacy alias) — base URL for the active provider
+- `CODEWHALE_PATH_SUFFIX` (preferred) / `DEEPSEEK_PATH_SUFFIX` (legacy alias) — path suffix for the active provider
 
 Remaining variables:
 
@@ -289,41 +291,55 @@ Remaining variables:
 - `DEEPSEEK_STREAM_OPEN_TIMEOUT_SECS` (connection setup + response-header wait in seconds; default `45`, clamped to `5..=300`; distinct from the per-chunk idle timeout)
 - `NVIDIA_API_KEY` or `NVIDIA_NIM_API_KEY` (preferred when provider is `nvidia-nim`; falls back to `DEEPSEEK_API_KEY`)
 - `NVIDIA_NIM_BASE_URL`, `NIM_BASE_URL`, or `NVIDIA_BASE_URL`
+- `NVIDIA_NIM_PATH_SUFFIX`, `NIM_PATH_SUFFIX`, or `NVIDIA_PATH_SUFFIX`
 - `NVIDIA_NIM_MODEL`
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`
+- `OPENAI_PATH_SUFFIX`
 - `OPENAI_MODEL`
 - `ATLASCLOUD_API_KEY`
 - `ATLASCLOUD_BASE_URL`
+- `ATLASCLOUD_PATH_SUFFIX`
 - `ATLASCLOUD_MODEL`
 - `WANJIE_ARK_API_KEY`, `WANJIE_API_KEY`, or `WANJIE_MAAS_API_KEY`
 - `WANJIE_ARK_BASE_URL`, `WANJIE_BASE_URL`, or `WANJIE_MAAS_BASE_URL`
+- `WANJIE_ARK_PATH_SUFFIX`, `WANJIE_PATH_SUFFIX`, or `WANJIE_MAAS_PATH_SUFFIX`
 - `WANJIE_ARK_MODEL`, `WANJIE_MODEL`, or `WANJIE_MAAS_MODEL`
 - `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, or `ARK_API_KEY`
 - `VOLCENGINE_BASE_URL`, `VOLCENGINE_ARK_BASE_URL`, or `ARK_BASE_URL`
+- `VOLCENGINE_PATH_SUFFIX`, `VOLCENGINE_ARK_PATH_SUFFIX`, or `ARK_PATH_SUFFIX`
 - `VOLCENGINE_MODEL` or `VOLCENGINE_ARK_MODEL`
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_BASE_URL`
+- `OPENROUTER_PATH_SUFFIX`
 - `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, or `MIMO_API_KEY`
 - `XIAOMI_MIMO_BASE_URL` or `MIMO_BASE_URL`
+- `XIAOMI_MIMO_PATH_SUFFIX` or `MIMO_PATH_SUFFIX`
 - `XIAOMI_MIMO_MODEL` or `MIMO_MODEL`
 - `NOVITA_API_KEY`
 - `NOVITA_BASE_URL`
+- `NOVITA_PATH_SUFFIX`
 - `FIREWORKS_API_KEY`
 - `FIREWORKS_BASE_URL`
+- `FIREWORKS_PATH_SUFFIX`
 - `SILICONFLOW_API_KEY`
 - `SILICONFLOW_BASE_URL`
+- `SILICONFLOW_PATH_SUFFIX`
 - `SILICONFLOW_MODEL`
 - `MOONSHOT_API_KEY` or `KIMI_API_KEY`
 - `MOONSHOT_BASE_URL` or `KIMI_BASE_URL`
+- `MOONSHOT_PATH_SUFFIX` or `KIMI_PATH_SUFFIX`
 - `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, or `KIMI_MODEL`
 - `SGLANG_BASE_URL`
+- `SGLANG_PATH_SUFFIX`
 - `SGLANG_MODEL`
 - `SGLANG_API_KEY` (optional; many localhost SGLang servers do not require auth)
 - `VLLM_BASE_URL`
+- `VLLM_PATH_SUFFIX`
 - `VLLM_MODEL`
 - `VLLM_API_KEY` (optional; many localhost vLLM servers do not require auth)
 - `OLLAMA_BASE_URL`
+- `OLLAMA_PATH_SUFFIX`
 - `OLLAMA_MODEL`
 - `OLLAMA_API_KEY` (optional; many localhost Ollama servers do not require auth)
 - `DEEPSEEK_LOG_LEVEL` or `RUST_LOG` (`info`/`debug`/`trace` enables lightweight verbose logs)
@@ -590,6 +606,7 @@ If you are upgrading from older releases:
 - `provider` (string, optional): `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `moonshot`, `sglang`, `vllm`, or `ollama`. Legacy `deepseek-cn` configs are still accepted as an alias for `deepseek`; DeepSeek uses the same official host [`https://api.deepseek.com`](https://api-docs.deepseek.com/) worldwide. `nvidia-nim` targets NVIDIA's NIM-hosted DeepSeek endpoints through `https://integrate.api.nvidia.com/v1`; `openai` targets a generic OpenAI-compatible endpoint, defaulting to `https://api.openai.com/v1`; `atlascloud` targets AtlasCloud's OpenAI-compatible endpoint at `https://api.atlascloud.ai/v1`; `wanjie-ark` targets Wanjie Ark's OpenAI-compatible endpoint at `https://maas-openapi.wanjiedata.com/api/v1`; `openrouter` targets `https://openrouter.ai/api/v1`; `xiaomi-mimo` targets Xiaomi MiMo's OpenAI-compatible endpoint at `https://api.xiaomimimo.com/v1`; `novita` targets `https://api.novita.ai/v1`; `fireworks` targets `https://api.fireworks.ai/inference/v1`; `siliconflow` targets SiliconFlow, defaulting to `https://api.siliconflow.com/v1`; `moonshot` targets Moonshot/Kimi, defaulting to `https://api.moonshot.ai/v1`; `sglang` targets a self-hosted OpenAI-compatible endpoint, defaulting to `http://localhost:30000/v1`; `vllm` targets a self-hosted vLLM OpenAI-compatible endpoint, defaulting to `http://localhost:8000/v1`; `ollama` targets Ollama's OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`.
 - `api_key` (string, required for hosted providers): must be non-empty for DeepSeek/hosted providers (or set the provider API key env var). Self-hosted SGLang, vLLM, and Ollama can omit it.
 - `base_url` (string, optional): defaults to `https://api.deepseek.com/beta` for DeepSeek's OpenAI-compatible Chat Completions API, including legacy `provider = "deepseek-cn"` configs. Other defaults are `https://integrate.api.nvidia.com/v1` for `nvidia-nim`, `https://api.openai.com/v1` for `openai`, `https://api.atlascloud.ai/v1` for `atlascloud`, `https://maas-openapi.wanjiedata.com/api/v1` for `wanjie-ark`, `https://openrouter.ai/api/v1` for `openrouter`, `https://api.xiaomimimo.com/v1` for `xiaomi-mimo`, `https://api.novita.ai/v1` for `novita`, `https://api.fireworks.ai/inference/v1` for `fireworks`, `https://api.siliconflow.com/v1` for `siliconflow`, `https://api.moonshot.ai/v1` for `moonshot`, `http://localhost:30000/v1` for `sglang`, `http://localhost:8000/v1` for `vllm`, and `http://localhost:11434/v1` for `ollama`. Set `https://api.deepseek.com` or `https://api.deepseek.com/v1` explicitly to opt out of DeepSeek beta features.
+- `path_suffix` (string, optional): defaults to None. Overwrite the version of base_url. Set to empty string to disable adding version to base_url.
 - `default_text_model` (string, optional): defaults to `deepseek-v4-pro` for DeepSeek and generic OpenAI-compatible endpoints, `deepseek-ai/deepseek-v4-pro` for NVIDIA NIM, `deepseek-ai/deepseek-v4-flash` for AtlasCloud, `deepseek-reasoner` for Wanjie Ark, `deepseek/deepseek-v4-pro` for OpenRouter and Novita, `mimo-v2.5-pro` for Xiaomi MiMo, `accounts/fireworks/models/deepseek-v4-pro` for Fireworks, `deepseek-ai/DeepSeek-V4-Pro` for SiliconFlow, `kimi-k2.6` for Moonshot, `deepseek-ai/DeepSeek-V4-Pro` for SGLang/vLLM, and `deepseek-coder:1.3b` for Ollama. Current public DeepSeek IDs are `deepseek-v4-pro` and `deepseek-v4-flash`, both with 1M context windows, 384K max output, and thinking mode enabled by default. Legacy `deepseek-chat` and `deepseek-reasoner` remain compatibility aliases for `deepseek-v4-flash` until July 24, 2026, except SiliconFlow maps `deepseek-reasoner` and `deepseek-r1` to its Pro model while `deepseek-chat` and `deepseek-v3` map to Flash. Provider-specific mappings translate `deepseek-v4-pro` / `deepseek-v4-flash` to each provider's model ID where supported. OpenRouter also recognizes recent large IDs such as `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `qwen/qwen3.6-35b-a3b`, `google/gemma-4-31b-it`, and `moonshotai/kimi-k2.6`. Generic `openai`, `atlascloud`, `wanjie-ark`, `xiaomi-mimo`, and Ollama model IDs are passed through unchanged. OpenRouter and SiliconFlow provider configs with a custom `base_url` also preserve explicit model values, which lets OpenAI-compatible gateways accept bare model IDs. Use `/models` or `codewhale models` to discover live IDs from your configured endpoint. `CODEWHALE_MODEL` overrides this for a single process; `DEEPSEEK_MODEL` is the legacy alias.
 - `reasoning_effort` (string, optional): `off`, `low`, `medium`, `high`, or `max`; defaults to the configured UI tier. DeepSeek Platform receives top-level `thinking` / `reasoning_effort` fields. NVIDIA NIM receives equivalent settings through `chat_template_kwargs`.
 - `allow_shell` (bool, optional): defaults to `true` (sandboxed).

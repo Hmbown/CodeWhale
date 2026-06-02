@@ -2315,13 +2315,18 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("DEEPSEEK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            deepseek_path_suffix: std::env::var("DEEPSEEK_PATH_SUFFIX").ok(),
+            deepseek_path_suffix: std::env::var("CODEWHALE_PATH_SUFFIX")
+                .or_else(|_| std::env::var("DEEPSEEK_PATH_SUFFIX"))
+                .ok(),
             nvidia_base_url: std::env::var("NVIDIA_NIM_BASE_URL")
                 .or_else(|_| std::env::var("NIM_BASE_URL"))
                 .or_else(|_| std::env::var("NVIDIA_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            nvidia_path_suffix: std::env::var("NVIDIA_PATH_SUFFIX").ok(),
+            nvidia_path_suffix: std::env::var("NVIDIA_NIM_PATH_SUFFIX")
+                .or_else(|_| std::env::var("NIM_PATH_SUFFIX"))
+                .or_else(|_| std::env::var("NVIDIA_PATH_SUFFIX"))
+                .ok(),
             openai_base_url: std::env::var("OPENAI_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -2335,13 +2340,19 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("ARK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            volcengine_path_suffix: std::env::var("VOLCENGINE_PATH_SUFFIX").ok(),
+            volcengine_path_suffix: std::env::var("VOLCENGINE_PATH_SUFFIX")
+                .or_else(|_| std::env::var("VOLCENGINE_ARK_PATH_SUFFIX"))
+                .or_else(|_| std::env::var("ARK_PATH_SUFFIX"))
+                .ok(),
             wanjie_ark_base_url: std::env::var("WANJIE_ARK_BASE_URL")
                 .or_else(|_| std::env::var("WANJIE_BASE_URL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            wanjie_ark_path_suffix: std::env::var("WANJIE_ARK_PATH_SUFFIX").ok(),
+            wanjie_ark_path_suffix: std::env::var("WANJIE_ARK_PATH_SUFFIX")
+                .or_else(|_| std::env::var("WANJIE_PATH_SUFFIX"))
+                .or_else(|_| std::env::var("WANJIE_MAAS_PATH_SUFFIX"))
+                .ok(),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -2350,7 +2361,9 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("MIMO_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            xiaomi_mimo_path_suffix: std::env::var("XIAOMI_MIMO_PATH_SUFFIX").ok(),
+            xiaomi_mimo_path_suffix: std::env::var("XIAOMI_MIMO_PATH_SUFFIX")
+                .or_else(|_| std::env::var("MIMO_PATH_SUFFIX"))
+                .ok(),
             novita_base_url: std::env::var("NOVITA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -2370,7 +2383,9 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("KIMI_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            moonshot_path_suffix: std::env::var("MOONSHOT_PATH_SUFFIX").ok(),
+            moonshot_path_suffix: std::env::var("MOONSHOT_PATH_SUFFIX")
+                .or_else(|_| std::env::var("KIMI_PATH_SUFFIX"))
+                .ok(),
             sglang_base_url: std::env::var("SGLANG_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -3165,6 +3180,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
         config.set_value("providers.moonshot.api_key", "moonshot-secret-value")?;
         config.set_value("providers.moonshot.base_url", DEFAULT_KIMI_CODE_BASE_URL)?;
+        config.set_value("providers.moonshot.path_suffix", "foo")?;
         config.set_value("providers.moonshot.model", DEFAULT_KIMI_CODE_MODEL)?;
         config.set_value("providers.moonshot.auth_mode", "api_key")?;
         config.set_value("providers.moonshot.http_headers", "X-Test=ok")?;
@@ -3178,6 +3194,12 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         assert_eq!(
             config.get_value("providers.moonshot.base_url").as_deref(),
             Some(DEFAULT_KIMI_CODE_BASE_URL)
+        );
+        assert_eq!(
+            config
+                .get_value("providers.moonshot.path_suffix")
+                .as_deref(),
+            Some("foo")
         );
         assert_eq!(
             config.get_value("providers.moonshot.model").as_deref(),
@@ -3195,12 +3217,23 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             Some("moon***alue")
         );
 
+        config.set_value("providers.moonshot.path_suffix", "")?;
+        assert_eq!(
+            config
+                .list_values()
+                .get("providers.moonshot.path_suffix")
+                .map(String::as_str),
+            Some("")
+        );
+
         config.unset_value("providers.moonshot.auth_mode")?;
         config.unset_value("providers.moonshot.base_url")?;
+        config.unset_value("providers.moonshot.path_suffix")?;
         config.unset_value("providers.moonshot.model")?;
 
         assert_eq!(config.get_value("providers.moonshot.auth_mode"), None);
         assert_eq!(config.get_value("providers.moonshot.base_url"), None);
+        assert_eq!(config.get_value("providers.moonshot.path_suffix"), None);
         assert_eq!(config.get_value("providers.moonshot.model"), None);
         Ok(())
     }
@@ -3844,6 +3877,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             env::set_var("DEEPSEEK_PROVIDER", "ollama-local");
             env::set_var("OLLAMA_BASE_URL", "http://ollama.example/v1");
             env::set_var("OLLAMA_API_KEY", "ollama-env-key");
+            env::set_var("OLLAMA_PATH_SUFFIX", "v2");
         }
 
         let resolved =
@@ -3851,6 +3885,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
         assert_eq!(resolved.provider, ProviderKind::Ollama);
         assert_eq!(resolved.base_url, "http://ollama.example/v1");
+        assert_eq!(resolved.path_suffix.as_deref(), Some("v2"));
         assert_eq!(resolved.api_key.as_deref(), Some("ollama-env-key"));
     }
 
@@ -3882,6 +3917,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             env::set_var("MIMO_API_KEY", "mimo-env-key");
             env::set_var("MIMO_BASE_URL", "https://mimo-gateway.example/v1");
             env::set_var("MIMO_MODEL", "mimo-v2.5");
+            env::set_var("MIMO_PATH_SUFFIX", "v2");
         }
 
         let resolved =
@@ -3890,6 +3926,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
         assert_eq!(resolved.api_key.as_deref(), Some("mimo-env-key"));
         assert_eq!(resolved.base_url, "https://mimo-gateway.example/v1");
+        assert_eq!(resolved.path_suffix.as_deref(), Some("v2"));
         assert_eq!(resolved.model, "mimo-v2.5");
     }
 
@@ -3938,6 +3975,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             env::set_var("CODEWHALE_PROVIDER", "siliconflow");
             env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
             env::set_var("SILICONFLOW_BASE_URL", "https://sf-mirror.example/v1");
+            env::set_var("SILICONFLOW_PATH_SUFFIX", "v2");
             env::set_var("SILICONFLOW_MODEL", "deepseek-v4-flash");
         }
 
@@ -3946,6 +3984,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
         assert_eq!(resolved.provider, ProviderKind::Siliconflow);
         assert_eq!(resolved.api_key.as_deref(), Some("sf-env-key"));
+        assert_eq!(resolved.path_suffix.as_deref(), Some("v2"));
         assert_eq!(resolved.base_url, "https://sf-mirror.example/v1");
         assert_eq!(resolved.model, "deepseek-v4-flash");
     }
@@ -3959,6 +3998,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             env::set_var("CODEWHALE_PROVIDER", "siliconflow");
             env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
             env::set_var("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1");
+            env::set_var("SILICONFLOW_PATH_SUFFIX", "v2");
         }
 
         for (alias, expected) in [
@@ -3975,6 +4015,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
             assert_eq!(resolved.provider, ProviderKind::Siliconflow);
             assert_eq!(resolved.base_url, "https://api.siliconflow.cn/v1");
+            assert_eq!(resolved.path_suffix.as_deref(), Some("v2"));
             assert_eq!(resolved.model, expected);
         }
     }
@@ -3988,6 +4029,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             env::set_var("DEEPSEEK_PROVIDER", "wanjie-ark");
             env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
             env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
+            env::set_var("WANJIE_ARK_PATH_SUFFIX", "v2");
             env::set_var("WANJIE_ARK_MODEL", "account-model-id");
         }
 
@@ -3996,8 +4038,24 @@ unix_socket_path = "/tmp/cw-hooks.sock"
 
         assert_eq!(resolved.provider, ProviderKind::WanjieArk);
         assert_eq!(resolved.api_key.as_deref(), Some("wanjie-env-key"));
+        assert_eq!(resolved.path_suffix.as_deref(), Some("v2"));
         assert_eq!(resolved.base_url, "https://wanjie.example/api/v1");
         assert_eq!(resolved.model, "account-model-id");
+    }
+
+    #[test]
+    fn deepseek_env_path_suffix_fall_back_when_config_missing_empty() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PATH_SUFFIX", "");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.path_suffix.as_deref(), Some(""));
     }
 
     #[test]
