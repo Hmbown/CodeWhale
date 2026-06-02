@@ -333,9 +333,13 @@ codewhale --provider novita --model deepseek/deepseek-v4-pro
 codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
 codewhale --provider fireworks --model deepseek-v4-pro
 
-# SiliconFlow
+# SiliconFlow (International endpoint)
 codewhale auth set --provider siliconflow --api-key "YOUR_SILICONFLOW_API_KEY"
 codewhale --provider siliconflow --model deepseek-ai/DeepSeek-V4-Pro
+
+# SiliconFlow (China regional endpoint)
+codewhale auth set --provider siliconflow --api-key "YOUR_SILICONFLOW_API_KEY"
+SILICONFLOW_BASE_URL="https://api.siliconflow.cn/v1" codewhale --provider siliconflow --model deepseek-ai/DeepSeek-V4-Pro
 
 # Generic OpenAI-compatible endpoint
 codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"

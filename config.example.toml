@@ -326,9 +326,13 @@ max_subagents = 10 # optional (1-20)
 # model = "accounts/fireworks/models/deepseek-v4-pro"
 
 # SiliconFlow-hosted DeepSeek V4 (https://siliconflow.com)
+# Supports international (.com) and China regional (.cn) endpoints
 [providers.siliconflow]
 # api_key = "YOUR_SILICONFLOW_API_KEY"
+# For international endpoint (default):
 # base_url = "https://api.siliconflow.com/v1"
+# For China regional endpoint:
+# base_url = "https://api.siliconflow.cn/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # Moonshot/Kimi OpenAI-compatible endpoint (https://platform.moonshot.ai)
