@@ -1,0 +1,22 @@
+# Normalize all text files to LF in the repository.
+# Working trees check out LF on every platform to keep diffs clean.
+* text=auto eol=lf
+
+# Shell scripts must always be LF.
+*.sh text eol=lf
+
+# Binary assets — never normalize or diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.gz binary
+*.zip binary
+*.wasm binary
