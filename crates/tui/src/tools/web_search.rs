@@ -186,6 +186,10 @@ impl ToolSpec for WebSearchTool {
         ApprovalRequirement::Auto
     }
 
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let query = extract_search_query(&input)?;
         if query.is_empty() {

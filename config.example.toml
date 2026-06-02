@@ -46,6 +46,9 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
+#   mimo-v2.5-tts                   ? Xiaomi MiMo speech/TTS model ID
+#   mimo-v2.5-tts-voicedesign       ? Xiaomi MiMo voice-design TTS model ID
+#   mimo-v2.5-tts-voiceclone        ? Xiaomi MiMo voice-clone TTS model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
@@ -121,6 +124,11 @@ memory_path = "~/.codewhale/memory.md"
 # Parsed but currently unused (reserved for future versions):
 # tools_file = "./tools.json"
 
+# Xiaomi MiMo speech/TTS defaults. Also configurable with
+# XIAOMI_MIMO_SPEECH_OUTPUT_DIR / MIMO_SPEECH_OUTPUT_DIR.
+[speech]
+# output_dir = "./speech"
+
 # Native tool catalog controls (#2076). By default only the core tool surface
 # is loaded into the model context; less common native tools are discoverable
 # through ToolSearch and loaded on first use.
@@ -133,6 +141,21 @@ memory_path = "~/.codewhale/memory.md"
 allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
+
+# Typed permission rules live in a sibling `permissions.toml` file, not in
+# config.toml. This schema slice is ask-only and is parsed for follow-up
+# approval-flow wiring; allow/deny records and UI persistence are intentionally
+# out of scope here.
+#
+# Example ~/.codewhale/permissions.toml:
+#
+# [[rules]]
+# tool = "exec_shell"
+# command = "cargo test"
+#
+# [[rules]]
+# tool = "read_file"
+# path = "secrets/api_key.txt"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # External Sandbox Backend (pluggable remote execution)
@@ -294,7 +317,9 @@ max_subagents = 10 # optional (1-20)
 [providers.xiaomi_mimo]
 # api_key = "YOUR_XIAOMI_KEY"
 # base_url = "https://api.xiaomimimo.com/v1"
-# model = "mimo-v2.5-pro"
+# model = "mimo-v2.5-pro"              # chat/reasoning
+# TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
+# TTS model IDs: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone, mimo-v2-tts
 
 # Novita AI-hosted inference (https://novita.ai)
 [providers.novita]
@@ -427,6 +452,14 @@ alternate_screen = "auto"   # auto/always use the TUI screen; never uses termina
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
+# Ordered footer chips shown in the TUI status line. Omit the key to use the
+# built-in default; set [] to hide all configurable chips. You can also edit
+# this interactively with `/statusline`.
+# Supported keys: mode, model, cost, balance (DeepSeek / DeepSeekCN only),
+# status, coherence, agents,
+# reasoning_replay, prefix_stability, cache, context_percent, git_branch,
+# last_tool_elapsed (placeholder), rate_limit (placeholder), tokens.
+# status_items = ["mode", "model", "status", "git_branch", "tokens", "cache"]
 # notification_condition = "always" # always | never — overrides [notifications].threshold_secs.
 #                                    "always" = notify on every successful turn (no threshold);
 #                                    "never"  = suppress all turn-completion notifications;
@@ -436,6 +469,7 @@ osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTer
 #                           # Override: `locale = "zh-Hans"` for Simplified Chinese regardless of OS locale.
 #                           # Also settable at runtime: /config locale zh-Hans
 #                           # Note: this only affects TUI labels/chrome — it does NOT change model output language.
+# mention_menu_behavior = "fuzzy" # fuzzy | browser; browser lists immediate directory children for @-mentions.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Feature Flags
@@ -479,8 +513,10 @@ exponential_base = 2.0
 # Context Compaction
 # ─────────────────────────────────────────────────────────────────────────────────
 # Auto-compaction is a saved UI setting edited with `/config` (`auto_compact`).
-# There is no config-file `[compaction]` table yet; detailed thresholds are
-# chosen by the TUI from the active model/context budget.
+# The optional saved threshold setting is `auto_compact_threshold_percent`
+# (default 70, still gated by the 500K-token floor). There is no config-file
+# `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
+# from the active model/context window.
 
 # Append-only Flash seams are experimental and opt-in while the v0.7.5
 # context/cache audit validates prefix-cache behavior.

@@ -1279,6 +1279,16 @@ pub struct GenericToolCell {
     pub is_diff: bool,
 }
 
+fn should_show_raw_tool_name(
+    name: &str,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+    mode: RenderMode,
+) -> bool {
+    matches!(mode, RenderMode::Transcript)
+        || matches!(family, crate::tui::widgets::tool_card::ToolFamily::Generic)
+        || name.starts_with("mcp_")
+}
+
 impl GenericToolCell {
     /// Render the generic tool cell into lines.
     ///
@@ -1329,12 +1339,14 @@ impl GenericToolCell {
             None,
             low_motion,
         ));
-        lines.extend(render_compact_kv(
-            "name",
-            &self.name,
-            tool_value_style(),
-            width,
-        ));
+        if should_show_raw_tool_name(&self.name, family, mode) {
+            lines.extend(render_compact_kv(
+                "name",
+                &self.name,
+                tool_value_style(),
+                width,
+            ));
+        }
 
         // Prefer per-prompt rows over the generic args summary when the tool
         // exposes a list of child prompts. One row per child with a `[i]`
@@ -1875,6 +1887,18 @@ pub fn summarize_tool_args(input: &Value) -> Option<String> {
     if let Some(value) = obj.get("model") {
         parts.push(format!(
             "model: {}",
+            summarize_inline_value(value, 40, false)
+        ));
+    }
+    if let Some(value) = obj.get("profile") {
+        parts.push(format!(
+            "profile: {}",
+            summarize_inline_value(value, 40, false)
+        ));
+    }
+    if let Some(value) = obj.get("level") {
+        parts.push(format!(
+            "level: {}",
             summarize_inline_value(value, 40, false)
         ));
     }
@@ -4790,6 +4814,73 @@ mod tests {
         }));
         let text = lines_text(&cell.lines(80));
         assert!(text.contains("query: foo"));
+    }
+
+    #[test]
+    fn known_generic_tool_hides_raw_name_in_live_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "run_verifiers".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("profile: auto, level: quick".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.lines(80));
+        assert!(text.contains("verify running"), "{text}");
+        assert!(text.contains("profile: auto"), "{text}");
+        assert!(
+            !text.contains("name: run_verifiers"),
+            "live card should not spend a row on internal tool id: {text}"
+        );
+        assert!(
+            !text.contains("run_verifiers"),
+            "known tool id should not leak into compact live card: {text}"
+        );
+    }
+
+    #[test]
+    fn known_generic_tool_keeps_raw_name_in_transcript_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "run_verifiers".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("profile: auto, level: quick".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.transcript_lines(80));
+        assert!(text.contains("verify running"), "{text}");
+        assert!(
+            text.contains("name: run_verifiers"),
+            "transcript replay should preserve exact tool id: {text}"
+        );
+    }
+
+    #[test]
+    fn unknown_generic_tool_keeps_raw_name_in_live_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "future_private_tool".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("query: foo".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.lines(80));
+        assert!(
+            text.contains("name: future_private_tool"),
+            "unknown tools should remain identifiable: {text}"
+        );
     }
 
     #[test]

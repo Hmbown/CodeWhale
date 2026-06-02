@@ -20,6 +20,24 @@ Overrides:
 
 If both are set, `--config` wins. Environment variable overrides are applied after the file is loaded.
 
+### User workspace entries
+
+For a shell opt-in that should live in the user's global config rather than in
+the repository, add a workspace-scoped entry:
+
+```toml
+[workspace.'/absolute/path/to/project']
+allow_shell = true
+```
+
+The entry applies only when the launched workspace path matches the table key.
+The legacy `[projects."/absolute/path/to/project"]` table is also accepted for
+this user-owned override.
+
+In interactive mode, the per-project overlay
+`<workspace>/.codewhale/config.toml` is applied after this user entry. A
+project-level `allow_shell = false` still takes precedence.
+
 ### Per-project overlay (#485)
 
 When the TUI starts in a workspace that contains a
@@ -495,14 +513,18 @@ round-trip intact.
 
 codewhale also stores user preferences in:
 
-- `~/.config/deepseek/settings.toml`
+- `~/.codewhale/settings.toml` on new installs
+- `~/.deepseek/settings.toml` or the legacy platform config-dir
+  `deepseek/settings.toml` when an existing settings file is present
 
 Notable settings include `auto_compact` (default `false`), which opts into
-replacement-style summarization only near the active model limit. The default
-V4 path preserves the stable message prefix for cache reuse; use manual
-`/compact` or enable `auto_compact` only when you explicitly want automatic
-replacement compaction. You can inspect or update these from the TUI with
-`/settings` and `/config` (interactive editor).
+replacement-style summarization before the active model limit. The trigger
+defaults to `auto_compact_threshold_percent = 70`, but the 500K-token floor
+still blocks early compaction. The default V4 path preserves the stable message
+prefix for cache reuse; use manual `/compact` / Ctrl+L or enable
+`auto_compact` only when you explicitly want automatic replacement compaction.
+You can inspect or update these from the TUI with `/settings` and `/config`
+(interactive editor).
 
 Common settings keys:
 
@@ -513,6 +535,8 @@ Common settings keys:
   community presets apply across the TUI. Aliases such as `whale`, `mono`,
   `black-white`, `tokyonight`, and `gruvbox` are accepted.
 - `auto_compact` (on/off, default off)
+- `auto_compact_threshold_percent` (10-100, default `70`): pre-send
+  auto-compaction threshold used only when `auto_compact` is enabled.
 - `paste_burst_detection` (on/off, default on): fallback rapid-key paste
   detection for terminals that do not emit bracketed-paste events. This is
   independent of terminal bracketed-paste mode.
@@ -522,6 +546,10 @@ Common settings keys:
 - `mention_walk_depth` (integer, default `6`): maximum workspace depth for
   `@`-mention completion walks. Set to `0` for unlimited depth in deeply
   nested workspaces; keep the default in very large repos unless needed.
+- `mention_menu_behavior` (`fuzzy`, `browser`; default `fuzzy`): controls how
+  `@`-mention completions are populated. `fuzzy` searches the workspace and
+  applies mention frecency. `browser` lists only the immediate children of the
+  currently typed directory segment in deterministic alphabetical order.
 - `show_thinking` (on/off)
 - `show_tool_details` (on/off)
 - `locale` (`auto`, `en`, `ja`, `zh-Hans`, `pt-BR`; default `auto`): UI chrome
@@ -609,7 +637,7 @@ If you are upgrading from older releases:
 - `path_suffix` (string, optional): defaults to None. Overwrite the version of base_url. Set to empty string to disable adding version to base_url.
 - `default_text_model` (string, optional): defaults to `deepseek-v4-pro` for DeepSeek and generic OpenAI-compatible endpoints, `deepseek-ai/deepseek-v4-pro` for NVIDIA NIM, `deepseek-ai/deepseek-v4-flash` for AtlasCloud, `deepseek-reasoner` for Wanjie Ark, `deepseek/deepseek-v4-pro` for OpenRouter and Novita, `mimo-v2.5-pro` for Xiaomi MiMo, `accounts/fireworks/models/deepseek-v4-pro` for Fireworks, `deepseek-ai/DeepSeek-V4-Pro` for SiliconFlow, `kimi-k2.6` for Moonshot, `deepseek-ai/DeepSeek-V4-Pro` for SGLang/vLLM, and `deepseek-coder:1.3b` for Ollama. Current public DeepSeek IDs are `deepseek-v4-pro` and `deepseek-v4-flash`, both with 1M context windows, 384K max output, and thinking mode enabled by default. Legacy `deepseek-chat` and `deepseek-reasoner` remain compatibility aliases for `deepseek-v4-flash` until July 24, 2026, except SiliconFlow maps `deepseek-reasoner` and `deepseek-r1` to its Pro model while `deepseek-chat` and `deepseek-v3` map to Flash. Provider-specific mappings translate `deepseek-v4-pro` / `deepseek-v4-flash` to each provider's model ID where supported. OpenRouter also recognizes recent large IDs such as `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `qwen/qwen3.6-35b-a3b`, `google/gemma-4-31b-it`, and `moonshotai/kimi-k2.6`. Generic `openai`, `atlascloud`, `wanjie-ark`, `xiaomi-mimo`, and Ollama model IDs are passed through unchanged. OpenRouter and SiliconFlow provider configs with a custom `base_url` also preserve explicit model values, which lets OpenAI-compatible gateways accept bare model IDs. Use `/models` or `codewhale models` to discover live IDs from your configured endpoint. `CODEWHALE_MODEL` overrides this for a single process; `DEEPSEEK_MODEL` is the legacy alias.
 - `reasoning_effort` (string, optional): `off`, `low`, `medium`, `high`, or `max`; defaults to the configured UI tier. DeepSeek Platform receives top-level `thinking` / `reasoning_effort` fields. NVIDIA NIM receives equivalent settings through `chat_template_kwargs`.
-- `allow_shell` (bool, optional): defaults to `true` (sandboxed).
+- `allow_shell` (bool, optional): defaults to `false`; shell tools must be explicitly enabled.
 - `approval_policy` (string, optional): `on-request`, `untrusted`, or `never`. Runtime `approval_mode` editing in `/config` also accepts `on-request` and `untrusted` aliases.
 - `sandbox_mode` (string, optional): `read-only`, `workspace-write`, `danger-full-access`, `external-sandbox`.
   Platform support is not identical. macOS uses Seatbelt for policy
@@ -618,6 +646,12 @@ If you are upgrading from older releases:
   with process-tree containment only and must not be described as read-only
   filesystem isolation, workspace-write enforcement, network blocking,
   registry isolation, or AppContainer isolation until those are implemented.
+- `permissions.toml` (sibling file, optional): ask-only typed permission rule
+  records loaded next to `config.toml`, for example
+  `~/.codewhale/permissions.toml`. This schema foundation accepts
+  `[[rules]]` entries with `tool` plus optional `command` or `path` fields.
+  It intentionally does not accept typed allow/deny records or provide approval
+  UI persistence yet.
 - `managed_config_path` (string, optional): managed config file loaded after user/env config.
 - `requirements_path` (string, optional): requirements file used to enforce allowed approval/sandbox values.
 - `max_subagents` (int, optional): defaults to `10` and is clamped to `1..=20`.

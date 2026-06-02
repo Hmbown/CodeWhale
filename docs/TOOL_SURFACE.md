@@ -40,6 +40,11 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 
 ### Shell
 
+Shell tools appear in the model-visible tool catalog only when shell access is
+enabled for the active session or profile. In Agent mode that usually means
+`allow_shell = true`; YOLO enables shell access automatically. Plan mode keeps
+shell execution off.
+
 | Tool | Niche |
 |---|---|
 | `exec_shell` | Run a shell command. Foreground runs are cancellable, but use them only for bounded commands; timeout kills the process and returns a background-rerun hint. |
@@ -92,6 +97,7 @@ to the model, such as `mcp_<server>_<tool>`.
 | `git_diff` | Inspect working-tree or staged diffs. |
 | `diagnostics` | Workspace, git, sandbox, and toolchain info in one call. |
 | `run_tests` | `cargo test` with optional args. |
+| `run_verifiers` | Run independent verifier gates in parallel across detected Rust, Node, Python, and Go projects, with optional custom `program` + `args` gates for other ecosystems. |
 
 ### Task management and durable work
 

@@ -290,6 +290,21 @@ pub enum MessageId {
     CmdThemeDescription,
     CmdProviderDescription,
     CmdQueueDescription,
+    CmdQueueUsage,
+    CmdQueueDraftHeader,
+    CmdQueueNoMessages,
+    CmdQueueListHeader,
+    CmdQueueTip,
+    CmdQueueAlreadyEditing,
+    CmdQueueNotFound,
+    CmdQueueEditingStatus,
+    CmdQueueEditingMessage,
+    CmdQueueDropped,
+    CmdQueueAlreadyEmpty,
+    CmdQueueCleared,
+    CmdQueueMissingIndex,
+    CmdQueueIndexPositive,
+    CmdQueueIndexMin,
     CmdRecallDescription,
     CmdRelayDescription,
     CmdRenameDescription,
@@ -488,6 +503,8 @@ pub enum MessageId {
     CtxMenuContextInspectorDesc,
     CtxMenuHelp,
     CtxMenuHelpDesc,
+    // Agent fanout card.
+    FanoutCounts,
 }
 
 #[allow(dead_code)]
@@ -554,6 +571,21 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdNoteDescription,
     MessageId::CmdProviderDescription,
     MessageId::CmdQueueDescription,
+    MessageId::CmdQueueUsage,
+    MessageId::CmdQueueDraftHeader,
+    MessageId::CmdQueueNoMessages,
+    MessageId::CmdQueueListHeader,
+    MessageId::CmdQueueTip,
+    MessageId::CmdQueueAlreadyEditing,
+    MessageId::CmdQueueNotFound,
+    MessageId::CmdQueueEditingStatus,
+    MessageId::CmdQueueEditingMessage,
+    MessageId::CmdQueueDropped,
+    MessageId::CmdQueueAlreadyEmpty,
+    MessageId::CmdQueueCleared,
+    MessageId::CmdQueueMissingIndex,
+    MessageId::CmdQueueIndexPositive,
+    MessageId::CmdQueueIndexMin,
     MessageId::CmdRecallDescription,
     MessageId::CmdRelayDescription,
     MessageId::CmdRenameDescription,
@@ -752,6 +784,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuContextInspectorDesc,
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
+    MessageId::FanoutCounts,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1035,6 +1068,27 @@ fn english(id: MessageId) -> &'static str {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "View or edit queued messages",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editing queued message:",
+        MessageId::CmdQueueNoMessages => "No queued messages",
+        MessageId::CmdQueueListHeader => "Queued messages ({count}):",
+        MessageId::CmdQueueTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Already editing a queued message. Send it or /queue clear to discard."
+        }
+        MessageId::CmdQueueNotFound => "Queued message not found",
+        MessageId::CmdQueueEditingStatus => "Editing queued message {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editing queued message {index} (press Enter to re-queue/send)"
+        }
+        MessageId::CmdQueueDropped => "Dropped queued message {index}",
+        MessageId::CmdQueueAlreadyEmpty => "Queue already empty",
+        MessageId::CmdQueueCleared => "Queue cleared",
+        MessageId::CmdQueueMissingIndex => {
+            "Missing index. Usage: /queue edit <n> or /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Index must be a positive number",
+        MessageId::CmdQueueIndexMin => "Index must be >= 1",
         MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
         MessageId::CmdRelayDescription => "Create a session relay (接力) for a fresh thread",
         MessageId::CmdRenameDescription => "Rename the current session",
@@ -1121,7 +1175,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::FooterAgentsPlural => "{count} agents",
         MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
         MessageId::FooterWorking => "working",
-        MessageId::FooterBalancePrefix => "bal",
+        MessageId::FooterBalancePrefix => "balance",
         MessageId::HelpSectionActions => "Actions",
         MessageId::HelpSectionClipboard => "Clipboard",
         MessageId::HelpSectionEditing => "Input editing",
@@ -1319,6 +1373,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxMenuContextInspectorDesc => "active context and cache hints",
         MessageId::CtxMenuHelp => "Help",
         MessageId::CtxMenuHelpDesc => "keybindings and commands",
+        MessageId::FanoutCounts => {
+            "{done} done · {running} running · {failed} failed · {pending} pending"
+        }
     }
 }
 
@@ -1443,6 +1500,27 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
+        MessageId::CmdQueueUsage => "Cách dùng: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Đang chỉnh sửa tin nhắn đang chờ:",
+        MessageId::CmdQueueNoMessages => "Không có tin nhắn đang chờ",
+        MessageId::CmdQueueListHeader => "Tin nhắn đang chờ ({count}):",
+        MessageId::CmdQueueTip => "Mẹo: /queue edit <n> để sửa, /queue drop <n> để xóa",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Đã đang chỉnh sửa một tin nhắn đang chờ. Hãy gửi nó hoặc dùng /queue clear để hủy."
+        }
+        MessageId::CmdQueueNotFound => "Không tìm thấy tin nhắn đang chờ",
+        MessageId::CmdQueueEditingStatus => "Đang chỉnh sửa tin nhắn đang chờ {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Đang chỉnh sửa tin nhắn đang chờ {index} (nhấn Enter để xếp lại hàng/gửi)"
+        }
+        MessageId::CmdQueueDropped => "Đã xóa tin nhắn đang chờ {index}",
+        MessageId::CmdQueueAlreadyEmpty => "Hàng đợi đã trống",
+        MessageId::CmdQueueCleared => "Đã xóa hàng đợi",
+        MessageId::CmdQueueMissingIndex => {
+            "Thiếu chỉ mục. Cách dùng: /queue edit <n> hoặc /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Chỉ mục phải là số dương",
+        MessageId::CmdQueueIndexMin => "Chỉ mục phải >= 1",
         MessageId::CmdRecallDescription => {
             "Tìm kiếm kho lưu trữ chu kỳ trước (BM25 trên văn bản tin nhắn)"
         }
@@ -1754,6 +1832,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "ngữ cảnh đang hoạt động và gợi ý bộ nhớ đệm",
         MessageId::CtxMenuHelp => "Trợ giúp",
         MessageId::CtxMenuHelpDesc => "phím tắt và lệnh",
+        MessageId::FanoutCounts => {
+            "{done} hoàn thành · {running} đang chạy · {failed} thất bại · {pending} chờ"
+        }
     })
 }
 
@@ -1767,6 +1848,9 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::TranslationComplete => "翻譯完成",
         MessageId::TranslationFailed => "翻譯失敗",
         MessageId::FooterBalancePrefix => "餘額",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 運行中 · {failed} 失敗 · {pending} 等待中"
+        }
         other => chinese_simplified(other)?,
     })
 }
@@ -1878,6 +1962,27 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
+        MessageId::CmdQueueUsage => "使用方法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "キューされたメッセージを編集中:",
+        MessageId::CmdQueueNoMessages => "キューされたメッセージはありません",
+        MessageId::CmdQueueListHeader => "キューされたメッセージ ({count}):",
+        MessageId::CmdQueueTip => "ヒント: /queue edit <n> で編集、/queue drop <n> で削除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "すでにキューされたメッセージを編集中です。送信するか /queue clear で破棄してください。"
+        }
+        MessageId::CmdQueueNotFound => "キューされたメッセージが見つかりません",
+        MessageId::CmdQueueEditingStatus => "キューされたメッセージ {index} を編集中",
+        MessageId::CmdQueueEditingMessage => {
+            "キューされたメッセージ {index} を編集中（Enter で再キュー/送信）"
+        }
+        MessageId::CmdQueueDropped => "キューされたメッセージ {index} を削除しました",
+        MessageId::CmdQueueAlreadyEmpty => "キューはすでに空です",
+        MessageId::CmdQueueCleared => "キューをクリアしました",
+        MessageId::CmdQueueMissingIndex => {
+            "インデックスが指定されていません。使用方法: /queue edit <n> または /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "インデックスは正の数値である必要があります",
+        MessageId::CmdQueueIndexMin => "インデックスは 1 以上である必要があります",
         MessageId::CmdRecallDescription => {
             "過去のサイクルアーカイブを検索（メッセージ本文への BM25 検索）"
         }
@@ -2163,6 +2268,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "アクティブなコンテキストとキャッシュヒント",
         MessageId::CtxMenuHelp => "ヘルプ",
         MessageId::CtxMenuHelpDesc => "キー操作とコマンド",
+        MessageId::FanoutCounts => {
+            "{done} 完了 · {running} 実行中 · {failed} 失敗 · {pending} 待機"
+        }
     })
 }
 
@@ -2253,6 +2361,25 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
+        MessageId::CmdQueueUsage => "用法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "正在编辑已排队的消息:",
+        MessageId::CmdQueueNoMessages => "没有已排队的消息",
+        MessageId::CmdQueueListHeader => "已排队的消息 ({count}):",
+        MessageId::CmdQueueTip => "提示: /queue edit <n> 编辑, /queue drop <n> 删除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "已在编辑一条已排队的消息。请先发送或使用 /queue clear 放弃。"
+        }
+        MessageId::CmdQueueNotFound => "未找到已排队的消息",
+        MessageId::CmdQueueEditingStatus => "正在编辑已排队的消息 {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "正在编辑已排队的消息 {index}（按 Enter 重新排队/发送）"
+        }
+        MessageId::CmdQueueDropped => "已删除已排队的消息 {index}",
+        MessageId::CmdQueueAlreadyEmpty => "队列已空",
+        MessageId::CmdQueueCleared => "队列已清空",
+        MessageId::CmdQueueMissingIndex => "缺少索引。用法: /queue edit <n> 或 /queue drop <n>",
+        MessageId::CmdQueueIndexPositive => "索引必须为正数",
+        MessageId::CmdQueueIndexMin => "索引必须 >= 1",
         MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
         MessageId::CmdRelayDescription => "为新线程创建会话接力摘要",
         MessageId::CmdRenameDescription => "重命名当前会话",
@@ -2500,6 +2627,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "活动上下文和缓存提示",
         MessageId::CtxMenuHelp => "帮助",
         MessageId::CtxMenuHelpDesc => "快捷键和命令",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
+        }
     })
 }
 
@@ -2614,6 +2744,27 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editando mensagem enfileirada:",
+        MessageId::CmdQueueNoMessages => "Nenhuma mensagem enfileirada",
+        MessageId::CmdQueueListHeader => "Mensagens enfileiradas ({count}):",
+        MessageId::CmdQueueTip => "Dica: /queue edit <n> para editar, /queue drop <n> para remover",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Já está editando uma mensagem enfileirada. Envie-a ou use /queue clear para descartar."
+        }
+        MessageId::CmdQueueNotFound => "Mensagem enfileirada não encontrada",
+        MessageId::CmdQueueEditingStatus => "Editando mensagem enfileirada {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editando mensagem enfileirada {index} (pressione Enter para re-enfileirar/enviar)"
+        }
+        MessageId::CmdQueueDropped => "Mensagem enfileirada {index} removida",
+        MessageId::CmdQueueAlreadyEmpty => "Fila já está vazia",
+        MessageId::CmdQueueCleared => "Fila limpa",
+        MessageId::CmdQueueMissingIndex => {
+            "Índice ausente. Uso: /queue edit <n> ou /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "O índice deve ser um número positivo",
+        MessageId::CmdQueueIndexMin => "O índice deve ser >= 1",
         MessageId::CmdRecallDescription => {
             "Buscar arquivos de ciclos anteriores (BM25 sobre o texto das mensagens)"
         }
@@ -2919,6 +3070,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto ativo e dicas de cache",
         MessageId::CtxMenuHelp => "Ajuda",
         MessageId::CtxMenuHelpDesc => "atalhos de teclado e comandos",
+        MessageId::FanoutCounts => {
+            "{done} concluído · {running} executando · {failed} falhou · {pending} pendente"
+        }
     })
 }
 
@@ -3039,6 +3193,29 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editando mensaje en cola:",
+        MessageId::CmdQueueNoMessages => "No hay mensajes en cola",
+        MessageId::CmdQueueListHeader => "Mensajes en cola ({count}):",
+        MessageId::CmdQueueTip => {
+            "Consejo: /queue edit <n> para editar, /queue drop <n> para eliminar"
+        }
+        MessageId::CmdQueueAlreadyEditing => {
+            "Ya estás editando un mensaje en cola. Envíalo o usa /queue clear para descartarlo."
+        }
+        MessageId::CmdQueueNotFound => "Mensaje en cola no encontrado",
+        MessageId::CmdQueueEditingStatus => "Editando mensaje en cola {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editando mensaje en cola {index} (presiona Enter para re-encolar/enviar)"
+        }
+        MessageId::CmdQueueDropped => "Mensaje en cola {index} eliminado",
+        MessageId::CmdQueueAlreadyEmpty => "La cola ya está vacía",
+        MessageId::CmdQueueCleared => "Cola limpiada",
+        MessageId::CmdQueueMissingIndex => {
+            "Índice faltante. Uso: /queue edit <n> o /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "El índice debe ser un número positivo",
+        MessageId::CmdQueueIndexMin => "El índice debe ser >= 1",
         MessageId::CmdRecallDescription => {
             "Buscar archivos de ciclos anteriores (BM25 sobre el texto de los mensajes)"
         }
@@ -3346,6 +3523,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto activo y sugerencias de caché",
         MessageId::CtxMenuHelp => "Ayuda",
         MessageId::CtxMenuHelpDesc => "atajos de teclado y comandos",
+        MessageId::FanoutCounts => {
+            "{done} completado · {running} ejecutando · {failed} falló · {pending} pendiente"
+        }
     })
 }
 

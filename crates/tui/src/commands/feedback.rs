@@ -37,11 +37,15 @@ pub fn feedback(_app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     let url = kind.issue_url();
-    let message = format!(
+    let mut message = format!(
         "Trying to open GitHub {} template in your browser. If that fails, open this URL manually:\n\n{}",
         kind.label().to_ascii_lowercase(),
         url,
     );
+    if matches!(kind, FeedbackKind::Bug) {
+        message.push_str("\n\n");
+        message.push_str(bug_report_diagnostics_hint());
+    }
 
     CommandResult::with_message_and_action(
         message,
@@ -113,6 +117,13 @@ fn feedback_help() -> String {
     message.push_str("/feedback feature\n");
     message.push_str("/feedback security\n");
     message
+}
+
+fn bug_report_diagnostics_hint() -> &'static str {
+    "Before filing, first check whether this looks like a model issue or an environment/tool issue: \
+     command exit, network/service, sandbox/approval, missing dependency/path, timeout, or an unclosed turn. \
+     Include the CodeWhale version, OS/terminal, the tool name, and redacted timestamps or log handles when available. \
+     Do not paste prompts, secrets, raw command output, full local paths, or conversation transcripts."
 }
 
 fn parse_feedback_kind(input: &str) -> Option<FeedbackKind> {
@@ -204,6 +215,12 @@ mod tests {
 
         assert!(message.contains("Trying to open GitHub bug report template"));
         assert!(message.contains("open this URL manually"));
+        assert!(message.contains("Before filing, first check whether this looks like"));
+        assert!(message.contains("network/service"));
+        assert!(message.contains("sandbox/approval"));
+        assert!(message.contains("missing dependency/path"));
+        assert!(message.contains("timeout"));
+        assert!(message.contains("Do not paste prompts, secrets, raw command output"));
         assert!(message.contains(url));
         assert!(url.contains("template=bug_report.md"));
         assert!(!url.contains("title="));

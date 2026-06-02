@@ -382,6 +382,48 @@ jobs:
           path: bundles/*
           if-no-files-found: error
 
+  windows-installer:
+    needs: [build, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: 'codewhale*-windows-x64.exe'
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ needs.resolve.outputs.tag }}".TrimStart("v")
+          Copy-Item "artifacts\codewhale-windows-x64.exe\codewhale-windows-x64.exe" "scripts\installer\codewhale.exe"
+          Copy-Item "artifacts\codewhale-tui-windows-x64.exe\codewhale-tui-windows-x64.exe" "scripts\installer\codewhale-tui.exe"
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (!(Test-Path $makensis)) {
+            $makensis = "${env:ProgramFiles}\NSIS\makensis.exe"
+          }
+          if (!(Test-Path $makensis)) {
+            throw "makensis.exe not found after NSIS install"
+          }
+          Push-Location scripts\installer
+          & $makensis "/DVERSION=$version" "codewhale.nsi"
+          Pop-Location
+          if (!(Test-Path "scripts\installer\CodeWhaleSetup.exe")) {
+            throw "CodeWhaleSetup.exe was not produced"
+          }
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeWhaleSetup.exe
+          path: scripts/installer/CodeWhaleSetup.exe
+          if-no-files-found: error
+
   docker:
     needs: [build, resolve]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -451,8 +493,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build, bundle, docker, resolve]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.docker.result == 'success' }}
+    needs: [build, bundle, windows-installer, docker, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.windows-installer.result == 'success' && needs.docker.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -506,10 +548,11 @@ jobs:
           body: |
             > This release renames the project to **CodeWhale**. The legacy
             > `deepseek` and `deepseek-tui` binaries continue to ship as
-            > deprecation shims for one release cycle; they print a one-line
-            > warning and forward to `codewhale` / `codewhale-tui`. They will
-            > be removed in v0.9.0. See `docs/REBRAND.md` for the full
-            > migration story.
+            > compatibility-only deprecation shims during v0.8.x; they print a
+            > one-line warning and forward to `codewhale` / `codewhale-tui`.
+            > They will be removed in v0.9.0. The legacy npm package
+            > `deepseek-tui` is deprecated and receives no further releases.
+            > See `docs/REBRAND.md` for the full migration story.
 
             ## Install
 
@@ -551,6 +594,7 @@ jobs:
             | Linux RISC-V | `codewhale-linux-riscv64.tar.gz` | `install.sh` |
             | macOS x64 | `codewhale-macos-x64.tar.gz` | `install.sh` |
             | macOS ARM | `codewhale-macos-arm64.tar.gz` | `install.sh` |
+            | Windows x64 (installer) | `CodeWhaleSetup.exe` | NSIS setup |
             | Windows x64 | `codewhale-windows-x64.zip` | `install.bat` |
             | Windows x64 (portable) | `codewhale-windows-x64-portable.zip` | — |
 
@@ -562,13 +606,14 @@ jobs:
             ```
 
             **Windows:**
+            - For the installer path, run `CodeWhaleSetup.exe`; it installs both binaries under `%LOCALAPPDATA%\Programs\CodeWhale\bin` and adds that directory to the current-user PATH.
             - Extract `codewhale-windows-x64.zip`
             - Run `install.bat` (copies to `%USERPROFILE%\bin`)
             - Add `%USERPROFILE%\bin` to your PATH
 
-            The **portable** Windows archive skips the install script — extract and run from any directory.
+            The **portable** Windows archive skips the install script — extract and run from any directory. The NSIS installer is currently unsigned and may trigger Windows SmartScreen until a signing certificate is wired into the release pipeline.
 
-            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets ship for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
+            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets are compatibility-only deprecation shims for v0.8.x so that existing `deepseek update` invocations on v0.8.40 keep working; they forward to the canonical binaries. The legacy npm package `deepseek-tui` is deprecated and is not republished.
 
             ### Verify (recommended)
 

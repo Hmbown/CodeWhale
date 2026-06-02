@@ -225,6 +225,9 @@ enum Commands {
     Logout,
     /// List available models from the configured API endpoint
     Models(ModelsArgs),
+    /// Generate speech audio with Xiaomi MiMo TTS models
+    #[command(visible_alias = "tts")]
+    Speech(SpeechArgs),
     /// Run a non-interactive prompt. Use --auto for tool-backed agent mode.
     Exec(ExecArgs),
     /// Generate SWE-bench prediction rows from CodeWhale runs
@@ -527,6 +530,50 @@ struct EvalArgs {
 #[derive(Args, Debug, Clone, Default)]
 struct ModelsArgs {
     /// Print models as pretty JSON
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct SpeechArgs {
+    /// Text to synthesize. This is sent as the assistant message content.
+    #[arg(value_name = "TEXT")]
+    text: String,
+
+    /// Output audio path. Defaults to speech.<format> in --output-dir,
+    /// [speech].output_dir, or the current directory.
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
+    /// Directory for the default speech.<format> output file when -o/--output is omitted.
+    #[arg(long = "output-dir", value_name = "DIR")]
+    output_dir: Option<PathBuf>,
+
+    /// TTS model. Defaults to built-in voices, or is inferred from --voice-prompt/--clone-voice.
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Built-in voice ID, or a data:audio/...;base64,... URI for voice clone.
+    #[arg(long)]
+    voice: Option<String>,
+
+    /// Natural language style instruction; not spoken verbatim.
+    #[arg(long)]
+    instruction: Option<String>,
+
+    /// Voice design prompt. Implies mimo-v2.5-tts-voicedesign when --model is omitted.
+    #[arg(long = "voice-prompt")]
+    voice_prompt: Option<String>,
+
+    /// MP3/WAV sample used for voice cloning. Implies mimo-v2.5-tts-voiceclone when --model is omitted.
+    #[arg(long = "clone-voice", value_name = "FILE")]
+    clone_voice: Option<PathBuf>,
+
+    /// Output audio format requested from the API
+    #[arg(long, default_value = "wav")]
+    format: String,
+
+    /// Emit machine-readable JSON output
     #[arg(long, default_value_t = false)]
     json: bool,
 }
@@ -896,13 +943,19 @@ async fn main() -> Result<()> {
                 let config = load_config_from_cli(&cli)?;
                 run_models(&config, args).await
             }
+            Commands::Speech(args) => {
+                let config = load_config_from_cli(&cli)?;
+                run_speech(&config, args).await
+            }
             Commands::Exec(args) => {
                 let config = load_config_from_cli(&cli)?;
-                let model = resolve_exec_model(&config, args.model.as_deref());
-                let prompt = join_prompt_parts(&args.prompt);
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
+                let mut config = config.clone();
+                merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                let model = resolve_exec_model(&config, args.model.as_deref());
+                let prompt = join_prompt_parts(&args.prompt);
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
                 // The `deepseek` launcher forwards `--yolo` to this binary via
                 // the DEEPSEEK_YOLO env var (which the config loader folds into
@@ -3517,6 +3570,198 @@ async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
     Ok(())
 }
 
+async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
+    use crate::client::{DeepSeekClient, SpeechSynthesisRequest};
+    use crate::config::ApiProvider;
+    use crate::tools::speech::{
+        DEFAULT_VOICE, SPEECH_MODEL_EXAMPLES, combine_speech_instructions,
+        default_speech_output_name, describe_speech_voice, encode_voice_clone_sample_data_uri,
+        infer_speech_model, normalize_speech_format,
+    };
+
+    let SpeechArgs {
+        text,
+        output,
+        output_dir,
+        model,
+        voice,
+        instruction,
+        voice_prompt,
+        clone_voice,
+        format,
+        json: json_output,
+    } = args;
+
+    if config.api_provider() != ApiProvider::XiaomiMimo {
+        bail!(
+            "`speech` requires provider = \"xiaomi-mimo\" (current: {}). Run with `--provider xiaomi-mimo` or set it in config.",
+            config.api_provider().as_str()
+        );
+    }
+
+    if text.trim().is_empty() {
+        bail!("Speech text cannot be empty");
+    }
+    let voice_is_data_uri = voice
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| value.starts_with("data:audio/"));
+    if clone_voice.is_some() && voice.is_some() {
+        bail!("Use either --clone-voice or --voice for cloned voice data, not both");
+    }
+    let model = infer_speech_model(
+        model.as_deref(),
+        clone_voice.is_some() || voice_is_data_uri,
+        voice_prompt.is_some(),
+    );
+    let model_lower = model.to_ascii_lowercase();
+    if !model_lower.contains("tts") {
+        bail!(
+            "speech requires a TTS model (examples: {}); got {model}",
+            SPEECH_MODEL_EXAMPLES.join(", ")
+        );
+    }
+    let is_voice_design = model_lower.contains("voicedesign");
+    let is_voice_clone = model_lower.contains("voiceclone");
+
+    let instruction = combine_speech_instructions(instruction, voice_prompt);
+    if is_voice_design
+        && instruction
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        bail!(
+            "mimo-v2.5-tts-voicedesign requires --voice-prompt or --instruction to describe the voice"
+        );
+    }
+
+    let voice = if let Some(clone_path) = clone_voice {
+        Some(encode_voice_clone_sample_data_uri(&clone_path)?)
+    } else if is_voice_design {
+        None
+    } else if let Some(value) = voice.filter(|value| !value.trim().is_empty()) {
+        Some(value)
+    } else if is_voice_clone {
+        bail!("mimo-v2.5-tts-voiceclone requires --clone-voice <mp3|wav> or --voice <data-uri>");
+    } else {
+        Some(DEFAULT_VOICE.to_string())
+    };
+    let format = normalize_speech_format(&format).with_context(|| {
+        format!("Unsupported speech format '{format}' (allowed: wav, mp3, pcm16)")
+    })?;
+    let output = output.unwrap_or_else(|| {
+        output_dir
+            .or_else(|| config.speech_output_dir())
+            .unwrap_or_default()
+            .join(default_speech_output_name(&format))
+    });
+
+    let client = DeepSeekClient::new(config)?;
+    let response = client
+        .synthesize_speech(SpeechSynthesisRequest {
+            model: model.clone(),
+            text,
+            instruction,
+            audio_format: format.clone(),
+            voice,
+        })
+        .await?;
+
+    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory {}", parent.display()))?;
+    }
+    std::fs::write(&output, &response.audio_bytes)
+        .with_context(|| format!("Failed to write audio file {}", output.display()))?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "speech",
+                "success": true,
+                "model": response.model,
+                "format": response.audio_format,
+                "output": output.display().to_string(),
+                "bytes": response.audio_bytes.len(),
+                "voice": response.voice.as_deref().map(describe_speech_voice),
+                "transcript": response.transcript,
+            }))?
+        );
+    } else {
+        println!(
+            "Generated speech: {} ({} bytes, model: {}, format: {})",
+            output.display(),
+            response.audio_bytes.len(),
+            response.model,
+            response.audio_format
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod speech_cli_tests {
+    use super::*;
+    use crate::tools::speech::{
+        default_speech_output_name, infer_speech_model, normalize_speech_format,
+    };
+
+    #[test]
+    fn normalizes_documented_speech_formats() {
+        assert_eq!(normalize_speech_format("WAV").as_deref(), Some("wav"));
+        assert_eq!(normalize_speech_format("pcm16").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("pcm").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("flac"), None);
+    }
+
+    #[test]
+    fn default_speech_output_tracks_requested_format() {
+        assert_eq!(
+            PathBuf::from(default_speech_output_name("mp3")),
+            PathBuf::from("speech.mp3")
+        );
+        assert_eq!(
+            PathBuf::from("audio").join(default_speech_output_name("pcm")),
+            PathBuf::from("audio").join("speech.pcm16")
+        );
+    }
+
+    #[test]
+    fn speech_command_parses_cli_passthrough_smoke() {
+        let cli = Cli::try_parse_from([
+            "codewhale-tui",
+            "speech",
+            "hello",
+            "--model",
+            "tts",
+            "--format",
+            "pcm",
+            "--output-dir",
+            "audio",
+            "--voice",
+            "Mia",
+        ])
+        .expect("speech command parses");
+
+        let Some(Commands::Speech(args)) = cli.command else {
+            panic!("expected speech command");
+        };
+        assert_eq!(args.text, "hello");
+        assert_eq!(
+            infer_speech_model(args.model.as_deref(), false, false),
+            "mimo-v2.5-tts"
+        );
+        assert_eq!(
+            normalize_speech_format(&args.format).as_deref(),
+            Some("pcm16")
+        );
+        assert_eq!(args.output_dir, Some(PathBuf::from("audio")));
+        assert_eq!(args.voice.as_deref(), Some("Mia"));
+    }
+}
+
 /// Test API connectivity by making a minimal request
 async fn test_api_connectivity(config: &Config) -> Result<()> {
     use crate::client::DeepSeekClient;
@@ -4957,6 +5202,86 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
     }
 }
 
+fn merge_user_workspace_config(
+    config: &mut Config,
+    config_path: Option<PathBuf>,
+    workspace: &Path,
+) {
+    if config.managed_config_path.is_some() || config.requirements_path.is_some() {
+        return;
+    }
+    let allow_shell_before = config.allow_shell;
+    let allow_shell_from_env = std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some();
+    let Some(path) = crate::config::resolve_load_config_path(config_path) else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&raw) else {
+        return;
+    };
+    merge_user_workspace_config_from_doc(config, &doc, workspace);
+    if allow_shell_from_env {
+        config.allow_shell = allow_shell_before;
+    }
+}
+
+fn merge_user_workspace_config_from_doc(config: &mut Config, doc: &toml::Value, workspace: &Path) {
+    for table_name in ["workspace", "projects"] {
+        let Some(entries) = doc.get(table_name).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (raw_path, entry) in entries {
+            if !workspace_config_path_matches(raw_path, workspace) {
+                continue;
+            }
+            if let Some(allow_shell) = entry.get("allow_shell").and_then(toml::Value::as_bool) {
+                config.allow_shell = Some(allow_shell);
+            }
+        }
+    }
+}
+
+fn workspace_config_path_matches(raw_path: &str, workspace: &Path) -> bool {
+    let configured = crate::config::expand_path(raw_path);
+    let configured = configured.canonicalize().unwrap_or(configured);
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    paths_equal_for_config(&configured, &workspace)
+}
+
+#[cfg(windows)]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    normalize_windows_config_path_for_compare(left)
+        == normalize_windows_config_path_for_compare(right)
+}
+
+#[cfg(not(windows))]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn normalize_windows_config_path_for_compare(path: &Path) -> String {
+    normalize_windows_config_path_str(&path.to_string_lossy())
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_config_path_str(path: &str) -> String {
+    let mut normalized = path.replace('/', "\\");
+    if let Some(rest) = normalized.strip_prefix(r"\\?\UNC\") {
+        normalized = format!("\\\\{rest}");
+    } else if let Some(rest) = normalized.strip_prefix(r"\\?\") {
+        normalized = rest.to_string();
+    }
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
+}
+
 async fn run_interactive(
     cli: &Cli,
     config: &Config,
@@ -4972,6 +5297,7 @@ async fn run_interactive(
     // or legacy $WORKSPACE/.deepseek/config.toml
     // unless --no-project-config was passed (#485).
     let mut merged_config = config.clone();
+    merge_user_workspace_config(&mut merged_config, cli.config.clone(), &workspace);
     if !cli.no_project_config {
         merge_project_config(&mut merged_config, &workspace);
     }
@@ -4990,8 +5316,12 @@ async fn run_interactive(
 
     // v0.8.44: migrate config from ~/.deepseek/ to ~/.codewhale/ on first
     // launch. Non-fatal — existing installs keep working either way.
-    if let Err(err) = codewhale_config::migrate_config_if_needed() {
-        logging::warn(format!("Config migration skipped: {err}"));
+    match codewhale_config::migrate_config_if_needed() {
+        Ok(Some(migration)) => {
+            eprintln!("{}", migration.user_notice());
+        }
+        Ok(None) => {}
+        Err(err) => logging::warn(format!("Config migration skipped: {err}")),
     }
 
     let model = config.default_model();
@@ -5380,10 +5710,12 @@ async fn run_exec_agent(
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        speech_output_dir: config.speech_output_dir(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
         allowed_tools: None,
+        hook_executor: None,
         locale_tag: crate::localization::resolve_locale(&settings.locale)
             .tag()
             .to_string(),
@@ -5440,6 +5772,7 @@ async fn run_exec_agent(
             model: effective_model.clone(),
             goal_objective: None,
             allowed_tools: None,
+            hook_executor: None,
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_model,
             auto_model,
@@ -6815,6 +7148,132 @@ allow_shell = false
         merge_project_config(&mut config, tmp.path());
         assert_eq!(config.max_subagents, Some(4));
         assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_can_enable_shell_for_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
+
+        assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn user_workspace_overlay_accepts_legacy_projects_table() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!("[projects.'{}']\nallow_shell = true\n", workspace.display());
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
+
+        assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn user_workspace_overlay_ignores_non_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let configured_workspace = tmp.path().join("configured");
+        let active_workspace = tmp.path().join("active");
+        fs::create_dir_all(&configured_workspace).expect("mkdir configured workspace");
+        fs::create_dir_all(&active_workspace).expect("mkdir active workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            configured_workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &active_workspace);
+
+        assert_eq!(config.allow_shell, None);
+    }
+
+    #[test]
+    fn user_workspace_overlay_preserves_allow_shell_env_override() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        unsafe {
+            std::env::set_var("DEEPSEEK_ALLOW_SHELL", "false");
+        }
+        let mut config = Config {
+            allow_shell: Some(false),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+        unsafe {
+            std::env::remove_var("DEEPSEEK_ALLOW_SHELL");
+        }
+
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_does_not_override_managed_config() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        let mut config = Config {
+            allow_shell: Some(false),
+            managed_config_path: Some("managed.toml".to_string()),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_mixed_separators() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo/")
+        );
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_verbatim_and_unc_prefixes() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo")
+        );
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\UNC\server\share\repo"),
+            normalize_windows_config_path_str(r"\\server/share/repo/")
+        );
     }
 
     #[test]

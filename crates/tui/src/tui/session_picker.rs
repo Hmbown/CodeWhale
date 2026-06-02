@@ -692,7 +692,8 @@ fn build_list_lines(
 }
 
 fn format_session_line(session: &SessionMetadata) -> String {
-    let updated = format_relative_time(&session.updated_at);
+    let age = format_relative_time(&session.updated_at);
+    let updated = crate::session_manager::format_session_updated_at(&session.updated_at, &age);
     let raw_title = extract_title(&session.title);
     let title = if raw_title == "Session" {
         truncate(crate::session_manager::truncate_id(&session.id), 32)
@@ -1109,6 +1110,39 @@ mod tests {
         assert_eq!(span.style.fg, Some(palette::SELECTION_TEXT));
         assert_eq!(span.style.bg, Some(palette::DEEPSEEK_BLUE));
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn build_list_lines_includes_absolute_updated_timestamp() {
+        let mut session = test_session(1, "last friday thread");
+        session.updated_at = DateTime::parse_from_rfc3339("2026-06-01T12:34:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let lines = build_list_lines(
+            &[session],
+            0,
+            120,
+            0,
+            5,
+            false,
+            "",
+            "recent",
+            false,
+            false,
+            "",
+            None,
+        );
+
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("2026-06-01 12:34 UTC"),
+            "session picker should include an absolute timestamp, got {rendered:?}"
+        );
     }
 
     #[test]

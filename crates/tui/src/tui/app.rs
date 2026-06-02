@@ -50,7 +50,7 @@ pub enum OnboardingState {
     Welcome,
     /// Pick the UI locale before any other config decisions (#566).
     /// Defaults to auto-detection from `LC_ALL` / `LANG`; explicit picks
-    /// land in `~/.deepseek/settings.toml` via `Settings::set("locale", …)`.
+    /// land in the persisted settings.toml via `Settings::set("locale", …)`.
     Language,
     ApiKey,
     TrustDirectory,
@@ -95,6 +95,17 @@ pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
     };
 
     !command.contains('/')
+}
+
+pub(crate) fn shell_command_from_bang_input(input: &str) -> Result<Option<&str>, &'static str> {
+    let Some(rest) = input.trim_start().strip_prefix('!') else {
+        return Ok(None);
+    };
+    let command = rest.trim();
+    if command.is_empty() {
+        return Err("Usage: ! <shell command>");
+    }
+    Ok(Some(command))
 }
 
 fn initial_onboarding_state(
@@ -885,6 +896,9 @@ pub struct MentionCompletionCache {
     /// Workspace depth limit used for this completion walk. Included so live
     /// config changes invalidate cached popup results.
     pub walk_depth: usize,
+    /// Completion behavior used for this walk. Included so live config changes
+    /// invalidate cached popup results.
+    pub behavior: String,
     /// Cached completion entries.
     pub entries: Vec<String>,
 }
@@ -1207,6 +1221,9 @@ pub struct App {
     /// Maximum workspace depth for `@`-mention completion walks. `0` means
     /// unlimited depth.
     pub mention_walk_depth: usize,
+    /// `@`-mention completion behavior: fuzzy workspace search or deterministic
+    /// directory browser.
+    pub mention_menu_behavior: String,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
     /// Set to `true` the first time a real `Event::Paste` arrives during a
@@ -1220,6 +1237,7 @@ pub struct App {
     #[allow(dead_code)]
     pub system_prompt: Option<SystemPrompt>,
     pub auto_compact: bool,
+    pub auto_compact_threshold_percent: f64,
     pub calm_mode: bool,
     pub low_motion: bool,
     /// Pending #61 (animated working strip). Set from config but not read
@@ -1486,6 +1504,11 @@ pub struct App {
     pub session_started_at: chrono::DateTime<chrono::Utc>,
     /// Whether the UI needs to be redrawn.
     pub needs_redraw: bool,
+    /// When true, the next draw will be a full repaint (terminal clear +
+    /// all cells redrawn) instead of a ratatui incremental diff. Used by
+    /// theme switches where the diff engine may miss color-only changes
+    /// in sidebar cells that were previously rendered with palette constants.
+    pub force_next_full_repaint: bool,
     /// When the current thinking block started (for duration tracking).
     pub thinking_started_at: Option<Instant>,
     /// Whether context compaction is currently in progress.
@@ -1748,6 +1771,7 @@ impl App {
             crate::config::active_provider_uses_env_only_api_key(&effective_auth_config);
         let was_onboarded = crate::tui::onboarding::is_onboarded();
         let auto_compact = settings.auto_compact;
+        let auto_compact_threshold_percent = settings.auto_compact_threshold_percent;
         let calm_mode = settings.calm_mode;
         let low_motion = settings.low_motion;
         let fancy_animations = settings.fancy_animations;
@@ -1946,6 +1970,7 @@ impl App {
             bracketed_paste_seen: false,
             system_prompt: None,
             auto_compact,
+            auto_compact_threshold_percent,
             calm_mode,
             low_motion,
             fancy_animations,
@@ -2074,6 +2099,7 @@ impl App {
             decision_card: None,
             session_started_at: chrono::Utc::now(),
             needs_redraw: true,
+            force_next_full_repaint: false,
             thinking_started_at: None,
             is_compacting: false,
             is_purging: false,
@@ -2103,6 +2129,7 @@ impl App {
                 .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
             mention_menu_limit: settings.mention_menu_limit,
             mention_walk_depth: settings.mention_walk_depth,
+            mention_menu_behavior: settings.mention_menu_behavior.clone(),
             session_title: None,
             receipt_text: None,
             receipt_started_at: None,
@@ -2153,7 +2180,7 @@ impl App {
     }
 
     /// Apply a locale tag selected from the onboarding language picker (#566).
-    /// Persists the value to `~/.deepseek/settings.toml` and immediately
+    /// Persists the value to settings.toml and immediately
     /// re-resolves `ui_locale` so the rest of onboarding renders in the new
     /// language. `App` doesn't keep `Settings` resident — it loads on entry
     /// and rewrites on exit, mirroring the pattern used by the `/config`
@@ -2167,7 +2194,7 @@ impl App {
         Ok(())
     }
 
-    /// Locale tag currently persisted in `~/.deepseek/settings.toml` (or
+    /// Locale tag currently persisted in settings.toml (or
     /// `"auto"` when no settings file exists). Used by the onboarding
     /// language picker to highlight the current selection without `App`
     /// having to keep `Settings` resident.
@@ -4800,6 +4827,8 @@ pub enum AppAction {
     OpenProviderPicker,
     /// Open the `/mode` picker modal for Agent / Plan / YOLO.
     OpenModePicker,
+    /// Refresh the engine prompt after the UI operating mode changes.
+    ModeChanged(AppMode),
     /// Open the `/statusline` multi-select picker for footer items.
     OpenStatusPicker,
     /// Open the `/feedback` picker for GitHub issue/security destinations.
@@ -5112,6 +5141,29 @@ mod tests {
         assert!(!looks_like_slash_command_input(
             "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
         ));
+    }
+
+    #[test]
+    fn bang_shell_prefix_parses_compact_and_spaced_forms() {
+        assert_eq!(shell_command_from_bang_input("!pwd"), Ok(Some("pwd")));
+        assert_eq!(shell_command_from_bang_input("! pwd"), Ok(Some("pwd")));
+        assert_eq!(
+            shell_command_from_bang_input("  !  cargo test -p codewhale-tui sidebar"),
+            Ok(Some("cargo test -p codewhale-tui sidebar"))
+        );
+        assert_eq!(shell_command_from_bang_input("normal message"), Ok(None));
+    }
+
+    #[test]
+    fn bang_shell_prefix_rejects_empty_command() {
+        assert_eq!(
+            shell_command_from_bang_input("!"),
+            Err("Usage: ! <shell command>")
+        );
+        assert_eq!(
+            shell_command_from_bang_input("!   "),
+            Err("Usage: ! <shell command>")
+        );
     }
 
     #[test]

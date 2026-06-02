@@ -78,7 +78,11 @@ impl Engine {
         if mode != AppMode::Plan {
             builder = builder
                 .with_rlm_tool(self.deepseek_client.clone(), self.session.model.clone())
-                .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone());
+                .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone())
+                .with_speech_tools(
+                    self.deepseek_client.clone(),
+                    self.config.speech_output_dir.clone(),
+                );
         }
 
         if self.config.features.enabled(Feature::ApplyPatch) && mode != AppMode::Plan {

@@ -57,14 +57,19 @@ pub(crate) fn handle_composer_history_arrow(
     }
 
     // When `composer_arrows_scroll` is enabled, plain Up/Down scroll the
-    // transcript for single-line drafts. Multiline composers keep editor-like
-    // line navigation, with history fallback at the first/last line.
+    // transcript for single-line drafts. Multiline drafts keep editor-like
+    // line navigation. If the user holds Up/Down at the first/last line, do
+    // not replace their current draft with prompt history unless they are
+    // already navigating history.
     let scroll_transcript = app.composer_arrows_scroll && !app.input.contains('\n');
+    let protect_multiline_draft = app.input.contains('\n') && app.history_index.is_none();
 
     match key.code {
         KeyCode::Up => {
             if scroll_transcript {
                 app.scroll_up(COMPOSER_ARROW_SCROLL_LINES);
+            } else if protect_multiline_draft && !cursor_has_previous_logical_line(app) {
+                app.needs_redraw = true;
             } else {
                 app.vim_move_up();
             }
@@ -73,6 +78,8 @@ pub(crate) fn handle_composer_history_arrow(
         KeyCode::Down => {
             if scroll_transcript {
                 app.scroll_down(COMPOSER_ARROW_SCROLL_LINES);
+            } else if protect_multiline_draft && !cursor_has_next_logical_line(app) {
+                app.needs_redraw = true;
             } else {
                 app.vim_move_down();
             }
@@ -80,6 +87,26 @@ pub(crate) fn handle_composer_history_arrow(
         }
         _ => false,
     }
+}
+
+fn cursor_has_previous_logical_line(app: &App) -> bool {
+    let cursor_byte = byte_index_at_char(&app.input, app.cursor_position);
+    app.input[..cursor_byte].contains('\n')
+}
+
+fn cursor_has_next_logical_line(app: &App) -> bool {
+    let cursor_byte = byte_index_at_char(&app.input, app.cursor_position);
+    app.input[cursor_byte..].contains('\n')
+}
+
+fn byte_index_at_char(text: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
 }
 
 pub(crate) fn is_word_cursor_modifier(modifiers: KeyModifiers) -> bool {

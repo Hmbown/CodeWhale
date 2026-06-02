@@ -196,6 +196,22 @@ async fn bounded_body_excerpt(response: reqwest::Response, max_bytes: usize) -> 
     format!("{}{}", redact_body_preview(&one_line), suffix)
 }
 
+fn invalid_json_preview(bytes: &[u8]) -> String {
+    let body_text = String::from_utf8_lossy(bytes);
+    if body_text.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let trimmed: String = body_text.chars().take(ERROR_BODY_PREVIEW_BYTES).collect();
+    let suffix = if body_text.chars().count() > ERROR_BODY_PREVIEW_BYTES {
+        "…"
+    } else {
+        ""
+    };
+    let one_line = trimmed.replace(['\n', '\r'], " ");
+    format!("{}{}", redact_body_preview(&one_line), suffix)
+}
+
 // === Configuration Types ===
 
 /// Full MCP configuration from mcp.json
@@ -1824,7 +1840,11 @@ impl McpConnection {
                 self.state = ConnectionState::Disconnected;
             })?;
             let value: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| {
-                format!("Invalid MCP JSON-RPC message from server '{}'", self.name)
+                format!(
+                    "Invalid MCP JSON-RPC message from server '{}': {}",
+                    self.name,
+                    invalid_json_preview(&bytes)
+                )
             })?;
 
             // Check if this is a response with the expected id. We emit
@@ -3380,6 +3400,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_method_invalid_json_includes_server_output_preview() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([b"Allow Burp MCP connection? [y/N]".to_vec()]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+
+        let err = conn
+            .call_method("tools/call", serde_json::json!({"name": "burp"}), 1)
+            .await
+            .expect_err("non-json MCP stdout should fail");
+        let msg = err.to_string();
+
+        assert!(msg.contains("Invalid MCP JSON-RPC message from server 'mock'"));
+        assert!(msg.contains("Allow Burp MCP connection"));
+    }
+
+    #[tokio::test]
     async fn call_method_times_out_while_waiting_for_response() {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let mut conn = test_connection(Box::new(HangingValueTransport {
@@ -3974,6 +4013,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn invalid_json_preview_collapses_lines_and_redacts_secrets() {
+        let preview = invalid_json_preview(
+            b"Authorization: Bearer PLACEHOLDER_TOKEN\nAllow connection? api_key=PLACEHOLDER_KEY",
+        );
+
+        assert!(
+            preview.contains("Authorization: Bearer *** Allow connection? api_key=***"),
+            "preview: {preview}"
+        );
+        assert!(
+            !preview.contains('\n'),
+            "preview should be single-line: {preview}"
+        );
+        assert!(
+            !preview.contains("PLACEHOLDER_TOKEN") && !preview.contains("PLACEHOLDER_KEY"),
+            "secret leaked: {preview}"
+        );
+    }
+
     /// #420: `StdioTransport::shutdown` reaps the child process by sending
     /// SIGTERM and giving it a brief grace period before drop fires SIGKILL.
     /// The test spawns `cat` (which exits immediately on stdin EOF / SIGTERM)
@@ -4460,6 +4519,12 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        async fn write_response(socket: &mut tokio::net::TcpStream, response: &[u8]) {
+            socket.write_all(response).await.unwrap();
+            socket.flush().await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+
         let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -4521,7 +4586,7 @@ mod tests {
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nMcp-Session-Id: {session}\r\nContent-Length: 0\r\n\r\n"
                         );
-                        socket.write_all(response.as_bytes()).await.unwrap();
+                        write_response(&mut socket, response.as_bytes()).await;
                         return;
                     }
 
@@ -4537,12 +4602,11 @@ mod tests {
 
                     if method == "tools/call" && session_header.as_deref() == Some("sess-old") {
                         stale_seen.store(true, AtomicOrdering::SeqCst);
-                        socket
-                            .write_all(
-                                b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
-                            )
-                            .await
-                            .unwrap();
+                        write_response(
+                            &mut socket,
+                            b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
+                        )
+                        .await;
                         return;
                     }
 
@@ -4567,10 +4631,11 @@ mod tests {
                             serde_json::json!({ "content": [{ "type": "text", "text": "ok" }] })
                         }
                         _ => {
-                            socket
-                                .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
-                                .await
-                                .unwrap();
+                            write_response(
+                                &mut socket,
+                                b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n",
+                            )
+                            .await;
                             return;
                         }
                     };
@@ -4585,7 +4650,7 @@ mod tests {
                         response_body.len(),
                         response_body
                     );
-                    socket.write_all(response.as_bytes()).await.unwrap();
+                    write_response(&mut socket, response.as_bytes()).await;
                 });
             }
         });

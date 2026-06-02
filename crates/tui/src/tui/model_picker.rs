@@ -332,6 +332,9 @@ fn picker_model_hint(id: &str) -> &'static str {
         }
         "arcee-ai/trinity-large-thinking" => "large thinking",
         "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => "long context",
+        "mimo-v2.5-tts" | "mimo-v2-tts" => "speech / TTS",
+        "mimo-v2.5-tts-voicedesign" => "voice design",
+        "mimo-v2.5-tts-voiceclone" => "voice clone",
         "minimax/minimax-m3" => "1M multimodal",
         _ => "provider model",
     }
@@ -543,8 +546,7 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        // App::new merges in `~/.config/deepseek/settings.toml` /
-        // `Application Support/deepseek/settings.toml`, which can override
+        // App::new merges in the user's persisted settings.toml, which can override
         // the model, effort, and provider with whatever the developer
         // happens to have saved. Pin all three back to known values so
         // the picker tests below exercise the picker logic, not the

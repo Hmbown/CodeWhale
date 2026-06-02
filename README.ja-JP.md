@@ -9,7 +9,7 @@
 
 ## インストール
 
-`codewhale` は自己完結型の Rust リリースバイナリのペアとしてインストールされます。`codewhale` はディスパッチャーで、同じ場所にある `codewhale-tui` ランタイムを起動して対話セッションを実行します。npm、Homebrew、Docker は両方を自動でインストールします。Cargo や手動インストールでは、両方を同じディレクトリ（通常は `PATH` 上のディレクトリ）に置いてください。実行に Node.js や Python のランタイムは不要です。
+`codewhale` は自己完結型の Rust リリースバイナリのペアとしてインストールされます。`codewhale` はディスパッチャーで、同じ場所にある `codewhale-tui` ランタイムを起動して対話セッションを実行します。npm と Docker は両方を自動でインストールします。Cargo や手動インストールでは、両方を同じディレクトリ（通常は `PATH` 上のディレクトリ）に置いてください。実行に Node.js や Python のランタイムは不要です。
 
 ```bash
 # 1. npm — すでに Node を使っているなら最も簡単。npm パッケージは
@@ -21,8 +21,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked   # `codewhale` (エントリーポイント)
 cargo install codewhale-tui     --locked   # `codewhale-tui` (TUI バイナリ)
 
-# 3. Homebrew — macOS パッケージマネージャ。
-#    tap/formula 名は旧名のままですが、codewhale と codewhale-tui をインストールします。
+# 3. Homebrew — 旧インストールとの互換用です。
+#    tap/formula はまだ旧 deepseek-tui 名を使っています。新規インストールでは、
+#    formula が改名されるまで npm、Cargo、Docker、直接ダウンロードを優先してください。
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
@@ -48,7 +49,7 @@ docker run --rm -it \
 ```bash
 codewhale update
 npm install -g codewhale@latest
-brew update && brew upgrade deepseek-tui
+brew update && brew upgrade deepseek-tui  # 旧 Homebrew インストールのみ
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```

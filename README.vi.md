@@ -9,7 +9,7 @@
 ## Cài đặt
 
 `codewhale` được cài đặt dưới dạng một cặp binary tự chạy bằng Rust đồng bộ với nhau:
-Lệnh điều phối `codewhale` (dispatcher) và môi trường chạy giao diện `codewhale-tui` (runtime) do nó khởi chạy để thực hiện các phiên làm việc tương tác. Các trình quản lý gói như npm, Homebrew, và Docker sẽ tự động cài đặt cả hai cho bạn; đối với Cargo hoặc cài đặt thủ công, bạn phải đặt cả hai tệp binary này trong cùng một thư mục (thông thường là một thư mục nằm trong biến môi trường `PATH` của bạn). Gói npm chỉ là một trình cài đặt/bao bọc (wrapper) cho các tệp binary phát hành này; agent không chạy trên môi trường Node.js.
+Lệnh điều phối `codewhale` (dispatcher) và môi trường chạy giao diện `codewhale-tui` (runtime) do nó khởi chạy để thực hiện các phiên làm việc tương tác. npm và Docker sẽ tự động cài đặt cả hai cho bạn; đối với Cargo hoặc cài đặt thủ công, bạn phải đặt cả hai tệp binary này trong cùng một thư mục (thông thường là một thư mục nằm trong biến môi trường `PATH` của bạn). Gói npm chỉ là một trình cài đặt/bao bọc (wrapper) cho các tệp binary phát hành này; agent không chạy trên môi trường Node.js.
 
 ```bash
 # 1. npm — dễ nhất nếu bạn đã cài đặt Node. Gói này sẽ tự động tải các
@@ -22,8 +22,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked   # cài đặt `codewhale` (điểm truy cập CLI chính)
 cargo install codewhale-tui     --locked   # cài đặt `codewhale-tui` (giao diện TUI)
 
-# 3. Homebrew — trình quản lý gói dành cho macOS.
-#    Tên tap/formula là tên cũ (legacy); nó sẽ cài đặt cả codewhale và codewhale-tui.
+# 3. Homebrew — chỉ dành cho khả năng tương thích với cài đặt cũ.
+#    Tap/formula vẫn dùng tên deepseek-tui cũ. Với cài đặt mới, hãy ưu tiên
+#    npm, Cargo, Docker hoặc tải trực tiếp cho đến khi formula được đổi tên.
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
@@ -56,7 +57,7 @@ docker run --rm -it \
 ```bash
 codewhale update                         # trình cập nhật binary phát hành trực tiếp
 npm install -g codewhale@latest      # thông qua trình bao bọc npm
-brew update && brew upgrade deepseek-tui
+brew update && brew upgrade deepseek-tui  # chỉ cho cài đặt Homebrew cũ
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```

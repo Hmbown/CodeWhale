@@ -135,6 +135,9 @@ enum Commands {
     Doctor(TuiPassthroughArgs),
     /// List live DeepSeek API models via the TUI binary.
     Models(TuiPassthroughArgs),
+    /// Generate speech audio with Xiaomi MiMo TTS models via the TUI binary.
+    #[command(visible_alias = "tts")]
+    Speech(TuiPassthroughArgs),
     /// List saved TUI sessions.
     Sessions(TuiPassthroughArgs),
     /// Resume a saved TUI session.
@@ -512,6 +515,10 @@ fn run() -> Result<()> {
         Some(Commands::Models(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, tui_args("models", args))
+        }
+        Some(Commands::Speech(args)) => {
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            delegate_to_tui(&cli, &resolved_runtime, tui_args("speech", args))
         }
         Some(Commands::Sessions(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);

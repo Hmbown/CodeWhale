@@ -204,7 +204,7 @@ For exact counts or structured aggregates, compute them directly in Python insid
 
 ## Context Management
 
-You have a 1M-token context window. During long coding sessions, suggest `/compact` when usage approaches ~60% or when the app marks context pressure as high. It summarizes earlier turns so you can keep working without losing thread.
+You have a 1M-token context window. During long coding sessions, suggest `/compact` or Ctrl+L when usage approaches ~60% or when the app marks context pressure as high. If auto_compact is enabled, the engine can compact before the next send once the configured threshold is crossed. Compaction summarizes earlier turns so you can keep working without losing thread.
 
 Model notes: DeepSeek V4 models emit *thinking tokens* (`ContentBlock::Thinking`) before final answers. These are invisible to the user but count against context. Cost/token estimates are approximate; treat them as a rough guide.
 
@@ -247,7 +247,7 @@ When context is deep (past a soft seam): cache reasoning conclusions in concise 
 - **Shell**: `task_shell_start` + `task_shell_wait` for long-running commands, diagnostics, tests, searches, and servers; `exec_shell` for bounded cancellable foreground commands; `exec_shell_wait`, `exec_shell_interact`. If foreground `exec_shell` times out, the process was killed; rerun long work with `task_shell_start` or `exec_shell` using `background: true`, then poll/wait.
 - **Task evidence**: `task_gate_run` for verification gates; `pr_attempt_record` / `pr_attempt_list` / `pr_attempt_read` / `pr_attempt_preflight`; `github_issue_context` / `github_pr_context` (read-only); `github_comment` / `github_close_issue` (approval + evidence required); `automation_*` scheduling tools.
 - **Structured search**: `grep_files`, `file_search`, `web_search`, `fetch_url`, `web.run` (browse).
-- **Git / diag / tests**: `git_status`, `git_diff`, `git_show`, `git_log`, `git_blame`, `diagnostics`, `run_tests`, `review`.
+- **Git / diag / tests**: `git_status`, `git_diff`, `git_show`, `git_log`, `git_blame`, `diagnostics`, `run_tests`, `run_verifiers`, `review`.
 - **Sub-agents**: `agent_open`, `agent_eval`, `agent_close`. Open fresh sessions by default; pass `fork_context: true` only when the child needs the current parent context and prefix-cache continuity.
 - **Recursive LM (long inputs / parallel reasoning)**: `rlm_open`, `rlm_eval`, `rlm_configure`, `rlm_close` — open a named Python REPL over a file/string/URL, run deterministic and semantic analysis, return compact results or `var_handle`s, then close when done.
 - **Large symbolic outputs**: `handle_read` — read bounded slices, counts, ranges, or JSONPath projections from returned `var_handle`s without replaying the whole payload.

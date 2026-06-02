@@ -133,7 +133,8 @@ pub fn build_context_inspector_text(app: &App) -> String {
 }
 
 fn context_usage(app: &App) -> (usize, u32, f64) {
-    let max = context_window_for_model(&app.model).unwrap_or(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
+    let max = context_window_for_model(app.effective_model_for_budget())
+        .unwrap_or(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
     let estimated =
         estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
     let total_chars = estimate_message_chars(&app.api_messages);
@@ -493,6 +494,18 @@ mod tests {
 
         let text = build_context_inspector_text(&app);
         assert!(text.contains("Context: critical"), "{text}");
+    }
+
+    #[test]
+    fn inspector_uses_effective_auto_model_context_window() {
+        let mut app = test_app();
+        app.model = "auto".to_string();
+        app.auto_model = true;
+        app.last_effective_model = Some("deepseek-v4-pro".to_string());
+
+        let text = build_context_inspector_text(&app);
+        assert!(text.contains("Model: auto"), "{text}");
+        assert!(text.contains("/1000000 tokens"), "{text}");
     }
 
     #[test]

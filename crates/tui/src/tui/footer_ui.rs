@@ -17,6 +17,7 @@ use crate::tui::ui::{
     status_color,
 };
 use crate::tui::ui_text::{concise_shell_command_label, truncate_line_to_width};
+use crate::tui::widgets::tool_card::tool_activity_label_for_name;
 use crate::tui::widgets::{FooterProps, FooterToast, FooterWidget, Renderable};
 use crate::tui::workspace_context;
 
@@ -399,7 +400,11 @@ fn collect_active_tool_status(cell: &HistoryCell, snapshot: &mut ActiveToolStatu
             if matches!(generic.name.as_str(), "agent_open" | "agent_spawn") {
                 return;
             }
-            snapshot.record(format!("tool {}", generic.name), generic.status, None);
+            snapshot.record(
+                tool_activity_label_for_name(&generic.name),
+                generic.status,
+                None,
+            );
         }
     }
 }

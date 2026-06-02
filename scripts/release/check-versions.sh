@@ -7,8 +7,8 @@
 #      crate must inherit `version.workspace = true`.
 #   2. `npm/codewhale/package.json` `version` matches the workspace
 #      `version` in the root `Cargo.toml`. (`npm/deepseek-tui/` still
-#      exists during the transition as a deprecation shim package; its
-#      version is also checked.)
+#      exists only as an unpublished compatibility notice and must stay
+#      private.)
 #   3. Internal `codewhale-*` path dependency pins match the workspace version.
 #   4. The TUI crate's packaged changelog copy matches root `CHANGELOG.md`.
 #   5. The current release has a dated Keep a Changelog entry and compare link.
@@ -37,12 +37,15 @@ if [[ "${workspace_version}" != "${npm_version}" ]]; then
   echo "::error::npm/codewhale/package.json version (${npm_version}) does not match workspace Cargo.toml (${workspace_version})." >&2
   fail=1
 fi
-# Also pin the legacy deprecation shim package to the same workspace version
-# so a stale `deepseek-tui` doesn't ship pointing at a different release.
 if [[ -f npm/deepseek-tui/package.json ]]; then
-  legacy_npm_version="$(node -p "require('./npm/deepseek-tui/package.json').version")"
-  if [[ "${workspace_version}" != "${legacy_npm_version}" ]]; then
-    echo "::error::npm/deepseek-tui/package.json version (${legacy_npm_version}) does not match workspace Cargo.toml (${workspace_version})." >&2
+  legacy_private="$(node -p "Boolean(require('./npm/deepseek-tui/package.json').private)")"
+  legacy_publish_config="$(node -p "Boolean(require('./npm/deepseek-tui/package.json').publishConfig)")"
+  if [[ "${legacy_private}" != "true" ]]; then
+    echo "::error::npm/deepseek-tui/package.json must stay private so the legacy package is not republished." >&2
+    fail=1
+  fi
+  if [[ "${legacy_publish_config}" == "true" ]]; then
+    echo "::error::npm/deepseek-tui/package.json must not define publishConfig; the legacy package is deprecated." >&2
     fail=1
   fi
 fi

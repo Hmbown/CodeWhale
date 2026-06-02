@@ -68,6 +68,7 @@ pub struct SettingsSection {
     pub composer_vim_mode: ComposerVimModeValue,
     #[schemars(range(min = 0))]
     pub mention_menu_limit: usize,
+    pub mention_menu_behavior: MentionMenuBehaviorValue,
     #[schemars(range(min = 0))]
     pub mention_walk_depth: usize,
     pub transcript_spacing: TranscriptSpacingValue,
@@ -206,6 +207,13 @@ pub enum ComposerVimModeValue {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum MentionMenuBehaviorValue {
+    Fuzzy,
+    Browser,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum TranscriptSpacingValue {
     Compact,
     Comfortable,
@@ -332,6 +340,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             composer_border: settings.composer_border,
             composer_vim_mode: settings.composer_vim_mode.as_str().into(),
             mention_menu_limit: settings.mention_menu_limit,
+            mention_menu_behavior: settings.mention_menu_behavior.as_str().into(),
             mention_walk_depth: settings.mention_walk_depth,
             transcript_spacing: settings.transcript_spacing.as_str().into(),
             status_indicator: settings.status_indicator.as_str().into(),
@@ -512,6 +521,10 @@ pub fn apply_document(
         (
             "mention_menu_limit",
             &doc.settings.mention_menu_limit.to_string(),
+        ),
+        (
+            "mention_menu_behavior",
+            doc.settings.mention_menu_behavior.as_setting(),
         ),
         (
             "mention_walk_depth",
@@ -778,6 +791,24 @@ impl From<&str> for ComposerVimModeValue {
         match value.trim().to_ascii_lowercase().as_str() {
             "vim" => Self::Vim,
             _ => Self::Normal,
+        }
+    }
+}
+
+impl MentionMenuBehaviorValue {
+    fn as_setting(self) -> &'static str {
+        match self {
+            Self::Fuzzy => "fuzzy",
+            Self::Browser => "browser",
+        }
+    }
+}
+
+impl From<&str> for MentionMenuBehaviorValue {
+    fn from(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "browser" => Self::Browser,
+            _ => Self::Fuzzy,
         }
     }
 }

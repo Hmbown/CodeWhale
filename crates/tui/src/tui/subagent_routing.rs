@@ -154,7 +154,10 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             card.claim_pending_worker(&agent_id, AgentLifecycle::Running);
             app.subagent_card_index.insert(agent_id, idx);
         } else {
-            let mut card = FanoutCard::new(dispatch_kind.unwrap_or("rlm_eval").to_string());
+            let mut card = FanoutCard::new(
+                dispatch_kind.unwrap_or("rlm_eval").to_string(),
+                app.ui_locale,
+            );
             card.upsert_worker(&agent_id, AgentLifecycle::Running);
             app.add_message(HistoryCell::SubAgent(SubAgentCell::Fanout(card)));
             let idx = app.history.len().saturating_sub(1);

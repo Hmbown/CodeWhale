@@ -68,7 +68,7 @@ use super::capacity_memory::{
 };
 use super::coherence::{CoherenceSignal, CoherenceState, next_coherence_state};
 use super::events::{Event, TurnOutcomeStatus};
-use super::ops::Op;
+use super::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
 use super::session::Session;
 use super::tool_parser;
 use super::turn::{TurnContext, TurnToolCall, post_turn_snapshot, pre_turn_snapshot};
@@ -161,11 +161,16 @@ pub struct EngineConfig {
     /// Path to the user memory file (#489). Always populated; only
     /// consulted when `memory_enabled` is `true`.
     pub memory_path: PathBuf,
+    /// Default directory for Xiaomi MiMo speech/TTS tool outputs.
+    pub speech_output_dir: Option<PathBuf>,
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub goal_objective: Option<String>,
     /// Tool restriction from custom slash command frontmatter.
     /// `None` means the current turn may use the normal tool set.
     pub allowed_tools: Option<Vec<String>>,
+    /// Hook executor for control-plane hooks.
+    /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
+    pub hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
     /// Resolved BCP-47 locale tag (e.g. `"en"`, `"zh-Hans"`, `"ja"`)
     /// for the `## Environment` block in the system prompt. The
     /// caller resolves this from `Settings` once at engine
@@ -233,10 +238,12 @@ impl Default for EngineConfig {
             subagent_model_overrides: HashMap::new(),
             memory_enabled: false,
             memory_path: PathBuf::from("./memory.md"),
+            speech_output_dir: None,
             vision_config: None,
             strict_tool_mode: false,
             goal_objective: None,
             allowed_tools: None,
+            hook_executor: None,
             locale_tag: "en".to_string(),
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
@@ -630,6 +637,248 @@ impl Engine {
         (engine, handle)
     }
 
+    async fn handle_run_shell_command(
+        &mut self,
+        command: String,
+        mode: AppMode,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: crate::tui::approval::ApprovalMode,
+    ) {
+        self.reset_cancel_token();
+        self.turn_counter = self.turn_counter.saturating_add(1);
+        self.capacity_controller.mark_turn_start(self.turn_counter);
+
+        let turn_id = format!(
+            "{}{seq}",
+            USER_SHELL_TOOL_ID_PREFIX,
+            seq = self.turn_counter
+        );
+        let tool_id = turn_id.clone();
+        let tool_name = "exec_shell".to_string();
+        let tool_input = json!({ "command": command, "source": "user" });
+        let snapshot_prompt = tool_input["command"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+
+        self.session.trust_mode = trust_mode;
+        self.config.trust_mode = trust_mode;
+        self.session.auto_approve = auto_approve;
+        self.session.approval_mode = if auto_approve {
+            crate::tui::approval::ApprovalMode::Auto
+        } else {
+            approval_mode
+        };
+
+        let _ = self
+            .tx_event
+            .send(Event::TurnStarted {
+                turn_id: turn_id.clone(),
+            })
+            .await;
+
+        if self.config.snapshots_enabled {
+            let pre_workspace = self.session.workspace.clone();
+            let pre_seq = self.turn_counter;
+            let pre_cap = self.config.snapshots_max_workspace_bytes;
+            let pre_prompt = snapshot_prompt.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap, Some(&pre_prompt))
+            })
+            .await;
+        }
+
+        let _ = self
+            .tx_event
+            .send(Event::ToolCallStarted {
+                id: tool_id.clone(),
+                name: tool_name.clone(),
+                input: tool_input.clone(),
+            })
+            .await;
+
+        let tool_context = self.build_tool_context(mode, auto_approve);
+        let registry = ToolRegistryBuilder::new()
+            .with_shell_tools()
+            .build(tool_context);
+
+        let result = if mode == AppMode::Plan {
+            Err(ToolError::permission_denied(
+                "Tool 'exec_shell' is unavailable in Plan mode".to_string(),
+            ))
+        } else if !self.config.features.enabled(Feature::ShellTool) {
+            Err(ToolError::not_available(
+                "Tool 'exec_shell' is disabled by feature flag".to_string(),
+            ))
+        } else if let Some(spec) = registry.get(&tool_name) {
+            let approval_required = spec.approval_requirement() != ApprovalRequirement::Auto
+                && !registry.context().auto_approve;
+            if approval_required {
+                emit_tool_audit(json!({
+                    "event": "tool.approval_required",
+                    "tool_id": tool_id.clone(),
+                    "tool_name": tool_name.clone(),
+                    "source": "composer_bang",
+                }));
+                let approval_key =
+                    crate::tools::approval_cache::build_approval_key(&tool_name, &tool_input).0;
+                let approval_grouping_key =
+                    crate::tools::approval_cache::build_approval_grouping_key(
+                        &tool_name,
+                        &tool_input,
+                    )
+                    .0;
+                let _ = self
+                    .tx_event
+                    .send(Event::ApprovalRequired {
+                        id: tool_id.clone(),
+                        tool_name: tool_name.clone(),
+                        input: tool_input.clone(),
+                        description: spec.description().to_string(),
+                        approval_key,
+                        approval_grouping_key,
+                        intent_summary: None,
+                    })
+                    .await;
+
+                match self.await_tool_approval(&tool_id).await {
+                    Ok(ApprovalResult::Approved) => {
+                        emit_tool_audit(json!({
+                            "event": "tool.approval_decision",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                            "decision": "approved",
+                            "source": "composer_bang",
+                        }));
+                        Self::execute_tool_with_lock(
+                            self.tool_exec_lock.clone(),
+                            spec.supports_parallel(),
+                            false,
+                            self.tx_event.clone(),
+                            tool_name.clone(),
+                            tool_input.clone(),
+                            Some(&registry),
+                            None,
+                            None,
+                        )
+                        .await
+                    }
+                    Ok(ApprovalResult::Denied) => {
+                        emit_tool_audit(json!({
+                            "event": "tool.approval_decision",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                            "decision": "denied",
+                            "source": "composer_bang",
+                        }));
+                        Err(ToolError::permission_denied(format!(
+                            "Tool '{tool_name}' denied by user"
+                        )))
+                    }
+                    Ok(ApprovalResult::RetryWithPolicy(policy)) => {
+                        emit_tool_audit(json!({
+                            "event": "tool.approval_decision",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                            "decision": "retry_with_policy",
+                            "policy": format!("{policy:?}"),
+                            "source": "composer_bang",
+                        }));
+                        let elevated_context = registry
+                            .context()
+                            .clone()
+                            .with_elevated_sandbox_policy(policy);
+                        Self::execute_tool_with_lock(
+                            self.tool_exec_lock.clone(),
+                            spec.supports_parallel(),
+                            false,
+                            self.tx_event.clone(),
+                            tool_name.clone(),
+                            tool_input.clone(),
+                            Some(&registry),
+                            None,
+                            Some(elevated_context),
+                        )
+                        .await
+                    }
+                    Err(err) => Err(err),
+                }
+            } else {
+                Self::execute_tool_with_lock(
+                    self.tool_exec_lock.clone(),
+                    spec.supports_parallel(),
+                    false,
+                    self.tx_event.clone(),
+                    tool_name.clone(),
+                    tool_input.clone(),
+                    Some(&registry),
+                    None,
+                    None,
+                )
+                .await
+            }
+        } else {
+            Err(ToolError::not_available(
+                "tool 'exec_shell' is not registered".to_string(),
+            ))
+        };
+
+        let mut result = result;
+        if let Ok(tool_result) = result.as_mut()
+            && let Some(path) = crate::tools::truncate::apply_spillover_with_artifact(
+                tool_result,
+                &tool_id,
+                &tool_name,
+                &self.session.id,
+            )
+        {
+            emit_tool_audit(json!({
+                "event": "tool.spillover",
+                "tool_id": tool_id.clone(),
+                "tool_name": tool_name.clone(),
+                "path": path.display().to_string(),
+                "source": "composer_bang",
+            }));
+        }
+
+        let status = if result.is_err() {
+            TurnOutcomeStatus::Failed
+        } else {
+            TurnOutcomeStatus::Completed
+        };
+        let error = result.as_ref().err().map(ToString::to_string);
+
+        let _ = self
+            .tx_event
+            .send(Event::ToolCallComplete {
+                id: tool_id,
+                name: tool_name,
+                result,
+            })
+            .await;
+
+        let _ = self
+            .tx_event
+            .send(Event::TurnComplete {
+                usage: Usage::default(),
+                status,
+                error,
+                tool_catalog: None,
+                base_url: None,
+            })
+            .await;
+
+        if self.config.snapshots_enabled {
+            let post_workspace = self.session.workspace.clone();
+            let post_seq = self.turn_counter;
+            let post_cap = self.config.snapshots_max_workspace_bytes;
+            crate::utils::spawn_blocking_supervised("post-shell-turn-snapshot", move || {
+                post_turn_snapshot(&post_workspace, post_seq, post_cap, Some(&snapshot_prompt));
+            });
+        }
+    }
+
     /// Run the engine event loop
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) {
@@ -650,6 +899,7 @@ impl Engine {
                     translation_enabled,
                     show_thinking,
                     allowed_tools,
+                    hook_executor,
                 } => {
                     self.handle_send_message(
                         content,
@@ -666,6 +916,23 @@ impl Engine {
                         translation_enabled,
                         show_thinking,
                         allowed_tools,
+                        hook_executor,
+                    )
+                    .await;
+                }
+                Op::RunShellCommand {
+                    command,
+                    mode,
+                    trust_mode,
+                    auto_approve,
+                    approval_mode,
+                } => {
+                    self.handle_run_shell_command(
+                        command,
+                        mode,
+                        trust_mode,
+                        auto_approve,
+                        approval_mode,
                     )
                     .await;
                 }
@@ -725,6 +992,7 @@ impl Engine {
                     )
                     .with_max_spawn_depth(self.config.max_spawn_depth)
                     .with_step_api_timeout(self.config.subagent_api_timeout)
+                    .with_speech_output_dir(self.config.speech_output_dir.clone())
                     .with_mcp_pool(mcp_pool)
                     .background_runtime();
                     let route = resolve_subagent_assignment_route(
@@ -778,15 +1046,19 @@ impl Engine {
                     let _ = self.tx_event.send(Event::AgentList { agents }).await;
                 }
                 Op::ChangeMode { mode } => {
+                    self.refresh_system_prompt(mode);
+                    self.emit_session_updated().await;
                     let _ = self
                         .tx_event
                         .send(Event::status(format!("Mode changed to: {mode:?}")))
                         .await;
                 }
-                Op::SetModel { model } => {
+                Op::SetModel { model, mode } => {
                     self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
                     self.session.model = model;
                     self.config.model.clone_from(&self.session.model);
+                    self.refresh_system_prompt(mode);
+                    self.emit_session_updated().await;
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
@@ -884,6 +1156,7 @@ impl Engine {
                         self.config.translation_enabled,
                         self.config.show_thinking,
                         self.config.allowed_tools.clone(),
+                        self.config.hook_executor.clone(),
                     )
                     .await;
                 }
@@ -937,7 +1210,10 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let mut lines = vec![format!("Current local date: {today}")];
+        let mut lines = vec![
+            format!("Current local date: {today}"),
+            format!("Current model: {routed_model}"),
+        ];
         if auto_model {
             lines.push(format!("Auto model route: {routed_model}"));
         }
@@ -1008,6 +1284,7 @@ impl Engine {
         translation_enabled: bool,
         show_thinking: bool,
         allowed_tools: Option<Vec<String>>,
+        hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
     ) {
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
@@ -1114,6 +1391,7 @@ impl Engine {
             );
         }
         self.config.allowed_tools = allowed_tools;
+        self.config.hook_executor = hook_executor;
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;
         self.session.auto_model = auto_model;
@@ -1219,6 +1497,7 @@ impl Engine {
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_step_api_timeout(self.config.subagent_api_timeout)
+                        .with_speech_output_dir(self.config.speech_output_dir.clone())
                         .with_mcp_pool(mcp_pool.clone())
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {

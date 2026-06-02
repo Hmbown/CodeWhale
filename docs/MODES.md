@@ -9,6 +9,10 @@ Model selection is separate. `--model auto` and `/model auto` route each turn to
 a concrete model and thinking level; they are not TUI modes and are not part of
 the `Tab` cycle.
 
+Each user turn includes a small `<turn_meta>` block with the current local date
+and the concrete model sent to the provider. When `--model auto` is active, the
+same block also records that the model was auto-routed.
+
 ## TUI Modes
 
 Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
@@ -21,6 +25,22 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 - **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
 - **Agent**: multi-step tool use. Shell execution (`exec_shell`, `task_shell_start`, `task_shell_wait`) requires `allow_shell = true` in config; approval prompts gate each call. File writes are allowed without a prompt.
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
+
+### Tool availability by mode
+
+| Tool family | Plan | Agent | YOLO |
+|:---|:---:|:---:|:---:|
+| Read-only file, search, and diagnostic tools | yes | yes | yes |
+| File write and patch tools | no | yes | yes |
+| Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | approval-gated, when `allow_shell = true` | yes |
+| Paid or external-service tools | approval-gated | approval-gated | auto-approved |
+| Access outside the workspace root | no | only with trust mode | yes |
+
+If a shell tool is missing from the model-visible catalog in Agent mode, check
+`allow_shell` first. The setting can come from the active config/profile or from
+the runtime session. YOLO turns shell access on together with trust mode and
+auto-approval, which is why shell commands may work there even when the Agent
+mode catalog does not list them.
 
 All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
 

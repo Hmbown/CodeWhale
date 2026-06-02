@@ -299,6 +299,53 @@ Scoop manifests are maintained outside this repository's release workflow and
 can lag GitHub/npm/Cargo releases. Use npm or manual GitHub release downloads
 when you need the newest version immediately.
 
+### Windows NSIS Installer
+
+A standalone NSIS-based installer is available starting with v0.8.50 for
+Windows users who prefer a traditional double-click setup (no npm, no Scoop, no
+Cargo required).
+
+**Download** `CodeWhaleSetup.exe` from the
+[Releases page](https://github.com/Hmbown/CodeWhale/releases/latest).
+
+**Install** by double-clicking the setup executable. The installer:
+
+- Installs `codewhale.exe` and `codewhale-tui.exe` side-by-side into
+  `%LOCALAPPDATA%\Programs\CodeWhale\bin`
+- Adds the install directory to the **current user** `PATH`
+- Registers in Windows **Apps & Features** for easy uninstall
+
+**Silent install** (for IT admins, SCCM, Intune):
+
+```powershell
+CodeWhaleSetup.exe /S
+```
+
+The installer is per-user and does not request elevation. Run silent installs in
+the target user's context, or use a deployment tool that can run the installer
+for each user profile that needs CodeWhale.
+
+The release-built installer is currently unsigned and may trigger Windows
+SmartScreen. Verify the SHA-256 checksum from `codewhale-artifacts-sha256.txt`
+before deploying, and sign the installer in your internal deployment pipeline if
+your environment requires signed application packages.
+
+**Build the installer yourself** (requires [NSIS](https://nsis.sourceforge.io)):
+
+```powershell
+cd scripts\installer
+# Place codewhale.exe and codewhale-tui.exe here, then:
+makensis /DVERSION=<version> codewhale.nsi
+```
+
+**Manual fallback** — if the installer is blocked by group policy, see the
+[CLASSROOM_INSTALL.md](CLASSROOM_INSTALL.md) guide for step-by-step PowerShell
+commands.
+
+> **Deploying to a classroom or lab?** See the full
+> [Classroom Install Checklist](CLASSROOM_INSTALL.md) for silent install,
+> API key provisioning, imaging notes, and troubleshooting.
+
 ---
 
 ## 7. Build from source

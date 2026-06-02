@@ -4,8 +4,8 @@ Install and run CodeWhale, the agentic terminal for open-source and open-weight 
 models, from GitHub release artifacts.
 
 > Previously published as `deepseek-tui`. See `docs/REBRAND.md` in the upstream
-> repository for the migration notes; the legacy `deepseek-tui` npm package
-> remains a deprecation shim through the v0.8.x transition.
+> repository for the migration notes; the legacy `deepseek-tui` npm package is
+> deprecated and receives no further releases.
 
 ## Install
 

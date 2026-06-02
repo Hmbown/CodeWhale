@@ -1918,7 +1918,8 @@ fn active_tool_status_label_counts_foreground_rlm_work() {
 
     let label = active_tool_status_label(&app).expect("status label");
 
-    assert!(label.contains("tool rlm"), "label: {label}");
+    assert!(label.contains("rlm"), "label: {label}");
+    assert!(!label.contains("tool rlm"), "label: {label}");
     assert!(label.contains("1 active"), "label: {label}");
 }
 
@@ -2021,11 +2022,12 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
     let compaction = app.compaction_config();
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    apply_model_and_compaction_update(&engine.handle, compaction).await;
+    apply_model_and_compaction_update(&engine.handle, compaction, app.mode).await;
 
     match engine.rx_op.recv().await.expect("set model op") {
-        crate::core::ops::Op::SetModel { model } => {
+        crate::core::ops::Op::SetModel { model, mode } => {
             assert_eq!(model, "deepseek-v4-flash");
+            assert_eq!(mode, app.mode);
         }
         other => panic!("expected SetModel, got {other:?}"),
     }
@@ -2035,6 +2037,22 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
             assert_eq!(config.model, "deepseek-v4-flash");
         }
         other => panic!("expected SetCompaction, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mode_change_update_notifies_engine() {
+    let mut app = create_test_app();
+    let _ = app.set_mode(crate::tui::app::AppMode::Plan);
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    assert!(apply_mode_update(&mut app, &engine.handle, crate::tui::app::AppMode::Yolo).await);
+
+    match engine.rx_op.recv().await.expect("change mode op") {
+        crate::core::ops::Op::ChangeMode { mode } => {
+            assert_eq!(mode, crate::tui::app::AppMode::Yolo);
+        }
+        other => panic!("expected ChangeMode, got {other:?}"),
     }
 }
 
@@ -2512,11 +2530,12 @@ fn turn_liveness_leaves_active_turn_running() {
 #[test]
 fn turn_liveness_uses_recent_turn_activity_not_turn_start() {
     let mut app = create_test_app();
-    let now = Instant::now();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.turn_started_at = Some(now - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_secs(30));
-    app.turn_last_activity_at = Some(now - Duration::from_secs(1));
+    app.turn_started_at = Some(Instant::now());
+    app.turn_last_activity_at =
+        Some(app.turn_started_at.unwrap() + TURN_STALL_WATCHDOG_TIMEOUT + Duration::from_secs(29));
+    let now = app.turn_last_activity_at.unwrap() + Duration::from_secs(1);
 
     let recovered = reconcile_turn_liveness(&mut app, now, false);
 
@@ -2529,11 +2548,14 @@ fn turn_liveness_uses_recent_turn_activity_not_turn_start() {
 #[test]
 fn turn_liveness_does_not_abort_running_tool() {
     let mut app = create_test_app();
-    let now = Instant::now();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.turn_started_at = Some(now - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_secs(30));
+    app.turn_started_at = Some(Instant::now());
     app.turn_last_activity_at = app.turn_started_at;
+    let now = app.turn_started_at.unwrap()
+        + TURN_STALL_WATCHDOG_TIMEOUT
+        + Duration::from_secs(30)
+        + Duration::from_secs(1);
     let mut active = ActiveCell::new();
     active.push_tool(
         "tool-1",
@@ -2910,6 +2932,88 @@ fn event_poll_timeout_has_nonzero_floor() {
         clamp_event_poll_timeout(Duration::from_millis(24)),
         Duration::from_millis(24)
     );
+}
+
+#[tokio::test]
+async fn bang_shell_input_dispatches_shell_op_instead_of_model_message() {
+    let mut app = create_test_app();
+    app.mode = AppMode::Agent;
+    app.trust_mode = false;
+
+    let mut engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "! pwd")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Shell command submitted: pwd")
+    );
+
+    let op = engine.rx_op.recv().await.expect("engine op");
+    match op {
+        Op::RunShellCommand {
+            command,
+            mode,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        } => {
+            assert_eq!(command, "pwd");
+            assert_eq!(mode, AppMode::Agent);
+            assert!(!trust_mode);
+            assert!(!auto_approve);
+            assert_eq!(approval_mode, ApprovalMode::Suggest);
+        }
+        other => panic!("expected RunShellCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bang_shell_input_dispatches_even_while_turn_is_loading() {
+    let mut app = create_test_app();
+    app.mode = AppMode::Agent;
+    app.is_loading = true;
+
+    let mut engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "! echo steer-safe")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    let op = engine.rx_op.recv().await.expect("engine op");
+    match op {
+        Op::RunShellCommand { command, mode, .. } => {
+            assert_eq!(command, "echo steer-safe");
+            assert_eq!(mode, AppMode::Agent);
+        }
+        other => panic!("expected RunShellCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn empty_bang_shell_input_is_consumed_with_usage_error() {
+    let mut app = create_test_app();
+    let engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "!   ")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Error: Usage: ! <shell command>")
+    );
+}
+
+#[test]
+fn local_bang_shell_tool_ids_are_not_model_visible() {
+    assert!(!is_model_visible_tool_call("user_shell_1"));
+    assert!(is_model_visible_tool_call("toolu_01abc"));
 }
 
 fn complete_release_json(tag: &str) -> serde_json::Value {
@@ -3347,18 +3451,30 @@ fn context_usage_snapshot_prefers_live_estimate_while_loading() {
 #[test]
 fn should_auto_compact_before_send_respects_threshold_and_setting() {
     let mut app = create_test_app();
-    let big_buffer = vec![Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "context ".repeat(400_000),
-            cache_control: None,
-        }],
-    }];
+    let messages_for_repeats = |repeats: usize| {
+        vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "context ".repeat(repeats),
+                cache_control: None,
+            }],
+        }]
+    };
 
     // High estimated context + auto_compact ON → auto-compact triggers.
-    app.api_messages = big_buffer.clone();
+    app.api_messages = messages_for_repeats(240_000);
     app.auto_compact = true;
+    app.auto_compact_threshold_percent = 70.0;
     assert!(should_auto_compact_before_send(&app));
+
+    let (_, _, high_percent) =
+        context_usage_snapshot(&app).expect("high context snapshot should be available");
+    assert!(
+        (70.0..90.0).contains(&high_percent),
+        "test fixture should sit between default and high custom thresholds; got {high_percent:.2}%"
+    );
+    app.auto_compact_threshold_percent = 90.0;
+    assert!(!should_auto_compact_before_send(&app));
 
     // Same high context but auto_compact OFF → never triggers.
     app.auto_compact = false;
@@ -3369,16 +3485,39 @@ fn should_auto_compact_before_send_respects_threshold_and_setting() {
     // #115 fix: the estimate is the primary signal, not the engine's
     // turn-cumulative reported value (which used to rule the displayed
     // % and could spuriously trigger / suppress auto-compact).
+    app.api_messages = messages_for_repeats(80_000);
+    app.auto_compact = true;
+    app.auto_compact_threshold_percent = 10.0;
+    app.session.last_prompt_tokens = Some(10_000);
+    let (used, _, percent) =
+        context_usage_snapshot(&app).expect("floor context snapshot should be available");
+    assert!(
+        used < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS as i64 && percent >= 10.0,
+        "test fixture should cross percent threshold but stay below the 500K floor; used={used} percent={percent:.2}"
+    );
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn context_pressure_warning_reflects_auto_compact_threshold_state() {
+    let mut app = create_test_app();
     app.api_messages = vec![Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
-            text: "small".to_string(),
+            text: "context ".repeat(240_000),
             cache_control: None,
         }],
     }];
     app.auto_compact = true;
-    app.session.last_prompt_tokens = Some(10_000);
-    assert!(!should_auto_compact_before_send(&app));
+    app.auto_compact_threshold_percent = 70.0;
+
+    maybe_warn_context_pressure(&mut app);
+
+    let status = app.status_message.expect("context warning");
+    assert!(
+        status.contains("Auto-compaction will run before the next send."),
+        "unexpected status: {status}"
+    );
 }
 
 // ============================================================================
@@ -4284,7 +4423,7 @@ fn detail_target_prefers_visible_tool_card() {
 
     assert_eq!(detail_target_cell_index(&app), Some(1));
     let expected = format!(
-        "{} Activity: file_search · {} raw",
+        "{} Activity: find · {} raw",
         crate::tui::key_shortcuts::activity_shortcut_label(),
         crate::tui::key_shortcuts::tool_details_shortcut_label()
     );
@@ -4695,6 +4834,59 @@ fn try_autocomplete_file_mention_no_match_reports_status() {
 }
 
 #[test]
+fn try_autocomplete_file_mention_no_match_mentions_depth_cap_for_path_like_partial() {
+    let tmpdir = TempDir::new().expect("tempdir");
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_walk_depth = 6;
+    app.input = "@a/b/c/d/e/f/g/target".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_file_mention(&mut app));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(
+            "No files match @a/b/c/d/e/f/g/target (mention_walk_depth=6; use /config set mention_walk_depth 0 to search deeper)"
+        )
+    );
+}
+
+#[test]
+fn try_autocomplete_file_mention_no_match_skips_depth_hint_for_shallow_path() {
+    let tmpdir = TempDir::new().expect("tempdir");
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_walk_depth = 6;
+    app.input = "@shallow_missing/main.rs".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_file_mention(&mut app));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("No files match @shallow_missing/main.rs")
+    );
+}
+
+#[test]
+fn try_autocomplete_file_mention_no_match_skips_depth_hint_when_unlimited() {
+    let tmpdir = TempDir::new().expect("tempdir");
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_walk_depth = 0;
+    app.input = "@a/b/c/d/e/f/g/target".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_file_mention(&mut app));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("No files match @a/b/c/d/e/f/g/target")
+    );
+}
+
+#[test]
 fn try_autocomplete_file_mention_returns_false_outside_mention() {
     let mut app = create_test_app();
     app.input = "no mention here".to_string();
@@ -4735,6 +4927,24 @@ fn mention_popup_lists_workspace_matches_for_cursor_partial() {
     assert!(entries.iter().any(|e| e.starts_with("docs/")));
     // README.md doesn't match `docs/` — confirm we didn't dump every file.
     assert!(!entries.iter().any(|e| e == "README.md"));
+}
+
+#[test]
+fn mention_popup_browser_mode_lists_immediate_directory_children() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    std::fs::create_dir_all(tmpdir.path().join("src/nested")).unwrap();
+    std::fs::write(tmpdir.path().join("src/lib.rs"), "lib").unwrap();
+    std::fs::write(tmpdir.path().join("src/nested/deep.rs"), "deep").unwrap();
+    std::fs::write(tmpdir.path().join("README.md"), "readme").unwrap();
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.mention_menu_behavior = "browser".to_string();
+    app.input = "look at @src/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_mention_menu_entries(&mut app, 8);
+    assert_eq!(entries, vec!["src/lib.rs", "src/nested/"]);
 }
 
 #[test]
@@ -5888,16 +6098,13 @@ fn activity_detail_includes_tool_handle_and_neighbor_context() {
     assert!(open_activity_detail_pager(&mut app));
     let body = pop_pager_body(&mut app);
 
-    assert!(body.contains("Activity: read_file"), "{body}");
+    assert!(body.contains("Activity: read"), "{body}");
     assert!(body.contains("Activity chunk: 2 of 3"), "{body}");
     assert!(
         body.contains("Previous activity: 1 of 3 - thinking"),
         "{body}"
     );
-    assert!(
-        body.contains("Next activity: 3 of 3 - tool grep_files"),
-        "{body}"
-    );
+    assert!(body.contains("Next activity: 3 of 3 - find"), "{body}");
     assert!(body.contains("Detail handle: art_call-read"), "{body}");
     assert!(
         body.contains("retrieve_tool_result ref=art_call-read"),
@@ -5932,7 +6139,7 @@ fn activity_detail_fallback_prefers_live_activity_context() {
     let body = pop_pager_body(&mut app);
 
     assert!(body.contains("Turn: turn_live_123456789"));
-    assert!(body.contains("Activity: tool agent_eval"));
+    assert!(body.contains("Activity: delegate"));
     assert!(body.contains("Status: running"));
     assert!(body.contains("agent_id: agent_af58ba3a"));
 }
@@ -5959,7 +6166,7 @@ fn activity_detail_fallback_uses_recent_meaningful_activity_without_full_tool_du
     assert!(open_activity_detail_pager(&mut app));
     let body = pop_pager_body(&mut app);
 
-    assert!(body.contains("Activity: tool read_file"));
+    assert!(body.contains("Activity: read"));
     assert!(body.contains("Status: done"));
     assert!(
         body.contains("Alt+V for details"),
@@ -6732,7 +6939,7 @@ fn footer_balance_spans_formats_cny() {
     };
     *app.balance_cell.lock().unwrap() = Some(info);
     let spans = footer_balance_spans(&app);
-    assert_eq!(spans_text(&spans), "bal ¥123.5");
+    assert_eq!(spans_text(&spans), "balance ¥123.5");
 }
 
 #[test]
@@ -6745,7 +6952,7 @@ fn footer_balance_spans_formats_usd() {
     };
     *app.balance_cell.lock().unwrap() = Some(info);
     let spans = footer_balance_spans(&app);
-    assert_eq!(spans_text(&spans), "bal $0.50");
+    assert_eq!(spans_text(&spans), "balance $0.50");
 }
 
 #[test]
@@ -6758,7 +6965,7 @@ fn footer_balance_spans_rounds_large_amount() {
     };
     *app.balance_cell.lock().unwrap() = Some(info);
     let spans = footer_balance_spans(&app);
-    assert_eq!(spans_text(&spans), "bal $1235");
+    assert_eq!(spans_text(&spans), "balance $1235");
 }
 
 #[test]
@@ -6771,7 +6978,7 @@ fn footer_balance_spans_treats_unknown_currency_as_usd() {
     };
     *app.balance_cell.lock().unwrap() = Some(info);
     let spans = footer_balance_spans(&app);
-    assert_eq!(spans_text(&spans), "bal $10.0");
+    assert_eq!(spans_text(&spans), "balance $10.0");
 }
 
 #[test]
@@ -6784,7 +6991,7 @@ fn render_footer_from_with_balance_item_shows_balance() {
     };
     *app.balance_cell.lock().unwrap() = Some(info);
     let props = render_footer_from(&app, &[crate::config::StatusItem::Balance], None);
-    assert_eq!(spans_text(&props.balance), "bal $42.5");
+    assert_eq!(spans_text(&props.balance), "balance $42.5");
 }
 
 #[test]
@@ -7120,7 +7327,7 @@ fn composer_arrows_scroll_multiline_input_navigates_lines() {
 }
 
 #[test]
-fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+fn composer_arrow_up_at_first_line_preserves_multiline_draft() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = false;
     app.input = "line one\nline two".to_string();
@@ -7134,7 +7341,29 @@ fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
         false,
     ));
 
-    assert_eq!(app.input, "previous prompt");
+    assert_eq!(app.input, "line one\nline two");
+    assert_eq!(app.cursor_position, 0);
+    assert!(app.history_index.is_none());
+}
+
+#[test]
+fn composer_arrow_down_at_last_line_preserves_multiline_draft() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("next prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert_eq!(app.cursor_position, app.input.chars().count());
+    assert!(app.history_index.is_none());
 }
 
 // #1443: when mouse capture is off (e.g. Windows CMD), arrow-scroll

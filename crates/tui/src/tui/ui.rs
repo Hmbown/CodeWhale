@@ -40,7 +40,7 @@ use crate::client::{
     inspect_prompt_for_request,
 };
 use crate::commands;
-use crate::compaction::estimate_input_tokens_conservative;
+use crate::compaction::{MINIMUM_AUTO_COMPACTION_TOKENS, estimate_input_tokens_conservative};
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig, StatusItem,
     UpdateConfig, save_provider_auth_mode_for,
@@ -48,7 +48,7 @@ use crate::config::{
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
-use crate::core::ops::Op;
+use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
 use crate::hooks::{HookEvent, HookExecutor};
 use crate::llm_client::LlmClient;
 use crate::models::{
@@ -115,7 +115,7 @@ use super::key_actions;
 use super::app::{
     App, AppAction, AppMode, OnboardingState, QueuedMessage, ReasoningEffort, SidebarFocus,
     StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
-    looks_like_slash_command_input,
+    looks_like_slash_command_input, shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -145,6 +145,7 @@ const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
+const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const UI_IDLE_POLL_MS: u64 = 48;
 const UI_ACTIVE_POLL_MS: u64 = 24;
 const WEB_CONFIG_POLL_MS: u64 = 16;
@@ -503,6 +504,13 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         .shell_manager
         .clone()
         .unwrap_or_else(|| crate::tools::shell::new_shared_shell_manager(app.workspace.clone()));
+    // #2511: ensure hook_executor is initialized for fresh sessions — it is
+    // only set by apply_workspace_runtime_state (session resume / workspace
+    // switch), so a brand-new session would otherwise leave it None and both
+    // exec_shell shell_env hooks and ToolCallBefore gate would silently no-op.
+    if app.runtime_services.hook_executor.is_none() {
+        app.runtime_services.hook_executor = Some(std::sync::Arc::new(app.hooks.clone()));
+    }
     app.runtime_services = RuntimeToolServices {
         shell_manager: Some(shell_manager),
         task_manager: Some(task_manager.clone()),
@@ -511,8 +519,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         active_task_id: None,
         active_thread_id: None,
         // #456: plumb the App's HookExecutor so `exec_shell` can surface
-        // the configured `shell_env` hooks. Wrapped in Arc once and shared.
-        hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
+        // the configured `shell_env` hooks. Clone the shared Arc.
+        hook_executor: app.runtime_services.hook_executor.clone(),
         handle_store: app.runtime_services.handle_store.clone(),
         rlm_sessions: app.runtime_services.rlm_sessions.clone(),
     };
@@ -754,6 +762,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         allowed_tools: app.active_allowed_tools.clone(),
+        hook_executor: app.runtime_services.hook_executor.clone(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -772,6 +781,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        speech_output_dir: config.speech_output_dir(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: app.hunt.quarry.clone(),
@@ -1414,21 +1424,27 @@ async fn run_event_loop(
                         if name == "update_plan" {
                             app.plan_tool_used_in_turn = true;
                         }
-                        let tool_content = match &result {
-                            Ok(output) => sanitize_stream_chunk(
-                                &tool_result_content_for_api_message(app, &id, &name, output).await,
-                            ),
-                            Err(err) => sanitize_stream_chunk(&format!("Error: {err}")),
-                        };
-                        app.api_messages.push(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::ToolResult {
-                                tool_use_id: id.clone(),
-                                content: tool_content,
-                                is_error: None,
-                                content_blocks: None,
-                            }],
-                        });
+                        if is_model_visible_tool_call(&id) {
+                            let tool_content = match &result {
+                                Ok(output) => sanitize_stream_chunk(
+                                    &tool_result_content_for_api_message(app, &id, &name, output)
+                                        .await,
+                                ),
+                                Err(err) => sanitize_stream_chunk(&format!("Error: {err}")),
+                            };
+                            app.api_messages.push(Message {
+                                role: "user".to_string(),
+                                content: vec![ContentBlock::ToolResult {
+                                    tool_use_id: id.clone(),
+                                    content: tool_content,
+                                    is_error: None,
+                                    content_blocks: None,
+                                }],
+                            });
+                        } else {
+                            app.pending_tool_uses
+                                .retain(|(tool_id, _, _)| tool_id != &id);
+                        }
                         handle_tool_call_complete(app, &id, &name, &result);
 
                         // Immediately refresh the task panel sidebar when a
@@ -2368,6 +2384,12 @@ async fn run_event_loop(
         } else {
             None
         };
+        // Merge the per-app full-repaint hint (set by theme switches)
+        // into the loop-level flag before the draw decision.
+        if app.force_next_full_repaint {
+            force_terminal_repaint = true;
+            app.force_next_full_repaint = false;
+        }
         if app.needs_redraw && draw_wait.is_none() {
             let was_full_repaint = force_terminal_repaint;
             draw_app_frame_inner(terminal, app, force_terminal_repaint)?;
@@ -2926,6 +2948,22 @@ async fn run_event_loop(
                 continue;
             }
 
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.view_stack.is_empty()
+            {
+                app.status_message = Some(if app.is_compacting {
+                    "Context compaction already in progress...".to_string()
+                } else {
+                    "Compacting context (Ctrl+L)...".to_string()
+                });
+                if !app.is_compacting {
+                    let _ = engine_handle.send(Op::CompactContext).await;
+                }
+                app.needs_redraw = true;
+                continue;
+            }
+
             if matches!(key.code, KeyCode::Char('b') | KeyCode::Char('B'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
                 && app.view_stack.is_empty()
@@ -3107,7 +3145,7 @@ async fn run_event_loop(
                         app.set_sidebar_focus(SidebarFocus::Work);
                         app.status_message = Some("Sidebar focus: work".to_string());
                     } else {
-                        app.set_mode(AppMode::Plan);
+                        apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     }
                     continue;
                 }
@@ -3116,7 +3154,7 @@ async fn run_event_loop(
                         app.set_sidebar_focus(SidebarFocus::Tasks);
                         app.status_message = Some("Sidebar focus: tasks".to_string());
                     } else {
-                        app.set_mode(AppMode::Agent);
+                        apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     }
                     continue;
                 }
@@ -3125,7 +3163,7 @@ async fn run_event_loop(
                         app.set_sidebar_focus(SidebarFocus::Agents);
                         app.status_message = Some("Sidebar focus: agents".to_string());
                     } else {
-                        app.set_mode(AppMode::Yolo);
+                        apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     }
                     continue;
                 }
@@ -3407,11 +3445,16 @@ async fn run_event_loop(
                         continue;
                     }
                     let prior_model = app.model.clone();
+                    let prior_mode = app.mode;
                     app.cycle_mode();
+                    if app.mode != prior_mode {
+                        sync_mode_update(&engine_handle, app.mode).await;
+                    }
                     if app.model != prior_model {
                         let _ = engine_handle
                             .send(Op::SetModel {
                                 model: app.model.clone(),
+                                mode: app.mode,
                             })
                             .await;
                     }
@@ -3484,6 +3527,9 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     if let Some(input) = app.submit_input() {
+                        if handle_bang_shell_input(app, &engine_handle, &input).await? {
+                            continue;
+                        }
                         if looks_like_slash_command_input(&input) {
                             if execute_command_input(
                                 terminal,
@@ -3533,6 +3579,9 @@ async fn run_event_loop(
                 // #382: Ctrl+Enter forces a steer into the current turn.
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(input) = app.submit_input() {
+                        if handle_bang_shell_input(app, &engine_handle, &input).await? {
+                            continue;
+                        }
                         if looks_like_slash_command_input(&input) {
                             if execute_command_input(
                                 terminal,
@@ -3607,6 +3656,9 @@ async fn run_event_loop(
                         // behaviour falls through to normal turn submit.
                         if config.memory_enabled() && is_memory_quick_add(&input) {
                             handle_memory_quick_add(app, &input, config);
+                            continue;
+                        }
+                        if handle_bang_shell_input(app, &engine_handle, &input).await? {
                             continue;
                         }
                         if looks_like_slash_command_input(&input) {
@@ -3873,34 +3925,34 @@ async fn run_event_loop(
                             AppMode::Agent => AppMode::Yolo,
                             AppMode::Yolo => AppMode::Plan,
                         };
-                        app.set_mode(new_mode);
+                        apply_mode_update(app, &engine_handle, new_mode).await;
                     }
                 }
                 _ if key_shortcuts::is_paste_shortcut(&key) => {
                     app.paste_from_clipboard();
                 }
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Agent);
+                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     continue;
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Yolo);
+                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     continue;
                 }
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Plan);
+                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     continue;
                 }
                 KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Agent);
+                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     continue;
                 }
                 KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Yolo);
+                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     continue;
                 }
                 KeyCode::Char('P') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    app.set_mode(AppMode::Plan);
+                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     continue;
                 }
                 KeyCode::Char('v') | KeyCode::Char('V')
@@ -4377,6 +4429,10 @@ async fn tool_result_content_for_api_message(
         return String::new();
     }
 
+    if matches!(name, "run_tests" | "run_verifiers" | "task_gate_run") {
+        return crate::core::engine::compact_tool_result_for_context(&app.model, name, output);
+    }
+
     if raw.chars().count() > crate::tool_output_receipts::RAW_TOOL_OUTPUT_RECEIPT_THRESHOLD_CHARS {
         let messages = live_tool_receipt_messages(app, id, raw, output.success);
         let artifacts = app.session_artifacts.clone();
@@ -4626,7 +4682,8 @@ async fn dispatch_user_message(
     });
     maybe_warn_context_pressure(app);
     if should_auto_compact_before_send(app) {
-        app.status_message = Some("Context critical; compacting before send...".to_string());
+        app.status_message =
+            Some("Context threshold reached; compacting before send...".to_string());
         let _ = engine_handle.send(Op::CompactContext).await;
     }
     app.session.last_prompt_tokens = None;
@@ -4706,6 +4763,7 @@ async fn dispatch_user_message(
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
             allowed_tools: app.active_allowed_tools.clone(),
+            hook_executor: app.runtime_services.hook_executor.clone(),
         })
         .await
     {
@@ -4718,13 +4776,59 @@ async fn dispatch_user_message(
     Ok(())
 }
 
+async fn sync_mode_update(engine_handle: &EngineHandle, mode: AppMode) {
+    let _ = engine_handle.send(Op::ChangeMode { mode }).await;
+}
+
+async fn apply_mode_update(app: &mut App, engine_handle: &EngineHandle, mode: AppMode) -> bool {
+    if app.set_mode(mode) {
+        sync_mode_update(engine_handle, mode).await;
+        true
+    } else {
+        false
+    }
+}
+
+async fn handle_bang_shell_input(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    input: &str,
+) -> Result<bool> {
+    let command = match shell_command_from_bang_input(input) {
+        Ok(Some(command)) => command,
+        Ok(None) => return Ok(false),
+        Err(message) => {
+            app.status_message = Some(format!("Error: {message}"));
+            return Ok(true);
+        }
+    };
+
+    engine_handle
+        .send(Op::RunShellCommand {
+            command: command.to_string(),
+            mode: app.mode,
+            trust_mode: app.trust_mode,
+            auto_approve: app.mode == AppMode::Yolo,
+            approval_mode: app.approval_mode,
+        })
+        .await?;
+    app.status_message = Some(format!("Shell command submitted: {command}"));
+    Ok(true)
+}
+
+fn is_model_visible_tool_call(id: &str) -> bool {
+    !id.starts_with(USER_SHELL_TOOL_ID_PREFIX)
+}
+
 async fn apply_model_and_compaction_update(
     engine_handle: &EngineHandle,
     compaction: crate::compaction::CompactionConfig,
+    mode: AppMode,
 ) {
     let _ = engine_handle
         .send(Op::SetModel {
             model: compaction.model.clone(),
+            mode,
         })
         .await;
     let _ = engine_handle
@@ -4752,6 +4856,7 @@ async fn drain_web_config_events(
                             apply_model_and_compaction_update(
                                 engine_handle,
                                 app.compaction_config(),
+                                app.mode,
                             )
                             .await;
                         }
@@ -4776,6 +4881,7 @@ async fn drain_web_config_events(
                             apply_model_and_compaction_update(
                                 engine_handle,
                                 app.compaction_config(),
+                                app.mode,
                             )
                             .await;
                         }
@@ -4861,7 +4967,7 @@ async fn apply_model_picker_choice(
     }
 
     if model_changed {
-        apply_model_and_compaction_update(engine_handle, app.compaction_config()).await;
+        apply_model_and_compaction_update(engine_handle, app.compaction_config(), app.mode).await;
     }
 
     let model_summary = if model_is_auto {
@@ -5105,6 +5211,9 @@ async fn apply_command_result(
                     persistence_actor::persist(PersistRequest::ClearCheckpoint);
                 }
             }
+            AppAction::ModeChanged(mode) => {
+                sync_mode_update(engine_handle, mode).await;
+            }
             AppAction::SendMessage(content) => {
                 let queued = build_queued_message(app, content);
                 submit_or_steer_message(app, config, engine_handle, queued).await?;
@@ -5210,7 +5319,7 @@ async fn apply_command_result(
                 }
             }
             AppAction::UpdateCompaction(compaction) => {
-                apply_model_and_compaction_update(engine_handle, compaction).await;
+                apply_model_and_compaction_update(engine_handle, compaction, app.mode).await;
             }
             AppAction::OpenConfigEditor(mode) => match mode {
                 ConfigUiMode::Native => {
@@ -5240,6 +5349,7 @@ async fn apply_command_result(
                                 apply_model_and_compaction_update(
                                     engine_handle,
                                     app.compaction_config(),
+                                    app.mode,
                                 )
                                 .await;
                             }
@@ -5981,7 +6091,7 @@ async fn apply_plan_choice(
 ) -> Result<()> {
     match choice {
         PlanChoice::AcceptAgent => {
-            app.set_mode(AppMode::Agent);
+            apply_mode_update(app, engine_handle, AppMode::Agent).await;
             app.add_message(HistoryCell::System {
                 content: "Plan accepted. Switching to Agent mode and starting implementation."
                     .to_string(),
@@ -5996,7 +6106,7 @@ async fn apply_plan_choice(
             }
         }
         PlanChoice::AcceptYolo => {
-            app.set_mode(AppMode::Yolo);
+            apply_mode_update(app, engine_handle, AppMode::Yolo).await;
             app.add_message(HistoryCell::System {
                 content: "Plan accepted. Switching to YOLO mode and starting implementation."
                     .to_string(),
@@ -6017,7 +6127,7 @@ async fn apply_plan_choice(
             app.status_message = Some("Revise the plan and press Enter.".to_string());
         }
         PlanChoice::ExitPlan => {
-            app.set_mode(AppMode::Agent);
+            apply_mode_update(app, engine_handle, AppMode::Agent).await;
             app.add_message(HistoryCell::System {
                 content: "Exited Plan mode. Switched to Agent mode.".to_string(),
             });
@@ -6704,6 +6814,19 @@ async fn handle_view_events(
                 persist,
             } => {
                 let result = commands::set_config_value(app, &key, &value, persist);
+                // Theme / background changes require a full terminal repaint
+                // because ratatui's incremental diff may miss color-only
+                // changes in cells that were rendered with theme-resolved
+                // colors (sidebar panels) rather than palette constants that
+                // go through the backend remap layer.  A full repaint
+                // (terminal clear + all cells redrawn) guarantees every cell
+                // picks up the new theme immediately.
+                if matches!(
+                    key.as_str(),
+                    "theme" | "ui_theme" | "background_color" | "background" | "bg"
+                ) {
+                    app.force_next_full_repaint = true;
+                }
                 // Only surface the "key = value" confirmation when the
                 // change is being persisted. Live-preview events
                 // (`persist: false`, e.g. arrow keys in the theme picker)
@@ -6716,7 +6839,8 @@ async fn handle_view_events(
                 if let Some(action) = result.action {
                     match action {
                         AppAction::UpdateCompaction(compaction) => {
-                            apply_model_and_compaction_update(engine_handle, compaction).await;
+                            apply_model_and_compaction_update(engine_handle, compaction, app.mode)
+                                .await;
                         }
                         AppAction::OpenConfigView => {}
                         _ => {}
@@ -6806,7 +6930,11 @@ async fn handle_view_events(
                 .await;
             }
             ViewEvent::ModeSelected { mode } => {
+                let prior_mode = app.mode;
                 let msg = commands::switch_mode(app, mode);
+                if app.mode != prior_mode {
+                    sync_mode_update(engine_handle, app.mode).await;
+                }
                 app.add_message(HistoryCell::System { content: msg });
             }
             ViewEvent::BacktrackStep { direction } => {
@@ -7860,14 +7988,21 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
-    if percent < CONTEXT_WARNING_THRESHOLD_PERCENT {
+    let configured_threshold = app.auto_compact_threshold_percent.clamp(10.0, 100.0);
+    let warning_threshold = CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(configured_threshold);
+    if percent < warning_threshold {
         return;
     }
 
-    let recommendation = if app.auto_compact {
-        "Auto-compaction is enabled."
+    let below_auto_floor = used < MINIMUM_AUTO_COMPACTION_TOKENS as i64;
+    let recommendation = if !app.auto_compact {
+        "Consider enabling auto_compact or use /compact."
+    } else if below_auto_floor {
+        "Auto-compaction is enabled but waits for the 500K token floor."
+    } else if percent >= configured_threshold {
+        "Auto-compaction will run before the next send."
     } else {
-        "Consider /compact or /clear."
+        "Auto-compaction is enabled."
     };
 
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
@@ -7878,8 +8013,13 @@ fn maybe_warn_context_pressure(app: &mut App) {
     }
 
     if app.status_message.is_none() {
+        let status_prefix = if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
+            "Context high"
+        } else {
+            "Context building"
+        };
         app.status_message = Some(format!(
-            "Context high: {percent:.0}% ({used}/{max} tokens). {recommendation}"
+            "{status_prefix}: {percent:.0}% ({used}/{max} tokens). {recommendation}"
         ));
     }
 }
@@ -7889,7 +8029,10 @@ fn should_auto_compact_before_send(app: &App) -> bool {
         return false;
     }
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT)
+        .map(|(used, _, pct)| {
+            used >= MINIMUM_AUTO_COMPACTION_TOKENS as i64
+                && pct >= app.auto_compact_threshold_percent.clamp(10.0, 100.0)
+        })
         .unwrap_or(false)
 }
 
@@ -8254,6 +8397,9 @@ fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> Stri
         HistoryCell::Thinking { .. } => "thinking".to_string(),
         HistoryCell::Error { .. } => "error".to_string(),
         HistoryCell::SubAgent(_) => "sub-agent".to_string(),
+        HistoryCell::Tool(ToolCell::Generic(generic)) => {
+            crate::tui::widgets::tool_card::tool_activity_label_for_name(&generic.name)
+        }
         HistoryCell::Tool(_) => {
             detail_target_label(app, cell_index).unwrap_or_else(|| "tool activity".to_string())
         }
@@ -8679,7 +8825,9 @@ pub(crate) fn detail_target_label(app: &App, cell_index: usize) -> Option<String
             Some(format!("image {}", image.path.display()))
         }
         HistoryCell::Tool(ToolCell::WebSearch(search)) => Some(format!("search {}", search.query)),
-        HistoryCell::Tool(ToolCell::Generic(generic)) => Some(format!("tool {}", generic.name)),
+        HistoryCell::Tool(ToolCell::Generic(generic)) => {
+            Some(crate::tui::widgets::tool_card::tool_activity_label_for_name(&generic.name))
+        }
         HistoryCell::SubAgent(_) => Some("sub-agent".to_string()),
         _ => None,
     }

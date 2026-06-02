@@ -1,7 +1,8 @@
 {
   "name": "deepseek-tui",
   "version": "0.8.49",
-  "description": "Legacy compatibility package. Renamed to `codewhale`; run `npm install -g codewhale` for new installs.",
+  "private": true,
+  "description": "Deprecated legacy package name. Install `codewhale` instead; this package is not republished.",
   "author": "Hmbown",
   "license": "MIT",
   "funding": [
@@ -33,9 +34,6 @@
   },
   "engines": {
     "node": ">=18"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "files": [
     "scripts/*.js",

@@ -46,7 +46,9 @@ The same toggles are reachable from the command palette:
 * `/settings set calm_mode on`
 * `/settings set status_indicator off`
 
-Settings written this way persist to `~/.config/deepseek/settings.toml`.
+Settings written this way persist to `~/.codewhale/settings.toml` on new
+installs, with legacy `~/.deepseek/settings.toml` and platform config-dir
+settings kept as compatibility fallbacks.
 The `NO_ANIMATIONS` env var still wins at startup if it's set, so
 unsetting the env var is the way to honor your saved choice.
 

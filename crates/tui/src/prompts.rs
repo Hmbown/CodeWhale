@@ -698,7 +698,7 @@ fn apply_model_template(prompt: &str, model_id: &str) -> String {
 
 const TOOL_TAXONOMY_DISCOVERY: &[&str] = &["grep_files", "file_search"];
 const TOOL_TAXONOMY_GIT: &[&str] = &["git_status", "git_diff"];
-const TOOL_TAXONOMY_VERIFICATION: &[&str] = &["run_tests"];
+const TOOL_TAXONOMY_VERIFICATION: &[&str] = &["run_tests", "run_verifiers"];
 
 fn render_core_tool_taxonomy_block(mode: AppMode) -> String {
     let core_tools = core_taxonomy_tools_for_mode(mode);
@@ -726,7 +726,7 @@ fn core_taxonomy_tools_for_mode(mode: AppMode) -> Vec<&'static str> {
     core_tools
         .iter()
         .copied()
-        .filter(|tool| mode != AppMode::Plan || *tool != "run_tests")
+        .filter(|tool| mode != AppMode::Plan || !matches!(*tool, "run_tests" | "run_verifiers"))
         .collect()
 }
 
@@ -995,7 +995,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
              1. Use `/compact` to summarize earlier context and free up space\n\
              2. The system will preserve important information (files you're working on, recent messages, tool results)\n\
              3. After compaction, you'll see a summary of what was discussed and can continue seamlessly\n\n\
-             If you notice context is getting long (>60% during sustained work), proactively suggest using `/compact` to the user.\n\n\
+             If you notice context is getting long (>60% during sustained work), proactively suggest using `/compact` or Ctrl+L to the user. If auto_compact is enabled, the engine can compact before the next send once the configured threshold is crossed.\n\n\
              ### Prompt-cache awareness\n\n\
              DeepSeek caches the longest *byte-stable prefix* of every request and charges roughly 100× less for cache-hit tokens than miss tokens. The system prompt above is layered most-static-first specifically so the prefix stays stable turn-over-turn. To keep cache hits high:\n\
              - **Working set location:** the current repo working set is stored on new user messages inside a `<turn_meta>` block. Treat it as high-priority turn metadata, not as a stable system-prompt section.\n\
@@ -1290,6 +1290,7 @@ mod tests {
         );
         assert!(
             !expected_taxonomy.contains("run_tests")
+                && !expected_taxonomy.contains("run_verifiers")
                 && !expected_taxonomy.contains("for verification")
                 && !expected_taxonomy.contains("Use  "),
             "Plan taxonomy must not advertise unavailable verification tools: {expected_taxonomy:?}"

@@ -22,6 +22,10 @@ macOS workbench (or any local supervisor)
 The engine runs as a local-only process. All APIs bind to `localhost` by
 default. No hosted relay, no provider-token custody, no secret leakage.
 
+For a proposed read-only audit export over completed turns, see
+[`docs/RECEIPTS.md`](RECEIPTS.md). That document is a protocol note; the receipt
+CLI/API surfaces are not implemented yet.
+
 ## ACP stdio adapter: `codewhale serve --acp`
 
 `codewhale serve --acp` speaks JSON-RPC 2.0 over newline-delimited stdio for
@@ -214,6 +218,9 @@ accept an empty string to clear a previously-set value. Added in v0.8.10 (#562):
 
 **Events** (SSE replay + live stream)
 - `GET /v1/threads/{id}/events?since_seq=<u64>`
+
+**Receipts** (future read-only audit export)
+- Proposed only: `GET /v1/threads/{thread_id}/turns/{turn_id}/receipt`
 
 **Compatibility stream** (one-shot, backwards-compatible)
 - `POST /v1/stream`

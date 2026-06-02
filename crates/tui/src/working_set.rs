@@ -17,7 +17,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Repo-aware resolver for `@`-mentions and file pickers.
@@ -274,6 +274,91 @@ impl Workspace {
         prefix_hits.truncate(limit);
         prefix_hits
     }
+
+    /// Deterministic directory-browser completions for `@` mentions.
+    ///
+    /// Unlike [`Workspace::completions`], this mode does not fuzzy-rank across
+    /// the full workspace. It locks onto the directory part of `partial` and
+    /// returns only that directory's immediate children in case-insensitive
+    /// alphabetical order.
+    #[must_use]
+    pub fn browser_completions(&self, partial: &str, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let normalized = partial.replace('\\', "/");
+        let trimmed = normalized.trim_start_matches('/');
+        let (dir_part, name_part) = match trimmed.rsplit_once('/') {
+            Some((dir, name)) => (dir.trim_end_matches('/'), name),
+            None => ("", trimmed),
+        };
+        let Some(safe_dir_part) = browser_completion_dir_part(dir_part) else {
+            return Vec::new();
+        };
+        let dir = if safe_dir_part.as_os_str().is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(&safe_dir_part)
+        };
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        let display_dir_part = safe_dir_part.to_string_lossy().replace('\\', "/");
+
+        let show_hidden = name_part.starts_with('.');
+        let needle = name_part.to_lowercase();
+        let mut entries = Vec::new();
+
+        let mut builder = WalkBuilder::new(&dir);
+        builder
+            .hidden(!show_hidden)
+            .follow_links(false)
+            .max_depth(Some(1));
+        let _ = builder.add_custom_ignore_filename(".deepseekignore");
+
+        for entry in builder.build().flatten() {
+            let path = entry.path();
+            if path == dir || path_is_excluded_from_discovery(&self.root, path) {
+                continue;
+            }
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() && !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            if !needle.is_empty() && !name.to_lowercase().starts_with(&needle) {
+                continue;
+            }
+            let mut candidate = if display_dir_part.is_empty() {
+                name.to_string()
+            } else {
+                format!("{display_dir_part}/{name}")
+            };
+            if file_type.is_dir() {
+                candidate.push('/');
+            }
+            entries.push(candidate);
+        }
+
+        entries.sort_by_key(|entry| entry.to_lowercase());
+        entries.truncate(limit);
+        entries
+    }
+}
+
+fn browser_completion_dir_part(dir_part: &str) -> Option<PathBuf> {
+    let mut safe = PathBuf::new();
+    for component in Path::new(dir_part).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => safe.push(part),
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => return None,
+        }
+    }
+    Some(safe)
 }
 
 /// Default directory depth walked when surfacing file-mention completions.
@@ -1505,6 +1590,66 @@ mod tests {
                 .iter()
                 .any(|entry| entry.ends_with("target.txt")),
             "depth 0 should disable the completion walk depth limit: {unlimited_entries:?}",
+        );
+    }
+
+    #[test]
+    fn browser_completions_show_only_immediate_children() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/nested")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "lib").unwrap();
+        std::fs::write(tmp.path().join("src/nested/deep.rs"), "deep").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "readme").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+
+        let root_entries = ws.browser_completions("", 16);
+        assert_eq!(root_entries, vec!["README.md", "src/"]);
+
+        let src_entries = ws.browser_completions("src/", 16);
+        assert_eq!(src_entries, vec!["src/lib.rs", "src/nested/"]);
+        assert!(
+            !src_entries.iter().any(|entry| entry.ends_with("deep.rs")),
+            "browser mode must not walk past immediate children: {src_entries:?}",
+        );
+    }
+
+    #[test]
+    fn browser_completions_hide_dot_entries_until_dot_query() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        std::fs::write(tmp.path().join(".env"), "secret-ish fixture").unwrap();
+        std::fs::write(tmp.path().join("app.rs"), "app").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+
+        let default_entries = ws.browser_completions("", 16);
+        assert_eq!(default_entries, vec!["app.rs"]);
+
+        let dot_entries = ws.browser_completions(".", 16);
+        assert_eq!(dot_entries, vec![".agents/", ".env"]);
+    }
+
+    #[test]
+    fn browser_completions_reject_path_escape_segments() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let sibling = tmp.path().join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(workspace.join("inside.rs"), "inside").unwrap();
+        std::fs::write(sibling.join("secret.rs"), "outside").unwrap();
+
+        let ws = Workspace::with_cwd(workspace, None);
+
+        assert_eq!(ws.browser_completions("", 16), vec!["inside.rs"]);
+        assert!(
+            ws.browser_completions("../", 16).is_empty(),
+            "browser mode must not list workspace siblings",
+        );
+        assert!(
+            ws.browser_completions("../outside", 16).is_empty(),
+            "browser mode must not complete names from outside the workspace",
         );
     }
 

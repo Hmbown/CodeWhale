@@ -27,11 +27,11 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-codewhale-config = { path = "../config", version = "0.8.49" }
-codewhale-protocol = { path = "../protocol", version = "0.8.49" }
-codewhale-release = { path = "../release", version = "0.8.49" }
-codewhale-secrets = { path = "../secrets", version = "0.8.49" }
-codewhale-tools = { path = "../tools", version = "0.8.49" }
+codewhale-config = { path = "../config", version = "0.8.50" }
+codewhale-protocol = { path = "../protocol", version = "0.8.50" }
+codewhale-release = { path = "../release", version = "0.8.50" }
+codewhale-secrets = { path = "../secrets", version = "0.8.50" }
+codewhale-tools = { path = "../tools", version = "0.8.50" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -95,4 +95,4 @@ objc2 = "0.6.3"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
+windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

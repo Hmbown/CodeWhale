@@ -11,8 +11,8 @@
 
 `codewhale` installs as a matched pair of self-contained Rust release binaries:
 the `codewhale` dispatcher command and the sibling `codewhale-tui` runtime it
-launches for interactive sessions. npm, Homebrew, and Docker install both for
-you; Cargo and manual installs must put both binaries in the same directory
+launches for interactive sessions. npm and Docker install both for you; Cargo
+and manual installs must put both binaries in the same directory
 (normally a directory on your `PATH`). The npm package is only an
 installer/wrapper for those release binaries; the agent does not run on Node.
 
@@ -27,8 +27,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked   # `codewhale` (entry point)
 cargo install codewhale-tui     --locked   # `codewhale-tui` (TUI binary)
 
-# 3. Homebrew — macOS package manager.
-#    The tap/formula name is legacy; it installs codewhale and codewhale-tui.
+# 3. Homebrew — legacy compatibility only.
+#    The tap/formula still uses the old deepseek-tui name. Prefer npm, Cargo,
+#    Docker, or direct downloads for new installs until the formula is renamed.
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
@@ -61,7 +62,7 @@ Already installed? Use the updater that matches the install path:
 ```bash
 codewhale update                         # release-binary updater
 npm install -g codewhale@latest      # npm wrapper
-brew update && brew upgrade deepseek-tui
+brew update && brew upgrade deepseek-tui  # legacy Homebrew installs only
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
@@ -307,6 +308,7 @@ codewhale --provider nvidia-nim
 # AtlasCloud
 codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
 codewhale --provider atlascloud
+codewhale --provider atlascloud --model vendor/model-id
 
 # Wanjie Ark
 codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"
@@ -321,6 +323,7 @@ codewhale --provider openrouter --model minimax/minimax-m3
 # Xiaomi MiMo
 codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_KEY"
 codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
+codewhale --provider xiaomi-mimo speech "Hello from MiMo" --model tts -o hello.wav
 
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
@@ -387,7 +390,7 @@ codewhale doctor --json                           # machine-readable diagnostics
 codewhale setup --status                          # read-only setup status
 codewhale setup --tools --plugins                 # scaffold tool/plugin dirs
 codewhale models                                  # list live API models
-codewhale sessions                                # list saved sessions
+codewhale sessions                                # list saved sessions with timestamps
 codewhale resume --last                           # resume the most recent session in this workspace
 codewhale resume <SESSION_ID>                     # resume a specific session by UUID
 codewhale fork <SESSION_ID>                       # fork a saved session into a sibling path
@@ -401,6 +404,10 @@ codewhale mcp-server                              # run dispatcher MCP stdio ser
 codewhale update                                  # check for and apply binary updates
 ```
 
+Inside the interactive TUI composer, prefix a line with `!` to run a shell
+command through the normal approval, sandbox, and output surfaces, for example
+`! cargo test -p codewhale-tui sidebar`.
+
 ### Branching Conversations
 
 Saved sessions are intentionally branchable. `codewhale fork <SESSION_ID>` copies
@@ -408,6 +415,11 @@ an existing saved session into a new sibling session, records the parent session
 id in metadata, and opens that fork so you can explore an alternate direction
 without polluting the original path. The session picker and `codewhale sessions`
 mark forked sessions with their parent id.
+
+`codewhale sessions` lists saved sessions across workspaces and includes the
+last-updated timestamp. `codewhale resume --last` and `codewhale --continue`
+choose the latest session for the current workspace; pass an explicit session id
+when resuming work from another directory.
 
 Inside the TUI, Esc-Esc backtrack can rewind the active transcript to a prior
 user prompt and put that prompt back in the composer for editing. `/restore`
@@ -488,6 +500,14 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 ## Configuration
 
 User config: `~/.codewhale/config.toml` (legacy `~/.deepseek/config.toml` fallback). Project overlay: `<workspace>/.codewhale/config.toml` (legacy `<workspace>/.deepseek/config.toml`) (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). [config.example.toml](config.example.toml) has every option.
+
+The TUI footer can be trimmed with `/statusline`, or by setting
+`[tui].status_items` in config. Current footer customization selects from the
+built-in chips such as `mode`, `model`, `status`, `git_branch`, `tokens`, and
+`cache`; chip order is controlled by the order of keys in `status_items` in
+`config.toml`. The interactive picker writes the canonical order. Multi-line
+layouts, custom colors, and external command widgets are not part of the
+current statusline surface.
 
 Custom DeepSeek-compatible endpoints usually do not need a new provider. Keep
 `provider = "deepseek"` and set `[providers.deepseek].base_url` / `model`, or

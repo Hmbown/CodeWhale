@@ -253,7 +253,7 @@ fn browser_open_command(url: &str) -> Result<Command> {
     {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "start", "", url]);
-        return Ok(cmd);
+        Ok(cmd)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

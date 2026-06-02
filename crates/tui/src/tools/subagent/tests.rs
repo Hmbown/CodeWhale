@@ -261,6 +261,7 @@ fn test_verifier_allowed_tools_include_test_runner_but_no_writes() {
     #[allow(deprecated)]
     let tools = SubAgentType::Verifier.allowed_tools();
     assert!(tools.contains(&"run_tests"));
+    assert!(tools.contains(&"run_verifiers"));
     assert!(tools.contains(&"diagnostics"));
     assert!(!tools.contains(&"write_file"));
     assert!(!tools.contains(&"apply_patch"));
@@ -938,7 +939,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
 }
 
 #[tokio::test]
-async fn test_running_count_ignores_finished_task_handles() {
+async fn test_running_count_counts_running_agents_until_status_reconciles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
@@ -953,17 +954,14 @@ async fn test_running_count_ignores_finished_task_handles() {
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
-    let handle = tokio::spawn(async {});
-    handle.await.expect("dummy task should finish immediately");
-    agent.task_handle = Some(tokio::spawn(async {}));
-    if let Some(handle) = agent.task_handle.as_ref() {
-        while !handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
+    let finished_handle = tokio::spawn(async {});
+    while !finished_handle.is_finished() {
+        tokio::task::yield_now().await;
     }
+    agent.task_handle = Some(finished_handle);
     manager.agents.insert(agent.id.clone(), agent);
 
-    assert_eq!(manager.running_count(), 0);
+    assert_eq!(manager.running_count(), 1);
 }
 
 #[test]
@@ -1503,6 +1501,75 @@ async fn auto_approved_parent_runs_required_tools_in_subagent() {
 }
 
 #[test]
+fn subagent_request_budget_allows_large_write_file_arguments() {
+    assert_eq!(
+        SUBAGENT_RESPONSE_MAX_TOKENS, 16_384,
+        "non-streaming sub-agent tool calls need enough output budget for large write_file arguments"
+    );
+}
+
+#[test]
+fn truncated_subagent_tool_calls_return_model_visible_errors() {
+    let tool_uses = vec![(
+        "toolu_write".to_string(),
+        "write_file".to_string(),
+        json!({"path": "report.md", "content": "partial"}),
+    )];
+
+    let results = truncated_response_tool_results(&tool_uses);
+
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "toolu_write");
+            assert_eq!(is_error, &Some(true));
+            assert!(content.contains("truncated by max_tokens"));
+            assert!(content.contains("write_file"));
+            assert!(content.contains("smaller writes"));
+        }
+        other => panic!("expected tool error result, got {other:?}"),
+    }
+}
+
+#[test]
+fn truncated_subagent_text_response_returns_model_visible_error() {
+    let results = truncated_response_text_retry_message();
+
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        ContentBlock::Text { text, .. } => {
+            assert!(text.contains("truncated by max_tokens"));
+            assert!(text.contains("No complete tool call was available"));
+            assert!(text.contains("Retry with a shorter response"));
+        }
+        other => panic!("expected text retry message, got {other:?}"),
+    }
+}
+
+#[test]
+fn consecutive_truncated_subagent_responses_are_capped() {
+    let mut consecutive = 0;
+
+    for _ in 0..MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES {
+        record_truncated_subagent_response(&mut consecutive).expect("within truncation cap");
+    }
+
+    let err = record_truncated_subagent_response(&mut consecutive)
+        .expect_err("one more truncation should stop the sub-agent");
+    assert!(err.to_string().contains("truncated by max_tokens"));
+    assert!(err.to_string().contains("consecutive"));
+
+    reset_truncated_subagent_responses(&mut consecutive);
+    record_truncated_subagent_response(&mut consecutive).expect("reset should allow recovery");
+    assert_eq!(consecutive, 1);
+}
+
+#[test]
 fn child_cancellation_cascades_from_parent() {
     let parent = stub_runtime();
     let child = parent.child_runtime();
@@ -1738,6 +1805,7 @@ fn stub_runtime() -> SubAgentRuntime {
         fork_context: None,
         mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+        speech_output_dir: None,
     }
 }
 
@@ -1967,6 +2035,16 @@ fn emit_parent_completion_fires_for_direct_child() {
     assert_eq!(received.agent_id, "agent_abc");
     assert_eq!(received.payload, "summary line\n<sentinel/>");
     assert!(rx.try_recv().is_err(), "should be exactly one message");
+}
+
+#[test]
+fn child_runtime_inherits_speech_output_dir() {
+    let output_dir = PathBuf::from("configured-speech-output");
+    let runtime = stub_runtime().with_speech_output_dir(Some(output_dir.clone()));
+
+    let child = runtime.child_runtime();
+
+    assert_eq!(child.speech_output_dir, Some(output_dir));
 }
 
 #[test]

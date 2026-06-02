@@ -51,6 +51,7 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "list_dir",
     "read_file",
     "run_tests",
+    "run_verifiers",
     "task_create",
     "task_list",
     "task_read",
@@ -107,6 +108,15 @@ pub(super) fn apply_mcp_tool_deferral(catalog: &mut [Tool], mode: AppMode) {
     }
 }
 
+/// Build the model tool catalog from native and MCP tool lists.
+///
+/// **Catalog-head stability invariant.** The head of the catalog (all
+/// non-deferred tools) must remain byte-identical across mode toggles
+/// (Plan ↔ Agent ↔ YOLO) for tools that are common to both modes.
+/// Deferred tool activations append to the tail and never reorder the
+/// head. This invariant is critical for DeepSeek's KV prefix cache:
+/// the tools array is part of the immutable prefix, and any byte-level
+/// change in the head forces a full re-prefill on the next turn.
 pub(super) fn build_model_tool_catalog(
     mut native_tools: Vec<Tool>,
     mut mcp_tools: Vec<Tool>,

@@ -7,31 +7,43 @@ function isVersionFlag(args = process.argv.slice(2)) {
   return args.includes("--version") || args.includes("-V");
 }
 
-function handleVersionFallback(binaryName) {
-  if (isVersionFlag()) {
-    const binVersion =
-      pkg.codewhaleBinaryVersion || pkg.deepseekBinaryVersion || pkg.version;
-    console.log(`${binaryName} (npm wrapper) v${pkg.version}`);
-    console.log(`binary version: v${binVersion}`);
-    console.log(`repo: ${pkg.repository?.url || "N/A"}`);
-    process.exit(0);
-  }
+function printVersionFallback(binaryName) {
+  const binVersion =
+    pkg.codewhaleBinaryVersion || pkg.deepseekBinaryVersion || pkg.version;
+  console.log(`${binaryName} (npm wrapper) v${pkg.version}`);
+  console.log(`binary version: v${binVersion}`);
+  console.log(`repo: ${pkg.repository?.url || "N/A"}`);
 }
 
-async function run(binaryName) {
-  // Intercept --version before attempting binary download/launch
-  handleVersionFallback(binaryName);
+async function run(binaryName, options = {}) {
+  const args = options.args || process.argv.slice(2);
+  const resolveBinaryPath = options.getBinaryPath || getBinaryPath;
+  const spawn = options.spawnSync || spawnSync;
+  const exit = options.exit || process.exit;
+  const versionFlag = isVersionFlag(args);
 
-  const binaryPath = await getBinaryPath(binaryName);
-  const result = spawnSync(binaryPath, process.argv.slice(2), {
+  let binaryPath;
+  try {
+    binaryPath = await resolveBinaryPath(binaryName);
+  } catch (error) {
+    if (versionFlag) {
+      printVersionFallback(binaryName);
+      return exit(0);
+    }
+    throw error;
+  }
+
+  const result = spawn(binaryPath, args, {
     stdio: "inherit",
   });
   if (result.error) {
-    // If binary fails and user asked for --version, show npm version instead
-    handleVersionFallback(binaryName);
+    if (versionFlag) {
+      printVersionFallback(binaryName);
+      return exit(0);
+    }
     throw result.error;
   }
-  process.exit(result.status ?? 1);
+  return exit(result.status ?? 1);
 }
 
 async function runCodeWhale() {
@@ -46,7 +58,7 @@ module.exports = {
   run,
   runCodeWhale,
   runCodeWhaleTui,
-  _internal: { isVersionFlag },
+  _internal: { isVersionFlag, printVersionFallback },
 };
 
 if (require.main === module) {

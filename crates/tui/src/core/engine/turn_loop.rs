@@ -6,6 +6,7 @@
 //! checkpoints, and loop termination.
 
 use super::*;
+use crate::prompt_zones::PinnedPrefix;
 
 fn loop_guard_block_tool_result(message: String) -> ToolResult {
     ToolResult::error(message).with_metadata(json!({"loop_guard": "identical_tool_call"}))
@@ -307,6 +308,37 @@ impl Engine {
                             })
                             .await;
                     }
+                }
+            }
+
+            // Three-zone prefix contract (#2264): freeze baseline on first
+            // turn, verify against it on subsequent turns. Operates alongside
+            // PrefixStabilityManager as an independent diagnostic layer.
+            // Phase 2: warn-only, auto-re-freeze on drift.
+            let system_text =
+                crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
+            let current_tools: &[crate::models::Tool] = active_tools.as_deref().unwrap_or_default();
+
+            match &self.session.frozen_prefix {
+                Some(frozen) => {
+                    if let Err(drift) = frozen.verify(&system_text, current_tools) {
+                        tracing::debug!(
+                            target: "prefix_cache",
+                            "three-zone drift: {drift}"
+                        );
+                        let pinned = PinnedPrefix::new(
+                            self.session.system_prompt.as_ref(),
+                            current_tools.to_vec(),
+                        );
+                        self.session.frozen_prefix = Some(pinned.freeze());
+                    }
+                }
+                None => {
+                    let pinned = PinnedPrefix::new(
+                        self.session.system_prompt.as_ref(),
+                        current_tools.to_vec(),
+                    );
+                    self.session.frozen_prefix = Some(pinned.freeze());
                 }
             }
 
@@ -1255,13 +1287,17 @@ impl Engine {
                     )));
                 }
 
-                if !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                if blocked_error.is_none()
+                    && !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name)
+                {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' is not in the allowed-tools list for the current command"
                     )));
                 }
 
-                if !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
+                if blocked_error.is_none()
+                    && !caller_allowed_for_tool(tool_caller.as_ref(), tool_def)
+                {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' does not allow caller '{}'",
                         caller_type_for_tool_use(tool_caller.as_ref())
@@ -1279,6 +1315,68 @@ impl Engine {
                         &tool_name,
                         &tool_catalog,
                     )));
+                }
+
+                if blocked_error.is_none()
+                    && let Some(hook_executor) = self.config.hook_executor.as_ref()
+                    && hook_executor.has_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
+                {
+                    // Warn if any ToolCallBefore hook is configured as background
+                    // — background hooks return exit_code: None immediately, so
+                    // the denial check (exit_code == Some(2)) can never match.
+                    if hook_executor
+                        .has_background_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
+                    {
+                        tracing::warn!(
+                            "ToolCallBefore hook(s) configured with background=true — \
+                             background hooks cannot deny tool calls because they exit \
+                             immediately with no result"
+                        );
+                    }
+
+                    let hook_context = crate::hooks::HookContext::new()
+                        .with_tool_name(&tool_name)
+                        .with_tool_args(&tool_input)
+                        .with_mode(&format!("{mode:?}"))
+                        .with_workspace(self.session.workspace.clone())
+                        .with_model(&self.config.model)
+                        .with_session_id(&self.session.id);
+                    // Run hooks off the Tokio worker thread: `execute()` calls
+                    // `child.wait_timeout()` which is a blocking syscall that
+                    // would stall all other async tasks on this thread.
+                    let executor = hook_executor.clone();
+                    let hook_results = tokio::task::spawn_blocking(move || {
+                        executor.execute(crate::hooks::HookEvent::ToolCallBefore, &hook_context)
+                    })
+                    .await
+                    .unwrap_or_else(|join_err| {
+                        tracing::error!("Hook executor task panicked: {join_err}");
+                        Vec::new()
+                    });
+                    if let Some(denial) = hook_results
+                        .iter()
+                        .find(|result| result.exit_code == Some(2))
+                    {
+                        let reason = denial
+                            .stdout
+                            .trim()
+                            .lines()
+                            .next()
+                            .filter(|line| !line.is_empty())
+                            .or_else(|| {
+                                denial
+                                    .stderr
+                                    .trim()
+                                    .lines()
+                                    .next()
+                                    .filter(|line| !line.is_empty())
+                            })
+                            .or(denial.error.as_deref())
+                            .unwrap_or("ToolCallBefore hook denied tool execution");
+                        blocked_error = Some(ToolError::permission_denied(format!(
+                            "ToolCallBefore hook denied tool '{tool_name}': {reason}"
+                        )));
+                    }
                 }
 
                 if McpPool::is_mcp_tool(&tool_name) {
@@ -2513,5 +2611,106 @@ mod tests {
         assert_eq!(tool_name, "read_file");
         let allowed = vec!["read_file".to_string()];
         assert!(command_allows_tool(Some(&allowed), &tool_name));
+    }
+
+    #[test]
+    fn hook_gate_denies_with_exit_code_2() {
+        use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
+
+        let deny_cmd = if cfg!(windows) { "exit /b 2" } else { "exit 2" };
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, deny_cmd)],
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, std::path::PathBuf::from("."));
+        let ctx = HookContext::new()
+            .with_tool_name("exec_shell")
+            .with_tool_args(&serde_json::json!({}));
+        let results = executor.execute(HookEvent::ToolCallBefore, &ctx);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].exit_code, Some(2));
+    }
+
+    #[test]
+    fn hook_gate_allows_with_exit_code_0() {
+        use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
+
+        let allow_cmd = if cfg!(windows) { "exit /b 0" } else { "exit 0" };
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, allow_cmd)],
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, std::path::PathBuf::from("."));
+        let ctx = HookContext::new()
+            .with_tool_name("read_file")
+            .with_tool_args(&serde_json::json!({}));
+        let results = executor.execute(HookEvent::ToolCallBefore, &ctx);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].exit_code, Some(0));
+        assert!(results[0].success);
+    }
+
+    #[test]
+    fn hook_gate_failure_exit_code_1_is_not_denial() {
+        use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
+
+        let fail_cmd = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, fail_cmd)],
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, std::path::PathBuf::from("."));
+        let ctx = HookContext::new()
+            .with_tool_name("write_file")
+            .with_tool_args(&serde_json::json!({}));
+        let results = executor.execute(HookEvent::ToolCallBefore, &ctx);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].exit_code, Some(1));
+        assert_ne!(results[0].exit_code, Some(2));
+    }
+
+    #[test]
+    fn hook_gate_no_hooks_returns_no_results() {
+        use crate::hooks::{HookContext, HookEvent, HookExecutor, HooksConfig};
+
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![],
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, std::path::PathBuf::from("."));
+        let ctx = HookContext::new().with_tool_name("grep_files");
+        let results = executor.execute(HookEvent::ToolCallBefore, &ctx);
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hook_gate_denial_reason_can_come_from_stdout() {
+        use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
+
+        let deny_cmd = if cfg!(windows) {
+            "echo Tool blocked by security policy & exit /b 2"
+        } else {
+            "echo 'Tool blocked by security policy' && exit 2"
+        };
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, deny_cmd)],
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, std::path::PathBuf::from("."));
+        let ctx = HookContext::new().with_tool_name("exec_shell");
+        let results = executor.execute(HookEvent::ToolCallBefore, &ctx);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].exit_code, Some(2));
+        assert!(results[0].stdout.contains("security"));
     }
 }

@@ -34,8 +34,8 @@ publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
       pins match the new workspace version.
 - [ ] `npm/codewhale/package.json` `version` AND `codewhaleBinaryVersion`
       are both bumped.
-- [ ] `npm/deepseek-tui/package.json` `version` is bumped for the one-release
-      deprecation shim.
+- [ ] `npm/deepseek-tui/package.json` remains private/compatibility-only and
+      is **not** bumped or published.
 - [ ] `Cargo.lock` is refreshed (`cargo update --workspace --offline`).
 - [ ] `./scripts/release/check-versions.sh` reports
       `Version state OK: workspace=X.Y.Z, npm=X.Y.Z, lockfile in sync.`
@@ -95,6 +95,8 @@ Run, in order, from the repo root:
       ```
 - [ ] `npm view codewhale@X.Y.Z version codewhaleBinaryVersion --json`
       reports the new version on the npm registry.
+- [ ] `npm view deepseek-tui deprecated` is non-empty. The legacy npm package
+      is deprecated and must not receive an `X.Y.Z` publish.
 - [ ] `crates.io` has the new version (or the `publish-crates.sh` job has
       pushed it).
 - [ ] `ghcr.io/hmbown/codewhale:vX.Y.Z` and `:latest` are updated.

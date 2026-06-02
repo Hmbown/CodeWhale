@@ -1654,6 +1654,7 @@ impl RuntimeThreadManager {
                 translation_enabled: false,
                 show_thinking,
                 allowed_tools: None,
+                hook_executor: None,
                 approval_mode: if auto_approve {
                     crate::tui::approval::ApprovalMode::Auto
                 } else {
@@ -2016,10 +2017,12 @@ impl RuntimeThreadManager {
             prefer_bwrap: self.config.prefer_bwrap.unwrap_or(false),
             memory_enabled: self.config.memory_enabled(),
             memory_path: self.config.memory_path(),
+            speech_output_dir: self.config.speech_output_dir(),
             vision_config: self.config.vision_model_config(),
             strict_tool_mode: self.config.strict_tool_mode.unwrap_or(false),
             goal_objective: None,
             allowed_tools: None,
+            hook_executor: None,
             locale_tag: crate::localization::resolve_locale(&settings.locale)
                 .tag()
                 .to_string(),

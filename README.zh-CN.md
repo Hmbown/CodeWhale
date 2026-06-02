@@ -10,8 +10,8 @@
 ## 安装
 
 `codewhale` 以一组自包含 Rust 发布二进制安装：`codewhale` 调度器命令，
-以及它在交互会话中启动的同级 `codewhale-tui` 运行时。npm、Homebrew 和
-Docker 会自动安装这两个二进制；Cargo 或手动下载时必须把两者放在同一目录
+以及它在交互会话中启动的同级 `codewhale-tui` 运行时。npm 和 Docker
+会自动安装这两个二进制；Cargo 或手动下载时必须把两者放在同一目录
 （通常是 `PATH` 上的某个目录）。运行时不依赖 Node.js 或 Python。
 
 ```bash
@@ -24,8 +24,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked   # `codewhale` 入口
 cargo install codewhale-tui     --locked   # `codewhale-tui` TUI 二进制
 
-# 3. Homebrew —— macOS 包管理器。
-#    tap/formula 名称仍是旧名；实际安装 codewhale 和 codewhale-tui。
+# 3. Homebrew —— 仅用于旧安装兼容。
+#    tap/formula 仍使用旧的 deepseek-tui 名称。新安装请优先使用
+#    npm、Cargo、Docker 或直接下载，直到 formula 完成改名。
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
@@ -57,7 +58,7 @@ docker run --rm -it \
 ```bash
 codewhale update                         # release 二进制更新器
 npm install -g codewhale@latest      # npm 包装器
-brew update && brew upgrade deepseek-tui
+brew update && brew upgrade deepseek-tui  # 仅旧 Homebrew 安装
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
@@ -268,6 +269,7 @@ codewhale --provider openrouter --model qwen/qwen3.7-max
 # Xiaomi MiMo
 codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_MIMO_API_KEY"
 codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
+codewhale --provider xiaomi-mimo speech "???MiMo" --model tts -o hello.wav
 
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"

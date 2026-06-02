@@ -595,6 +595,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.composer.mention_completion_cache = None;
             app.needs_redraw = true;
         }
+        "mention_menu_behavior" | "mention_behavior" | "mention_menu" => {
+            app.mention_menu_behavior = settings.mention_menu_behavior.clone();
+            app.composer.mention_completion_cache = None;
+            app.needs_redraw = true;
+        }
         "mention_walk_depth" | "mention_depth" | "completions_walk_depth" => {
             app.mention_walk_depth = settings.mention_walk_depth;
             app.composer.mention_completion_cache = None;
@@ -725,16 +730,33 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
         return CommandResult::action(AppAction::OpenModePicker);
     };
     match parse_mode_arg(arg) {
-        Some(mode) => CommandResult::message(switch_mode(app, mode)),
+        Some(mode) => {
+            let (message, changed) = switch_mode_with_status(app, mode);
+            if changed {
+                CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
+            } else {
+                CommandResult::message(message)
+            }
+        }
         None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
     }
 }
 
 pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
+    switch_mode_with_status(app, mode).0
+}
+
+fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     if app.set_mode(mode) {
-        format!("Switched to {} mode.", mode_display_name(mode))
+        (
+            format!("Switched to {} mode.", mode_display_name(mode)),
+            true,
+        )
     } else {
-        format!("Already in {} mode.", mode_display_name(mode))
+        (
+            format!("Already in {} mode.", mode_display_name(mode)),
+            false,
+        )
     }
 }
 
@@ -1499,6 +1521,7 @@ mod tests {
         let _ = mode(&mut app, Some("agent"));
         let result = mode(&mut app, Some("yolo"));
         assert!(result.message.unwrap().contains("Switched to YOLO mode"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
         assert!(app.allow_shell);
         assert!(app.trust_mode);
         assert!(app.yolo);
@@ -1511,9 +1534,11 @@ mod tests {
         let mut app = create_test_app();
         let _ = mode(&mut app, Some("agent"));
         assert_eq!(app.mode, AppMode::Agent);
-        let _ = mode(&mut app, Some("2"));
+        let result = mode(&mut app, Some("2"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Plan)));
         assert_eq!(app.mode, AppMode::Plan);
-        let _ = mode(&mut app, Some("3"));
+        let result = mode(&mut app, Some("3"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
         assert_eq!(app.mode, AppMode::Yolo);
     }
 

@@ -978,6 +978,156 @@ fn deferred_tool_preflight_guides_checklist_update_list_replacement() {
     assert!(result.content.contains("Use checklist_write"));
 }
 
+#[tokio::test]
+async fn run_shell_command_op_requests_approval_and_executes_shell() {
+    let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let handle_for_approval = handle.clone();
+
+    let task = tokio::spawn(async move {
+        engine
+            .handle_run_shell_command(
+                "echo bang-ok".to_string(),
+                AppMode::Agent,
+                false,
+                false,
+                crate::tui::approval::ApprovalMode::Suggest,
+            )
+            .await;
+    });
+
+    let mut saw_started = false;
+    let mut saw_approval = false;
+    let mut saw_complete = false;
+    let mut saw_turn_complete = false;
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::TurnStarted { turn_id } => {
+                assert!(turn_id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
+            }
+            Event::ToolCallStarted { id, name, input } => {
+                saw_started = true;
+                assert!(id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
+                assert_eq!(name, "exec_shell");
+                assert_eq!(input["command"], json!("echo bang-ok"));
+                assert_eq!(input["source"], json!("user"));
+            }
+            Event::ApprovalRequired { id, tool_name, .. } => {
+                saw_approval = true;
+                assert!(id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
+                assert_eq!(tool_name, "exec_shell");
+                handle_for_approval
+                    .approve_tool_call(id)
+                    .await
+                    .expect("approve shell");
+            }
+            Event::ToolCallComplete { id, name, result } => {
+                saw_complete = true;
+                assert!(id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
+                assert_eq!(name, "exec_shell");
+                let result = result.expect("shell result");
+                assert!(result.success, "{result:?}");
+                assert!(result.content.contains("bang-ok"), "{result:?}");
+            }
+            Event::TurnComplete { status, .. } => {
+                saw_turn_complete = true;
+                assert_eq!(status, TurnOutcomeStatus::Completed);
+                break;
+            }
+            _ => {}
+        }
+    }
+    drop(rx);
+    task.await.expect("shell op task");
+
+    assert!(saw_started);
+    assert!(saw_approval);
+    assert!(saw_complete);
+    assert!(saw_turn_complete);
+}
+
+#[tokio::test]
+async fn run_shell_command_op_skips_approval_when_auto_approved() {
+    let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
+
+    engine
+        .handle_run_shell_command(
+            "echo bang-yolo".to_string(),
+            AppMode::Yolo,
+            true,
+            true,
+            crate::tui::approval::ApprovalMode::Auto,
+        )
+        .await;
+
+    let mut saw_complete = false;
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::ApprovalRequired { .. } => {
+                panic!("auto-approved shell shortcut should not request approval");
+            }
+            Event::ToolCallComplete { result, .. } => {
+                saw_complete = true;
+                let result = result.expect("shell result");
+                assert!(result.success, "{result:?}");
+                assert!(result.content.contains("bang-yolo"), "{result:?}");
+            }
+            Event::TurnComplete { status, .. } => {
+                assert_eq!(status, TurnOutcomeStatus::Completed);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_complete);
+}
+
+#[tokio::test]
+async fn run_shell_command_op_preserves_plan_mode_shell_block() {
+    let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
+
+    engine
+        .handle_run_shell_command(
+            "echo blocked".to_string(),
+            AppMode::Plan,
+            false,
+            false,
+            crate::tui::approval::ApprovalMode::Suggest,
+        )
+        .await;
+
+    let mut saw_complete = false;
+    let mut saw_turn_complete = false;
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::ApprovalRequired { .. } => {
+                panic!("Plan mode shell should be blocked before approval");
+            }
+            Event::ToolCallComplete { name, result, .. } => {
+                saw_complete = true;
+                assert_eq!(name, "exec_shell");
+                let err = result.expect_err("plan shell should fail");
+                assert!(
+                    err.to_string().contains("unavailable in Plan mode"),
+                    "{err}"
+                );
+            }
+            Event::TurnComplete { status, .. } => {
+                saw_turn_complete = true;
+                assert_eq!(status, TurnOutcomeStatus::Failed);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_complete);
+    assert!(saw_turn_complete);
+}
+
 #[test]
 fn deferred_tool_preflight_skips_already_active_tools() {
     let mut tool = api_tool("deferred_tool");
@@ -1048,6 +1198,137 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(
         write_or_exec_tools.is_empty(),
         "Plan mode must not register file-writing or code-execution tools: {write_or_exec_tools:?}"
+    );
+}
+
+/// Plan mode toggle must not change the byte representation of the tool
+/// catalog head. DeepSeek's KV prefix cache includes the tools array in
+/// the immutable prefix; if toggling between Plan and Agent mode changes
+/// the tool bytes, every mode switch forces a full re-prefill.
+///
+/// This test verifies two invariants:
+/// 1. Building the catalog twice for the same mode produces identical bytes.
+/// 2. The head of the catalog (non-deferred tools) preserves its order
+///    when deferred tools are activated mid-session.
+#[test]
+fn plan_mode_toggle_preserves_catalog_byte_stability() {
+    let always_load = HashSet::new();
+
+    // Build catalog for Plan mode twice — must be byte-identical.
+    let plan_native = vec![
+        api_tool("read_file"),
+        api_tool("list_dir"),
+        api_tool("write_file"),
+        api_tool("edit_file"),
+        api_tool("exec_shell"),
+    ];
+    let plan_mcp = vec![api_tool("mcp_search"), api_tool("mcp_write")];
+
+    let catalog_a = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Plan,
+        &always_load,
+    );
+    let catalog_b = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Plan,
+        &always_load,
+    );
+
+    let json_a = serde_json::to_string(&catalog_a).unwrap();
+    let json_b = serde_json::to_string(&catalog_b).unwrap();
+    assert_eq!(
+        json_a, json_b,
+        "building the catalog twice for Plan mode must produce identical bytes"
+    );
+
+    // Build catalog for Agent mode twice — must be byte-identical.
+    let agent_catalog_a = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+    let agent_catalog_b = build_model_tool_catalog(
+        plan_native.clone(),
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+
+    let agent_json_a = serde_json::to_string(&agent_catalog_a).unwrap();
+    let agent_json_b = serde_json::to_string(&agent_catalog_b).unwrap();
+    assert_eq!(
+        agent_json_a, agent_json_b,
+        "building the catalog twice for Agent mode must produce identical bytes"
+    );
+
+    // Verify that the non-deferred tools that are common to both modes
+    // appear in the same order. Plan mode excludes execution tools, but
+    // the tools that are present in both modes must have stable ordering.
+    let plan_names: Vec<&str> = catalog_a
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+    let agent_names: Vec<&str> = agent_catalog_a
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+
+    // The common prefix of non-deferred tools must be identical.
+    let common_len = plan_names.len().min(agent_names.len());
+    assert_eq!(
+        &plan_names[..common_len],
+        &agent_names[..common_len],
+        "non-deferred tools common to Plan and Agent must appear in the same order"
+    );
+
+    // Verify that activating a deferred tool mid-session appends to the
+    // tail without reordering the head.
+    let mut tools_with_deferred = plan_native.clone();
+    tools_with_deferred.push({
+        let mut t = api_tool("deferred_search");
+        t.defer_loading = Some(true);
+        t
+    });
+    let catalog_with_deferred = build_model_tool_catalog(
+        tools_with_deferred,
+        plan_mcp.clone(),
+        AppMode::Agent,
+        &always_load,
+    );
+
+    // Activate the deferred tool.
+    let mut active: HashSet<String> = catalog_with_deferred
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.clone())
+        .collect();
+    active.insert("deferred_search".to_string());
+
+    let listed = active_tools_for_step(&catalog_with_deferred, &active, false);
+    let listed_names: Vec<&str> = listed.iter().map(|t| t.name.as_str()).collect();
+
+    // The head (non-deferred tools) must still be in their original order.
+    let head_names: Vec<&str> = catalog_with_deferred
+        .iter()
+        .filter(|t| !t.defer_loading.unwrap_or(false))
+        .map(|t| t.name.as_str())
+        .collect();
+    assert!(
+        listed_names.starts_with(&head_names),
+        "activating a deferred tool must not reorder the catalog head: \
+         expected {head_names:?} as prefix, got {listed_names:?}"
+    );
+    // The deferred tool must be at the tail.
+    assert_eq!(
+        listed_names.last(),
+        Some(&"deferred_search"),
+        "deferred tool must be appended at the tail"
     );
 }
 
@@ -1236,6 +1517,104 @@ async fn session_update_preserves_reasoning_tool_only_turn() {
     };
 
     assert_eq!(messages, vec![assistant]);
+}
+
+#[tokio::test]
+async fn set_model_reloads_instruction_sources_and_updates_session_prompt() {
+    let tmp = tempdir().expect("tempdir");
+    let instructions = tmp.path().join("instructions.md");
+    fs::write(&instructions, "FLASH_INSTRUCTIONS_MARKER").expect("write instructions");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-flash".to_string(),
+        instructions: vec![instructions.clone().into()],
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+    fs::write(&instructions, "PRO_INSTRUCTIONS_MARKER").expect("rewrite instructions");
+
+    let run = tokio::spawn(engine.run());
+    handle
+        .send(Op::SetModel {
+            model: "deepseek-v4-pro".to_string(),
+            mode: AppMode::Agent,
+        })
+        .await
+        .expect("send set model");
+
+    let (model, prompt) = {
+        let mut rx = handle.rx_event.write().await;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("session update after model switch")
+                .expect("event");
+            if let Event::SessionUpdated {
+                model,
+                system_prompt,
+                ..
+            } = event
+            {
+                let prompt = match system_prompt.expect("system prompt") {
+                    SystemPrompt::Text(text) => text,
+                    SystemPrompt::Blocks(blocks) => blocks
+                        .into_iter()
+                        .map(|block| block.text)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                break (model, prompt);
+            }
+        }
+    };
+    run.abort();
+
+    assert_eq!(model, "deepseek-v4-pro");
+    assert!(prompt.contains("PRO_INSTRUCTIONS_MARKER"));
+    assert!(!prompt.contains("FLASH_INSTRUCTIONS_MARKER"));
+}
+
+#[tokio::test]
+async fn change_mode_refreshes_session_prompt_and_updates_session() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+
+    let run = tokio::spawn(engine.run());
+    handle
+        .send(Op::ChangeMode {
+            mode: AppMode::Yolo,
+        })
+        .await
+        .expect("send change mode");
+
+    let prompt = {
+        let mut rx = handle.rx_event.write().await;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("session update after mode switch")
+                .expect("event");
+            if let Event::SessionUpdated { system_prompt, .. } = event {
+                break match system_prompt.expect("system prompt") {
+                    SystemPrompt::Text(text) => text,
+                    SystemPrompt::Blocks(blocks) => blocks
+                        .into_iter()
+                        .map(|block| block.text)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+            }
+        }
+    };
+    run.abort();
+
+    assert!(prompt.contains("Mode: YOLO"));
+    assert!(prompt.contains("Approval Policy: Auto"));
 }
 
 #[test]
@@ -1427,6 +1806,143 @@ fn subagent_results_are_summarized_before_parent_context_insertion() {
 }
 
 #[test]
+fn run_verifiers_results_are_structured_before_context_insertion() {
+    let noisy_failure = "node lint failure detail\n".repeat(300);
+    let noisy_success = "successful check output\n".repeat(300);
+    let output = ToolResult::success(
+        json!({
+            "success": false,
+            "profile": "auto",
+            "level": "quick",
+            "workspace": "/repo",
+            "gate_count": 3,
+            "passed": 1,
+            "failed": 1,
+            "skipped": 1,
+            "summary": "1 passed, 1 failed, 1 skipped",
+            "gates": [
+                {
+                    "name": "rust-check",
+                    "ecosystem": "rust",
+                    "status": "passed",
+                    "command": "cargo check --workspace --locked",
+                    "cwd": "/repo",
+                    "exit_code": 0,
+                    "duration_ms": 110,
+                    "stdout": noisy_success.clone(),
+                    "stderr": "",
+                    "stdout_truncated": false,
+                    "stderr_truncated": false,
+                    "skipped_reason": null
+                },
+                {
+                    "name": "node-lint",
+                    "ecosystem": "node",
+                    "status": "failed",
+                    "command": "npm run lint",
+                    "cwd": "/repo",
+                    "exit_code": 1,
+                    "duration_ms": 220,
+                    "stdout": "",
+                    "stderr": noisy_failure,
+                    "stdout_truncated": false,
+                    "stderr_truncated": false,
+                    "skipped_reason": null
+                },
+                {
+                    "name": "python-pytest",
+                    "ecosystem": "python",
+                    "status": "skipped",
+                    "command": "",
+                    "cwd": "/repo",
+                    "exit_code": null,
+                    "duration_ms": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "stdout_truncated": false,
+                    "stderr_truncated": false,
+                    "skipped_reason": "pytest is not installed"
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    let context = compact_tool_result_for_context("deepseek-v4-pro", "run_verifiers", &output);
+
+    assert!(context.contains("[run_verifiers result summarized for context]"));
+    assert!(context.contains("summary: 1 passed, 1 failed, 1 skipped"));
+    assert!(context.contains("selection: profile=auto, level=quick"));
+    assert!(context.contains("- node-lint (node): failed exit=1"));
+    assert!(context.contains("command: npm run lint"));
+    assert!(context.contains("- python-pytest (python): skipped"));
+    assert!(context.contains("pytest is not installed"));
+    assert!(context.contains("- rust-check (rust): passed exit=0"));
+    assert!(context.len() < output.content.len());
+    assert!(
+        !context.contains(&noisy_success),
+        "successful gate stdout should not be copied into parent context"
+    );
+}
+
+#[test]
+fn run_tests_results_are_structured_before_context_insertion() {
+    let stdout = "running test suite\n".repeat(500);
+    let stderr = "error[E0425]: cannot find value `missing`\n".repeat(500);
+    let output = ToolResult::success(
+        json!({
+            "success": false,
+            "exit_code": 101,
+            "stdout": stdout,
+            "stderr": stderr,
+            "command": "(cd /repo && cargo test --workspace --all-features)"
+        })
+        .to_string(),
+    );
+
+    let context = compact_tool_result_for_context("deepseek-v4-pro", "run_tests", &output);
+
+    assert!(context.contains("[run_tests result summarized for context]"));
+    assert!(context.contains("status: failed, exit_code: 101"));
+    assert!(context.contains("cargo test --workspace --all-features"));
+    assert!(context.contains("error[E0425]"));
+    assert!(context.contains("running test suite"));
+    assert!(context.len() < output.content.len());
+}
+
+#[test]
+fn task_gate_run_results_are_structured_before_context_insertion() {
+    let output = ToolResult::success(
+        json!({
+            "gate": {
+                "id": "gate_abcd1234",
+                "gate": "clippy",
+                "command": "cargo clippy -p codewhale-tui --all-targets --all-features --locked -- -D warnings",
+                "cwd": "/repo",
+                "exit_code": 1,
+                "status": "failed",
+                "classification": "compile_failure",
+                "duration_ms": 5000,
+                "summary": "warning promoted to error in verifier.rs",
+                "log_path": "/repo/.codewhale/runtime/gate.log",
+                "recorded_at": "2026-06-01T12:00:00Z"
+            },
+            "stdout_summary": "",
+            "stderr_summary": "warning promoted to error"
+        })
+        .to_string(),
+    );
+
+    let context = compact_tool_result_for_context("deepseek-v4-pro", "task_gate_run", &output);
+
+    assert!(context.contains("[task_gate_run result summarized for context]"));
+    assert!(context.contains("gate: clippy, status: failed, exit_code: 1"));
+    assert!(context.contains("cargo clippy -p codewhale-tui"));
+    assert!(context.contains("summary: warning promoted to error"));
+    assert!(context.contains("log_path: /repo/.codewhale/runtime/gate.log"));
+}
+
+#[test]
 fn refresh_system_prompt_leaves_working_set_out_of_system_prompt() {
     let tmp = tempdir().expect("tempdir");
     fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
@@ -1492,6 +2008,7 @@ fn working_set_reaches_model_as_turn_metadata() {
 fn turn_metadata_includes_current_local_date_without_working_set() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
         workspace: tmp.path().to_path_buf(),
         ..Default::default()
     };
@@ -1511,6 +2028,7 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     assert!(text.starts_with("<turn_meta>\n"));
     assert!(text.contains(&format!("Current local date: {today}")));
+    assert!(text.contains("Current model: deepseek-v4-flash"));
 }
 
 #[test]
@@ -1534,6 +2052,7 @@ fn turn_metadata_includes_auto_model_route() {
         panic!("expected text metadata block");
     };
 
+    assert!(text.contains("Current model: deepseek-v4-pro"));
     assert!(text.contains("Auto model route: deepseek-v4-pro"));
     assert!(text.contains("Auto reasoning effort: max"));
     assert!(!text.contains("debug this regression"));

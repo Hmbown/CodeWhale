@@ -26,6 +26,6 @@ Don't sequence approvals one at a time — the user wants context, not interrupt
 Long sessions accumulate context. To stay fast:
 - Open sub-agent sessions for independent work instead of doing everything sequentially
 - Batch reads/searches/git-inspections into parallel tool calls
-- Suggest `/compact` when context nears 60% during sustained work — the compaction relay preserves open blockers
+- Suggest `/compact` or Ctrl+L when context nears 60% during sustained work — the compaction relay preserves open blockers
 - Use `note` for decisions you'll need across compaction boundaries
 - A 3-turn session that fans out to sub-agents finishes faster AND stays responsive longer than a 15-turn sequential grind

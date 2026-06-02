@@ -114,11 +114,11 @@ endpoint.
 | `deepseek` | `[providers.deepseek]` | `DEEPSEEK_API_KEY` | `CODEWHALE_BASE_URL` / `DEEPSEEK_BASE_URL`; default `https://api.deepseek.com/beta` | `deepseek-v4-pro`, `deepseek-v4-flash`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | First-class default. Beta URL enables strict tool mode, chat prefix completion, and FIM completion. Set `https://api.deepseek.com` or `/v1` explicitly to opt out of beta-only features. |
 | `nvidia-nim` | `[providers.nvidia_nim]` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, fallback `DEEPSEEK_API_KEY` | `NVIDIA_NIM_BASE_URL`, `NIM_BASE_URL`, `NVIDIA_BASE_URL`; default `https://integrate.api.nvidia.com/v1` | `deepseek-ai/deepseek-v4-pro`, `deepseek-ai/deepseek-v4-flash` | Hosted DeepSeek V4 through NVIDIA NIM. `NVIDIA_NIM_MODEL` is accepted by the TUI config path. |
 | `openai` | `[providers.openai]` | `OPENAI_API_KEY` | `OPENAI_BASE_URL`; default `https://api.openai.com/v1` | Registry entries: `deepseek-v4-pro`, `deepseek-v4-flash`; default config model `deepseek-v4-pro` | Generic OpenAI-compatible route for gateways and custom endpoints. Use this for explicit third-party OpenAI-compatible routes instead of inventing a new provider ID. `OPENAI_MODEL` is accepted. |
-| `atlascloud` | `[providers.atlascloud]` | `ATLASCLOUD_API_KEY` | `ATLASCLOUD_BASE_URL`; default `https://api.atlascloud.ai/v1` | `deepseek-ai/deepseek-v4-flash`, `deepseek-ai/deepseek-v4-pro` | OpenAI-compatible hosted route. `ATLASCLOUD_MODEL` is accepted by the TUI config path, and the static `ModelRegistry` includes AtlasCloud fallback rows for CLI model resolution. |
+| `atlascloud` | `[providers.atlascloud]` | `ATLASCLOUD_API_KEY` | `ATLASCLOUD_BASE_URL`; default `https://api.atlascloud.ai/v1` | Default `deepseek-ai/deepseek-v4-flash`; explicit `vendor/model-id` values pass through when AtlasCloud is selected | OpenAI-compatible hosted route. `ATLASCLOUD_MODEL` is accepted by the TUI config path, the static `ModelRegistry` keeps DeepSeek V4 fallback rows, and provider-hinted CLI model IDs are sent to AtlasCloud exactly as requested. |
 | `wanjie-ark` | `[providers.wanjie_ark]` | `WANJIE_ARK_API_KEY`, `WANJIE_API_KEY`, `WANJIE_MAAS_API_KEY` | `WANJIE_ARK_BASE_URL`, `WANJIE_BASE_URL`, `WANJIE_MAAS_BASE_URL`; default `https://maas-openapi.wanjiedata.com/api/v1` | `deepseek-reasoner` | OpenAI-compatible hosted route. `WANJIE_ARK_MODEL`, `WANJIE_MODEL`, and `WANJIE_MAAS_MODEL` are accepted. |
 | `volcengine` | `[providers.volcengine]` | `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, `ARK_API_KEY` | `VOLCENGINE_BASE_URL`, `VOLCENGINE_ARK_BASE_URL`, `ARK_BASE_URL`; default `https://ark.cn-beijing.volces.com/api/coding/v3` | `DeepSeek-V4-Pro`, `DeepSeek-V4-Flash` | Volcengine/Volcano Engine Ark OpenAI-compatible coding endpoint. `VOLCENGINE_MODEL` and `VOLCENGINE_ARK_MODEL` are accepted. |
 | `openrouter` | `[providers.openrouter]` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL`; default `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash`; recent large IDs include `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `qwen/qwen3.6-35b-a3b`, `google/gemma-4-31b-it`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.6` | Additive open-model routing layer. It does not replace DeepSeek; it lets users route supported model IDs through OpenRouter when they choose it. |
-| `xiaomi-mimo` | `[providers.xiaomi_mimo]` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` | `XIAOMI_MIMO_BASE_URL`, `MIMO_BASE_URL`; default `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro`, `mimo-v2.5` | Xiaomi MiMo OpenAI-compatible chat completions route. It sends `max_completion_tokens` and uses MiMo's `thinking` field for reasoning control. |
+| `xiaomi-mimo` | `[providers.xiaomi_mimo]` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` | `XIAOMI_MIMO_BASE_URL`, `MIMO_BASE_URL`; default `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro`, `mimo-v2.5`, `mimo-v2.5-tts`, `mimo-v2.5-tts-voicedesign`, `mimo-v2.5-tts-voiceclone`, `mimo-v2-tts` | Xiaomi MiMo OpenAI-compatible chat completions route. It sends `max_completion_tokens` and uses MiMo's `thinking` field for reasoning control. `codewhale speech` / `tts` uses the TTS models. |
 | `novita` | `[providers.novita]` | `NOVITA_API_KEY` | `NOVITA_BASE_URL`; default `https://api.novita.ai/v1` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` | OpenAI-compatible hosted route for DeepSeek model IDs. Use config or `CODEWHALE_MODEL` / `DEEPSEEK_MODEL` for model overrides. |
 | `fireworks` | `[providers.fireworks]` | `FIREWORKS_API_KEY` | `FIREWORKS_BASE_URL`; default `https://api.fireworks.ai/inference/v1` | `accounts/fireworks/models/deepseek-v4-pro` | OpenAI-compatible hosted route. Use config or `CODEWHALE_MODEL` / `DEEPSEEK_MODEL` for model overrides. |
 | `siliconflow` | `[providers.siliconflow]` | `SILICONFLOW_API_KEY` | `SILICONFLOW_BASE_URL`; default `https://api.siliconflow.com/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | OpenAI-compatible hosted route. Official docs use the `.com` endpoint; users who need the regional endpoint can set `https://api.siliconflow.cn/v1` explicitly. `SILICONFLOW_MODEL` is accepted. Reasoning aliases `deepseek-reasoner` and `deepseek-r1` map to Pro; `deepseek-chat` and `deepseek-v3` map to Flash. |
@@ -130,7 +130,11 @@ endpoint.
 ### Xiaomi MiMo Notes
 
 `xiaomi-mimo` defaults to `mimo-v2.5-pro` for long-context reasoning and coding
-work, while the static registry also exposes `mimo-v2.5`. Xiaomi's current
+work, while the static registry also exposes `mimo-v2.5`. Xiaomi MiMo TTS is
+available through `codewhale --provider xiaomi-mimo speech "text" --model tts`
+(or the `tts` alias) plus model-visible `speech` / `tts` tools in Agent/YOLO mode.
+Voice-design and voice-clone shorthands map to `mimo-v2.5-tts-voicedesign` and
+`mimo-v2.5-tts-voiceclone`. Xiaomi's current
 [image-understanding guide](https://platform.xiaomimimo.com/docs/en-US/usage-guide/multimodal-understanding/image-understanding)
 includes `mimo-v2.5` for image input. CodeWhale exposes image analysis through the
 separate `[vision_model]` / `image_analyze` path; set that model to
@@ -164,7 +168,7 @@ endpoint when the endpoint supports model listing.
 | `wanjie-ark` | `deepseek-reasoner` | yes | yes |
 | `volcengine` | `DeepSeek-V4-Pro`, `DeepSeek-V4-Flash` | yes | yes |
 | `openrouter` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash`, `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `xiaomi/mimo-v2.5`, `qwen/qwen3.6-35b-a3b`, `qwen/qwen3.6-27b`, `moonshotai/kimi-k2.6`, `z-ai/glm-5.1`, `tencent/hy3-preview`, `google/gemma-4-31b-it`, `google/gemma-4-26b-a4b-it`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | yes | yes |
-| `xiaomi-mimo` | `mimo-v2.5-pro`, `mimo-v2.5` | yes | yes |
+| `xiaomi-mimo` | `mimo-v2.5-pro`, `mimo-v2.5`, `mimo-v2.5-tts`, `mimo-v2.5-tts-voicedesign`, `mimo-v2.5-tts-voiceclone`, `mimo-v2-tts` | yes | yes for chat models; no for TTS models |
 | `novita` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` | yes | yes |
 | `fireworks` | `accounts/fireworks/models/deepseek-v4-pro` | yes | yes |
 | `siliconflow` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
@@ -205,6 +209,26 @@ Tool-call support is tracked separately by the static `ModelRegistry` and by
 the endpoint's ability to accept OpenAI-compatible `tools` payloads. A custom
 OpenAI-compatible or local endpoint can still reject tool calls even if
 CodeWhale can send the schema.
+
+### When a Local Model Prints Tool JSON
+
+CodeWhale only executes tools when the provider returns Chat Completions
+`tool_calls` or streamed `delta.tool_calls`. If a local model prints text such
+as `{"name":"grep_files","arguments":{...}}` in the assistant message, that is
+ordinary model output, not an executable tool request.
+
+For OpenAI-compatible or local runtimes, check:
+
+- The endpoint accepts the `tools` array in `/v1/chat/completions` requests.
+- The selected model or chat template is configured for function/tool calls.
+- The server returns `tool_calls` in the response rather than plain JSON text.
+- The compatibility layer does not strip tools before forwarding the request.
+- If in doubt, test a small `read_file` or `grep_files` request against a known
+  tool-calling model before debugging CodeWhale's tool registry.
+
+Changing `provider`, `base_url`, or `model` can select a route that supports the
+OpenAI-compatible payload shape, but CodeWhale cannot convert arbitrary JSON
+text into a trusted tool call after the model has emitted it as prose.
 
 DeepSeek compatibility aliases `deepseek-chat` and `deepseek-reasoner` map to
 `deepseek-v4-flash` capability metadata and are scheduled to retire on

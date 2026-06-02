@@ -69,6 +69,7 @@ const SEATBELT_BASE_POLICY: &str = r#"
 ; Terminal support (essential for shell commands)
 (allow pseudo-tty)
 (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write* file-ioctl (literal "/dev/tty"))
 (allow file-read* file-write* file-ioctl (regex #"^/dev/ttys[0-9]+$"))
 
 ; macOS-specific device access
@@ -649,6 +650,19 @@ mod tests {
                 None => std::env::remove_var("NPM_CONFIG_CACHE"),
             }
         }
+    }
+
+    #[test]
+    fn test_generate_policy_allows_dev_tty() {
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/test");
+        let policy_text = generate_policy(&policy, cwd);
+
+        assert!(
+            policy_text
+                .contains(r#"(allow file-read* file-write* file-ioctl (literal "/dev/tty"))"#),
+            "TTY-mode shells need /dev/tty access for sshpass/sudo prompts"
+        );
     }
 
     #[test]

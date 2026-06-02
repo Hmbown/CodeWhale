@@ -8,6 +8,7 @@ use crate::compaction::estimate_tokens;
 use crate::error_taxonomy::ErrorCategory;
 use crate::models::{Message, SystemPrompt, context_window_for_model};
 use crate::tools::spec::ToolResult;
+use serde_json::Value;
 
 /// Max output tokens requested for normal agent turns. Generous on purpose:
 /// V4 thinking models can produce tens of thousands of reasoning tokens on
@@ -126,6 +127,12 @@ fn tool_result_is_noisy(tool_name: &str) -> bool {
         "exec_shell"
             | "exec_shell_wait"
             | "exec_shell_interact"
+            | "exec_shell_cancel"
+            | "task_shell_start"
+            | "task_shell_wait"
+            | "run_tests"
+            | "run_verifiers"
+            | "task_gate_run"
             | "multi_tool_use.parallel"
             | "web_search"
     )
@@ -259,6 +266,179 @@ fn compact_subagent_tool_result_for_context(tool_name: &str, raw: &str) -> Optio
     Some(out.trim_end().to_string())
 }
 
+fn json_text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn json_number_text(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_i64()
+                .map(|n| n.to_string())
+                .or_else(|| value.as_u64().map(|n| n.to_string()))
+        })
+        .or_else(|| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn compact_run_tests_result_for_context(raw: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    let success = parsed.get("success")?.as_bool()?;
+    let exit_code = json_number_text(&parsed, "exit_code").unwrap_or_else(|| "?".to_string());
+    let command = json_text(&parsed, "command").unwrap_or("(unknown command)");
+    let stdout = json_text(&parsed, "stdout");
+    let stderr = json_text(&parsed, "stderr");
+    let stream_limit = if success { 500 } else { 1_000 };
+
+    let mut lines = vec![
+        "[run_tests result summarized for context]".to_string(),
+        format!(
+            "status: {}, exit_code: {exit_code}",
+            if success { "passed" } else { "failed" }
+        ),
+        format!("command: {}", summarize_text(command, 300)),
+    ];
+    if let Some(stderr) = stderr {
+        lines.push(format!(
+            "stderr: {}",
+            summarize_text_head_tail(stderr, stream_limit)
+        ));
+    }
+    if let Some(stdout) = stdout {
+        lines.push(format!(
+            "stdout: {}",
+            summarize_text_head_tail(stdout, stream_limit)
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
+fn run_verifier_status_rank(status: Option<&str>) -> u8 {
+    match status.unwrap_or_default() {
+        "failed" | "timeout" => 0,
+        "skipped" => 1,
+        "passed" => 2,
+        _ => 3,
+    }
+}
+
+fn compact_run_verifiers_result_for_context(raw: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    let gates = parsed.get("gates")?.as_array()?;
+    let summary = json_text(&parsed, "summary")
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            let passed = json_number_text(&parsed, "passed").unwrap_or_else(|| "?".to_string());
+            let failed = json_number_text(&parsed, "failed").unwrap_or_else(|| "?".to_string());
+            let skipped = json_number_text(&parsed, "skipped").unwrap_or_else(|| "?".to_string());
+            format!("{passed} passed, {failed} failed, {skipped} skipped")
+        });
+
+    let mut ordered: Vec<&Value> = gates.iter().collect();
+    ordered.sort_by(|a, b| {
+        run_verifier_status_rank(json_text(a, "status"))
+            .cmp(&run_verifier_status_rank(json_text(b, "status")))
+            .then_with(|| json_text(a, "name").cmp(&json_text(b, "name")))
+    });
+
+    let mut lines = vec![
+        "[run_verifiers result summarized for context]".to_string(),
+        format!("summary: {summary}"),
+    ];
+    let profile = json_text(&parsed, "profile");
+    let level = json_text(&parsed, "level");
+    if profile.is_some() || level.is_some() {
+        lines.push(format!(
+            "selection: profile={}, level={}",
+            profile.unwrap_or("?"),
+            level.unwrap_or("?")
+        ));
+    }
+
+    for (idx, gate) in ordered.iter().enumerate() {
+        if idx >= 12 {
+            lines.push(format!(
+                "- ... {} more gate(s) omitted from context summary",
+                ordered.len().saturating_sub(idx)
+            ));
+            break;
+        }
+
+        let name = json_text(gate, "name").unwrap_or("gate");
+        let ecosystem = json_text(gate, "ecosystem").unwrap_or("unknown");
+        let status = json_text(gate, "status").unwrap_or("unknown");
+        let exit = json_number_text(gate, "exit_code")
+            .map(|code| format!(" exit={code}"))
+            .unwrap_or_default();
+        lines.push(format!("- {name} ({ecosystem}): {status}{exit}"));
+
+        if status != "passed" {
+            if let Some(command) = json_text(gate, "command") {
+                lines.push(format!("  command: {}", summarize_text(command, 240)));
+            }
+            if let Some(detail) = json_text(gate, "skipped_reason")
+                .or_else(|| json_text(gate, "stderr"))
+                .or_else(|| json_text(gate, "stdout"))
+            {
+                lines.push(format!(
+                    "  detail: {}",
+                    summarize_text_head_tail(detail, 600)
+                ));
+            }
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn compact_task_gate_run_result_for_context(raw: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    let gate = parsed.get("gate")?;
+    let gate_name = json_text(gate, "gate").unwrap_or("gate");
+    let status = json_text(gate, "status").unwrap_or("unknown");
+    let command = json_text(gate, "command").unwrap_or("(unknown command)");
+    let summary = json_text(gate, "summary")
+        .or_else(|| json_text(&parsed, "stderr_summary"))
+        .or_else(|| json_text(&parsed, "stdout_summary"));
+    let exit = json_number_text(gate, "exit_code")
+        .map(|code| format!(", exit_code: {code}"))
+        .unwrap_or_default();
+
+    let mut lines = vec![
+        "[task_gate_run result summarized for context]".to_string(),
+        format!("gate: {gate_name}, status: {status}{exit}"),
+        format!("command: {}", summarize_text(command, 300)),
+    ];
+    if let Some(summary) = summary {
+        lines.push(format!("summary: {}", summarize_text(summary, 800)));
+    }
+    if let Some(log_path) = json_text(gate, "log_path") {
+        lines.push(format!("log_path: {log_path}"));
+    }
+    Some(lines.join("\n"))
+}
+
+fn compact_structured_tool_result_for_context(tool_name: &str, raw: &str) -> Option<String> {
+    match tool_name {
+        "run_tests" => compact_run_tests_result_for_context(raw),
+        "run_verifiers" => compact_run_verifiers_result_for_context(raw),
+        "task_gate_run" => compact_task_gate_run_result_for_context(raw),
+        _ => None,
+    }
+}
+
 fn tool_result_context_limits_for_model(model: &str) -> ToolResultContextLimits {
     let is_large_context =
         context_window_for_model(model).is_some_and(|window| window >= LARGE_CONTEXT_WINDOW_TOKENS);
@@ -289,6 +469,10 @@ pub(crate) fn compact_tool_result_for_context(
     }
 
     if let Some(summary) = compact_subagent_tool_result_for_context(tool_name, raw) {
+        return summary;
+    }
+
+    if let Some(summary) = compact_structured_tool_result_for_context(tool_name, raw) {
         return summary;
     }
 

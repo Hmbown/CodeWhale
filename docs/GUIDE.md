@@ -56,8 +56,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 
-# Homebrew
-# The tap/formula name is legacy; it installs codewhale and codewhale-tui.
+# Homebrew, legacy installs only
+# The tap/formula still uses the old deepseek-tui name. Prefer npm, Cargo,
+# Docker, or direct downloads for new installs until the formula is renamed.
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 ```
@@ -179,6 +180,15 @@ The interactive TUI has a few stable regions:
 - Status and footer areas: live activity, queued follow-ups, and short command
   hints.
 
+The footer status line is configurable. Run `/statusline` to choose which
+footer chips are visible, or set `[tui].status_items` in `config.toml` to
+control both selection and order. Supported keys currently include `mode`,
+`model`, `cost`, `balance` (DeepSeek / DeepSeekCN only), `status`, `coherence`,
+`agents`, `reasoning_replay`, `prefix_stability`, `cache`, `context_percent`,
+`git_branch`, `last_tool_elapsed` (placeholder), `rate_limit` (placeholder),
+and `tokens`. Omit `status_items` to keep the built-in default order; set it to
+`[]` to hide configurable chips.
+
 The transcript is the audit trail. When CodeWhale reads files, runs commands,
 or edits code, the action appears there. If a command fails, use the visible
 failure output as part of your next instruction instead of starting over.
@@ -255,6 +265,7 @@ Common commands for first-time users:
 | `/models` | Fetch or list models from the active endpoint |
 | `/provider` | Pick the active API provider |
 | `/config` | Edit runtime and provider settings |
+| `/statusline` | Choose which footer status chips are visible |
 | `/settings` | Inspect persistent UI preferences |
 | `/compact` | Summarize long context to recover token budget |
 | `/review` | Ask for a structured review workflow |
@@ -496,6 +507,11 @@ before implementing so you do not spend tokens on the wrong path.
 CodeWhale saves sessions. Use the session picker or resume/continue CLI paths
 documented in the README and modes guide. For a risky experiment, fork the
 session before changing direction.
+
+The `/sessions` picker starts scoped to the current workspace so resumes stay
+attached to the project you opened. Press `a` in the picker to show sessions
+from every workspace, or run `codewhale sessions` to list all saved sessions
+with last-updated timestamps before resuming a specific id.
 
 ### What should I do when the model gets confused?
 

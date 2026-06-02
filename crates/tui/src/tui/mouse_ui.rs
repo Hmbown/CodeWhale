@@ -524,6 +524,14 @@ pub(crate) fn open_context_menu(app: &mut App, mouse: MouseEvent) {
 pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEntry> {
     let mut entries = Vec::new();
 
+    // Paste first — the most common action when right-clicking in the
+    // composer after copying text from the output area.
+    entries.push(ContextMenuEntry {
+        label: app.tr(MessageId::CtxMenuPaste).to_string(),
+        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
+        action: ContextMenuAction::Paste,
+    });
+
     if selection_has_content(app) {
         entries.push(ContextMenuEntry {
             label: app.tr(MessageId::CtxMenuCopySelection).to_string(),
@@ -597,11 +605,6 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
-    entries.push(ContextMenuEntry {
-        label: app.tr(MessageId::CtxMenuPaste).to_string(),
-        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
-        action: ContextMenuAction::Paste,
-    });
     entries.push(ContextMenuEntry {
         label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
         description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),

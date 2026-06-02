@@ -78,6 +78,10 @@ pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 pub const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
+pub const XIAOMI_MIMO_TTS_MODEL: &str = "mimo-v2.5-tts";
+pub const XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL: &str = "mimo-v2.5-tts-voicedesign";
+pub const XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL: &str = "mimo-v2.5-tts-voiceclone";
+pub const XIAOMI_MIMO_V2_TTS_MODEL: &str = "mimo-v2-tts";
 pub const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
@@ -538,6 +542,38 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
     }
 }
 
+fn canonical_xiaomi_mimo_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        "mimo"
+        | DEFAULT_XIAOMI_MIMO_MODEL
+        | "mimo-v2-5-pro"
+        | "xiaomi-mimo-v2.5-pro"
+        | "xiaomi-mimo-v2-5-pro" => Some(DEFAULT_XIAOMI_MIMO_MODEL),
+        "mimo-v2.5" | "mimo-v25" | "mimo-v2-5" | "xiaomi-mimo-v2.5" | "xiaomi-mimo-v2-5" => {
+            Some("mimo-v2.5")
+        }
+        "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" | "tts" | "speech" => {
+            Some(XIAOMI_MIMO_TTS_MODEL)
+        }
+        "mimo-tts-voicedesign"
+        | "mimo-voice-design"
+        | "mimo-v25-tts-voicedesign"
+        | "mimo-v2.5-tts-voicedesign"
+        | "voicedesign"
+        | "voice-design" => Some(XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL),
+        "mimo-tts-voiceclone"
+        | "mimo-voice-clone"
+        | "mimo-v25-tts-voiceclone"
+        | "mimo-v2.5-tts-voiceclone"
+        | "voiceclone"
+        | "voice-clone" => Some(XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL),
+        "mimo-v2-tts" => Some(XIAOMI_MIMO_V2_TTS_MODEL),
+        _ => None,
+    }
+}
+
 /// Normalize a model selected through the TUI for the active provider.
 ///
 /// Official DeepSeek endpoints require bare model IDs. Provider-prefixed
@@ -552,6 +588,12 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     if matches!(provider, ApiProvider::Openrouter)
         && let Some(canonical) = canonical_openrouter_recent_model_id(model)
+    {
+        return Some(canonical.to_string());
+    }
+
+    if matches!(provider, ApiProvider::XiaomiMimo)
+        && let Some(canonical) = canonical_xiaomi_mimo_model_id(model)
     {
         return Some(canonical.to_string());
     }
@@ -585,7 +627,14 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
 #[must_use]
 pub fn wire_model_for_provider(provider: ApiProvider, model: &str) -> String {
     let trimmed = model.trim();
-    if trimmed.is_empty() || provider_passes_model_through(provider) {
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    if matches!(provider, ApiProvider::XiaomiMimo) {
+        return normalize_model_name_for_provider(provider, trimmed)
+            .unwrap_or_else(|| trimmed.to_string());
+    }
+    if provider_passes_model_through(provider) {
         return trimmed.to_string();
     }
     normalize_model_name_for_provider(provider, trimmed).unwrap_or_else(|| trimmed.to_string())
@@ -601,7 +650,14 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             models.extend_from_slice(RECENT_OPENROUTER_LARGE_MODELS);
             models
         }
-        ApiProvider::XiaomiMimo => vec![DEFAULT_XIAOMI_MIMO_MODEL, "mimo-v2.5"],
+        ApiProvider::XiaomiMimo => vec![
+            DEFAULT_XIAOMI_MIMO_MODEL,
+            "mimo-v2.5",
+            XIAOMI_MIMO_TTS_MODEL,
+            XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL,
+            XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL,
+            XIAOMI_MIMO_V2_TTS_MODEL,
+        ],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
         ApiProvider::Siliconflow => {
@@ -820,6 +876,15 @@ pub struct MemoryConfig {
     /// `# foo` typed in the composer to append to that file. Default `false`.
     #[serde(default)]
     pub enabled: Option<bool>,
+}
+
+/// Xiaomi MiMo speech/TTS output configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpeechConfig {
+    /// Default directory for generated speech/TTS files when no explicit
+    /// output path is provided.
+    #[serde(default)]
+    pub output_dir: Option<String>,
 }
 
 impl SnapshotsConfig {
@@ -1429,6 +1494,10 @@ pub struct Config {
     /// `DEEPSEEK_MEMORY=on` is set.
     #[serde(default)]
     pub memory: Option<MemoryConfig>,
+
+    /// Xiaomi MiMo speech/TTS defaults.
+    #[serde(default)]
+    pub speech: Option<SpeechConfig>,
 
     /// Tunables for `--model auto` (#1207). When absent, the auto router
     /// keeps its existing balanced behaviour.
@@ -2370,6 +2439,26 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("./memory.md"))
     }
 
+    /// Resolve the default speech/TTS output directory, if configured.
+    #[must_use]
+    pub fn speech_output_dir(&self) -> Option<PathBuf> {
+        std::env::var("XIAOMI_MIMO_SPEECH_OUTPUT_DIR")
+            .or_else(|_| std::env::var("MIMO_SPEECH_OUTPUT_DIR"))
+            .or_else(|_| std::env::var("XIAOMIMIMO_SPEECH_OUTPUT_DIR"))
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| expand_path(&value))
+            .or_else(|| {
+                self.speech
+                    .as_ref()
+                    .and_then(|speech| speech.output_dir.as_deref())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(expand_path)
+            })
+    }
+
     /// Resolve the configured `instructions = [...]` array (#454)
     /// to absolute paths, in declared order. Empty when unset or
     /// when every entry is empty after trimming. Each entry runs
@@ -2721,7 +2810,7 @@ fn expand_pathbuf(path: PathBuf) -> PathBuf {
     path
 }
 
-fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
+pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
     if let Some(path) = path {
         return Some(expand_pathbuf(path));
     }
@@ -3811,6 +3900,11 @@ fn normalize_model_config(config: &mut Config) {
 }
 
 fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    if matches!(provider, ApiProvider::XiaomiMimo)
+        && let Some(canonical) = canonical_xiaomi_mimo_model_id(model)
+    {
+        return Some(canonical.to_string());
+    }
     if provider_passes_model_through(provider) {
         return None;
     }
@@ -4060,6 +4154,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         snapshots: override_cfg.snapshots.or(base.snapshots),
         search: override_cfg.search.or(base.search),
         memory: override_cfg.memory.or(base.memory),
+        speech: override_cfg.speech.or(base.speech),
         auto: override_cfg.auto.or(base.auto),
         update: override_cfg.update.or(base.update),
         lsp: override_cfg.lsp.or(base.lsp),
@@ -6917,6 +7012,37 @@ api_key = "old-openrouter-key"
                 normalize_model_name_for_provider(ApiProvider::Openrouter, alias).as_deref(),
                 Some(expected)
             );
+        }
+    }
+
+    #[test]
+    fn normalize_xiaomi_mimo_tts_aliases_for_provider() {
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::XiaomiMimo, "tts").as_deref(),
+            Some("mimo-v2.5-tts")
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::XiaomiMimo, "voice-design").as_deref(),
+            Some("mimo-v2.5-tts-voicedesign")
+        );
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::XiaomiMimo, "voiceclone"),
+            "mimo-v2.5-tts-voiceclone"
+        );
+    }
+
+    #[test]
+    fn model_completion_names_for_xiaomi_mimo_include_tts_models() {
+        let models = model_completion_names_for_provider(ApiProvider::XiaomiMimo);
+        for expected in [
+            "mimo-v2.5-pro",
+            "mimo-v2.5",
+            "mimo-v2.5-tts",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2-tts",
+        ] {
+            assert!(models.contains(&expected), "missing {expected}");
         }
     }
 

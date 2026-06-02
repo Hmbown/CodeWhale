@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.50] - 2026-06-02
+
+### Added
+
+- Added a Windows NSIS installer release artifact and classroom/lab deployment
+  checklist, harvested from #2045 for #1987. The release workflow now builds
+  `CodeWhaleSetup.exe` from the canonical Windows binaries, and the installer
+  adds/removes only the exact current-user PATH entry.
+- Added deterministic session timestamps in session listings, receipt-export
+  boundary docs, and current-model turn metadata for routed/auto sessions.
+- Added exact AtlasCloud provider-hinted model ID pass-through for explicit
+  `vendor/model-id` selections, harvested from #2569 without freezing a
+  brittle provider catalog.
+- Added Xiaomi MiMo speech/TTS support with a `codewhale speech` CLI command,
+  `tts` tool alias, and config wiring for voice-design and voice-clone models,
+  harvested from #2560.
+- Added a three-zone immutable prefix diagnostic layer (FrozenPrefix Phase 2)
+  that logs cache-prefix drift at debug level without blocking requests,
+  harvested from #2514.
+- Added a Cache Guard CI integration test suite simulating prefix-cache
+  behaviour across nine scenarios, gated behind `CODEWHALE_CACHE_GUARD=1`,
+  harvested from #2503.
+- Added a plan-mode byte-stability invariant test verifying that the tool
+  catalog head remains byte-identical across mode toggles, harvested from
+  #2519.
+- Localized all 15 `/queue` command messages across 7 shipped locales,
+  harvested from #2568.
+- Added localized `FanoutCounts` MessageId for i18n of the aggregate worker
+  stats line in fanout cards, harvested from #2566.
+- Added contribution gate CI workflows (PR gate, issue gate, contributor
+  approval) with a dry-run mode, harvested from #2565.
+
+### Changed
+
+- Hardened theme repainting and sidebar color use so theme switches do not
+  leave stale Whale-dark panel colors behind.
+- Made legacy config migration visible when CodeWhale copies old DeepSeek-era
+  config into the CodeWhale config path.
+
+### Fixed
+
+- Fixed `/context` to use the effective routed model for context-window
+  budgeting, so DeepSeek V4 routes report the 1M-token window and legacy
+  DeepSeek routes keep the 128K fallback.
+- Fixed npm wrapper version output so `--version` prefers the installed binary
+  version instead of stale package metadata when both are available.
+- Fixed multiline composer arrow navigation so holding Up/Down at the first or
+  last line no longer replaces the current draft with prompt history.
+- Fixed foreground `exec_shell` output collection so timeout and inherited-pipe
+  cleanup cannot wedge later tool calls behind the global tool lock.
+- Clarified the English DeepSeek account-balance footer chip from `bal` to
+  `balance` so it is less likely to be mistaken for session spend.
+- Fixed truncated subagent tool calls and repeated truncated subagent responses
+  so they return model-visible errors instead of silently failing.
+- Moved Paste to the first position in the right-click context menu so users
+  copying text from the output area can paste with a single left-click instead
+  of navigating past cell-specific actions.
+
+### Community
+
+Thanks to **@ZhulongNT** (#2045), **@cyq1017** (#2521, #2536, #2537, #2559,
+#2562, #2563, #2564), **@HUQIANTAO** (#2527, #2519, #2503), **@lucaszhu-hue**
+(#2569), **@idling11** (#2573), **@encyc** (#2514), **@xyuai** (#2560),
+**@gordonlu** (#2568, #2566), and **@nightt5879** (#2565) for the work
+harvested into this release pass. Thanks
+also to issue reporters and verification helpers including **@New2Niu**
+(#2561), **@buko** (#2533, #2369), **@wywsoor** (#2494), **@ctxyao** (#2556),
+**@Dr3259** (#2380), **@caiyilian** (#2567), and **@chinaqy110** (#2571) for
+reports and acceptance details that shaped these fixes, plus the WeChat/Chinese
+UX reports relayed during the final triage pass.
+
 ## [0.8.49] - 2026-06-01
 
 ### Added
@@ -5162,7 +5233,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...HEAD
+[0.8.50]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...v0.8.50
 [0.8.49]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...v0.8.49
 [0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48
 [0.8.47]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...v0.8.47
