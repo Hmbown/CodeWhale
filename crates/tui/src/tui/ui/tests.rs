@@ -2613,7 +2613,7 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
     // Creates a real mpsc channel, sets up app as if a turn is in progress,
     // drops the sender (mirroring engine task exit in spawn_supervised),
     // and verifies the post-loop recovery logic cleans up the UI state.
-    let (tx_event, mut rx) = tokio::sync::mpsc::channel::<EngineEvent>(256);
+    let (tx_event, rx) = tokio::sync::mpsc::channel::<EngineEvent>(256);
     drop(tx_event);
 
     // Confirm the channel is closed
