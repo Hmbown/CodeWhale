@@ -2515,11 +2515,8 @@ fn turn_liveness_uses_recent_turn_activity_not_turn_start() {
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
     app.turn_started_at = Some(Instant::now());
-    app.turn_last_activity_at = Some(
-        app.turn_started_at.unwrap()
-            + TURN_STALL_WATCHDOG_TIMEOUT
-            + Duration::from_secs(29),
-    );
+    app.turn_last_activity_at =
+        Some(app.turn_started_at.unwrap() + TURN_STALL_WATCHDOG_TIMEOUT + Duration::from_secs(29));
     let now = app.turn_last_activity_at.unwrap() + Duration::from_secs(1);
 
     let recovered = reconcile_turn_liveness(&mut app, now, false);
