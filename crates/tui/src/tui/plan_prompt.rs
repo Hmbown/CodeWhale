@@ -245,6 +245,9 @@ impl ModalView for PlanPromptView {
                 // short plan that fits entirely never triggers a false positive.
                 if self.scroll.min(self.last_max_scroll.get()) > 0 {
                     // User scrolled; ask for confirmation before discarding.
+                    // Clear a stray pending_g so it doesn't leak into the
+                    // confirm dialog and survive a cancel (#).
+                    self.pending_g = false;
                     self.confirming_exit = true;
                     ViewAction::None
                 } else {
@@ -371,8 +374,6 @@ impl ModalView for PlanPromptView {
             );
         }
 
-        render_modal_chrome(area, popup_area, buf);
-
         // Calculate scroll bounds so long plan content doesn't clip the options.
         // Use wrapped_line_count to estimate post-wrap line count.
         let total_lines = wrapped_line_count(&lines, content_width);
@@ -454,6 +455,7 @@ impl ModalView for PlanPromptView {
                 .block(modal_block().title_bottom(confirm_footer));
             confirm.render(popup_area, buf);
         } else {
+            render_modal_chrome(area, popup_area, buf);
             let paragraph = Paragraph::new(lines)
                 .alignment(Alignment::Left)
                 .wrap(Wrap { trim: true })
