@@ -2628,6 +2628,14 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
     app.streaming_message_index = Some(0);
     app.user_scrolled_during_stream = true;
 
+    // Verify pending steers are surfaced to the visible queue on reconnect
+    app.pending_steers.push_back(QueuedMessage {
+        display: "steer content".to_string(),
+        skill_instruction: None,
+    });
+    assert_eq!(app.pending_steers.len(), 1);
+    assert_eq!(app.queued_message_count(), 0);
+
     // Apply the same post-loop logic from ui.rs
     if (app.is_loading || app.is_compacting || app.is_purging) && rx.is_closed() {
         streaming_thinking::finalize_current(&mut app);
@@ -2649,6 +2657,11 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
         app.runtime_turn_id = None;
         app.dispatch_started_at = None;
         app.user_scrolled_during_stream = false;
+
+        for msg in app.drain_pending_steers() {
+            app.queue_message(msg);
+        }
+
         app.push_status_toast(
             "Engine process has terminated unexpectedly.",
             StatusToastLevel::Error,
@@ -2672,6 +2685,12 @@ fn engine_event_channel_disconnect_recovers_mid_turn_ui_state() {
     let toast = app.status_toasts.back().expect("error toast pushed");
     assert_eq!(toast.level, StatusToastLevel::Error);
     assert!(toast.text.contains("Engine process has terminated"));
+
+    // Verify pending steers were preserved in the visible queue
+    assert!(app.pending_steers.is_empty(), "pending_steers drained");
+    assert_eq!(app.queued_message_count(), 1, "steer requeued");
+    let queued = app.pop_queued_message().expect("queued steer available");
+    assert_eq!(queued.display, "steer content");
 }
 
 #[test]

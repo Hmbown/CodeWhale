@@ -2262,6 +2262,14 @@ async fn run_event_loop(
                 app.runtime_turn_id = None;
                 app.dispatch_started_at = None;
                 app.user_scrolled_during_stream = false;
+
+                // Preserve pending steers: same hard-fail recovery as
+                // TurnComplete::Failed — surface them in the visible queue
+                // so they are not silently lost.
+                for msg in app.drain_pending_steers() {
+                    app.queue_message(msg);
+                }
+
                 app.push_status_toast(
                     "Engine process has terminated unexpectedly.",
                     StatusToastLevel::Error,
