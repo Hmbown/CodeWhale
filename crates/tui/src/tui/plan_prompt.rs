@@ -1,9 +1,10 @@
 //! Modal prompt for selecting what to do after a plan is generated.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::palette;
 use crate::tools::plan::PlanSnapshot;
@@ -24,6 +25,12 @@ const PLAN_OPTIONS: [(&str, &str); 4] = [
         "Return to Agent mode without implementation",
     ),
 ];
+
+/// Shortcut letters for each plan option (used in the footer bar).
+const PLAN_SHORTCUTS: [char; 4] = ['a', 'y', 'r', 'q'];
+
+/// Compact labels for each plan option (used in the footer bar).
+const PLAN_SHORT_LABELS: [&str; 4] = ["Accept", "YOLO", "Revise", "Exit"];
 
 fn modal_block() -> Block<'static> {
     Block::default()
@@ -96,13 +103,26 @@ fn push_option_lines(
 #[derive(Debug, Clone, Default)]
 pub struct PlanPromptView {
     selected: usize,
+    /// Vertical scroll position (in lines).
+    scroll: usize,
+    /// Tracks a previous 'g' press for the 'gg' (jump to top) combo.
+    pending_g: bool,
+    /// When true, an "are you sure?" prompt is shown instead of the option list
+    /// because the user pressed Esc after scrolling away from the top.
+    confirming_exit: bool,
     /// The plan snapshot to display (if update_plan was called).
     plan: Option<PlanSnapshot>,
 }
 
 impl PlanPromptView {
     pub fn new(plan: Option<PlanSnapshot>) -> Self {
-        Self { selected: 0, plan }
+        Self {
+            selected: 0,
+            scroll: 0,
+            pending_g: false,
+            confirming_exit: false,
+            plan,
+        }
     }
 
     fn max_index(&self) -> usize {
@@ -118,7 +138,7 @@ impl PlanPromptView {
     fn submit_number(number: u32) -> ViewAction {
         if (1..=u32::try_from(PLAN_OPTIONS.len()).unwrap_or(0)).contains(&number) {
             ViewAction::EmitAndClose(ViewEvent::PlanPromptSelected {
-                option: usize::try_from(number).unwrap_or(1),
+                option: usize::from(number),
             })
         } else {
             ViewAction::None
@@ -136,6 +156,27 @@ impl ModalView for PlanPromptView {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+        // When the "confirm exit" prompt is active, only y / n / Esc matter.
+        if self.confirming_exit {
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    ViewAction::EmitAndClose(ViewEvent::PlanPromptDismissed)
+                }
+                KeyCode::Char('n')
+                | KeyCode::Char('N')
+                | KeyCode::Esc => {
+                    self.confirming_exit = false;
+                    ViewAction::None
+                }
+                _ => ViewAction::None,
+            };
+        }
+        // Clear a pending 'g' when any other key is pressed so the gg combo
+        // doesn't fire on a stray g followed by, say, an up-arrow 30 s later.
+        let is_g = matches!(key.code, KeyCode::Char('g'));
+        if self.pending_g && !is_g {
+            self.pending_g = false;
+        }
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
@@ -173,7 +214,10 @@ impl ModalView for PlanPromptView {
                 self.selected = 2;
                 self.submit_selected()
             }
-            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('e') | KeyCode::Char('E') => {
+            KeyCode::Char('q')
+            | KeyCode::Char('Q')
+            | KeyCode::Char('e')
+            | KeyCode::Char('E') => {
                 self.selected = 3;
                 self.submit_selected()
             }
@@ -182,7 +226,68 @@ impl ModalView for PlanPromptView {
                 Self::submit_number(number)
             }
             KeyCode::Enter => self.submit_selected(),
-            KeyCode::Esc => ViewAction::EmitAndClose(ViewEvent::PlanPromptDismissed),
+            KeyCode::Esc => {
+                if self.confirming_exit {
+                    // Second Esc: cancel the confirmation prompt.
+                    self.confirming_exit = false;
+                    ViewAction::None
+                } else if self.scroll > 0 {
+                    // User scrolled; ask for confirmation before discarding.
+                    self.confirming_exit = true;
+                    ViewAction::None
+                } else {
+                    ViewAction::EmitAndClose(ViewEvent::PlanPromptDismissed)
+                }
+            }
+            // Scroll the plan content when it overflows the popup.
+            KeyCode::PageUp => {
+                self.scroll = self.scroll.saturating_sub(6);
+                ViewAction::None
+            }
+            KeyCode::PageDown => {
+                self.scroll = self.scroll.saturating_add(6);
+                ViewAction::None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_sub(6);
+                ViewAction::None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_add(6);
+                ViewAction::None
+            }
+            // Vim-style scroll keys.
+            KeyCode::Char('g') if self.pending_g => {
+                // Second g in sequence → jump to top.
+                self.scroll = 0;
+                self.pending_g = false;
+                ViewAction::None
+            }
+            KeyCode::Char('g') => {
+                self.pending_g = true;
+                ViewAction::None
+            }
+            KeyCode::Char('G') => {
+                // Vim 'G' (Shift+g) → jump to bottom.  Render clamps overshoot.
+                self.scroll = usize::MAX;
+                ViewAction::None
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_add(6);
+                ViewAction::None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_sub(6);
+                ViewAction::None
+            }
+            KeyCode::Home => {
+                self.scroll = 0;
+                ViewAction::None
+            }
+            KeyCode::End => {
+                self.scroll = usize::MAX;
+                ViewAction::None
+            }
             _ => ViewAction::None,
         }
     }
@@ -215,14 +320,15 @@ impl ModalView for PlanPromptView {
                     "Plan steps:",
                     Style::default().fg(palette::DEEPSEEK_SKY).bold(),
                 )));
-                for item in &plan.items {
+                for (i, item) in plan.items.iter().enumerate() {
                     let status_mark = match item.status {
                         crate::tools::plan::StepStatus::Pending => "\u{b7}",
                         crate::tools::plan::StepStatus::InProgress => "\u{25b6}",
                         crate::tools::plan::StepStatus::Completed => "\u{2713}",
                     };
+                    let step_text = truncate_step(&item.step, 60);
                     lines.push(Line::from(Span::styled(
-                        format!("  {status_mark} {}", item.step),
+                        format!("  {status_mark} {}. {}", i + 1, step_text),
                         Style::default().fg(palette::TEXT_PRIMARY),
                     )));
                 }
@@ -235,32 +341,114 @@ impl ModalView for PlanPromptView {
             push_option_lines(&mut lines, self.selected == idx, number, label, description);
         }
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "1-4 / a / y / r / q",
-                Style::default().fg(palette::DEEPSEEK_SKY).bold(),
-            ),
-            Span::styled(" quick pick", Style::default().fg(palette::TEXT_MUTED)),
-            Span::raw("  "),
-            Span::styled("Up/Down", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" move", Style::default().fg(palette::TEXT_MUTED)),
-            Span::raw("  "),
-            Span::styled("Enter", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" confirm", Style::default().fg(palette::TEXT_MUTED)),
-            Span::raw("  "),
-            Span::styled("Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" close", Style::default().fg(palette::TEXT_MUTED)),
-        ]));
-
-        let paragraph = Paragraph::new(lines)
-            .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true })
-            .block(modal_block());
-
         let popup_area = centered_rect(72, 52, area);
         render_modal_chrome(area, popup_area, buf);
-        paragraph.render(popup_area, buf);
+
+        // Calculate scroll bounds so long plan content doesn't clip the options.
+        // Use wrapped_line_count to estimate post-wrap line count.
+        let content_width = usize::from(popup_area.width.saturating_sub(4).max(1));
+        let total_lines = wrapped_line_count(&lines, content_width);
+        let visible_lines = usize::from(popup_area.height).saturating_sub(4).max(1);
+        let max_scroll = total_lines.saturating_sub(visible_lines);
+        let scroll = self.scroll.min(max_scroll);
+
+        // Build footer: scroll indicator (left) + data-driven option shortcuts +
+        // description of the currently selected option (right).
+        let mut footer_spans: Vec<Span> = Vec::new();
+        if total_lines > visible_lines {
+            footer_spans.push(Span::styled(
+                format!(" [{}/{} PgUp/Dn · Ctrl+U/D] ", scroll + 1, max_scroll + 1),
+                Style::default().fg(palette::DEEPSEEK_SKY),
+            ));
+        }
+        for (idx, _) in PLAN_OPTIONS.iter().enumerate() {
+            let shortcut = PLAN_SHORTCUTS[idx];
+            let short_label = PLAN_SHORT_LABELS[idx];
+            let is_current = self.selected == idx;
+            let shortcut_style = if is_current {
+                Style::default()
+                    .fg(palette::SELECTION_TEXT)
+                    .bg(palette::SELECTION_BG)
+                    .bold()
+            } else {
+                Style::default().fg(palette::DEEPSEEK_SKY)
+            };
+            footer_spans.push(Span::styled(
+                format!("[{}/{}] {}", idx + 1, shortcut, short_label),
+                shortcut_style,
+            ));
+            footer_spans.push(Span::raw("  "));
+        }
+        // Selected option description, right-aligned by filling space.
+        let desc = PLAN_OPTIONS[self.selected].1;
+        let desc_span = Span::styled(
+            format!(" → {desc}"),
+            Style::default().fg(palette::TEXT_MUTED),
+        );
+        footer_spans.push(desc_span);
+
+        // When the user pressed Esc after scrolling, show a confirmation prompt
+        // instead of the normal plan + options.
+        if self.confirming_exit {
+            let confirm_lines = vec![
+                Line::from(Span::styled(
+                    "Exit without implementing?",
+                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "You've scrolled through the plan content. Are you sure you want to exit?",
+                    Style::default().fg(palette::TEXT_PRIMARY),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  y — Yes, exit Plan mode",
+                    Style::default().fg(palette::DEEPSEEK_SKY),
+                )),
+                Line::from(Span::styled(
+                    "  n / Esc — Cancel, go back to plan",
+                    Style::default().fg(palette::TEXT_MUTED),
+                )),
+            ];
+            let confirm_footer = Line::from(vec![
+                Span::styled(" y ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("confirm exit", Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw("  "),
+                Span::styled("n / Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
+            ]);
+            let popup_area = centered_rect(66, 34, area);
+            render_modal_chrome(area, popup_area, buf);
+            let confirm = Paragraph::new(confirm_lines)
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true })
+                .block(modal_block().title_bottom(confirm_footer));
+            confirm.render(popup_area, buf);
+        } else {
+            let paragraph = Paragraph::new(lines)
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true })
+                .block(modal_block().title_bottom(Line::from(footer_spans)))
+                .scroll((scroll as u16, 0));
+
+            paragraph.render(popup_area, buf);
+        }
+    }
+}
+
+/// Truncate a plan step description to `max_len` chars, breaking at a word
+/// boundary and appending an ellipsis when truncation occurs.
+fn truncate_step(text: &str, max_len: usize) -> String {
+    if text.chars().count() <= max_len {
+        return text.to_string();
+    }
+    // Walk back from the cutoff to find a natural word boundary.
+    let cutoff = max_len.saturating_sub(3); // reserve room for "..."
+    let truncated: String = text.chars().take(cutoff).collect();
+    if let Some(last_space) = truncated.rfind(' ') {
+        format!("{}...", &truncated[..last_space])
+    } else {
+        format!("{truncated}...")
     }
 }
 
@@ -310,6 +498,26 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Estimate the number of display lines after word-wrapping a set of logical
+/// lines to `width` columns. Uses Unicode display widths so CJK characters
+/// count as 2 columns.
+fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
+    if width == 0 {
+        return lines.len().max(1);
+    }
+    let mut total = 0usize;
+    for line in lines {
+        let text: String = line.iter().map(|s| s.content.as_ref()).collect();
+        if text.is_empty() {
+            total += 1;
+            continue;
+        }
+        let display_width = UnicodeWidthStr::width(text.as_str());
+        total += (display_width + width - 1) / width;
+    }
+    total
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -351,8 +559,9 @@ mod tests {
 
         assert!(rendered.contains("Action required"));
         assert!(rendered.contains("Choose what should happen after this plan."));
-        assert!(rendered.contains("1-4"));
-        assert!(rendered.contains("Enter"));
+        // Data-driven footer shows per-option shortcut labels.
+        assert!(rendered.contains("[1/a]"));
+        assert!(rendered.contains("[4/q]"));
     }
 
     #[test]
@@ -364,5 +573,243 @@ mod tests {
 
         assert!(rendered.contains("> 2) Accept plan (YOLO)"));
         assert!(rendered.contains("Start implementation in YOLO mode (auto-approve)"));
+    }
+
+    #[test]
+    fn plan_prompt_shows_scroll_indicator_when_content_overflows() {
+        use crate::tools::plan::{PlanItemArg, PlanSnapshot, StepStatus};
+
+        let plan = PlanSnapshot {
+            explanation: Some("A".repeat(500)),
+            items: vec![PlanItemArg {
+                step: "Line 1".into(),
+                status: StepStatus::Pending,
+            }; 20],
+        };
+        let view = PlanPromptView::new(Some(plan));
+        // Render into a small area so content overflows.
+        let rendered = render_view(&view, 80, 24);
+
+        assert!(
+            rendered.contains("PgUp/Dn"),
+            "scroll indicator should appear when content overflows"
+        );
+    }
+
+    #[test]
+    fn plan_prompt_page_up_decrements_scroll() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 12;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_page_down_increments_scroll() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_ctrl_u_decrements_scroll() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 12;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_ctrl_d_increments_scroll() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_scroll_clamped_in_render() {
+        use crate::tools::plan::{PlanItemArg, PlanSnapshot, StepStatus};
+
+        let plan = PlanSnapshot {
+            explanation: Some("x".repeat(600)),
+            items: vec![PlanItemArg {
+                step: "Step".into(),
+                status: StepStatus::Pending,
+            }; 30],
+        };
+        let mut view = PlanPromptView::new(Some(plan));
+        // Set scroll far beyond content.
+        view.scroll = 999;
+        let rendered = render_view(&view, 80, 20);
+
+        // The rendered view should still contain the last option.
+        assert!(
+            rendered.contains("Exit Plan mode"),
+            "clamped scroll should keep last options visible"
+        );
+    }
+
+    #[test]
+    fn plan_prompt_gg_jumps_to_top() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 30;
+
+        // First 'g' sets pending flag, no scroll change.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(view.pending_g);
+        assert_eq!(view.scroll, 30);
+
+        // Second 'g' jumps to top.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(!view.pending_g);
+        assert_eq!(view.scroll, 0);
+    }
+
+    #[test]
+    fn plan_prompt_capital_g_jumps_to_bottom() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        // set to MAX so render clamps it.
+        assert_eq!(view.scroll, usize::MAX);
+    }
+
+    #[test]
+    fn plan_prompt_ctrl_f_scrolls_down() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action =
+            view.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_ctrl_b_scrolls_up() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 12;
+
+        let action =
+            view.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 6);
+    }
+
+    #[test]
+    fn plan_prompt_home_jumps_to_top() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 30;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, 0);
+    }
+
+    #[test]
+    fn plan_prompt_end_jumps_to_bottom() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.scroll, usize::MAX);
+    }
+
+    #[test]
+    fn plan_prompt_pending_g_clears_on_other_key() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 10;
+
+        // Press g → pending.
+        view.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(view.pending_g);
+
+        // Press Up → pending_g cleared, selected moves.
+        view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(!view.pending_g);
+
+        // Follow-up g should now set pending again, not jump.
+        view.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(view.pending_g);
+        assert_eq!(view.scroll, 10);
+    }
+
+    #[test]
+    fn plan_prompt_esc_after_scroll_confirms_then_cancels() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 5; // simulate user having scrolled
+
+        // First Esc: enters confirmation mode, does not close.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(view.confirming_exit);
+
+        // 'n' cancels confirmation, returns to plan.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(!view.confirming_exit);
+    }
+
+    #[test]
+    fn plan_prompt_esc_then_esc_cancels_confirmation() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 3;
+
+        // Enter confirmation.
+        view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(view.confirming_exit);
+
+        // Second Esc cancels.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(!view.confirming_exit);
+    }
+
+    #[test]
+    fn plan_prompt_esc_no_scroll_closes_immediately() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 0;
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::EmitAndClose(_)));
+    }
+
+    #[test]
+    fn plan_prompt_confirm_then_y_exits() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 2;
+
+        view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::EmitAndClose(_)));
+    }
+
+    #[test]
+    fn plan_prompt_other_keys_ignored_during_confirmation() {
+        let mut view = PlanPromptView::new(None);
+        view.scroll = 2;
+
+        view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(view.confirming_exit);
+
+        // Random key (e.g. 'a') should be ignored — does not submit option.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+        assert!(view.confirming_exit);
     }
 }
