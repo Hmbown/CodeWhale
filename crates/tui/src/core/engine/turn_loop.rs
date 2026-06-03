@@ -1357,13 +1357,14 @@ impl Engine {
                     )));
                 }
 
-                // Pause gate: when the command is paused, block all tool calls.
+                // Pause gate: when the command is paused, cancel the turn
+                // instead of returning a tool error. Returning a tool error
+                // causes the model to try alternative approaches; cancelling
+                // the turn cleanly stops all execution.
                 let is_paused = self.shared_paused.lock().map_or(false, |g| *g);
                 tracing::debug!(target: "pausable", is_paused, tool_name, "pause gate check");
                 if blocked_error.is_none() && is_paused {
-                    blocked_error = Some(ToolError::execution_failed(
-                        "Command is paused. Press Esc and select Resume to continue.".to_string(),
-                    ));
+                    self.cancel_token.cancel();
                 }
 
                 if blocked_error.is_none()
