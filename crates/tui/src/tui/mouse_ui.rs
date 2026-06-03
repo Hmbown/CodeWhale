@@ -42,6 +42,47 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     }
 }
 
+/// Handle mouse events on the sidebar resize handle (the 1-col vertical bar
+/// between the chat area and the sidebar). Returns true when the event was
+/// consumed so other handlers skip it.
+fn handle_sidebar_resize_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let Some(handle) = app.last_sidebar_handle_area else {
+        return false;
+    };
+
+    let hit = mouse.column == handle.x
+        && mouse.row >= handle.y
+        && mouse.row < handle.y.saturating_add(handle.height);
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if hit => {
+            app.sidebar_resizing = true;
+            app.sidebar_resize_anchor_x = mouse.column;
+            app.sidebar_resize_anchor_width = app.last_sidebar_area.map(|a| a.width).unwrap_or(28);
+            app.needs_redraw = true;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.sidebar_resizing => {
+            let delta = app.sidebar_resize_anchor_x as i32 - mouse.column as i32;
+            let new_width = (app.sidebar_resize_anchor_width as i32 + delta).max(24) as u16;
+            let total = app.sidebar_resize_total_width.max(1);
+            let new_pct = ((new_width as u32 * 100) / total as u32).clamp(10, 50) as u16;
+            if new_pct != app.sidebar_width_percent {
+                app.sidebar_width_percent = new_pct;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.sidebar_resizing => {
+            app.sidebar_resizing = false;
+            app.sidebar_width_dirty = true;
+            app.needs_redraw = true;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Map a mouse (column, row) within the composer area to a char index
 /// in the composer input string. Uses the inner content rect (border-aware)
 /// for coordinate mapping, and accounts for vertical padding and scroll offset.
@@ -214,6 +255,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     if !app.view_stack.is_empty() {
         app.needs_redraw = true;
         return app.view_stack.handle_mouse(mouse);
+    }
+
+    // Sidebar resize handle — check before composer so it doesn't compete
+    // with text selection / scrolling.
+    if handle_sidebar_resize_mouse(app, mouse) {
+        return Vec::new();
     }
 
     // Composer mouse events take priority over transcript.

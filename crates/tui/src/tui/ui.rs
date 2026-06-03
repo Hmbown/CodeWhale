@@ -60,6 +60,7 @@ use crate::session_manager::{
     OfflineQueueState, QueuedSessionMessage, SavedSession, SessionManager,
     create_saved_session_with_id_and_mode, create_saved_session_with_mode, update_session,
 };
+use crate::settings::Settings;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
@@ -2597,6 +2598,14 @@ async fn run_event_loop(
                 {
                     return Ok(());
                 }
+                // Persist sidebar width when the user finishes a drag-to-resize.
+                if app.sidebar_width_dirty {
+                    app.sidebar_width_dirty = false;
+                    if let Ok(mut settings) = Settings::load() {
+                        settings.update_sidebar_width(app.sidebar_width_percent);
+                        let _ = settings.save();
+                    }
+                }
                 continue;
             }
 
@@ -2997,6 +3006,14 @@ async fn run_event_loop(
                 .await?
                 {
                     return Ok(());
+                }
+                // Persist sidebar width when the user finishes a drag-to-resize.
+                if app.sidebar_width_dirty {
+                    app.sidebar_width_dirty = false;
+                    if let Ok(mut settings) = Settings::load() {
+                        settings.update_sidebar_width(app.sidebar_width_percent);
+                        let _ = settings.save();
+                    }
                 }
                 continue;
             }
@@ -6379,6 +6396,8 @@ fn render(f: &mut Frame, app: &mut App) {
             };
 
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
+            // Record total width for drag-to-resize percentage calculation.
+            app.sidebar_resize_total_width = chat_area.width;
             let split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Min(1), Constraint::Length(sidebar_width)])
@@ -6392,7 +6411,53 @@ fn render(f: &mut Frame, app: &mut App) {
         chat_widget.render(chat_area, buf);
 
         if let Some(sidebar_area) = sidebar_area {
+            // Store sidebar area for mouse hit-testing (resize handle).
+            app.last_sidebar_area = Some(sidebar_area);
+
+            // Render sidebar
             super::sidebar::render_sidebar(f, sidebar_area, app);
+
+            // Paint resize handle (1-col draggable bar) on the left edge of
+            // the sidebar, over the sidebar content. Mouse drag on this strip
+            // adjusts sidebar_width_percent in real time.
+            let handle_rect = Rect {
+                x: sidebar_area.x,
+                y: sidebar_area.y,
+                width: 1,
+                height: sidebar_area.height,
+            };
+
+            // Store for mouse event handler.
+            app.last_sidebar_handle_area = Some(handle_rect);
+
+            let mouse_over = app.last_mouse_pos.is_some_and(|(col, row)| {
+                row >= handle_rect.y
+                    && row < handle_rect.y.saturating_add(handle_rect.height)
+                    && col == handle_rect.x
+            });
+
+            let handle_style = if app.sidebar_resizing {
+                Style::default()
+                    .bg(palette::DEEPSEEK_BLUE)
+                    .fg(palette::TEXT_PRIMARY)
+            } else if mouse_over {
+                Style::default()
+                    .bg(palette::STATUS_WARNING)
+                    .fg(palette::TEXT_MUTED)
+            } else {
+                Style::default()
+                    .bg(palette::DEEPSEEK_SLATE)
+                    .fg(palette::TEXT_MUTED)
+            };
+
+            let buf = f.buffer_mut();
+            for row in handle_rect.y..handle_rect.y.saturating_add(handle_rect.height) {
+                if row < buf.area().height {
+                    buf[(handle_rect.x, row)]
+                        .set_char('│')
+                        .set_style(handle_style);
+                }
+            }
 
             // Render sidebar hover tooltip if active.
             if let Some(ref tooltip_text) = app.sidebar_hover_tooltip

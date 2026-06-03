@@ -532,6 +532,12 @@ impl Settings {
         Ok(())
     }
 
+    /// Update and persist sidebar width percentage (10-50) — used by the
+    /// drag-to-resize handle in the TUI.
+    pub fn update_sidebar_width(&mut self, percent: u16) {
+        self.sidebar_width_percent = percent.clamp(10, 50);
+    }
+
     /// Set a single setting by key
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {

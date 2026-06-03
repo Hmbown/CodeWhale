@@ -2749,6 +2749,154 @@ fn hidden_sidebar_focus_suppresses_sidebar_split_even_when_wide() {
     assert_eq!(sidebar_width_for_chat_area(&app, 120), None);
 }
 
+// ── Sidebar resize-handle mouse tests ──────────────────────────────
+
+fn setup_resize_handle(app: &mut App, handle_x: u16, sidebar_width: u16, total_width: u16) {
+    let y = 2;
+    let h = 10;
+    app.last_sidebar_handle_area = Some(Rect {
+        x: handle_x,
+        y,
+        width: 1,
+        height: h,
+    });
+    app.last_sidebar_area = Some(Rect {
+        x: handle_x,
+        y,
+        width: sidebar_width,
+        height: h,
+    });
+    app.sidebar_resize_total_width = total_width;
+    app.sidebar_width_percent = 28;
+}
+
+#[test]
+fn sidebar_resize_down_on_handle_starts_resizing() {
+    let mut app = create_test_app();
+    setup_resize_handle(&mut app, 80, 33, 120);
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 80,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(
+        app.sidebar_resizing,
+        "should start resizing on handle click"
+    );
+    assert_eq!(app.sidebar_resize_anchor_x, 80);
+    assert_eq!(app.sidebar_resize_anchor_width, 33);
+}
+
+#[test]
+fn sidebar_resize_down_outside_handle_does_not_start_resizing() {
+    let mut app = create_test_app();
+    setup_resize_handle(&mut app, 80, 33, 120);
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 79, // one column left of handle
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(
+        !app.sidebar_resizing,
+        "should not resize on non-handle click"
+    );
+}
+
+#[test]
+fn sidebar_resize_drag_adjusts_width_percent() {
+    let mut app = create_test_app();
+    setup_resize_handle(&mut app, 80, 33, 120);
+    // 33 / 120 * 100 ≈ 27.5 → initial percent = 28 (the setup defaults to 28)
+    app.sidebar_width_percent = 28;
+    app.sidebar_resizing = true;
+    app.sidebar_resize_anchor_x = 80;
+    app.sidebar_resize_anchor_width = 33;
+
+    // Drag left by 4 cols (making sidebar wider): 33 + 4 = 37 → 37/120*100 ≈ 30
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 76,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    let expected = ((37u32 * 100) / 120) as u16; // ~30
+    assert_eq!(app.sidebar_width_percent, expected);
+}
+
+#[test]
+fn sidebar_resize_drag_clamps_to_10_50_range() {
+    let mut app = create_test_app();
+    setup_resize_handle(&mut app, 80, 33, 120);
+    app.sidebar_resizing = true;
+    app.sidebar_resize_anchor_x = 80;
+    app.sidebar_resize_anchor_width = 33;
+
+    // Drag far right → sidebar should shrink but not below 10%
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 200,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(app.sidebar_width_percent >= 10);
+
+    // Drag far left → sidebar should grow but not above 50%
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 0,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(app.sidebar_width_percent <= 50);
+}
+
+#[test]
+fn sidebar_resize_up_ends_resizing_and_marks_dirty() {
+    let mut app = create_test_app();
+    setup_resize_handle(&mut app, 80, 33, 120);
+    app.sidebar_resizing = true;
+    app.sidebar_resize_anchor_x = 80;
+    app.sidebar_resize_anchor_width = 33;
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 76,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(!app.sidebar_resizing, "should stop resizing on mouse up");
+    assert!(
+        app.sidebar_width_dirty,
+        "should mark width dirty for persistence"
+    );
+}
+
 fn make_subagent(
     id: &str,
     status: crate::tools::subagent::SubAgentStatus,
