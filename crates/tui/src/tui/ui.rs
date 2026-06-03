@@ -6383,6 +6383,24 @@ async fn steer_user_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
+    // Belt-and-suspenders: intercept resume here too, in case the message
+    // reaches steer_user_message without going through submit_or_steer_message.
+    if app.paused_quarry.is_some() {
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue" || trimmed == "resume"
+            || trimmed.starts_with("continue ")
+            || trimmed.starts_with("resume ")
+        {
+            app.hunt.quarry = app.paused_quarry.take();
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            app.status_message = None;
+        }
+    }
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
         &message.display,
@@ -6442,13 +6460,18 @@ async fn submit_or_steer_message(
     // "continue" or "resume", restore the goal BEFORE deciding disposition.
     // This catches messages sent while is_loading=true (which go through
     // the Steer path and bypass dispatch_user_message entirely).
+    // DEBUG: force output to stderr so we can see it in tui-stderr-*.log
+    eprintln!("[pausable debug] submit_or_steer: paused_quarry.is_some()={}", app.paused_quarry.is_some());
     if app.paused_quarry.is_some() {
+        eprintln!("[pausable debug] submit_or_steer: message.display={:?}", message.display);
         tracing::debug!(target: "pausable", display=?message.display, "submit_or_steer: paused_quarry present, checking");
         let trimmed = message.display.trim().to_lowercase();
+        eprintln!("[pausable debug] submit_or_steer: trimmed={:?}", trimmed);
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
         {
+            eprintln!("[pausable debug] submit_or_steer: RESUME DETECTED — consuming paused_quarry");
             tracing::debug!(target: "pausable", "submit_or_steer: RESUME DETECTED — consuming paused_quarry");
             app.hunt.quarry = app.paused_quarry.take();
             app.paused = false;
