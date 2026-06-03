@@ -4879,21 +4879,25 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused, let all messages through — the user can ask questions or
-    // give instructions while the old command is on hold.
+    // When paused, let all messages through.
     // "continue"/"resume" restores the paused goal so the model continues it.
-    // Any other message goes through with no active goal (hunt.quarry is None).
+    // Any other message cancels the old command and sends the new message
+    // with no active goal (the model should focus on the new request).
     if app.paused {
         let trimmed = message.display.trim().to_lowercase();
         if trimmed == "continue" || trimmed == "resume" {
-            // Restore the saved goal so the model sees it and continues.
             app.hunt.quarry = app.paused_quarry.take();
+        } else {
+            // Non-continue message: cancel the old turn and clear hunt state.
+            engine_handle.cancel();
+            app.hunt.quarry = None;
         }
         app.paused = false;
         app.paused_at = None;
         app.paused_cancelled = false;
         app.pausable = false;
         app.active_snapshot = None;
+        app.paused_quarry = None;
         engine_handle.set_paused(false);
         app.status_message = None;
         // Fall through — message goes to engine as a normal user message.
