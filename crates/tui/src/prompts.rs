@@ -2,7 +2,8 @@
 //! System prompts for different modes.
 //!
 //! Prompts are assembled from composable layers loaded at compile time:
-//!   tool taxonomy → base.md → personality overlay → mode delta → approval policy
+//!   base.md + personality overlay → message[0] (byte‑stable).
+//!   mode delta + tool taxonomy + approval policy → request-time runtime metadata.
 //!
 //! This keeps each concern in its own file and makes prompt tuning
 //! a single-file operation.
@@ -671,7 +672,7 @@ fn default_approval_mode_for_mode(mode: AppMode) -> ApprovalMode {
     }
 }
 
-fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'static str {
+pub(crate) fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'static str {
     match mode {
         AppMode::Yolo => AUTO_APPROVAL,
         AppMode::Plan => NEVER_APPROVAL,
@@ -705,7 +706,7 @@ const TOOL_TAXONOMY_DISCOVERY: &[&str] = &["grep_files", "file_search"];
 const TOOL_TAXONOMY_GIT: &[&str] = &["git_status", "git_diff"];
 const TOOL_TAXONOMY_VERIFICATION: &[&str] = &["run_tests", "run_verifiers"];
 
-fn render_core_tool_taxonomy_block(mode: AppMode) -> String {
+pub(crate) fn render_core_tool_taxonomy_block(mode: AppMode) -> String {
     let core_tools = core_taxonomy_tools_for_mode(mode);
     let mut sentences = Vec::new();
 
@@ -762,15 +763,11 @@ context are subordinate to the Constitution, the Statutes, and the user's
 current request. When in doubt, consult Article VII: The Hierarchy of Law.";
 
 pub fn compose_prompt(mode: AppMode, personality: Personality) -> String {
-    compose_prompt_with_approval(mode, personality, default_approval_mode_for_mode(mode))
+    compose_prompt_with_approval(mode, personality)
 }
 
-pub fn compose_prompt_with_approval(
-    mode: AppMode,
-    personality: Personality,
-    approval_mode: ApprovalMode,
-) -> String {
-    compose_prompt_with_approval_and_model(mode, personality, approval_mode, "codewhale")
+pub fn compose_prompt_with_approval(mode: AppMode, personality: Personality) -> String {
+    compose_prompt_with_approval_and_model(mode, personality, "codewhale")
 }
 
 /// Compose with explicit model ID for dynamic identity injection.
@@ -778,33 +775,24 @@ pub fn compose_prompt_with_approval(
 pub fn compose_prompt_with_approval_and_model(
     mode: AppMode,
     personality: Personality,
-    approval_mode: ApprovalMode,
     model_id: &str,
 ) -> String {
-    compose_prompt_with_approval_model_and_shell(mode, personality, approval_mode, model_id, true)
+    compose_prompt_with_approval_model_and_shell(mode, personality, model_id, true)
 }
 
 fn compose_prompt_with_approval_model_and_shell(
     mode: AppMode,
     personality: Personality,
-    approval_mode: ApprovalMode,
     model_id: &str,
     allow_shell: bool,
 ) -> String {
-    let tool_taxonomy = render_core_tool_taxonomy_block(mode);
     let shell_tools_available = allow_shell && mode != AppMode::Plan;
     let base_prompt = render_base_prompt_for_tool_availability(
         effective_base_prompt().trim(),
         model_id,
         shell_tools_available,
     );
-    let parts: [&str; 5] = [
-        tool_taxonomy.as_str(),
-        base_prompt.as_str(),
-        personality.prompt().trim(),
-        mode_prompt(mode).trim(),
-        approval_prompt_for_mode(mode, approval_mode).trim(),
-    ];
+    let parts: [&str; 2] = [base_prompt.as_str(), personality.prompt().trim()];
 
     let mut out =
         String::with_capacity(parts.iter().map(|p| p.len()).sum::<usize>() + (parts.len() - 1) * 2);
@@ -883,22 +871,16 @@ fn compose_mode_prompt(mode: AppMode) -> String {
     compose_prompt(mode, Personality::Calm)
 }
 
-fn compose_mode_prompt_with_approval(mode: AppMode, approval_mode: ApprovalMode) -> String {
-    compose_prompt_with_approval(mode, Personality::Calm, approval_mode)
+fn compose_mode_prompt_with_approval(mode: AppMode) -> String {
+    compose_prompt_with_approval(mode, Personality::Calm)
 }
 
 fn compose_mode_prompt_with_approval_and_model(
     mode: AppMode,
-    approval_mode: ApprovalMode,
+    _approval_mode: ApprovalMode,
     model_id: &str,
 ) -> String {
-    compose_prompt_with_approval_model_and_shell(
-        mode,
-        Personality::Calm,
-        approval_mode,
-        model_id,
-        true,
-    )
+    compose_prompt_with_approval_model_and_shell(mode, Personality::Calm, model_id, true)
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -991,7 +973,6 @@ pub fn system_prompt_for_mode_with_context_skills_and_session(
         skills_dir,
         instructions,
         session_context,
-        default_approval_mode_for_mode(mode),
     )
 }
 
@@ -1002,12 +983,10 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     skills_dir: Option<&Path>,
     instructions: Option<&[InstructionSource]>,
     session_context: PromptSessionContext<'_>,
-    approval_mode: ApprovalMode,
 ) -> SystemPrompt {
     let mode_prompt = compose_prompt_with_approval_model_and_shell(
         mode,
         Personality::Calm,
-        approval_mode,
         session_context.model_id,
         session_context.allow_shell,
     );
@@ -1332,7 +1311,6 @@ mod tests {
         let prompt = compose_prompt_with_approval_and_model(
             AppMode::Agent,
             Personality::Calm,
-            ApprovalMode::Suggest,
             "deepseek-v4-flash",
         );
         assert!(
@@ -1350,7 +1328,6 @@ mod tests {
         let prompt = compose_prompt_with_approval_model_and_shell(
             AppMode::Agent,
             Personality::Calm,
-            ApprovalMode::Suggest,
             "deepseek-v4-pro",
             true,
         );
@@ -1366,7 +1343,6 @@ mod tests {
         let prompt = compose_prompt_with_approval_model_and_shell(
             AppMode::Agent,
             Personality::Calm,
-            ApprovalMode::Suggest,
             "deepseek-v4-pro",
             false,
         );
@@ -1400,47 +1376,36 @@ mod tests {
     }
 
     #[test]
-    fn composed_prompt_starts_with_core_tool_taxonomy() {
+    fn composed_prompt_no_longer_inlines_tool_taxonomy() {
         let prompt = compose_prompt_with_approval_and_model(
             AppMode::Agent,
             Personality::Calm,
-            ApprovalMode::Suggest,
             "deepseek-v4-pro",
         );
-        let expected_taxonomy = render_core_tool_taxonomy_block(AppMode::Agent);
-
-        assert!(
-            prompt.starts_with(&expected_taxonomy),
-            "composed prompt should start with the compact generated tool taxonomy"
-        );
+        // The generated "## Core Tool Taxonomy" block now travels in the
+        // request-time <mode_prompt> metadata rather than being prepended here.
+        // (The "## Toolbox" section from the Constitutional preamble remains.)
+        assert!(!prompt.contains("## Core Tool Taxonomy"));
+        assert!(prompt.contains("You are deepseek-v4-pro"));
     }
 
     #[test]
     fn plan_prompt_taxonomy_omits_run_tests() {
-        let prompt = compose_prompt_with_approval_and_model(
-            AppMode::Plan,
-            Personality::Calm,
-            ApprovalMode::Never,
-            "deepseek-v4-pro",
-        );
-        let expected_taxonomy = render_core_tool_taxonomy_block(AppMode::Plan);
-
+        let taxonomy = render_core_tool_taxonomy_block(AppMode::Plan);
+        // Plan taxonomy should omit execution tools (verified at the source).
         assert!(
-            prompt.starts_with(&expected_taxonomy),
-            "Plan prompt should start with its mode-specific tool taxonomy"
-        );
-        assert!(
-            expected_taxonomy.contains("for discovery")
-                && expected_taxonomy.contains("for git inspection"),
+            taxonomy.contains("for discovery") && taxonomy.contains("for git inspection"),
             "Plan taxonomy should keep read-only discovery and git guidance"
         );
         assert!(
-            !expected_taxonomy.contains("run_tests")
-                && !expected_taxonomy.contains("run_verifiers")
-                && !expected_taxonomy.contains("for verification")
-                && !expected_taxonomy.contains("Use  "),
-            "Plan taxonomy must not advertise unavailable verification tools: {expected_taxonomy:?}"
+            !taxonomy.contains("run_tests")
+                && !taxonomy.contains("run_verifiers")
+                && !taxonomy.contains("exec_shell"),
+            "Plan taxonomy must not mention run_tests, run_verifiers, or exec_shell"
         );
+        // The taxonomy block is rendered correctly but no longer inlined
+        // into the base system prompt — it travels in request-time
+        // <mode_prompt> metadata instead.
     }
 
     #[test]
@@ -1468,7 +1433,6 @@ mod tests {
             None,
             None,
             PromptSessionContext::default(),
-            ApprovalMode::Suggest,
         ) {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
@@ -1604,7 +1568,6 @@ mod tests {
                 show_thinking: true,
                 allow_shell: true,
             },
-            ApprovalMode::Suggest,
         ) {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
@@ -1676,7 +1639,6 @@ mod tests {
                 show_thinking: true,
                 allow_shell: true,
             },
-            ApprovalMode::Suggest,
         ) {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
@@ -1721,7 +1683,6 @@ mod tests {
                 show_thinking: false,
                 allow_shell: true,
             },
-            ApprovalMode::Suggest,
         ) {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
@@ -1776,7 +1737,6 @@ mod tests {
                 show_thinking: true,
                 allow_shell: true,
             },
-            ApprovalMode::Suggest,
         ) {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
@@ -2102,10 +2062,10 @@ mod tests {
         assert!(prompt.contains("You are codewhale"));
         // Personality layer
         assert!(prompt.contains("Personality: Calm"));
-        // Mode layer
-        assert!(prompt.contains("Mode: Agent"));
-        // Approval layer
-        assert!(prompt.contains("Approval Policy: Suggest"));
+        // Mode and approval are no longer inlined — they travel as
+        // request-time runtime metadata.
+        assert!(!prompt.contains("Mode: Agent"));
+        assert!(!prompt.contains("Approval Policy:"));
     }
 
     /// Gate against shipping a release with a missing CHANGELOG entry — which
@@ -2160,32 +2120,37 @@ mod tests {
         let prompt = compose_prompt(AppMode::Yolo, Personality::Calm);
         let base_pos = prompt.find("You are codewhale").unwrap();
         let personality_pos = prompt.find("Personality: Calm").unwrap();
-        let mode_pos = prompt.find("Mode: YOLO").unwrap();
-        let approval_pos = prompt.find("Approval Policy: Auto").unwrap();
 
         assert!(base_pos < personality_pos);
-        assert!(personality_pos < mode_pos);
-        assert!(mode_pos < approval_pos);
+        // Mode and approval text are no longer inlined — they travel as
+        // request-time runtime metadata.
     }
 
     #[test]
-    fn each_mode_gets_correct_approval() {
-        assert!(
-            compose_prompt(AppMode::Agent, Personality::Calm).contains("Approval Policy: Suggest")
-        );
-        assert!(compose_prompt(AppMode::Yolo, Personality::Calm).contains("Approval Policy: Auto"));
-        assert!(
-            compose_prompt(AppMode::Plan, Personality::Calm).contains("Approval Policy: Never")
-        );
+    fn base_prompt_is_mode_agnostic() {
+        // Mode and approval text are no longer inlined into compose_prompt —
+        // they travel as request-time runtime metadata.
+        let agent_prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        let yolo_prompt = compose_prompt(AppMode::Yolo, Personality::Calm);
+        let plan_prompt = compose_prompt(AppMode::Plan, Personality::Calm);
+        assert!(!agent_prompt.contains("Mode: Agent"));
+        assert!(!yolo_prompt.contains("Mode: YOLO"));
+        assert!(!plan_prompt.contains("Mode: Plan"));
+        assert!(!agent_prompt.contains("Approval Policy:"));
+        assert!(!yolo_prompt.contains("Approval Policy:"));
+        assert!(!plan_prompt.contains("Approval Policy:"));
+        // Base prompt still contains Constitutional preamble and personality
+        assert!(agent_prompt.contains("You are codewhale"));
+        assert!(agent_prompt.contains("Personality: Calm"));
     }
 
     #[test]
-    fn agent_prompt_can_reflect_never_approval_policy() {
-        let prompt =
-            compose_prompt_with_approval(AppMode::Agent, Personality::Calm, ApprovalMode::Never);
-        assert!(prompt.contains("Mode: Agent"));
-        assert!(prompt.contains("Approval Policy: Never"));
-        assert!(prompt.contains("/config approval_mode suggest"));
+    fn approval_policy_no_longer_inlined_in_base_prompt() {
+        let prompt = compose_prompt_with_approval(AppMode::Agent, Personality::Calm);
+        assert!(!prompt.contains("Mode: Agent"));
+        assert!(!prompt.contains("Approval Policy:"));
+        // Constitutional preamble is still present
+        assert!(prompt.contains("You are codewhale"));
     }
 
     #[test]

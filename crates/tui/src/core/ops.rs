@@ -77,7 +77,7 @@ pub enum Op {
     #[allow(dead_code)]
     ChangeMode { mode: AppMode },
 
-    /// Update the model being used and refresh the prompt for the current mode.
+    /// Update the model being used and refresh stable prompt context.
     #[allow(dead_code)]
     SetModel { model: String, mode: AppMode },
 

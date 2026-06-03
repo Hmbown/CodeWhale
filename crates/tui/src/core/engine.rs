@@ -633,7 +633,6 @@ impl Engine {
                     show_thinking: config.show_thinking,
                     allow_shell: config.allow_shell,
                 },
-                session.approval_mode,
             );
         let stable_prompt = Some(system_prompt);
         session.last_system_prompt_hash = Some(system_prompt_hash(stable_prompt.as_ref()));
@@ -798,11 +797,12 @@ impl Engine {
         self.session.trust_mode = trust_mode;
         self.config.trust_mode = trust_mode;
         self.session.auto_approve = auto_approve;
-        self.session.approval_mode = if auto_approve {
-            crate::tui::approval::ApprovalMode::Auto
-        } else {
-            approval_mode
-        };
+        let agent_approval_mode = agent_approval_mode_for_turn(auto_approve, approval_mode);
+        // Only track the Agent-mode approval — Yolo/Plan have fixed
+        // approval policies that are derived from the mode itself.
+        if mode == AppMode::Agent {
+            self.session.approval_mode = agent_approval_mode;
+        }
 
         let _ = self
             .tx_event
@@ -1181,7 +1181,6 @@ impl Engine {
                 Op::ChangeMode { mode } => {
                     let previous_mode = self.current_mode;
                     self.current_mode = mode;
-                    self.refresh_system_prompt(mode);
                     self.emit_session_updated().await;
                     // Notify the agent that the mode has changed so it can re-evaluate
                     // any operations that were blocked by the previous mode's policy.
@@ -1198,11 +1197,11 @@ impl Engine {
                         )))
                         .await;
                 }
-                Op::SetModel { model, mode } => {
+                Op::SetModel { model, mode: _ } => {
                     self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
                     self.session.model = model;
                     self.config.model.clone_from(&self.session.model);
-                    self.refresh_system_prompt(mode);
+                    self.refresh_system_prompt();
                     self.emit_session_updated().await;
                     let _ = self
                         .tx_event
@@ -1240,6 +1239,10 @@ impl Engine {
                     self.session.compaction_summary_prompt =
                         extract_compaction_summary_prompt(system_prompt.clone());
                     self.session.system_prompt = system_prompt;
+                    self.session.last_system_prompt_hash =
+                        Some(system_prompt_hash(self.session.system_prompt.as_ref()));
+                    // Host-supplied prompts are persisted prefixes. Keep them
+                    // byte-stable; mode/runtime state is projected per request.
                     self.session.system_prompt_override =
                         system_prompt_override && self.session.system_prompt.is_some();
                     self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
@@ -1420,6 +1423,18 @@ In {new} mode: {policy}\n\n\
         }
     }
 
+    fn runtime_prompt_message(&self) -> Message {
+        let mode = self.current_mode;
+        let approval_mode = approval_mode_for(mode, self.session.approval_mode);
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: runtime_prompt_text(mode, approval_mode),
+                cache_control: None,
+            }],
+        }
+    }
+
     fn user_text_message_with_turn_metadata(&self, text: String) -> Message {
         self.user_text_message_with_turn_metadata_for_route(
             text,
@@ -1560,6 +1575,14 @@ In {new} mode: {policy}\n\n\
             .observe_user_message(&content, &self.session.workspace);
         let force_update_plan_first = should_force_update_plan_first(mode, &content);
 
+        let agent_approval_mode = agent_approval_mode_for_turn(auto_approve, approval_mode);
+        self.session.auto_approve = auto_approve;
+        // Only track the Agent-mode approval — Yolo/Plan have fixed
+        // approval policies that are derived from the mode itself.
+        if mode == AppMode::Agent {
+            self.session.approval_mode = agent_approval_mode;
+        }
+
         // Add user message to session
         let user_msg = self.user_text_message_with_turn_metadata_for_route(
             content,
@@ -1597,15 +1620,10 @@ In {new} mode: {policy}\n\n\
         self.config.trust_mode = trust_mode;
         self.config.translation_enabled = translation_enabled;
         self.config.show_thinking = show_thinking;
-        self.session.auto_approve = auto_approve;
-        self.session.approval_mode = if auto_approve {
-            crate::tui::approval::ApprovalMode::Auto
-        } else {
-            approval_mode
-        };
 
-        // Update system prompt to match current mode and include persisted compaction context.
-        self.refresh_system_prompt(mode);
+        // Refresh stable prompt context. Current mode is carried by the
+        // request-time runtime prompt projection.
+        self.refresh_system_prompt();
         self.emit_session_updated().await;
 
         // Build tool registry and tool list for the current mode
@@ -2342,8 +2360,8 @@ In {new} mode: {policy}\n\n\
             )))
             .await;
     }
-    /// Refresh the system prompt based on current mode and context.
-    fn refresh_system_prompt(&mut self, mode: AppMode) {
+    /// Refresh the stable system prompt based on current non-mode context.
+    fn refresh_system_prompt(&mut self) {
         let user_memory_block =
             crate::memory::compose_block(self.config.memory_enabled, &self.config.memory_path);
         let prompt_goal_objective = goal_objective_for_prompt(
@@ -2351,7 +2369,7 @@ In {new} mode: {policy}\n\n\
             &self.config.goal_state,
         );
         let base = prompts::system_prompt_for_mode_with_context_skills_session_and_approval(
-            mode,
+            AppMode::Agent,
             &self.config.workspace,
             None,
             Some(&self.config.skills_dir),
@@ -2366,7 +2384,6 @@ In {new} mode: {policy}\n\n\
                 show_thinking: self.config.show_thinking,
                 allow_shell: self.session.allow_shell,
             },
-            self.session.approval_mode,
         );
         let mut stable_prompt =
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
@@ -2384,7 +2401,6 @@ In {new} mode: {policy}\n\n\
 
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
-            self.session.last_system_prompt_hash = Some(stable_hash);
             return;
         }
         if self.session.last_system_prompt_hash != Some(stable_hash) {
@@ -2544,6 +2560,84 @@ fn goal_objective_for_prompt(
         Err(err) => tracing::warn!("goal state lock poisoned while building prompt: {err}"),
     }
     normalized_goal_objective(configured_goal)
+}
+
+// ── Mode & approval prompts as request-time runtime metadata ─────────
+//
+// Mode contracts and approval policies are not persisted in the session
+// history and are not sent as extra system messages. Instead, each API
+// request projects a transient user-role runtime metadata message at the
+// tail. The stable system prompt remains byte-stable, stored history remains
+// byte-stable, and strict chat-template providers never see a system message
+// outside messages[0].
+
+fn approval_mode_for(
+    mode: AppMode,
+    session_approval: crate::tui::approval::ApprovalMode,
+) -> crate::tui::approval::ApprovalMode {
+    match mode {
+        AppMode::Yolo => crate::tui::approval::ApprovalMode::Auto,
+        AppMode::Plan => crate::tui::approval::ApprovalMode::Never,
+        AppMode::Agent => session_approval,
+    }
+}
+
+fn agent_approval_mode_for_turn(
+    auto_approve: bool,
+    approval_mode: crate::tui::approval::ApprovalMode,
+) -> crate::tui::approval::ApprovalMode {
+    if auto_approve {
+        crate::tui::approval::ApprovalMode::Auto
+    } else {
+        approval_mode
+    }
+}
+
+fn mode_prompt_marker(mode: AppMode) -> String {
+    format!(
+        "<mode_prompt mode=\"{}\">",
+        match mode {
+            AppMode::Agent => "agent",
+            AppMode::Plan => "plan",
+            AppMode::Yolo => "yolo",
+        }
+    )
+}
+
+fn approval_prompt_marker(approval_mode: crate::tui::approval::ApprovalMode) -> String {
+    format!(
+        "<approval_policy policy=\"{}\">",
+        match approval_mode {
+            crate::tui::approval::ApprovalMode::Auto => "auto",
+            crate::tui::approval::ApprovalMode::Suggest => "suggest",
+            crate::tui::approval::ApprovalMode::Never => "never",
+        }
+    )
+}
+
+fn mode_prompt_text(mode: AppMode) -> &'static str {
+    match mode {
+        AppMode::Agent => prompts::AGENT_MODE,
+        AppMode::Plan => prompts::PLAN_MODE,
+        AppMode::Yolo => prompts::YOLO_MODE,
+    }
+}
+
+fn runtime_prompt_text(mode: AppMode, approval_mode: crate::tui::approval::ApprovalMode) -> String {
+    let marker = mode_prompt_marker(mode);
+    let mode_text = mode_prompt_text(mode).trim();
+    let taxonomy = prompts::render_core_tool_taxonomy_block(mode);
+    let approval_marker = approval_prompt_marker(approval_mode);
+    let approval_text = prompts::approval_prompt_for_mode(mode, approval_mode).trim();
+    format!(
+        "<runtime_prompt visibility=\"internal\">\n\
+This is runtime control metadata for the current request, not user input. \
+Apply it to the next assistant response and tool calls. It supersedes any \
+earlier mode or approval metadata in the transcript.\n\n\
+{marker}\n{taxonomy}\n{mode_text}\n</mode_prompt>\n\n\
+{approval_marker}\n{approval_text}\n</approval_policy>\n\
+</runtime_prompt>"
+    )
 }
 
 /// Spawn the engine in a background task

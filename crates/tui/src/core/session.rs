@@ -31,8 +31,8 @@ pub struct Session {
 
     /// System prompt (optional)
     pub system_prompt: Option<SystemPrompt>,
-    /// True when `system_prompt` came from an explicit runtime API override
-    /// and should not be replaced by mode/context refreshes.
+    /// True when `system_prompt` is a persisted/runtime-supplied prefix that
+    /// should not be replaced by mode/context refreshes.
     pub system_prompt_override: bool,
     /// Hash of the last assembled stable system prompt. Used to avoid
     /// replacing `system_prompt` when unchanged.

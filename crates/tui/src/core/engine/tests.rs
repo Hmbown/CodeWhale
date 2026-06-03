@@ -263,7 +263,7 @@ fn refresh_system_prompt_uses_runtime_goal_state() {
         goal.create("Close the runtime goal loop".to_string(), None);
     }
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     let prompt = match engine.session.system_prompt {
         Some(SystemPrompt::Text(text)) => text,
         Some(SystemPrompt::Blocks(blocks)) => blocks
@@ -465,116 +465,36 @@ fn tool_exec_outcome_tracks_duration() {
 #[test]
 fn core_native_tools_stay_loaded_in_yolo_mode() {
     let always_load = HashSet::new();
-    assert!(!should_default_defer_tool(
-        "exec_shell",
-        AppMode::Yolo,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("exec_shell", &always_load));
     // git_blame remains deferred (read-only git history beyond log/show/diff).
-    assert!(should_default_defer_tool(
-        "git_blame",
-        AppMode::Yolo,
-        &always_load
-    ));
+    assert!(should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
 fn non_yolo_mode_retains_default_defer_policy() {
     let always_load = HashSet::new();
-    assert!(!should_default_defer_tool(
-        "exec_shell",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "edit_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "apply_patch",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "fetch_url",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_diff",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("exec_shell", &always_load));
+    assert!(!should_default_defer_tool("edit_file", &always_load));
+    assert!(!should_default_defer_tool("apply_patch", &always_load));
+    assert!(!should_default_defer_tool("fetch_url", &always_load));
+    assert!(!should_default_defer_tool("git_diff", &always_load));
     // #2654: read-only git history joins the active set.
-    assert!(!should_default_defer_tool(
-        "git_log",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_show",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_status",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "run_tests",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "agent_open",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("git_log", &always_load));
+    assert!(!should_default_defer_tool("git_show", &always_load));
+    assert!(!should_default_defer_tool("git_status", &always_load));
+    assert!(!should_default_defer_tool("run_tests", &always_load));
+    assert!(!should_default_defer_tool("agent_open", &always_load));
     // #2605: the fetch/close side of the sub-agent surface must also stay
     // active so a first `agent_eval`/`agent_close` executes instead of
     // hydrating its schema and forcing a double-invoke.
-    assert!(!should_default_defer_tool(
-        "agent_eval",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "agent_close",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "read_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "web_search",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "write_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "task_shell_start",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "task_shell_wait",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(should_default_defer_tool(
-        "git_blame",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("agent_eval", &always_load));
+    assert!(!should_default_defer_tool("agent_close", &always_load));
+    assert!(!should_default_defer_tool("read_file", &always_load));
+    assert!(!should_default_defer_tool("web_search", &always_load));
+    assert!(!should_default_defer_tool("write_file", &always_load));
+    assert!(!should_default_defer_tool("task_shell_start", &always_load));
+    assert!(!should_default_defer_tool("task_shell_wait", &always_load));
+    assert!(should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
@@ -775,11 +695,7 @@ fn agent_catalog_keeps_edit_file_loaded_when_fuzz_is_omitted() {
 #[test]
 fn tools_always_load_overrides_default_native_deferral() {
     let always_load = HashSet::from(["git_blame".to_string()]);
-    assert!(!should_default_defer_tool(
-        "git_blame",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
@@ -1755,15 +1671,20 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
         .await
         .expect("send change mode");
 
-    let prompt = {
+    let (_prompt, messages) = {
         let mut rx = handle.rx_event.write().await;
         loop {
             let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
                 .await
                 .expect("session update after mode switch")
                 .expect("event");
-            if let Event::SessionUpdated { system_prompt, .. } = event {
-                break match system_prompt.expect("system prompt") {
+            if let Event::SessionUpdated {
+                system_prompt,
+                messages,
+                ..
+            } = event
+            {
+                let prompt = match system_prompt.expect("system prompt") {
                     SystemPrompt::Text(text) => text,
                     SystemPrompt::Blocks(blocks) => blocks
                         .into_iter()
@@ -1771,13 +1692,98 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
                         .collect::<Vec<_>>()
                         .join("\n"),
                 };
+                break (prompt, messages);
             }
         }
     };
     run.abort();
 
-    assert!(prompt.contains("Mode: YOLO"));
-    assert!(prompt.contains("Approval Policy: Auto"));
+    assert!(
+        messages.iter().all(|message| message.role != "system"),
+        "mode switch must not persist appended system messages: {messages:?}"
+    );
+    assert!(
+        messages.iter().all(|message| {
+            message.content.iter().all(|block| {
+                !matches!(
+                    block,
+                    ContentBlock::Text { text, .. }
+                        if text.contains("<mode_prompt") || text.contains("<approval_policy")
+                )
+            })
+        }),
+        "mode/approval prompts should be request-time metadata, not session history"
+    );
+}
+
+#[test]
+fn turn_approval_mode_prefers_auto_approve_flag() {
+    use crate::tui::approval::ApprovalMode;
+
+    assert_eq!(
+        agent_approval_mode_for_turn(true, ApprovalMode::Suggest),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(
+            AppMode::Agent,
+            agent_approval_mode_for_turn(true, ApprovalMode::Never),
+        ),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(AppMode::Yolo, ApprovalMode::Suggest),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(AppMode::Plan, ApprovalMode::Auto),
+        ApprovalMode::Never
+    );
+}
+
+#[test]
+fn runtime_prompt_is_projected_without_persisting_to_session_messages() {
+    use crate::tui::approval::ApprovalMode;
+
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    engine.current_mode = AppMode::Plan;
+    engine.session.approval_mode = ApprovalMode::Suggest;
+    engine.session.messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "summary after compaction".to_string(),
+            cache_control: None,
+        }],
+    }];
+    let stored = engine.session.messages.clone();
+
+    let request_messages = engine.messages_with_turn_metadata();
+
+    assert_eq!(engine.session.messages, stored);
+    assert_eq!(request_messages.len(), stored.len() + 1);
+    assert!(
+        request_messages
+            .iter()
+            .all(|message| message.role != "system"),
+        "runtime prompts must not create appended system messages"
+    );
+    let runtime = request_messages.last().expect("runtime prompt message");
+    assert_eq!(runtime.role, "user");
+    let ContentBlock::Text { text, .. } = runtime.content.first().expect("runtime prompt text")
+    else {
+        panic!("expected text runtime prompt");
+    };
+    assert!(text.contains("<runtime_prompt"));
+    assert!(text.contains("<mode_prompt mode=\"plan\">"));
+    assert!(
+        text.contains("<approval_policy policy=\"never\">"),
+        "Plan mode should project its fixed never-approval policy: {text}"
+    );
 }
 
 #[tokio::test]
@@ -2176,7 +2182,7 @@ fn refresh_system_prompt_leaves_working_set_out_of_system_prompt() {
         .working_set
         .observe_user_message("please inspect src/lib.rs", tmp.path());
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     let prompt = match &engine.session.system_prompt {
         Some(SystemPrompt::Text(text)) => text.clone(),
@@ -2211,7 +2217,7 @@ fn working_set_reaches_model_as_turn_metadata() {
 
     let messages = engine.messages_with_turn_metadata();
     let first_block = messages
-        .last()
+        .first()
         .and_then(|message| message.content.first())
         .expect("turn metadata block");
     let ContentBlock::Text { text, .. } = first_block else {
@@ -2236,7 +2242,7 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
 
     let messages = engine.messages_with_turn_metadata();
     let first_block = messages
-        .last()
+        .first()
         .and_then(|message| message.content.first())
         .expect("turn metadata block");
     let ContentBlock::Text { text, .. } = first_block else {
@@ -2411,7 +2417,16 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     let first_user = engine.user_text_message_with_turn_metadata("inspect src/lib.rs".to_string());
     engine.session.add_message(first_user.clone());
     let first_request = engine.messages_with_turn_metadata();
-    assert_eq!(first_request, engine.session.messages);
+    assert_eq!(
+        &first_request[..engine.session.messages.len()],
+        engine.session.messages.as_slice()
+    );
+    assert_eq!(first_request.len(), engine.session.messages.len() + 1);
+    assert_eq!(first_request.first(), Some(&first_user));
+    assert_eq!(
+        first_request.last().map(|message| message.role.as_str()),
+        Some("user")
+    );
 
     engine.session.add_message(Message {
         role: "assistant".to_string(),
@@ -2428,14 +2443,24 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     engine.session.add_message(second_user);
 
     let second_request = engine.messages_with_turn_metadata();
-    assert_eq!(second_request, engine.session.messages);
+    assert_eq!(
+        &second_request[..engine.session.messages.len()],
+        engine.session.messages.as_slice()
+    );
+    assert_eq!(second_request.len(), engine.session.messages.len() + 1);
     assert_eq!(second_request.first(), Some(&first_user));
+    let runtime = second_request.last().expect("runtime prompt");
+    let ContentBlock::Text { text, .. } = runtime.content.first().expect("runtime prompt text")
+    else {
+        panic!("expected runtime prompt text");
+    };
+    assert!(text.contains("<runtime_prompt"));
 }
 
 /// v0.8.11 regression: tool-result messages serialize to role="tool" on
 /// the wire but are stored as role="user" internally. `<turn_meta>` must
-/// be stored only on actual user-text messages, not retroactively added
-/// to tool-result messages at request time.
+/// be stored only on actual user-text messages. Request-time runtime metadata
+/// is appended separately and must not mutate tool-result messages.
 #[test]
 fn turn_metadata_skips_tool_result_messages() {
     let tmp = tempdir().expect("tempdir");
@@ -2478,9 +2503,11 @@ fn turn_metadata_skips_tool_result_messages() {
 
     let messages = engine.messages_with_turn_metadata();
 
-    // The trailing message is the tool result and MUST be untouched —
+    // The stored trailing message is the tool result and MUST be untouched —
     // no Text block sneaking in front of the ToolResult block.
-    let trailing = messages.last().expect("trailing message");
+    let trailing = messages
+        .get(messages.len().saturating_sub(2))
+        .expect("stored trailing message");
     assert_eq!(trailing.role, "user");
     assert_eq!(trailing.content.len(), 1);
     assert!(matches!(
@@ -2497,11 +2524,18 @@ fn turn_metadata_skips_tool_result_messages() {
     };
     assert!(text.starts_with("<turn_meta>\n"));
     assert!(text.contains("src/lib.rs"));
+    assert!(
+        matches!(
+            messages.last().and_then(|message| message.content.first()),
+            Some(ContentBlock::Text { text, .. }) if text.contains("<runtime_prompt")
+        ),
+        "request projection should append transient runtime metadata"
+    );
 }
 
 /// When the turn is mid-execution and the trailing user message is a
-/// tool result, no turn_meta is injected at request time. The working_set
-/// surfaces again on the next stored user-text message.
+/// tool result, no turn_meta is injected into that tool-result message. The
+/// working_set surfaces again on the next stored user-text message.
 #[test]
 fn turn_metadata_skips_when_only_tool_results_trail() {
     let tmp = tempdir().expect("tempdir");
@@ -2534,14 +2568,21 @@ fn turn_metadata_skips_when_only_tool_results_trail() {
 
     let messages = engine.messages_with_turn_metadata();
 
-    // Returned unchanged: the single tool-result message, no Text
-    // prefix, content length == 1.
-    let only = messages.last().expect("trailing message");
+    // Stored tool-result message is unchanged: no Text prefix, content length == 1.
+    let only = messages.first().expect("stored tool result message");
     assert_eq!(only.content.len(), 1);
     assert!(matches!(
         only.content.first(),
         Some(ContentBlock::ToolResult { .. })
     ));
+    assert_eq!(messages.len(), 2);
+    assert!(
+        matches!(
+            messages.last().and_then(|message| message.content.first()),
+            Some(ContentBlock::Text { text, .. }) if text.contains("<runtime_prompt")
+        ),
+        "request projection should still append transient runtime metadata"
+    );
 }
 
 #[test]
@@ -2553,10 +2594,10 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     let first_hash = engine.session.last_system_prompt_hash;
     let first_prompt = engine.session.system_prompt.clone();
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.last_system_prompt_hash, first_hash);
     assert_eq!(engine.session.system_prompt, first_prompt);
@@ -2603,7 +2644,7 @@ fn text_system_prompt_override_via_runtime_sync_survives_refresh() {
     let expected = Some(prompt.clone());
 
     sync_runtime_system_prompt_override(&mut engine, prompt);
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.system_prompt, expected);
 }
@@ -2624,7 +2665,7 @@ fn blocks_system_prompt_override_via_runtime_sync_survives_mode_change_refresh()
     let expected = Some(prompt.clone());
 
     sync_runtime_system_prompt_override(&mut engine, prompt);
-    engine.refresh_system_prompt(AppMode::Plan);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.system_prompt, expected);
 }
@@ -2644,7 +2685,7 @@ fn compaction_summary_stays_in_stable_system_prompt() {
         .session
         .working_set
         .observe_user_message("continue in src/main.rs", tmp.path());
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     engine.merge_compaction_summary(Some(SystemPrompt::Blocks(vec![SystemBlock {
         block_type: "text".to_string(),
         text: format!("{COMPACTION_SUMMARY_MARKER}\nsummary"),
@@ -2797,7 +2838,6 @@ async fn post_tool_replay_invoked_when_high_non_severe_risk() {
     let restarted = engine
         .run_capacity_post_tool_checkpoint(
             &turn,
-            AppMode::Agent,
             Some(&registry),
             Arc::new(RwLock::new(())),
             None,
@@ -2858,12 +2898,12 @@ async fn error_escalation_triggers_replan_when_severe_or_repeated_failures() {
     let before_len = engine.session.messages.len();
     let turn = TurnContext::new(10);
     let restarted = engine
-        .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
+        .run_capacity_error_escalation_checkpoint(&turn, 2, 2, &[])
         .await;
 
     assert!(restarted);
     assert!(engine.session.messages.len() < before_len);
-    assert!(engine.session.messages.len() <= 2);
+    assert!(engine.session.messages.len() <= 4);
 
     let records = load_last_k_capacity_records(&engine.session.id, 1).expect("load memory");
     assert!(!records.is_empty());
@@ -2916,7 +2956,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
     let before_len = engine.session.messages.len();
     let turn = TurnContext::new(10);
     let restarted = engine
-        .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
+        .run_capacity_error_escalation_checkpoint(&turn, 2, 2, &[])
         .await;
 
     // Capacity is disabled → no replan, no message clear.
