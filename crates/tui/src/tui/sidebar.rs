@@ -334,24 +334,6 @@ fn work_panel_lines(
 
     push_work_goal_lines(summary, content_width, max_rows, &mut lines, ui_theme);
 
-    // Pause/cancel indicator
-    if let Some(indicator) = &summary.pause_indicator {
-        if lines.len() < max_rows {
-            let (fg, symbol) = match indicator.as_str() {
-                "(Cancelled)" => (ui_theme.error_fg, "✘"),
-                "(Pausing)" => (ui_theme.warning, "⏳"),
-                _ => (ui_theme.accent_primary, "⏸"),
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {symbol} "), Style::default().fg(fg)),
-                Span::styled(
-                    indicator.clone(),
-                    Style::default().fg(ui_theme.text_muted),
-                ),
-            ]));
-        }
-    }
-
     if summary.state_updating && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
             "Work state updating...",
@@ -388,15 +370,27 @@ fn push_work_goal_lines(
 
     let icon = if summary.goal_completed {
         "✓"
-    } else if summary.pause_indicator.is_some() {
-        // Paused/cancelled — indicator shown separately above
-        "◆"
+    } else if let Some(indicator) = &summary.pause_indicator {
+        match indicator.as_str() {
+            "(Cancelled)" => "✘",
+            "(Pausing)" => "⏳",
+            _ => "⏸",
+        }
     } else {
         "▶"
     };
     let status_style = if summary.goal_completed {
         Style::default()
             .fg(theme.success)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else if let Some(indicator) = &summary.pause_indicator {
+        let (fg, _) = match indicator.as_str() {
+            "(Cancelled)" => (theme.error_fg, "✘"),
+            "(Pausing)" => (theme.warning, "⏳"),
+            _ => (theme.accent_primary, "⏸"),
+        };
+        Style::default()
+            .fg(fg)
             .add_modifier(ratatui::style::Modifier::BOLD)
     } else {
         Style::default()
