@@ -3224,14 +3224,21 @@ mod tests {
         app.pausable = true;
 
         // Simulate CancelRequest handler clearing on cancel:
+        // quarry is NOT cleared here — it persists so the WorkBench shows
+        // the cancelled goal. It is cleared in dispatch_user_message when
+        // the user sends a new message.
         app.paused_cancelled = true;
         app.paused = false;
-        app.hunt.quarry = None;
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
         app.active_allowed_tools = None;
 
+        // Quarry is kept visible for WorkBench display
+        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repositories"),
+            "quarry must persist on cancel so WorkBench shows the cancelled goal");
+        // Simulate dispatch_user_message clearing on next user message:
+        app.hunt.quarry = None;
         assert!(app.hunt.quarry.is_none(),
-            "hunt.quarry must be cleared so model doesn't see old goal");
+            "quarry cleared in dispatch_user_message when user sends next message");
         assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunting);
         assert!(app.active_allowed_tools.is_none(),
             "tool restriction must be cleared on cancel");
@@ -3339,17 +3346,21 @@ mod tests {
         assert!(app.hunt.quarry.is_none(), "active goal must be cleared");
 
         // 3. User presses ESC again — cancel (simulate CancelRequest handler)
+        // Restore quarry from paused_quarry so WorkBench shows the goal.
         app.paused = false;
         app.pausable = false;
         app.paused_cancelled = true;
-        app.hunt.quarry = None;
-        app.paused_quarry = None;
+        if let Some(saved) = app.paused_quarry.take() {
+            app.hunt.quarry = Some(saved);
+        }
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
 
-        // → WorkBench should show "✘ (Cancelled)"
+        // → WorkBench should show "✘ (Cancelled)" with the original goal
         let summary = sidebar_work_summary(&mut app);
         assert_eq!(summary.pause_indicator.as_deref(), Some("(Cancelled)"),
             "must show cancelled indicator");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "workbench must show the original goal even when cancelled");
         assert!(app.paused_quarry.is_none(), "paused_quarry cleared on cancel");
 
         // 4. User starts a fresh slash command

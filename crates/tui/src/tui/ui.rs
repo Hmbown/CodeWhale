@@ -3486,11 +3486,10 @@ async fn run_event_loop(
                                 // the cancellation status message.
                                 app.paused_cancelled = true;
                                 app.paused = false;
-                                // Clear the hunt goal so the model doesn't
-                                // see the old command's objective in the
-                                // system prompt for the next conversation.
-                                app.hunt.quarry = None;
-                                app.paused_quarry = None;
+                                // Restore the quarry from paused_quarry so the
+                                // WorkBench shows the original goal (with ✘ icon).
+                                // Cleared in dispatch_user_message when user types next.
+                                app.hunt.quarry = app.paused_quarry.take();
                                 app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
                                 app.active_allowed_tools = None;
                                 if let Ok(mut slot) = engine_handle.shared_paused.lock() {
@@ -4910,6 +4909,15 @@ async fn dispatch_user_message(
         if let Ok(mut slot) = engine_handle.shared_paused.lock() {
             *slot = false;
         }
+    }
+
+    // If we're in a cancelled state and the user is sending a new message,
+    // clear the quarry so the system prompt doesn't include the old goal.
+    // The quarry is kept visible in the WorkBench (via pause_indicator="(Cancelled)")
+    // until the user types, at which point it's naturally replaced by the new goal.
+    if app.paused_cancelled {
+        app.hunt.quarry = None;
+        app.paused_cancelled = false;
     }
 
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
