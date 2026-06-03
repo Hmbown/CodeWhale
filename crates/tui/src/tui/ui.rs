@@ -6443,11 +6443,13 @@ async fn submit_or_steer_message(
     // This catches messages sent while is_loading=true (which go through
     // the Steer path and bypass dispatch_user_message entirely).
     if app.paused_quarry.is_some() {
+        tracing::debug!(target: "pausable", display=?message.display, "submit_or_steer: paused_quarry present, checking");
         let trimmed = message.display.trim().to_lowercase();
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
         {
+            tracing::debug!(target: "pausable", "submit_or_steer: RESUME DETECTED — consuming paused_quarry");
             app.hunt.quarry = app.paused_quarry.take();
             app.paused = false;
             app.paused_at = None;
