@@ -20,7 +20,7 @@ use crate::models::{
 /// Configuration for conversation compaction behavior.
 ///
 /// v0.8.11 simplified this from the prior token-OR-message-count trigger
-/// to a token-only trigger gated by an absolute floor. The
+/// to a token-only trigger. The
 /// `message_threshold` field was removed: its only purpose was to fire
 /// compaction on long sessions of small messages, which is exactly the
 /// case where rewriting the V4 prefix cache is least valuable. Token
@@ -31,13 +31,6 @@ pub struct CompactionConfig {
     pub token_threshold: usize,
     pub model: String,
     pub cache_summary: bool,
-    /// Hard floor — `should_compact` returns `false` when total session
-    /// tokens fall below this number, regardless of `enabled` or
-    /// `token_threshold`. Defaults to [`MINIMUM_AUTO_COMPACTION_TOKENS`]
-    /// (500K) for v0.8.11+. Tests that want to exercise the threshold
-    /// logic at small fixture sizes can set this to `0` to disable the
-    /// floor.
-    pub auto_floor_tokens: usize,
 }
 
 impl Default for CompactionConfig {
@@ -62,27 +55,9 @@ impl Default for CompactionConfig {
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
             cache_summary: true,
-            auto_floor_tokens: MINIMUM_AUTO_COMPACTION_TOKENS,
         }
     }
 }
-
-/// Hard floor for automatic compaction in v0.8.11+.
-///
-/// Below this token count, `should_compact` returns `false` regardless of
-/// `enabled` or `token_threshold`. The point of the floor is V4 prefix-cache
-/// economics: compaction rewrites the stable prefix, which destroys the KV
-/// cache. At low token counts the prefix cache is healthy and compaction's
-/// cost (full re-prefill at miss prices) dwarfs its benefit (a tiny budget
-/// reclaim). Above the floor compaction can still be net-positive — cache
-/// is already pressured, the prefix has drifted, and freeing budget matters.
-///
-/// Manual `/compact` slash command bypasses this floor with explicit user
-/// agency.
-///
-/// Constant rather than configurable for v0.8.11. If anyone needs to dial
-/// it (smaller models, opinionated workflows), we can add a setting later.
-pub const MINIMUM_AUTO_COMPACTION_TOKENS: usize = 500_000;
 
 pub const KEEP_RECENT_MESSAGES: usize = 4;
 const RECENT_WORKING_SET_WINDOW: usize = 12;
@@ -290,7 +265,8 @@ fn message_text(msg: &Message) -> String {
             }
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => {}
         }
     }
     text
@@ -314,7 +290,8 @@ fn extract_paths_from_message(message: &Message, workspace: Option<&Path>) -> Ve
             ContentBlock::Thinking { .. } => Vec::new(),
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => Vec::new(),
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => Vec::new(),
         };
         paths.extend(candidates);
     }
@@ -587,7 +564,8 @@ fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usi
             ContentBlock::ToolResult { content, .. } => content.len() / 4,
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => 0,
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => 0,
         })
         .sum::<usize>()
 }
@@ -647,21 +625,6 @@ pub fn should_compact(
 ) -> bool {
     if !config.enabled {
         return false;
-    }
-
-    // v0.8.11: hard floor enforcement. Below the floor (default 500K tokens
-    // — see `MINIMUM_AUTO_COMPACTION_TOKENS`), automatic compaction is
-    // refused because rewriting the prefix kills V4's prefix cache for
-    // little budget recovery. Manual `/compact` and the `compact_now` tool
-    // bypass this floor by going through different code paths.
-    if config.auto_floor_tokens > 0 {
-        let total_session_tokens: usize = messages
-            .iter()
-            .map(|m| estimate_tokens_for_message(m, false))
-            .sum();
-        if total_session_tokens < config.auto_floor_tokens {
-            return false;
-        }
     }
 
     let plan = plan_compaction(
@@ -1386,7 +1349,8 @@ fn build_formatted_summary_request(
                 }
                 ContentBlock::ServerToolUse { .. }
                 | ContentBlock::ToolSearchToolResult { .. }
-                | ContentBlock::CodeExecutionToolResult { .. } => {}
+                | ContentBlock::CodeExecutionToolResult { .. }
+                | ContentBlock::ImageUrl { .. } => {}
             }
         }
     }
@@ -2028,7 +1992,6 @@ mod tests {
         let config = CompactionConfig {
             enabled: true,
             token_threshold: 1_000_000,
-            auto_floor_tokens: 0,
             ..Default::default()
         };
 
@@ -2447,7 +2410,6 @@ mod tests {
         let config = CompactionConfig {
             enabled: true,
             token_threshold: 100, // Low threshold for testing
-            auto_floor_tokens: 0,
             ..Default::default()
         };
 
@@ -2474,61 +2436,16 @@ mod tests {
         assert!(!should_compact(&messages, &config, None, None, None));
     }
 
-    /// v0.8.11: the 500K hard floor blocks auto-compaction even when the
-    /// token-percentage threshold would otherwise fire. This is the V4
-    /// prefix-cache protection — below 500K total tokens, rewriting the
-    /// prefix loses cache for tiny budget gains.
     #[test]
-    fn auto_compaction_floor_blocks_below_500k_even_when_threshold_says_yes() {
+    fn auto_compaction_uses_token_threshold_without_fixed_floor() {
         let config = CompactionConfig {
             enabled: true,
-            token_threshold: 100, // would normally fire instantly
-            // Use the production default explicitly so this test pins the
-            // floor's contract rather than relying on `Default`.
-            auto_floor_tokens: MINIMUM_AUTO_COMPACTION_TOKENS,
+            token_threshold: 100,
             ..Default::default()
         };
 
         let messages: Vec<Message> = (0..10).map(|_| msg("user", &"x".repeat(50))).collect();
-        // Total tokens way under 500K, so floor blocks compaction.
-        assert!(!should_compact(&messages, &config, None, None, None));
-    }
-
-    /// v0.8.11: when total tokens cross the 500K floor, the existing
-    /// threshold/message-count logic takes over again.
-    #[test]
-    fn auto_compaction_floor_yields_to_threshold_logic_above_500k() {
-        let config = CompactionConfig {
-            enabled: true,
-            token_threshold: 2_000_000,
-            auto_floor_tokens: MINIMUM_AUTO_COMPACTION_TOKENS,
-            ..Default::default()
-        };
-
-        // Each message ~500 tokens; 1100 messages → ~550K total tokens.
-        // That's above the floor (500K) AND below the deliberately high
-        // token_threshold, so auto-compaction stays off — by threshold,
-        // not floor.
-        let messages: Vec<Message> = (0..1100).map(|_| msg("user", &"x".repeat(2000))).collect();
-        assert!(!should_compact(&messages, &config, None, None, None));
-
-        // Crank threshold below total → compaction fires now that we're
-        // past the floor.
-        let config_lower = CompactionConfig {
-            token_threshold: 100_000,
-            ..config
-        };
-        assert!(should_compact(&messages, &config_lower, None, None, None));
-    }
-
-    /// `CompactionConfig::default()` ships with the 500K floor on by
-    /// default — production callers via `..Default::default()` get the
-    /// safety guarantee automatically.
-    #[test]
-    fn compaction_config_default_carries_500k_floor() {
-        let config = CompactionConfig::default();
-        assert_eq!(config.auto_floor_tokens, MINIMUM_AUTO_COMPACTION_TOKENS);
-        assert_eq!(config.auto_floor_tokens, 500_000);
+        assert!(should_compact(&messages, &config, None, None, None));
     }
 
     #[test]

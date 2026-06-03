@@ -362,9 +362,11 @@ fn browser_completion_dir_part(dir_part: &str) -> Option<PathBuf> {
 }
 
 /// Default directory depth walked when surfacing file-mention completions.
-/// Mirrors the existing `project_tree` cutoff and keeps Tab snappy in deep
-/// monorepos unless the user opts into a deeper walk.
-pub const DEFAULT_COMPLETIONS_WALK_DEPTH: usize = 6;
+/// Set high enough that conventionally nested source trees (Java/.NET/web
+/// projects routinely reach 7-9 levels) stay reachable, while a `0` override
+/// removes the limit entirely. Keeps Tab snappy in deep monorepos via the
+/// `.gitignore`-aware walk and per-keypress candidate caps (#2488).
+pub const DEFAULT_COMPLETIONS_WALK_DEPTH: usize = 10;
 
 fn normalize_completion_walk_depth(depth: usize) -> Option<usize> {
     if depth == 0 { None } else { Some(depth) }
@@ -1044,7 +1046,8 @@ fn extract_paths_from_message(message: &Message) -> Vec<String> {
             ContentBlock::Thinking { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => {}
         }
     }
     paths
@@ -1209,7 +1212,8 @@ fn message_mentions_any_path(message: &Message, needles: &[String], max_scan_cha
             ContentBlock::Thinking { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => {}
         }
     }
     false
@@ -1561,7 +1565,9 @@ mod tests {
     #[test]
     fn workspace_completions_honor_configured_walk_depth() {
         let tmp = TempDir::new().unwrap();
-        let deep_dir = tmp.path().join("a/b/c/d/e/f/g/h");
+        // Sits at component depth 12, past the default walk depth (10) but
+        // within the explicit deeper walk (16) below.
+        let deep_dir = tmp.path().join("a/b/c/d/e/f/g/h/i/j/k");
         std::fs::create_dir_all(&deep_dir).unwrap();
         std::fs::write(deep_dir.join("target.txt"), "target").unwrap();
 

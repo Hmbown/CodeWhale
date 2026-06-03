@@ -61,6 +61,7 @@ fn stream_idle_timeout() -> Duration {
 
 use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
+use crate::llm_client::sanitize_http_error_body;
 use crate::logging;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageDelta, MessageRequest, MessageResponse,
@@ -161,7 +162,12 @@ impl DeepSeekClient {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("Failed to call DeepSeek Chat API: HTTP {status}: {error_text}");
         }
 
@@ -254,7 +260,12 @@ impl DeepSeekClient {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             // If DeepSeek rejected for missing reasoning_content despite the
             // sanitizer, dump the offending indices so we can diagnose where
             // they came from on the next failure.
@@ -515,7 +526,7 @@ impl<'a> PromptBuilder<'a> {
     }
 
     fn build_for_provider(self, provider: ApiProvider) -> Vec<Value> {
-        build_chat_messages_with_reasoning(
+        let mut messages = build_chat_messages_with_reasoning(
             self.system,
             self.messages,
             self.model,
@@ -525,7 +536,11 @@ impl<'a> PromptBuilder<'a> {
                 self.reasoning_effort,
             ),
             false,
-        )
+        );
+        if provider == ApiProvider::Arcee {
+            apply_arcee_waf_safe_message_encoding(&mut messages);
+        }
+        messages
     }
 
     fn inspect(self) -> PromptInspection {
@@ -569,6 +584,65 @@ impl<'a> PromptBuilder<'a> {
             temperature: Some(0.0),
             top_p: None,
         }
+    }
+}
+
+const ARCEE_WAF_TEXT_SPLIT_TRIGGERS: &[(&str, &str, &str)] = &[("python -c", "python ", "-c")];
+
+fn apply_arcee_waf_safe_message_encoding(messages: &mut [Value]) {
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("system") {
+            continue;
+        }
+        let Some(content) = message.get("content").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(parts) = arcee_waf_safe_text_parts(content) else {
+            continue;
+        };
+        message["content"] = json!(parts);
+    }
+}
+
+fn arcee_waf_safe_text_parts(content: &str) -> Option<Vec<Value>> {
+    let mut parts = Vec::new();
+    let mut cursor = 0usize;
+    let mut split_any = false;
+
+    while cursor < content.len() {
+        let Some((trigger_start, trigger, left, right)) = next_arcee_waf_trigger(content, cursor)
+        else {
+            push_text_part(&mut parts, &content[cursor..]);
+            break;
+        };
+
+        push_text_part(&mut parts, &content[cursor..trigger_start]);
+        push_text_part(&mut parts, left);
+        push_text_part(&mut parts, right);
+        cursor = trigger_start + trigger.len();
+        split_any = true;
+    }
+
+    split_any.then_some(parts)
+}
+
+fn next_arcee_waf_trigger(content: &str, cursor: usize) -> Option<(usize, &str, &str, &str)> {
+    ARCEE_WAF_TEXT_SPLIT_TRIGGERS
+        .iter()
+        .filter_map(|(trigger, left, right)| {
+            content[cursor..]
+                .find(trigger)
+                .map(|offset| (cursor + offset, *trigger, *left, *right))
+        })
+        .min_by_key(|(start, _, _, _)| *start)
+}
+
+fn push_text_part(parts: &mut Vec<Value>, text: &str) {
+    if !text.is_empty() {
+        parts.push(json!({
+            "type": "text",
+            "text": text,
+        }));
     }
 }
 
@@ -775,6 +849,31 @@ fn message_content_for_inspect(message: &Value) -> String {
     {
         parts.push(content.to_string());
     }
+    if let Some(content) = message.get("content").and_then(Value::as_array) {
+        for part in content {
+            match part.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = part.get("text").and_then(Value::as_str)
+                        && !text.is_empty()
+                    {
+                        parts.push(text.to_string());
+                    }
+                }
+                Some("image_url") => {
+                    let url = part
+                        .get("image_url")
+                        .and_then(|image_url| image_url.get("url"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    parts.push(format!(
+                        "[image_url:{}]",
+                        summarize_image_url_for_inspect(url)
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
     if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str)
         && !reasoning.is_empty()
     {
@@ -784,6 +883,13 @@ fn message_content_for_inspect(message: &Value) -> String {
         parts.push(tool_calls.to_string());
     }
     parts.join("\n")
+}
+
+fn summarize_image_url_for_inspect(url: &str) -> String {
+    let Some((prefix, encoded)) = url.split_once(";base64,") else {
+        return first_chars(url, 96);
+    };
+    format!("{prefix};base64,<{} chars>", encoded.len())
 }
 
 fn tool_result_inspection_for_message(message: &Value) -> Option<ToolResultInspection> {
@@ -1272,6 +1378,7 @@ fn build_chat_messages_with_reasoning(
     for (message_index, message) in messages.iter().enumerate() {
         let role = message.role.as_str();
         let mut text_parts = Vec::new();
+        let mut image_parts = Vec::new();
         let mut thinking_parts = Vec::new();
         let mut tool_calls = Vec::new();
         let mut tool_call_infos = Vec::new();
@@ -1289,6 +1396,14 @@ fn build_chat_messages_with_reasoning(
                     } else {
                         text_parts.push(text.clone());
                     }
+                }
+                ContentBlock::ImageUrl { image_url } => {
+                    image_parts.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url.url.clone(),
+                        },
+                    }));
                 }
                 ContentBlock::Thinking { thinking } => thinking_parts.push(thinking.clone()),
                 ContentBlock::ToolUse {
@@ -1403,10 +1518,25 @@ fn build_chat_messages_with_reasoning(
             }
         } else if role == "user" {
             let content = text_parts.join("\n");
-            if !content.trim().is_empty() {
+            let has_text = !content.trim().is_empty();
+            let has_images = !image_parts.is_empty();
+            if has_text || has_images {
+                let wire_content = if has_images {
+                    let mut parts = Vec::new();
+                    if has_text {
+                        parts.push(json!({
+                            "type": "text",
+                            "text": content,
+                        }));
+                    }
+                    parts.extend(image_parts);
+                    json!(parts)
+                } else {
+                    json!(content)
+                };
                 let mut msg = json!({
                     "role": "user",
-                    "content": content,
+                    "content": wire_content,
                 });
                 if include_tool_budget_metadata && let Some(turn_meta) = &turn_meta_budget {
                     msg["_turn_meta_budget"] = turn_meta_budget_json(turn_meta);
@@ -1829,6 +1959,18 @@ fn is_reasoning_model_for_stream(provider: ApiProvider, model: &str) -> bool {
     provider_accepts_reasoning_content(provider) && model_supports_reasoning(model)
 }
 
+/// Providers whose chat-completions API both returns and accepts a dedicated
+/// `reasoning_content` field on assistant messages.
+///
+/// Arcee is intentionally included. Trinity-Large-Thinking natively emits
+/// `<think>...</think>` traces, but Arcee's hosted API serves it through vLLM
+/// with `--reasoning-parser deepseek_r1`, which parses those blocks into a
+/// `reasoning_content` field (verified live against `api.arcee.ai`: thinking
+/// streams as `delta.reasoning_content`, the answer as `delta.content`, with no
+/// `<think>` tags on the wire). Arcee's docs require replaying `reasoning_content`
+/// on assistant tool-call turns; dropping it makes the model emit tool calls as
+/// raw XML inside its thinking ("xml_in_reasoning" pitfall). Do not remove Arcee
+/// here without new live evidence — see docs.arcee.ai/capabilities/reasoning-traces.
 fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
     matches!(
         provider,
@@ -1840,6 +1982,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Novita
             | ApiProvider::Fireworks
             | ApiProvider::Siliconflow
+            | ApiProvider::Arcee
             | ApiProvider::Sglang
     )
 }
@@ -2019,6 +2162,7 @@ fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
                 events.push(StreamEvent::ContentBlockStop { index });
             }
             ContentBlock::ToolResult { .. } => {}
+            ContentBlock::ImageUrl { .. } => {}
             ContentBlock::ServerToolUse { id, name, input } => {
                 events.push(StreamEvent::ContentBlockStart {
                     index,
@@ -2421,6 +2565,83 @@ mod stream_diagnostics_tests {
             rendered.contains("server=(absent)"),
             "non-UTF8 header values fall back to (absent); got: {rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod arcee_waf_message_encoding_tests {
+    use super::build_chat_messages_for_request_and_provider;
+    use crate::config::ApiProvider;
+    use crate::models::{MessageRequest, SystemPrompt};
+    use serde_json::Value;
+
+    fn request_with_system(system: &str) -> MessageRequest {
+        MessageRequest {
+            model: "trinity-large-thinking".to_string(),
+            messages: Vec::new(),
+            max_tokens: 16,
+            system: Some(SystemPrompt::Text(system.to_string())),
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        }
+    }
+
+    fn decoded_content(content: &Value) -> String {
+        if let Some(text) = content.as_str() {
+            return text.to_string();
+        }
+        content
+            .as_array()
+            .expect("content parts")
+            .iter()
+            .map(|part| part.get("text").and_then(Value::as_str).expect("text part"))
+            .collect()
+    }
+
+    #[test]
+    fn arcee_splits_waf_trigger_without_changing_decoded_system_prompt() {
+        let system = "Run calculations with `python -c 'print(1)'` when a tool is available.";
+        let request = request_with_system(system);
+
+        let messages = build_chat_messages_for_request_and_provider(&request, ApiProvider::Arcee);
+        let content = &messages[0]["content"];
+
+        assert!(
+            content.is_array(),
+            "Arcee system content with a WAF trigger should be encoded as text parts"
+        );
+        assert_eq!(decoded_content(content), system);
+        let serialized = serde_json::to_string(&messages).expect("serialize messages");
+        assert!(
+            !serialized.contains("python -c"),
+            "wire JSON should not contain the Cloudflare trigger contiguously: {serialized}"
+        );
+    }
+
+    #[test]
+    fn non_arcee_providers_keep_system_prompt_as_string() {
+        let system = "Run calculations with `python -c 'print(1)'` when a tool is available.";
+        let request = request_with_system(system);
+
+        let messages = build_chat_messages_for_request_and_provider(&request, ApiProvider::Openai);
+
+        assert_eq!(messages[0]["content"].as_str(), Some(system));
+    }
+
+    #[test]
+    fn arcee_keeps_non_triggering_system_prompt_as_string() {
+        let system = "Use read-only tools to inspect files before reporting results.";
+        let request = request_with_system(system);
+
+        let messages = build_chat_messages_for_request_and_provider(&request, ApiProvider::Arcee);
+
+        assert_eq!(messages[0]["content"].as_str(), Some(system));
     }
 }
 
@@ -3375,6 +3596,7 @@ mod alias_thinking_detection_tests {
         assert!(provider_accepts_reasoning_content(ApiProvider::Deepseek));
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
         assert!(provider_accepts_reasoning_content(ApiProvider::XiaomiMimo));
+        assert!(provider_accepts_reasoning_content(ApiProvider::Arcee));
     }
 
     #[test]
@@ -3474,6 +3696,10 @@ mod alias_thinking_detection_tests {
         assert!(
             is_reasoning_model_for_stream(ApiProvider::XiaomiMimo, "mimo-v2.5-pro"),
             "mimo-v2.5-pro should stream reasoning as thinking on Xiaomi MiMo"
+        );
+        assert!(
+            is_reasoning_model_for_stream(ApiProvider::Arcee, "trinity-large-thinking"),
+            "trinity-large-thinking should stream reasoning as thinking on direct Arcee"
         );
         for model in [
             "arcee-ai/trinity-large-thinking",

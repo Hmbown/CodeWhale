@@ -453,9 +453,7 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
     let fork_context = SubAgentForkContext {
         system: Some(parent_system.clone()),
         messages: vec![parent_message.clone()],
-        structured_state_block: Some(
-            "## Cycle State (Auto-Preserved)\n- Mode: `AGENT`".to_string(),
-        ),
+        structured_state_block: Some("## Fork State\n- Mode: `AGENT`".to_string()),
     };
 
     let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));
@@ -962,6 +960,122 @@ async fn test_running_count_counts_running_agents_until_status_reconciles() {
     manager.agents.insert(agent.id.clone(), agent);
 
     assert_eq!(manager.running_count(), 1);
+}
+
+#[tokio::test]
+async fn cleanup_auto_cancels_stale_running_agent_and_releases_slot() {
+    let mut manager = SubAgentManager::new(PathBuf::from("."), 1)
+        .with_running_heartbeat_timeout(Duration::from_secs(300));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_stale".to_string(),
+        SubAgentType::Explore,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    agent.last_activity_at = instant_from_duration(Duration::from_secs(600));
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let agent_id = agent.id.clone();
+    manager.agents.insert(agent_id.clone(), agent);
+
+    assert_eq!(
+        manager.running_count(),
+        0,
+        "stale running agents must not keep the concurrency slot occupied"
+    );
+    assert_eq!(manager.cleanup(Duration::from_secs(60 * 60)), 1);
+
+    let snapshot = manager
+        .get_result(&agent_id)
+        .expect("agent should remain inspectable");
+    assert_eq!(snapshot.status, SubAgentStatus::Cancelled);
+    assert_eq!(manager.running_count(), 0);
+    assert!(
+        snapshot
+            .result
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Auto-cancelled")
+    );
+}
+
+#[tokio::test]
+async fn cleanup_keeps_recent_running_agent() {
+    let mut manager = SubAgentManager::new(PathBuf::from("."), 1)
+        .with_running_heartbeat_timeout(Duration::from_secs(300));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_recent".to_string(),
+        SubAgentType::Explore,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    agent.last_activity_at = Instant::now();
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let agent_id = agent.id.clone();
+    manager.agents.insert(agent_id.clone(), agent);
+
+    assert_eq!(manager.running_count(), 1);
+    assert_eq!(manager.cleanup(Duration::from_secs(60 * 60)), 0);
+    assert_eq!(
+        manager.get_result(&agent_id).expect("agent").status,
+        SubAgentStatus::Running
+    );
+    manager
+        .agents
+        .get_mut(&agent_id)
+        .and_then(|agent| agent.task_handle.take())
+        .expect("live task handle")
+        .abort();
+}
+
+#[tokio::test]
+async fn touch_refreshes_stale_running_agent_heartbeat() {
+    let mut manager = SubAgentManager::new(PathBuf::from("."), 1)
+        .with_running_heartbeat_timeout(Duration::from_secs(300));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_touched".to_string(),
+        SubAgentType::Explore,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    agent.last_activity_at = instant_from_duration(Duration::from_secs(600));
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let agent_id = agent.id.clone();
+    manager.agents.insert(agent_id.clone(), agent);
+
+    assert_eq!(manager.running_count(), 0);
+    assert!(manager.touch(&agent_id));
+    assert_eq!(manager.running_count(), 1);
+    assert_eq!(manager.cleanup(Duration::from_secs(60 * 60)), 0);
+    manager
+        .agents
+        .get_mut(&agent_id)
+        .and_then(|agent| agent.task_handle.take())
+        .expect("live task handle")
+        .abort();
 }
 
 #[test]

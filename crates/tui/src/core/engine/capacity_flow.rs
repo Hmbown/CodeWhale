@@ -226,7 +226,8 @@ impl Engine {
                     ContentBlock::Thinking { .. }
                     | ContentBlock::ServerToolUse { .. }
                     | ContentBlock::ToolSearchToolResult { .. }
-                    | ContentBlock::CodeExecutionToolResult { .. } => {}
+                    | ContentBlock::CodeExecutionToolResult { .. }
+                    | ContentBlock::ImageUrl { .. } => {}
                 }
             }
         }

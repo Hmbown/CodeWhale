@@ -34,6 +34,7 @@ enum ProviderArg {
     Novita,
     Fireworks,
     Siliconflow,
+    Arcee,
     Moonshot,
     Sglang,
     Vllm,
@@ -54,6 +55,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
             ProviderArg::Siliconflow => ProviderKind::Siliconflow,
+            ProviderArg::Arcee => ProviderKind::Arcee,
             ProviderArg::Moonshot => ProviderKind::Moonshot,
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
@@ -745,6 +747,8 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
         ProviderKind::Siliconflow => "siliconflow",
+        ProviderKind::SiliconflowCN => "siliconflow",
+        ProviderKind::Arcee => "arcee",
         ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
@@ -753,7 +757,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 15] = [
+const PROVIDER_LIST: [ProviderKind; 17] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -765,6 +769,8 @@ const PROVIDER_LIST: [ProviderKind; 15] = [
     ProviderKind::Novita,
     ProviderKind::Fireworks,
     ProviderKind::Siliconflow,
+    ProviderKind::SiliconflowCN,
+    ProviderKind::Arcee,
     ProviderKind::Moonshot,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
@@ -783,7 +789,6 @@ fn write_provider_api_key_to_config(
     provider: ProviderKind,
     api_key: &str,
 ) {
-    store.config.provider = provider;
     store.config.auth_mode = Some("api_key".to_string());
     store.config.providers.for_provider_mut(provider).api_key = Some(api_key.to_string());
     if provider == ProviderKind::Deepseek {
@@ -822,6 +827,8 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
         ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
         ProviderKind::Siliconflow => &["SILICONFLOW_API_KEY"],
+        ProviderKind::SiliconflowCN => &["SILICONFLOW_API_KEY"],
+        ProviderKind::Arcee => &["ARCEE_API_KEY"],
         ProviderKind::Moonshot => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
@@ -985,7 +992,6 @@ fn run_auth_command_with_secrets(
             let provider: ProviderKind = provider.into();
             let slot = provider_slot(provider);
             if provider == ProviderKind::Ollama && api_key.is_none() && !api_key_stdin {
-                store.config.provider = provider;
                 let provider_cfg = store.config.providers.for_provider_mut(provider);
                 if provider_cfg.base_url.is_none() {
                     provider_cfg.base_url = Some("http://localhost:11434/v1".to_string());
@@ -1514,13 +1520,14 @@ fn build_tui_command(
             | ProviderKind::Novita
             | ProviderKind::Fireworks
             | ProviderKind::Siliconflow
+            | ProviderKind::Arcee
             | ProviderKind::Moonshot
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Arcee AI, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -2236,6 +2243,18 @@ mod tests {
             }))
         ));
 
+        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "arcee"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(AuthArgs {
+                command: AuthCommand::Set {
+                    provider: ProviderArg::Arcee,
+                    api_key: None,
+                    api_key_stdin: false,
+                }
+            }))
+        ));
+
         let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "moonshot"]);
         assert!(matches!(
             cli.command,
@@ -2358,6 +2377,44 @@ mod tests {
     }
 
     #[test]
+    fn auth_set_provider_key_does_not_switch_active_provider() {
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "deepseek-cli-auth-set-preserve-provider-test-{}-{nanos}.toml",
+            std::process::id()
+        ));
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Deepseek;
+        let secrets = no_keyring_secrets();
+
+        run_auth_command_with_secrets(
+            &mut store,
+            AuthCommand::Set {
+                provider: ProviderArg::Arcee,
+                api_key: Some("arcee-key".to_string()),
+                api_key_stdin: false,
+            },
+            &secrets,
+        )
+        .expect("set should succeed");
+
+        assert_eq!(store.config.provider, ProviderKind::Deepseek);
+        assert_eq!(
+            store.config.providers.arcee.api_key.as_deref(),
+            Some("arcee-key")
+        );
+
+        let reloaded = ConfigStore::load(Some(path.clone())).expect("store should reload");
+        assert_eq!(reloaded.config.provider, ProviderKind::Deepseek);
+        assert_eq!(
+            reloaded.config.providers.arcee.api_key.as_deref(),
+            Some("arcee-key")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn auth_set_ollama_accepts_empty_key_and_records_base_url() {
         let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let path = std::env::temp_dir().join(format!(
@@ -2365,6 +2422,7 @@ mod tests {
             std::process::id()
         ));
         let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Deepseek;
         let secrets = no_keyring_secrets();
 
         run_auth_command_with_secrets(
@@ -2378,7 +2436,7 @@ mod tests {
         )
         .expect("ollama auth set should not require a key");
 
-        assert_eq!(store.config.provider, ProviderKind::Ollama);
+        assert_eq!(store.config.provider, ProviderKind::Deepseek);
         assert_eq!(
             store.config.providers.ollama.base_url.as_deref(),
             Some("http://localhost:11434/v1")
@@ -2986,6 +3044,7 @@ mod tests {
                 "siliconflow",
                 &["SILICONFLOW_API_KEY"],
             ),
+            (ProviderKind::Arcee, "arcee", &["ARCEE_API_KEY"]),
             (ProviderKind::Sglang, "sglang", &["SGLANG_API_KEY"]),
             (ProviderKind::Vllm, "vllm", &["VLLM_API_KEY"]),
             (ProviderKind::Ollama, "ollama", &["OLLAMA_API_KEY"]),

@@ -31,7 +31,10 @@ use crate::core::coherence::CoherenceState;
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
-use crate::models::{ContentBlock, Message, SystemPrompt, Usage, compaction_threshold_for_model};
+use crate::models::{
+    ContentBlock, Message, SystemPrompt, Usage, auto_compact_default_for_model,
+    compaction_threshold_for_model_at_percent,
+};
 use crate::tools::plan::new_shared_plan_state;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::new_shared_todo_list;
@@ -58,12 +61,9 @@ fn validated_record_id<'a>(id: &'a str, label: &str) -> Result<&'a str> {
     Ok(trimmed)
 }
 
-/// Bumped to 2 for v0.6.6 — see issue #124. The persisted thread/turn/item
-/// records didn't change shape, but the live engine semantics did: cycle
-/// boundaries advance the `Session.cycle_count` and produce archived JSONL
-/// files at `~/.deepseek/sessions/<id>/cycles/<n>.jsonl`. A v1 reader on a
-/// session written by v2 wouldn't know about the cycle archive directory and
-/// might misinterpret message counts; bumping is the safe choice.
+/// Bumped to 2 for v0.6.6 after live engine semantics changed. The persisted
+/// thread/turn/item records did not change shape, but a v1 reader on a v2
+/// session should still fail closed rather than silently mis-replay.
 const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
 const RUNTIME_RESTART_REASON: &str = "Interrupted by process restart";
 const APPROVAL_DECISION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -1945,12 +1945,20 @@ impl RuntimeThreadManager {
         }
 
         // Compaction defaults to disabled in v0.6.6 — the cycle architecture
-        // (issue #124) handles long-context resets. Threads keep the
-        // legacy summarizer wired off unless an operator opts in via config.
+        let settings = crate::settings::Settings::load().unwrap_or_default();
+        let auto_compact_enabled =
+            if crate::settings::Settings::auto_compact_explicitly_configured() {
+                settings.auto_compact
+            } else {
+                auto_compact_default_for_model(&thread.model)
+            };
         let compaction = CompactionConfig {
-            enabled: false,
+            enabled: auto_compact_enabled,
             model: thread.model.clone(),
-            token_threshold: compaction_threshold_for_model(&thread.model),
+            token_threshold: compaction_threshold_for_model_at_percent(
+                &thread.model,
+                settings.auto_compact_threshold_percent,
+            ),
             ..Default::default()
         };
         let network_policy = self.config.network.clone().map(|toml_cfg| {
@@ -1961,7 +1969,6 @@ impl RuntimeThreadManager {
             .lsp
             .clone()
             .map(crate::config::LspConfigToml::into_runtime);
-        let settings = crate::settings::Settings::load().unwrap_or_default();
         let engine_cfg = EngineConfig {
             model: thread.model.clone(),
             workspace: thread.workspace.clone(),
@@ -1983,7 +1990,6 @@ impl RuntimeThreadManager {
             max_subagents: self.config.max_subagents().clamp(1, MAX_SUBAGENTS),
             features: self.config.features(),
             compaction,
-            cycle: crate::cycle_manager::CycleConfig::default(),
             capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(
                 &self.config,
             ),
@@ -2013,6 +2019,9 @@ impl RuntimeThreadManager {
             subagent_model_overrides: self.config.subagent_model_overrides(),
             subagent_api_timeout: std::time::Duration::from_secs(
                 self.config.subagent_api_timeout_secs(),
+            ),
+            subagent_heartbeat_timeout: std::time::Duration::from_secs(
+                self.config.subagent_heartbeat_timeout_secs(),
             ),
             prefer_bwrap: self.config.prefer_bwrap.unwrap_or(false),
             memory_enabled: self.config.memory_enabled(),
@@ -2417,26 +2426,6 @@ impl RuntimeThreadManager {
                         )
                         .await?;
                     }
-                }
-                EngineEvent::CycleAdvanced { from, to, briefing } => {
-                    // Surface the cycle boundary in the runtime event timeline so
-                    // background-task subscribers and replay see it. The actual
-                    // archive write is the engine's responsibility (see
-                    // `cycle_manager::archive_cycle`); this event is informational.
-                    self.emit_event(
-                        &thread_id,
-                        Some(&turn_id),
-                        None,
-                        "cycle.advanced",
-                        json!({
-                            "from": from,
-                            "to": to,
-                            "briefing_tokens": briefing.token_estimate,
-                            "cycle": briefing.cycle,
-                            "timestamp": briefing.timestamp,
-                        }),
-                    )
-                    .await?;
                 }
                 EngineEvent::CoherenceState {
                     state,

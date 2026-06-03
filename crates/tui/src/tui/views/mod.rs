@@ -140,6 +140,7 @@ pub enum ViewEvent {
     /// nothing changed and craft a clear status message.
     ModelPickerApplied {
         model: String,
+        provider: Option<crate::config::ApiProvider>,
         effort: crate::tui::app::ReasoningEffort,
         previous_model: String,
         previous_effort: crate::tui::app::ReasoningEffort,

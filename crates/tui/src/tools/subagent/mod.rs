@@ -1017,6 +1017,7 @@ pub struct SubAgent {
     pub result: Option<String>,
     pub steps_taken: u32,
     pub started_at: Instant,
+    pub last_activity_at: Instant,
     /// `None` = full registry inheritance, with approval-gated tools still
     /// blocked unless the parent runtime is auto-approved.
     /// `Some(list)` = explicit narrow allowlist (Custom agents, legacy).
@@ -1046,6 +1047,7 @@ impl SubAgent {
     ) -> Self {
         let session_name = id.clone();
 
+        let started_at = Instant::now();
         Self {
             id,
             session_name,
@@ -1058,7 +1060,8 @@ impl SubAgent {
             status: SubAgentStatus::Running,
             result: None,
             steps_taken: 0,
-            started_at: Instant::now(),
+            started_at,
+            last_activity_at: started_at,
             allowed_tools,
             session_boot_id,
             input_tx: Some(input_tx),
@@ -1099,6 +1102,7 @@ pub struct SubAgentManager {
     state_path: Option<PathBuf>,
     max_steps: u32,
     max_agents: usize,
+    running_heartbeat_timeout: Duration,
     /// Stable id assigned at manager construction (#405). Stamped on
     /// every agent the manager spawns; agents loaded from the
     /// persisted state file carry whatever id the prior session
@@ -1118,6 +1122,9 @@ impl SubAgentManager {
             state_path: None,
             max_steps: DEFAULT_MAX_STEPS,
             max_agents,
+            running_heartbeat_timeout: Duration::from_secs(
+                crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+            ),
             // Fresh boot id per manager. Used by #405 to classify
             // re-loaded persisted agents as "prior session".
             current_session_boot_id: format!("boot_{}", &Uuid::new_v4().to_string()[..12]),
@@ -1142,6 +1149,16 @@ impl SubAgentManager {
     #[must_use]
     fn with_state_path(mut self, path: PathBuf) -> Self {
         self.state_path = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub fn with_running_heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        self.running_heartbeat_timeout = if timeout.is_zero() {
+            Duration::from_secs(crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS)
+        } else {
+            timeout
+        };
         self
     }
 
@@ -1244,6 +1261,7 @@ impl SubAgentManager {
                 result: persisted.result,
                 steps_taken: persisted.steps_taken,
                 started_at,
+                last_activity_at: started_at,
                 allowed_tools,
                 // Empty string when loading pre-#405 records; the
                 // manager treats that the same as a non-matching id —
@@ -1274,9 +1292,26 @@ impl SubAgentManager {
                 // Keep recently finished handles counted until the terminal
                 // status update has reconciled. Otherwise a fanout burst can
                 // refill the cap before the UI/state catches up (#2211).
-                true
+                !self.running_heartbeat_timed_out(agent)
             })
             .count()
+    }
+
+    fn running_heartbeat_timed_out(&self, agent: &SubAgent) -> bool {
+        agent.status == SubAgentStatus::Running
+            && agent.task_handle.is_some()
+            && agent.last_activity_at.elapsed() >= self.running_heartbeat_timeout
+    }
+
+    pub fn touch(&mut self, agent_id: &str) -> bool {
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return false;
+        };
+        if agent.status != SubAgentStatus::Running {
+            return false;
+        }
+        agent.last_activity_at = Instant::now();
+        true
     }
 
     /// Spawn a new background sub-agent.
@@ -1548,6 +1583,7 @@ impl SubAgentManager {
             agent.result = None;
             agent.steps_taken = 0;
             agent.started_at = restarted_at;
+            agent.last_activity_at = restarted_at;
             agent.input_tx = Some(input_tx);
             agent.task_handle = Some(handle);
 
@@ -1740,9 +1776,37 @@ impl SubAgentManager {
             .collect()
     }
 
-    /// Clean up completed agents older than the given duration.
-    pub fn cleanup(&mut self, max_age: Duration) {
+    /// Clean up stale running agents and completed agents older than the
+    /// given duration. Returns the number of running agents auto-cancelled
+    /// during this pass.
+    pub fn cleanup(&mut self, max_age: Duration) -> usize {
         let before = self.agents.len();
+        let mut auto_cancelled = 0;
+        let timeout = self.running_heartbeat_timeout;
+        for agent in self.agents.values_mut() {
+            if agent.status == SubAgentStatus::Running
+                && agent.task_handle.is_some()
+                && agent.last_activity_at.elapsed() >= timeout
+            {
+                tracing::warn!(
+                    target: "subagent",
+                    agent_id = %agent.id,
+                    timeout_secs = timeout.as_secs(),
+                    "auto-cancelling stale sub-agent with no manager-visible progress"
+                );
+                agent.status = SubAgentStatus::Cancelled;
+                agent.result = Some(format!(
+                    "Auto-cancelled after {}s without sub-agent progress.",
+                    timeout.as_secs()
+                ));
+                release_resident_leases_for(&agent.id);
+                if let Some(handle) = agent.task_handle.take() {
+                    handle.abort();
+                }
+                agent.input_tx = None;
+                auto_cancelled += 1;
+            }
+        }
         self.agents.retain(|_, agent| {
             if agent.status == SubAgentStatus::Running {
                 true
@@ -1750,9 +1814,10 @@ impl SubAgentManager {
                 agent.started_at.elapsed() < max_age
             }
         });
-        if self.agents.len() != before {
+        if self.agents.len() != before || auto_cancelled > 0 {
             self.persist_state_best_effort();
         }
+        auto_cancelled
     }
 
     fn update_from_result(&mut self, agent_id: &str, result: SubAgentResult) {
@@ -1918,9 +1983,26 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 /// Create a shared sub-agent manager with a configurable limit.
 #[must_use]
 pub fn new_shared_subagent_manager(workspace: PathBuf, max_agents: usize) -> SharedSubAgentManager {
+    new_shared_subagent_manager_with_timeout(
+        workspace,
+        max_agents,
+        Duration::from_secs(crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS),
+    )
+}
+
+/// Create a shared sub-agent manager with configurable concurrency and stale
+/// running-agent heartbeat timeout.
+#[must_use]
+pub fn new_shared_subagent_manager_with_timeout(
+    workspace: PathBuf,
+    max_agents: usize,
+    running_heartbeat_timeout: Duration,
+) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, MAX_SUBAGENTS);
     let state_path = default_state_path(&workspace);
-    let mut manager = SubAgentManager::new(workspace, max_agents).with_state_path(state_path);
+    let mut manager = SubAgentManager::new(workspace, max_agents)
+        .with_running_heartbeat_timeout(running_heartbeat_timeout)
+        .with_state_path(state_path);
     if let Err(err) = manager.load_state() {
         // Routed through tracing instead of stderr — see comment in
         // `persist_state_best_effort` above.
@@ -3735,6 +3817,18 @@ async fn insert_subagent_full_transcript_handle(
     store.insert_json(format!("agent:{agent_id}"), "full_transcript", payload)
 }
 
+fn record_agent_progress(runtime: &SubAgentRuntime, agent_id: &str, message: impl Into<String>) {
+    if let Ok(mut manager) = runtime.manager.try_write() {
+        manager.touch(agent_id);
+    }
+    emit_agent_progress(
+        runtime.event_tx.as_ref(),
+        runtime.mailbox.as_ref(),
+        agent_id,
+        message.into(),
+    );
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_subagent(
     runtime: &SubAgentRuntime,
@@ -3779,9 +3873,8 @@ async fn run_subagent(
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
-    emit_agent_progress(
-        runtime.event_tx.as_ref(),
-        runtime.mailbox.as_ref(),
+    record_agent_progress(
+        runtime,
         &agent_id,
         format!("started ({})", agent_type.as_str()),
     );
@@ -3796,9 +3889,8 @@ async fn run_subagent(
         // while we were between steps. Top-level model-visible sub-agents use
         // a detached token so parent turn cancellation does not stop them.
         if runtime.cancel_token.is_cancelled() {
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: cancelled"),
             );
@@ -3845,9 +3937,8 @@ async fn run_subagent(
         }
 
         steps += 1;
-        emit_agent_progress(
-            runtime.event_tx.as_ref(),
-            runtime.mailbox.as_ref(),
+        record_agent_progress(
+            runtime,
             &agent_id,
             format!("step {steps}/{max_steps}: requesting model response"),
         );
@@ -3892,9 +3983,8 @@ async fn run_subagent(
         let response = tokio::select! {
             biased;
             () = runtime.cancel_token.cancelled() => {
-                emit_agent_progress(
-                    runtime.event_tx.as_ref(),
-                    runtime.mailbox.as_ref(),
+                record_agent_progress(
+                    runtime,
                     &agent_id,
                     format!("step {steps}/{max_steps}: cancelled mid-request"),
                 );
@@ -3980,9 +4070,8 @@ async fn run_subagent(
                     tool_uses.len()
                 )
             };
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: {progress}"),
             );
@@ -4006,9 +4095,8 @@ async fn run_subagent(
                 pending_inputs.push_back(input);
             }
             if pending_inputs.is_empty() {
-                emit_agent_progress(
-                    runtime.event_tx.as_ref(),
-                    runtime.mailbox.as_ref(),
+                record_agent_progress(
+                    runtime,
                     &agent_id,
                     format!("step {steps}/{max_steps}: complete"),
                 );
@@ -4017,9 +4105,8 @@ async fn run_subagent(
             continue;
         }
 
-        emit_agent_progress(
-            runtime.event_tx.as_ref(),
-            runtime.mailbox.as_ref(),
+        record_agent_progress(
+            runtime,
             &agent_id,
             format!(
                 "step {steps}/{max_steps}: executing {} tool call(s)",
@@ -4028,9 +4115,8 @@ async fn run_subagent(
         );
         let mut tool_results: Vec<ContentBlock> = Vec::new();
         for (tool_id, tool_name, tool_input) in tool_uses {
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: running tool '{tool_name}'"),
             );
@@ -4053,9 +4139,8 @@ async fn run_subagent(
                 Err(_) => format!("Error: Tool {tool_name} timed out"),
             };
             let tool_ok = !result.starts_with("Error:");
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: finished tool '{tool_name}'"),
             );

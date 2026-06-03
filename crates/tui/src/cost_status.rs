@@ -1,10 +1,10 @@
 //! Process-wide cost-accrual side-channel (#526).
 //!
 //! Background LLM calls outside the main turn-complete path
-//! (compaction summaries, seam recompaction, cycle briefings) used
+//! (compaction summaries, seam recompaction) used
 //! to drop their token usage on the floor — the dashboard's
 //! session-cost only saw the parent turn's tokens, so a long
-//! session that triggered compaction or cycle-restart under-reported
+//! session that triggered compaction under-reported
 //! cost by however many tokens those background calls consumed.
 //!
 //! Mirrors the [`crate::retry_status`] pattern: background callers
@@ -13,7 +13,7 @@
 //! gets folded into `App::accrue_subagent_cost_estimate`.
 //!
 //! Why a side-channel and not a plumbed callback: the leaky callers
-//! (`compaction.rs`, `seam_manager.rs`, `cycle_manager.rs`) are
+//! (`compaction.rs`, `seam_manager.rs`) are
 //! engine-internal machinery without a direct handle to `App` or
 //! the engine's event channel. A side-channel keeps the change
 //! surface tiny — one new `report` line per call site — and any

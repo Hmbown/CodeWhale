@@ -9,7 +9,6 @@ mod balance;
 mod change;
 mod config;
 mod core;
-mod cycle;
 mod debug;
 mod feedback;
 mod goal;
@@ -341,24 +340,6 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdContextDescription,
     },
     CommandInfo {
-        name: "cycles",
-        aliases: &["zhouqi"],
-        usage: "/cycles",
-        description_id: MessageId::CmdCyclesDescription,
-    },
-    CommandInfo {
-        name: "cycle",
-        aliases: &[],
-        usage: "/cycle <n>",
-        description_id: MessageId::CmdCycleDescription,
-    },
-    CommandInfo {
-        name: "recall",
-        aliases: &[],
-        usage: "/recall <query>",
-        description_id: MessageId::CmdRecallDescription,
-    },
-    CommandInfo {
         name: "export",
         aliases: &["daochu"],
         usage: "/export [path]",
@@ -610,9 +591,6 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "load" | "jiazai" => session::load(app, arg),
         "compact" | "yasuo" => session::compact(app),
         "purge" | "qingchu" => session::purge(app),
-        "cycles" | "zhouqi" => cycle::list_cycles(app),
-        "cycle" => cycle::show_cycle(app, arg),
-        "recall" => cycle::recall_archive(app, arg),
         "export" | "daochu" => session::export(app, arg),
 
         // Config commands
@@ -849,10 +827,6 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     if let Some(budget) = app.hunt.token_budget {
         let _ = writeln!(out, "- Hunt token budget: {budget}");
     }
-    if app.cycle_count > 0 {
-        let _ = writeln!(out, "- Cycle count: {}", app.cycle_count);
-    }
-
     if let Ok(todos) = app.todos.try_lock() {
         let snapshot = todos.snapshot();
         if !snapshot.items.is_empty() {
@@ -1184,7 +1158,6 @@ mod tests {
         let mut app = create_test_app();
         app.hunt.quarry = Some("Unify the work surface".to_string());
         app.hunt.token_budget = Some(12_000);
-        app.cycle_count = 2;
         {
             let mut todos = app.todos.try_lock().expect("todo lock");
             todos.add("inspect workspace".to_string(), TodoStatus::Completed);
@@ -1220,7 +1193,6 @@ mod tests {
         assert!(message.contains("Requested relay focus: verify install"));
         assert!(message.contains("Hunt quarry: Unify the work surface"));
         assert!(message.contains("Hunt token budget: 12000"));
-        assert!(message.contains("Cycle count: 2"));
         assert!(message.contains("Work checklist (primary progress surface, 50% complete)"));
         assert!(message.contains("#1 [completed] inspect workspace"));
         assert!(message.contains("#2 [in_progress] patch relay command"));

@@ -586,10 +586,6 @@ pub(super) fn context_input_budget(model: &str) -> Option<usize> {
         .and_then(|v| v.checked_sub(CONTEXT_HEADROOM_TOKENS))
 }
 
-pub(super) fn turn_response_headroom_tokens() -> u64 {
-    u64::from(TURN_MAX_OUTPUT_TOKENS).saturating_add(CONTEXT_HEADROOM_TOKENS as u64)
-}
-
 pub(super) fn is_context_length_error_message(message: &str) -> bool {
     crate::error_taxonomy::classify_error_message(message) == ErrorCategory::InvalidInput
 }

@@ -1113,10 +1113,19 @@ fn is_mcp_stale_session_body(body: &str) -> bool {
 
 fn is_mcp_stale_session_error(err: &anyhow::Error) -> bool {
     let err = format!("{err:#}");
+    let lower_err = err.to_ascii_lowercase();
     err.contains("MCP Streamable HTTP session expired")
         || err.contains("MCP session expired")
         || err.contains("SSE transport closed")
+        || (err.contains("MCP SSE POST send failed") && is_connection_closed_error_text(&lower_err))
         || is_mcp_stale_session_body(&err)
+}
+
+fn is_connection_closed_error_text(err: &str) -> bool {
+    err.contains("connection closed")
+        || err.contains("connection reset")
+        || err.contains("broken pipe")
+        || err.contains("unexpected eof")
 }
 
 fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
@@ -1205,7 +1214,13 @@ impl McpTransport for SseTransport {
         )
         .body(msg)
         .send()
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "MCP SSE POST send failed (transport=sse endpoint={})",
+                mask_url_secrets(endpoint)
+            )
+        })?;
         let status = response.status();
         if !status.is_success() {
             let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
@@ -3659,6 +3674,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_sse_post_disconnect_is_retryable() {
+        let err = anyhow::anyhow!(
+            "MCP SSE POST send failed (transport=sse endpoint=http://127.0.0.1:123/messages): connection closed before message completed"
+        );
+        assert!(
+            is_mcp_stale_session_error(&err),
+            "closed legacy SSE POST should force reconnect before retry"
+        );
+
+        let err = anyhow::anyhow!(
+            "MCP SSE POST send failed (transport=sse endpoint=http://127.0.0.1:123/messages): connection reset by peer"
+        );
+        assert!(
+            is_mcp_stale_session_error(&err),
+            "reset legacy SSE POST should force reconnect before retry"
+        );
+    }
+
     #[tokio::test]
     async fn discover_all_ignores_unsupported_optional_capabilities() {
         let sent = Arc::new(Mutex::new(Vec::new()));
@@ -4902,7 +4936,24 @@ mod tests {
                         "result": result
                     })
                     .to_string();
-                    if let Some(tx) = active_sse.lock().unwrap().as_ref() {
+                    // Deliver the response over the *current* SSE channel. The
+                    // retry tool call can race ahead of the reconnecting GET
+                    // /sse that re-stores the sender; under parallel load those
+                    // two server tasks are scheduled in either order, so wait
+                    // briefly for the channel instead of dropping the response
+                    // (which left the client hanging until timeout) (#2597).
+                    let send_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    let tx = loop {
+                        if let Some(tx) = active_sse.lock().unwrap().as_ref().cloned() {
+                            break Some(tx);
+                        }
+                        if std::time::Instant::now() >= send_deadline {
+                            break None;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    };
+                    if let Some(tx) = tx {
                         let _ = tx.send(Some(response));
                     }
                 });

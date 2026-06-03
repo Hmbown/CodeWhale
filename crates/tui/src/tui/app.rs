@@ -17,10 +17,12 @@ use crate::config::{
 };
 use crate::config_ui::ConfigUiMode;
 use crate::core::coherence::CoherenceState;
-use crate::cycle_manager::{CycleBriefing, CycleConfig};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::localization::{Locale, MessageId, resolve_locale, tr};
-use crate::models::{Message, SystemPrompt, Tool, compaction_threshold_for_model_and_effort};
+use crate::models::{
+    Message, SystemPrompt, Tool, auto_compact_default_for_model,
+    compaction_threshold_for_model_at_percent,
+};
 use crate::palette::{self, UiTheme};
 use crate::pricing::{CostCurrency, CostEstimate};
 use crate::session_manager::SessionContextReference;
@@ -38,6 +40,7 @@ use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
+use crate::tui::sidebar::SidebarWorkSummary;
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::views::ViewStack;
@@ -606,7 +609,7 @@ fn looks_like_raw_mouse_report_fragment(run: &[char]) -> bool {
 ///   first BEL (`\x07`), `\x1b\\`, lone `\\`, or the next `\x1b]8;`
 ///   block — terminator characters are optional because crossterm may
 ///   have already consumed them.
-/// - **Kitty CSI**: `(\x1b?) [ (? | > | =) ... u` — the `?`/`>`/`=`
+/// - **Kitty CSI**: `(\x1b?) [ (? | > | < | =) ... u` — the
 ///   private-parameter prefix is what distinguishes a Kitty response
 ///   from a user-typed `[…u` (which is exceedingly rare and would
 ///   need an explicit private-parameter byte to be a real CSI).
@@ -710,10 +713,16 @@ fn match_osc8_fragment(chars: &[char], start: usize) -> Option<usize> {
     Some(end)
 }
 
-/// If a Kitty keyboard protocol CSI fragment starts at `chars[start]`,
-/// return its end index (exclusive). Shape: `(ESC)? [ (? | > | =)
-/// [0-9;:]* u`. The private-parameter byte (`?`, `>`, `=`) is what
-/// keeps this distinct from text the user might plausibly type.
+/// If a private-parameter CSI fragment starts at `chars[start]`, return its
+/// end index (exclusive). Shape: `(ESC)? [ (? | > | < | =) [0-9;:]* <final>`
+/// where `<final>` is any ASCII letter. This covers the Kitty keyboard
+/// protocol (`…u`) *and* the DEC private mode set/reset sequences a terminal
+/// emits during a session — bracketed paste (`[?2004h`/`[?2004l`), mouse
+/// capture (`[?1000h`), focus reporting (`[?1004h`), and synchronized output
+/// (`[?2026h`). Those end in `h`/`l`, not `u`, so the old `u`-only terminator
+/// let the leading `[` leak into the composer during dense streaming (#2592,
+/// regression of #1915). The private-parameter byte (`?`, `>`, `<`, `=`) is
+/// what keeps this distinct from text the user might plausibly type.
 fn match_kitty_csi_fragment(chars: &[char], start: usize) -> Option<usize> {
     let after_csi = if chars.get(start) == Some(&'\x1b') && chars.get(start + 1) == Some(&'[') {
         start + 2
@@ -724,21 +733,30 @@ fn match_kitty_csi_fragment(chars: &[char], start: usize) -> Option<usize> {
     };
 
     let priv_byte = chars.get(after_csi)?;
-    if !matches!(priv_byte, '?' | '>' | '=') {
+    if !matches!(priv_byte, '?' | '>' | '<' | '=') {
         return None;
     }
 
     let mut end = after_csi + 1;
+    let mut saw_param = false;
     while end < chars.len() {
         let ch = chars[end];
-        if ch == 'u' {
-            return Some(end + 1);
-        }
         if ch.is_ascii_digit() || ch == ';' || ch == ':' {
+            saw_param = true;
             end += 1;
             continue;
         }
-        return None;
+        // Final byte. The Kitty keyboard protocol ends in `u` and is valid
+        // with no parameters (`[?u`). DEC private mode set/reset ends in
+        // `h`/`l` and always carries a numeric mode — bracketed paste
+        // (`[?2004h`/`l`), mouse capture (`[?1000h`), focus reporting
+        // (`[?1004h`), synchronized output (`[?2026h`). Require a parameter
+        // before `h`/`l` so ordinary text like `[?help]` is left untouched.
+        return match ch {
+            'u' => Some(end + 1),
+            'h' | 'l' if saw_param => Some(end + 1),
+            _ => None,
+        };
     }
     None
 }
@@ -979,6 +997,10 @@ pub struct ViewportState {
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_composer_area: Option<Rect>,
+    /// Outer rect of the right-hand sidebar (when visible), stored at render
+    /// time so mouse hit-testing can keep scroll events over the sidebar from
+    /// leaking into the transcript viewport.
+    pub last_sidebar_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
@@ -1007,6 +1029,7 @@ impl Default for ViewportState {
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_composer_area: None,
+            last_sidebar_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
@@ -1175,6 +1198,9 @@ pub struct App {
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     pub model: String,
+    /// Persisted model selections by provider name. Loaded from settings so
+    /// `/model` and the picker can surface saved provider-specific choices.
+    pub provider_models: HashMap<String, String>,
     /// When true, the model is auto-selected based on request complexity
     /// rather than using a fixed model. The `/model auto` command sets this.
     /// `dispatch_user_message` calls `auto_model_heuristic` to resolve the
@@ -1237,6 +1263,7 @@ pub struct App {
     #[allow(dead_code)]
     pub system_prompt: Option<SystemPrompt>,
     pub auto_compact: bool,
+    pub auto_compact_user_configured: bool,
     pub auto_compact_threshold_percent: f64,
     pub calm_mode: bool,
     pub low_motion: bool,
@@ -1271,8 +1298,26 @@ pub struct App {
     pub sidebar_hover: SidebarHoverState,
     /// Current hover tooltip text, if any.
     pub sidebar_hover_tooltip: Option<String>,
+    /// Last successfully rendered Work panel summary. Transient mutex misses
+    /// should not wipe completed checklist/strategy state from the sidebar.
+    pub(crate) cached_work_summary: Option<SidebarWorkSummary>,
     /// Last known mouse position for tooltip placement.
     pub last_mouse_pos: Option<(u16, u16)>,
+    /// Whether the user is currently dragging the sidebar resize handle.
+    pub sidebar_resizing: bool,
+    /// Mouse column at the start of a sidebar-resize drag.
+    pub sidebar_resize_anchor_x: u16,
+    /// Sidebar width in columns at the start of a sidebar-resize drag.
+    pub sidebar_resize_anchor_width: u16,
+    /// Last sidebar area rendered (for mouse hit-testing the resize handle).
+    pub last_sidebar_area: Option<Rect>,
+    /// Handle rect painted on the left edge of the sidebar (1 col).
+    pub last_sidebar_handle_area: Option<Rect>,
+    /// Total horizontal space (chat + sidebar) used to compute the percentage
+    /// during sidebar resize drag.
+    pub sidebar_resize_total_width: u16,
+    /// Sidebar width changed during this drag and needs persistence.
+    pub sidebar_width_dirty: bool,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
@@ -1536,14 +1581,6 @@ pub struct App {
     /// states. See [`App::arm_quit`] / [`App::quit_is_armed`].
     pub quit_armed_until: Option<Instant>,
 
-    /// Number of checkpoint-restart cycles crossed in this session
-    /// (issue #124). Mirrors `Session.cycle_count` on the engine side.
-    pub cycle_count: u32,
-
-    /// Briefings produced at past cycle boundaries, in chronological order.
-    /// Used by `/cycles` and `/cycle <n>` slash commands.
-    pub cycle_briefings: Vec<CycleBriefing>,
-
     // === Prefix-Cache Stability Tracking ===
     /// Number of times the prefix (system prompt + tool specs) has changed.
     pub prefix_change_count: u64,
@@ -1557,10 +1594,6 @@ pub struct App {
     /// Updated per-turn via PrefixCacheChange events; surfaced by
     /// `/cache stats` for cache-hit debugging.
     pub last_pinned_prefix_hash: Option<String>,
-
-    /// Active cycle configuration (token threshold, briefing cap, per-model
-    /// overrides). Loaded from config and forwarded to the engine.
-    pub cycle: CycleConfig,
 
     // === Transcript filtering (#397) ===
     /// Transcript cells the user has collapsed (hidden from view).
@@ -1753,8 +1786,15 @@ impl App {
         let settings = Settings::load().unwrap_or_else(|_| Settings::default());
         let mut provider = config.api_provider();
 
-        // Let settings override the config provider so runtime switches survive restarts.
-        if let Some(ref provider_str) = settings.default_provider
+        // Let settings preserve runtime switches only when config/CLI did not
+        // explicitly select a provider. A configured provider must not be
+        // pushed back to a stale saved setting on restart.
+        if config
+            .provider
+            .as_deref()
+            .and_then(ApiProvider::parse)
+            .is_none()
+            && let Some(ref provider_str) = settings.default_provider
             && let Some(parsed) = ApiProvider::parse(provider_str)
         {
             provider = parsed;
@@ -1770,7 +1810,8 @@ impl App {
         let api_key_env_only =
             crate::config::active_provider_uses_env_only_api_key(&effective_auth_config);
         let was_onboarded = crate::tui::onboarding::is_onboarded();
-        let auto_compact = settings.auto_compact;
+        let settings_auto_compact = settings.auto_compact;
+        let auto_compact_user_configured = Settings::auto_compact_explicitly_configured();
         let auto_compact_threshold_percent = settings.auto_compact_threshold_percent;
         let calm_mode = settings.calm_mode;
         let low_motion = settings.low_motion;
@@ -1808,10 +1849,10 @@ impl App {
         {
             ui_theme = ui_theme.with_background_color(background);
         }
-        let model = settings
-            .provider_models
-            .as_ref()
-            .and_then(|m| m.get(provider.as_str()).cloned())
+        let provider_models = settings.provider_models.clone().unwrap_or_default();
+        let model = provider_models
+            .get(provider.as_str())
+            .cloned()
             .or_else(|| {
                 // default_model is a DeepSeek-centric setting; other providers
                 // get their model from config.toml / env (e.g. OPENAI_MODEL).
@@ -1832,8 +1873,15 @@ impl App {
         } else {
             model.as_str()
         };
-        let compact_threshold =
-            compaction_threshold_for_model_and_effort(threshold_model, configured_reasoning_effort);
+        let compact_threshold = compaction_threshold_for_model_at_percent(
+            threshold_model,
+            auto_compact_threshold_percent,
+        );
+        let auto_compact = if auto_compact_user_configured {
+            settings_auto_compact
+        } else {
+            auto_compact_default_for_model(threshold_model)
+        };
         let reasoning_effort = if auto_model {
             ReasoningEffort::Auto
         } else {
@@ -1950,6 +1998,7 @@ impl App {
             sticky_status: None,
             last_status_message_seen: None,
             model,
+            provider_models,
             auto_model,
             last_effective_model: None,
             api_provider: provider,
@@ -1970,6 +2019,7 @@ impl App {
             bracketed_paste_seen: false,
             system_prompt: None,
             auto_compact,
+            auto_compact_user_configured,
             auto_compact_threshold_percent,
             calm_mode,
             low_motion,
@@ -1988,7 +2038,15 @@ impl App {
             sidebar_focus,
             sidebar_hover: SidebarHoverState::default(),
             sidebar_hover_tooltip: None,
+            cached_work_summary: None,
             last_mouse_pos: None,
+            sidebar_resizing: false,
+            sidebar_resize_anchor_x: 0,
+            sidebar_resize_anchor_width: 0,
+            last_sidebar_area: None,
+            last_sidebar_handle_area: None,
+            sidebar_resize_total_width: 0,
+            sidebar_width_dirty: false,
             context_panel: settings.context_panel,
             file_tree: None,
             file_tree_visible: false,
@@ -2109,14 +2167,11 @@ impl App {
             last_submitted_prompt: None,
             auto_submit_initial_input,
             quit_armed_until: None,
-            cycle_count: 0,
-            cycle_briefings: Vec::new(),
             prefix_change_count: 0,
             prefix_checks_total: 0,
             prefix_stability_pct: None,
             last_prefix_change_desc: None,
             last_pinned_prefix_hash: None,
-            cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),
             folded_thinking: HashSet::new(),
             collapsed_cell_map: Vec::new(),
@@ -4708,7 +4763,10 @@ impl App {
     pub fn update_model_compaction_budget(&mut self) {
         let model = self.effective_model_for_budget().to_string();
         self.compact_threshold =
-            compaction_threshold_for_model_and_effort(&model, self.reasoning_effort.api_value());
+            compaction_threshold_for_model_at_percent(&model, self.auto_compact_threshold_percent);
+        if !self.auto_compact_user_configured {
+            self.auto_compact = auto_compact_default_for_model(&model);
+        }
     }
 
     pub fn set_model_selection(&mut self, model: String) {
@@ -4779,12 +4837,6 @@ impl App {
             model: self.effective_model_for_budget().to_string(),
             ..Default::default()
         }
-    }
-
-    /// Forward the active cycle configuration to the engine. Cloned so the
-    /// engine has its own copy to mutate per-session.
-    pub fn cycle_config(&self) -> CycleConfig {
-        self.cycle.clone()
     }
 }
 
@@ -5117,6 +5169,78 @@ mod tests {
     }
 
     #[test]
+    fn explicit_config_provider_wins_over_saved_default_provider() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            tmp.path().join("settings.toml"),
+            "default_provider = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n",
+        )
+        .expect("settings");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let config = Config {
+            provider: Some("xiaomi-mimo".to_string()),
+            providers: Some(ProvidersConfig {
+                xiaomi_mimo: ProviderConfig {
+                    api_key: Some("mimo-config-key".to_string()),
+                    model: Some("mimo-v2.5-pro".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let mut options = test_options(false);
+        options.model = "mimo-v2.5-pro".to_string();
+        let app = App::new(options, &config);
+
+        assert_eq!(app.api_provider, ApiProvider::XiaomiMimo);
+        assert_eq!(app.model, "mimo-v2.5-pro");
+        assert!(
+            !app.onboarding_needs_api_key,
+            "Xiaomi MiMo provider config key should satisfy startup auth"
+        );
+    }
+
+    #[test]
+    fn app_new_defaults_auto_compact_on_for_256k_class_models_when_unset() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "trinity-large-thinking".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(app.auto_compact);
+        assert!(!app.auto_compact_user_configured);
+        assert_eq!(app.auto_compact_threshold_percent, 80.0);
+        assert_eq!(app.compact_threshold, 209_715);
+    }
+
+    #[test]
+    fn app_new_respects_explicit_auto_compact_false_for_256k_class_models() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n")
+            .expect("settings");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "trinity-large-thinking".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(!app.auto_compact);
+        assert!(app.auto_compact_user_configured);
+        assert_eq!(app.compact_threshold, 209_715);
+    }
+
+    #[test]
     fn sidebar_focus_accepts_work_and_maps_legacy_trackers_to_work() {
         assert_eq!(SidebarFocus::from_setting("auto"), SidebarFocus::Auto);
         assert_eq!(SidebarFocus::from_setting("work"), SidebarFocus::Work);
@@ -5328,12 +5452,40 @@ mod tests {
         app.insert_str("ready ");
 
         // Kitty keyboard protocol responses look like `\x1b[?1u`,
-        // `\x1b[>1u`, or `\x1b[?u`. With the ESC consumed, the tail
-        // shape is `[?…u` or `[>…u`.
-        app.insert_str("[?1u[>1u[?u");
+        // `\x1b[>1u`, `\x1b[<1u`, or `\x1b[?u`. With the ESC consumed,
+        // the tail shape is `[?…u`, `[>…u`, or `[<…u`.
+        app.insert_str("[?1u[>1u[<1u[?u");
 
         assert_eq!(app.input, "ready ");
         assert_eq!(app.cursor_position, "ready ".chars().count());
+    }
+
+    #[test]
+    fn composer_strips_dec_private_mode_set_reset_fragments() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("ok ");
+
+        // Regression for #2592: DEC private mode set/reset chatter ends in
+        // `h`/`l`, not `u`, so the `u`-only terminator used to leak the
+        // leading `[`. Bracketed paste, mouse capture, focus reporting, and
+        // synchronized output all leak during dense streaming.
+        app.insert_str("[?2004h[?2004l[?1000h[?1004h[?2026h[?25l");
+
+        assert_eq!(app.input, "ok ");
+        assert_eq!(app.cursor_position, "ok ".chars().count());
+    }
+
+    #[test]
+    fn composer_keeps_bracket_question_word_text() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        // The `h`/`l` terminator only counts after a numeric parameter, so
+        // ordinary prose where a letter follows `[?` directly is preserved.
+        app.insert_str("[?help] and [?later]");
+
+        assert_eq!(app.input, "[?help] and [?later]");
     }
 
     #[test]
@@ -6079,14 +6231,31 @@ mod tests {
     #[test]
     fn test_update_model_compaction_budget() {
         let mut app = App::new(test_options(false), &Config::default());
+        // Pin the inputs so the budget math is deterministic and does not
+        // depend on the developer's local `auto_compact_threshold_percent`
+        // setting (App::new loads real settings) or on auto-model resolution.
+        app.auto_model = false;
+        app.auto_compact_threshold_percent = 80.0;
+
+        // A large-context model earns a proportionally larger compaction
+        // budget; an unknown model falls back to the fixed default threshold.
+        app.model = "deepseek-v4-pro".to_string();
+        app.update_model_compaction_budget();
+        let large_window_threshold = app.compact_threshold;
+
         app.model = "unknown-test-model".to_string();
         app.update_model_compaction_budget();
-        let initial_threshold = app.compact_threshold;
-        app.model = "deepseek-v3.2-128k".to_string();
-        app.update_model_compaction_budget();
-        // Threshold may have changed based on model
-        // Explicit 128k DeepSeek model IDs have a higher threshold than unknown models.
-        assert!(app.compact_threshold >= initial_threshold);
+        let unknown_threshold = app.compact_threshold;
+
+        assert!(
+            unknown_threshold > 0,
+            "unknown model must still get a positive budget"
+        );
+        assert!(
+            large_window_threshold > unknown_threshold,
+            "a large-context model ({large_window_threshold}) should budget more \
+             than an unknown model ({unknown_threshold})"
+        );
     }
 
     #[test]

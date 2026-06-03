@@ -495,9 +495,8 @@ where
     F: std::future::Future<Output = T>,
 {
     // We're on the TUI's thread, which is part of the multi-threaded runtime.
-    // `block_in_place` + `Handle::current().block_on` is the pattern used by
-    // `commands/cycle.rs` to bridge sync slash-command handlers back into the
-    // async ecosystem.
+    // `block_in_place` + `Handle::current().block_on` bridges sync
+    // slash-command handlers back into the async ecosystem.
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 

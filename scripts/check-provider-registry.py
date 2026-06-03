@@ -27,6 +27,9 @@ PROVIDERS_MD = ROOT / "docs" / "PROVIDERS.md"
 
 
 API_PROVIDER_ONLY_IDS = {"deepseek-cn"}
+SHARED_PROVIDER_TABLES = {
+    "siliconflow-CN": "siliconflow",
+}
 
 
 def read(path: Path) -> str:
@@ -195,6 +198,10 @@ def report_provider_enum_drift(
     return errors
 
 
+def provider_table_name(provider_id: str) -> str:
+    return SHARED_PROVIDER_TABLES.get(provider_id, provider_id.replace("-", "_"))
+
+
 def main() -> int:
     try:
         config_rs = read(CONFIG_RS)
@@ -205,7 +212,7 @@ def main() -> int:
         variant_to_id = provider_kind_ids(config_rs)
         canonical_ids = set(variant_to_id.values())
         live_api_provider_ids = set(api_provider_ids(tui_config_rs).values())
-        expected_tables = {provider_id.replace("-", "_") for provider_id in canonical_ids}
+        expected_tables = {provider_table_name(provider_id) for provider_id in canonical_ids}
 
         errors: list[str] = []
         errors += report_provider_enum_drift(canonical_ids, live_api_provider_ids)

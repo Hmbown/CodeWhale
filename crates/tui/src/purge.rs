@@ -246,6 +246,7 @@ fn format_content_block(buf: &mut String, blk_idx: usize, block: &ContentBlock) 
                 "  [{blk_idx}] CodeExecutionToolResult (id={tool_use_id}, content={snippet})"
             );
         }
+        ContentBlock::ImageUrl { .. } => {}
     }
 }
 

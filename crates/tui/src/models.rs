@@ -15,6 +15,7 @@ pub const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: u32 = 1_000_000;
 /// [`compaction_threshold_for_model`] (#664).
 pub const DEFAULT_COMPACTION_TOKEN_THRESHOLD: usize = 102_400;
 const COMPACTION_THRESHOLD_PERCENT: u32 = 80;
+pub const DEFAULT_AUTO_COMPACT_MAX_CONTEXT_WINDOW_TOKENS: u32 = 262_144;
 
 // === Core Message Types ===
 
@@ -64,6 +65,12 @@ pub struct SystemBlock {
     pub cache_control: Option<CacheControl>,
 }
 
+/// OpenAI-compatible image URL payload inside a multimodal message.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
 /// A chat message with role and content blocks.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
@@ -81,6 +88,8 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "tool_use")]
@@ -240,24 +249,31 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
 
 fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
     match model_lower {
-        "arcee-ai/trinity-large-thinking" => Some(262_144),
+        "trinity-mini" => Some(128_000),
+        "arcee-ai/trinity-large-thinking" | "trinity-large-thinking" | "trinity-large-preview" => {
+            Some(262_144)
+        }
         "google/gemma-4-31b-it"
         | "google/gemma-4-31b-it:free"
         | "google/gemma-4-26b-a4b-it"
         | "google/gemma-4-26b-a4b-it:free"
         | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         | "qwen/qwen3.6-35b-a3b"
+        | "qwen/qwen3.6-max-preview"
         | "qwen/qwen3.6-27b"
         | "tencent/hy3-preview"
         | "moonshotai/kimi-k2.6"
         | "moonshotai/kimi-k2.6:free" => Some(262_144),
         "z-ai/glm-5.1" | "z-ai/glm-5v-turbo" => Some(202_752),
-        "minimax/minimax-m3" => Some(1_000_000),
-        "xiaomi/mimo-v2.5-pro"
-        | "xiaomi/mimo-v2.5"
-        | "mimo-v2.5-pro"
-        | "mimo-v2.5"
-        | "qwen/qwen3.6-plus" => Some(1_000_000),
+        "minimax/minimax-m3" | "qwen/qwen3.6-flash" | "qwen/qwen3.6-plus" => Some(1_000_000),
+        "xiaomi/mimo-v2.5-pro" | "xiaomi/mimo-v2.5" | "mimo-v2.5-pro" | "mimo-v2.5" => {
+            Some(1_000_000)
+        }
+        "mimo-v2.5-asr"
+        | "mimo-v2.5-tts"
+        | "mimo-v2.5-tts-voicedesign"
+        | "mimo-v2.5-tts-voiceclone"
+        | "mimo-v2-tts" => Some(8_000),
         _ => None,
     }
 }
@@ -269,12 +285,20 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
         return Some(384_000);
     }
     match lower.as_str() {
-        "arcee-ai/trinity-large-thinking" | "moonshotai/kimi-k2.6" => Some(262_144),
+        "arcee-ai/trinity-large-thinking" | "trinity-large-thinking" | "moonshotai/kimi-k2.6" => {
+            Some(262_144)
+        }
         "minimax/minimax-m3" => Some(524_288),
         "qwen/qwen3.6-35b-a3b" | "qwen/qwen3.6-27b" => Some(262_140),
+        "qwen/qwen3.6-flash" | "qwen/qwen3.6-max-preview" | "qwen/qwen3.6-plus" => Some(65_536),
         "xiaomi/mimo-v2.5-pro" | "xiaomi/mimo-v2.5" | "mimo-v2.5-pro" | "mimo-v2.5" => {
             Some(131_072)
         }
+        "mimo-v2.5-asr" => Some(2_048),
+        "mimo-v2.5-tts"
+        | "mimo-v2.5-tts-voicedesign"
+        | "mimo-v2.5-tts-voiceclone"
+        | "mimo-v2-tts" => Some(8_192),
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" => Some(65_536),
         "google/gemma-4-31b-it" => Some(16_384),
         "google/gemma-4-31b-it:free" | "google/gemma-4-26b-a4b-it:free" => Some(32_768),
@@ -291,6 +315,7 @@ pub fn model_supports_reasoning(model: &str) -> bool {
     matches!(
         lower.as_str(),
         "arcee-ai/trinity-large-thinking"
+            | "trinity-large-thinking"
             | "google/gemma-4-31b-it"
             | "google/gemma-4-31b-it:free"
             | "google/gemma-4-26b-a4b-it"
@@ -299,8 +324,11 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "moonshotai/kimi-k2.6:free"
             | "minimax/minimax-m3"
             | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+            | "qwen/qwen3.6-flash"
             | "qwen/qwen3.6-35b-a3b"
+            | "qwen/qwen3.6-max-preview"
             | "qwen/qwen3.6-27b"
+            | "qwen/qwen3.6-plus"
             | "tencent/hy3-preview"
             | "xiaomi/mimo-v2.5-pro"
             | "xiaomi/mimo-v2.5"
@@ -343,34 +371,32 @@ fn explicit_context_window_hint(model_lower: &str) -> Option<u32> {
     None
 }
 
-/// Derive a compaction token threshold from model context window.
-///
-/// Keeps headroom for tool outputs and assistant completion by defaulting to 80%
-/// of known context windows. This is the hard automatic compaction threshold
-/// used only when `auto_compact` is enabled; model-facing guidance still
-/// suggests manual `/compact` earlier (~60%) during sustained work.
+/// Derive a compaction token threshold from model context and a caller-supplied
+/// percentage.
 #[must_use]
-pub fn compaction_threshold_for_model(model: &str) -> usize {
+pub fn compaction_threshold_for_model_at_percent(model: &str, percent: f64) -> usize {
     let Some(window) = context_window_for_model(model) else {
         return DEFAULT_COMPACTION_TOKEN_THRESHOLD;
     };
 
-    let threshold = (u64::from(window) * u64::from(COMPACTION_THRESHOLD_PERCENT)) / 100;
+    let percent = percent.clamp(10.0, 100.0);
+    let threshold = (f64::from(window) * percent / 100.0).round();
+    let threshold = if threshold.is_finite() && threshold > 0.0 {
+        threshold as u64
+    } else {
+        u64::from(window) * u64::from(COMPACTION_THRESHOLD_PERCENT) / 100
+    };
     usize::try_from(threshold).unwrap_or(DEFAULT_COMPACTION_TOKEN_THRESHOLD)
 }
 
-/// Compaction threshold keyed by model and caller-supplied effort tier.
-///
-/// Replacement-style compaction rewrites the stable prefix, which works against
-/// DeepSeek V4 prefix-cache economics. Reasoning effort must not lower V4's
-/// automatic replacement threshold; V4-family models use the same late
-/// 80%-of-window hard guard as `compaction_threshold_for_model`.
+/// Whether auto-compaction should be enabled when the user did not explicitly
+/// configure it. V4-class 1M models keep the prefix-cache-friendly opt-in
+/// behavior; 256K-class and smaller known models need automatic pressure
+/// relief near the context wall.
 #[must_use]
-pub fn compaction_threshold_for_model_and_effort(
-    model: &str,
-    _reasoning_effort: Option<&str>,
-) -> usize {
-    compaction_threshold_for_model(model)
+pub fn auto_compact_default_for_model(model: &str) -> bool {
+    context_window_for_model(model)
+        .is_some_and(|window| window <= DEFAULT_AUTO_COMPACT_MAX_CONTEXT_WINDOW_TOKENS)
 }
 
 // === Streaming Structures ===
@@ -498,9 +524,14 @@ mod tests {
     fn recent_openrouter_large_models_have_static_windows() {
         for (model, expected_window) in [
             ("arcee-ai/trinity-large-thinking", 262_144),
+            ("trinity-large-thinking", 262_144),
+            (concat!("qwen/", "qwen3.6-flash"), 1_000_000),
             (concat!("qwen/", "qwen3.6-35b-a3b"), 262_144),
+            (concat!("qwen/", "qwen3.6-max-preview"), 262_144),
+            (concat!("qwen/", "qwen3.6-plus"), 1_000_000),
             (concat!("xiaomi/", "mimo-v2.5-pro"), 1_000_000),
             ("mimo-v2.5-pro", 1_000_000),
+            ("mimo-v2.5", 1_000_000),
             ("minimax/minimax-m3", 1_000_000),
             ("moonshotai/kimi-k2.6", 262_144),
             ("google/gemma-4-31b-it", 262_144),
@@ -512,16 +543,44 @@ mod tests {
     }
 
     #[test]
+    fn arcee_direct_models_have_static_windows_without_reasoning_flag() {
+        assert_eq!(
+            context_window_for_model("trinity-large-preview"),
+            Some(262_144)
+        );
+        assert!(!model_supports_reasoning("trinity-large-preview"));
+        assert_eq!(context_window_for_model("trinity-mini"), Some(128_000));
+        assert!(!model_supports_reasoning("trinity-mini"));
+    }
+
+    #[test]
     fn recent_openrouter_large_models_have_known_output_caps() {
         assert_eq!(
             max_output_tokens_for_model("arcee-ai/trinity-large-thinking"),
             Some(262_144)
         );
         assert_eq!(
+            max_output_tokens_for_model("trinity-large-thinking"),
+            Some(262_144)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.6-flash")),
+            Some(65_536)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.6-max-preview")),
+            Some(65_536)
+        );
+        assert_eq!(
+            max_output_tokens_for_model(concat!("qwen/", "qwen3.6-plus")),
+            Some(65_536)
+        );
+        assert_eq!(
             max_output_tokens_for_model(concat!("xiaomi/", "mimo-v2.5-pro")),
             Some(131_072)
         );
         assert_eq!(max_output_tokens_for_model("mimo-v2.5-pro"), Some(131_072));
+        assert_eq!(max_output_tokens_for_model("mimo-v2.5"), Some(131_072));
         assert_eq!(
             max_output_tokens_for_model("minimax/minimax-m3"),
             Some(524_288)
@@ -544,7 +603,7 @@ mod tests {
     #[test]
     fn compaction_threshold_scales_with_context_window() {
         assert_eq!(
-            compaction_threshold_for_model("deepseek-v3.2-128k"),
+            compaction_threshold_for_model_at_percent("deepseek-v3.2-128k", 80.0),
             102_400
         );
         // v0.8.11 (#664): unknown-model fallback also resolves to 80% of
@@ -553,55 +612,38 @@ mod tests {
         // `50_000` pre-v0.8.11; that hardcoded value compacted at ~5% of a
         // 1M window when model detection silently fell through, which is
         // exactly the prefix-cache-burning behaviour we're getting away from.
-        assert_eq!(compaction_threshold_for_model("unknown-model"), 102_400);
+        assert_eq!(
+            compaction_threshold_for_model_at_percent("unknown-model", 80.0),
+            102_400
+        );
     }
 
     #[test]
     fn compaction_scales_for_deepseek_v4_1m_context() {
-        assert_eq!(compaction_threshold_for_model("deepseek-v4-pro"), 800_000);
-    }
-
-    #[test]
-    fn v4_replacement_compaction_ignores_reasoning_effort() {
         assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v4-pro", Some("off")),
-            800_000
-        );
-        assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v4-pro", Some("high")),
-            800_000
-        );
-        assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v4-pro", Some("max")),
+            compaction_threshold_for_model_at_percent("deepseek-v4-pro", 80.0),
             800_000
         );
     }
 
     #[test]
-    fn v4_soft_caps_only_apply_to_v4_models() {
+    fn compaction_threshold_honors_configured_percent() {
         assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v3.2-128k", Some("max")),
-            102_400
+            compaction_threshold_for_model_at_percent("deepseek-v4-pro", 75.0),
+            750_000
         );
-        // v0.8.11 (#664): unknown-model fallback also lands on the
-        // 80%-of-128K legacy DeepSeek fallback instead of the legacy
-        // hardcoded 50K, so model-detection-fall-through doesn't quietly
-        // burn V4 prefix cache at 5%-of-window.
         assert_eq!(
-            compaction_threshold_for_model_and_effort("unknown-model", Some("max")),
-            102_400
+            compaction_threshold_for_model_at_percent("trinity-large-thinking", 80.0),
+            209_715
         );
     }
 
     #[test]
-    fn v4_replacement_compaction_defaults_to_late_guard_when_effort_unknown() {
-        assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v4-pro", None),
-            800_000
-        );
-        assert_eq!(
-            compaction_threshold_for_model_and_effort("deepseek-v4-pro", Some("unknown")),
-            800_000
-        );
+    fn auto_compaction_defaults_on_for_256k_class_models_only() {
+        assert!(auto_compact_default_for_model("trinity-large-thinking"));
+        assert!(auto_compact_default_for_model("deepseek-v3.2-128k"));
+        assert!(!auto_compact_default_for_model("deepseek-v4-pro"));
+        assert!(!auto_compact_default_for_model("mimo-v2.5-pro"));
+        assert!(!auto_compact_default_for_model("unknown-model"));
     }
 }

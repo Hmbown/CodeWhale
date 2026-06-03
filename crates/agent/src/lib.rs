@@ -165,6 +165,17 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "trinity-large-thinking".to_string(),
+                provider: ProviderKind::Arcee,
+                aliases: vec![
+                    "trinity".to_string(),
+                    "arcee-trinity".to_string(),
+                    "arcee-trinity-large-thinking".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![
@@ -218,6 +229,13 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "qwen/qwen3.6-flash".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.6-flash".to_string(), "qwen-3.6-flash".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "qwen/qwen3.6-35b-a3b".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![
@@ -228,9 +246,27 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "qwen/qwen3.6-max-preview".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "qwen3.6-max-preview".to_string(),
+                    "qwen-3.6-max-preview".to_string(),
+                    "qwen-max-preview".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "qwen/qwen3.6-27b".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec!["qwen3.6-27b".to_string(), "qwen-3.6-27b".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "qwen/qwen3.6-plus".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.6-plus".to_string(), "qwen-3.6-plus".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -296,16 +332,39 @@ impl Default for ModelRegistry {
             ModelInfo {
                 id: "mimo-v2.5-pro".to_string(),
                 provider: ProviderKind::XiaomiMimo,
-                aliases: vec!["mimo".to_string()],
+                aliases: vec![
+                    "mimo".to_string(),
+                    "pro".to_string(),
+                    "xiaomi-mimo-v2.5-pro".to_string(),
+                    "xiaomi-mimo-v2-5-pro".to_string(),
+                ],
                 supports_tools: true,
                 supports_reasoning: true,
             },
             ModelInfo {
                 id: "mimo-v2.5".to_string(),
                 provider: ProviderKind::XiaomiMimo,
-                aliases: vec!["xiaomi-mimo-v2.5".to_string()],
+                aliases: vec![
+                    "omni".to_string(),
+                    "mimo-omni".to_string(),
+                    "v2.5-omni".to_string(),
+                    "mimo-v2.5-omni".to_string(),
+                    "xiaomi-mimo-v2.5".to_string(),
+                    "xiaomi-mimo-v2.5-omni".to_string(),
+                ],
                 supports_tools: true,
                 supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mimo-v2.5-asr".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec![
+                    "asr".to_string(),
+                    "speech-to-text".to_string(),
+                    "transcribe".to_string(),
+                ],
+                supports_tools: false,
+                supports_reasoning: false,
             },
             ModelInfo {
                 id: "mimo-v2.5-tts".to_string(),
@@ -402,6 +461,13 @@ impl Default for ModelRegistry {
                 ],
                 supports_tools: true,
                 supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "trinity-large-preview".to_string(),
+                provider: ProviderKind::Arcee,
+                aliases: vec!["arcee-trinity-large-preview".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
             },
             ModelInfo {
                 id: "kimi-k2.6".to_string(),
@@ -553,6 +619,26 @@ impl ModelRegistry {
                     fallback_chain,
                 };
             }
+            if provider_hint == Some(ProviderKind::Arcee)
+                && let Some(model) = arcee_passthrough_model(name)
+            {
+                return ModelResolution {
+                    requested: Some(name.to_string()),
+                    resolved: model,
+                    used_fallback: false,
+                    fallback_chain,
+                };
+            }
+            if provider_hint == Some(ProviderKind::XiaomiMimo)
+                && let Some(model) = xiaomi_mimo_passthrough_model(name)
+            {
+                return ModelResolution {
+                    requested: Some(name.to_string()),
+                    resolved: model,
+                    used_fallback: false,
+                    fallback_chain,
+                };
+            }
             if let Some(idx) = self.alias_map.get(&normalize(name)) {
                 return ModelResolution {
                     requested: Some(name.to_string()),
@@ -621,6 +707,37 @@ fn atlascloud_passthrough_model(requested: &str) -> Option<ModelInfo> {
     Some(ModelInfo {
         id: requested.to_string(),
         provider: ProviderKind::Atlascloud,
+        aliases: Vec::new(),
+        supports_tools: true,
+        supports_reasoning: true,
+    })
+}
+
+fn arcee_passthrough_model(requested: &str) -> Option<ModelInfo> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    let supports_reasoning = requested.to_ascii_lowercase().contains("thinking");
+
+    Some(ModelInfo {
+        id: requested.to_string(),
+        provider: ProviderKind::Arcee,
+        aliases: Vec::new(),
+        supports_tools: true,
+        supports_reasoning,
+    })
+}
+
+fn xiaomi_mimo_passthrough_model(requested: &str) -> Option<ModelInfo> {
+    let requested = requested.trim();
+    if requested.is_empty() || requested.chars().any(char::is_control) {
+        return None;
+    }
+
+    Some(ModelInfo {
+        id: requested.to_string(),
+        provider: ProviderKind::XiaomiMimo,
         aliases: Vec::new(),
         supports_tools: true,
         supports_reasoning: true,
@@ -764,6 +881,40 @@ mod tests {
     }
 
     #[test]
+    fn xiaomi_mimo_chat_aliases_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+
+        let resolved = registry.resolve(Some("omni"), Some(ProviderKind::XiaomiMimo));
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "mimo-v2.5");
+        assert!(resolved.resolved.supports_tools);
+    }
+
+    #[test]
+    fn xiaomi_mimo_provider_hint_preserves_custom_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved =
+            registry.resolve(Some("account-custom-mimo"), Some(ProviderKind::XiaomiMimo));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "account-custom-mimo");
+        assert!(!resolved.used_fallback);
+    }
+
+    #[test]
+    fn xiaomi_mimo_provider_hint_does_not_reclassify_openrouter_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(
+            Some("deepseek/deepseek-v4-pro"),
+            Some(ProviderKind::XiaomiMimo),
+        );
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-pro");
+        assert!(!resolved.used_fallback);
+    }
+
+    #[test]
     fn wanjie_ark_default_uses_reasoner_model_id() {
         let registry = ModelRegistry::default();
         let resolved = registry.resolve(None, Some(ProviderKind::WanjieArk));
@@ -802,6 +953,47 @@ mod tests {
         assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
         assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
         assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn arcee_default_uses_direct_trinity_large_thinking_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::Arcee));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.resolved.id, "trinity-large-thinking");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn arcee_trinity_alias_resolves_to_direct_large_thinking_not_openrouter() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("trinity"), Some(ProviderKind::Arcee));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.resolved.id, "trinity-large-thinking");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn arcee_trinity_mini_remains_explicit_compatibility_model() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("trinity-mini"), Some(ProviderKind::Arcee));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.resolved.id, "trinity-mini");
+        assert!(!resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn arcee_provider_hint_preserves_explicit_future_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("trinity-large-next"), Some(ProviderKind::Arcee));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.resolved.id, "trinity-large-next");
+        assert!(!resolved.resolved.supports_reasoning);
+        assert!(!resolved.used_fallback);
     }
 
     #[test]
@@ -846,7 +1038,10 @@ mod tests {
 
         for (alias, expected) in [
             ("trinity-large-thinking", "arcee-ai/trinity-large-thinking"),
+            ("qwen3.6-flash", "qwen/qwen3.6-flash"),
             ("qwen3.6-35b-a3b", "qwen/qwen3.6-35b-a3b"),
+            ("qwen3.6-max-preview", "qwen/qwen3.6-max-preview"),
+            ("qwen3.6-plus", "qwen/qwen3.6-plus"),
             ("gemma-4-31b-it", "google/gemma-4-31b-it"),
             ("glm-5.1", "z-ai/glm-5.1"),
             ("minimax-m3", "minimax/minimax-m3"),

@@ -106,7 +106,8 @@ impl ProviderPickerView {
             ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
-            ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "SILICONFLOW_API_KEY",
+            ApiProvider::Arcee => "ARCEE_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY / KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
@@ -481,6 +482,8 @@ mod tests {
                 "Novita AI",
                 "Fireworks AI",
                 "SiliconFlow",
+                "SiliconFlow (China)",
+                "Arcee AI",
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
@@ -641,7 +644,7 @@ mod tests {
         let config = Config::default();
         let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
-        let rendered = render_text(&picker, 80, 21);
+        let rendered = render_text(&picker, 80, 23);
 
         assert!(rendered.contains("DeepSeek *"));
         assert!(rendered.contains("Ollama"));

@@ -241,6 +241,13 @@ impl From<LlmError> for ErrorEnvelope {
                 "llm_auth_error",
                 message,
             ),
+            LlmError::AuthorizationError(message) => Self::new(
+                ErrorCategory::Authorization,
+                ErrorSeverity::Error,
+                false,
+                "llm_authorization_error",
+                message,
+            ),
             LlmError::InvalidRequest { message, .. } => Self::new(
                 ErrorCategory::InvalidInput,
                 ErrorSeverity::Error,
@@ -314,10 +321,22 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
     if lower.contains("timeout") || lower.contains("timed out") {
         return ErrorCategory::Timeout;
     }
-    if lower.contains("auth") || lower.contains("unauthorized") || lower.contains("api key") {
+    if lower.contains("authentication")
+        || lower.contains("auth failed")
+        || lower.contains("auth error")
+        || lower.contains("unauthorized")
+        || lower.contains("api key")
+        || lower.contains("invalid key")
+        || lower.contains("invalid token")
+        || lower.contains("bearer token")
+    {
         return ErrorCategory::Authentication;
     }
-    if lower.contains("permission") || lower.contains("forbidden") || lower.contains("denied") {
+    if lower.contains("authorization")
+        || lower.contains("permission")
+        || lower.contains("forbidden")
+        || lower.contains("denied")
+    {
         return ErrorCategory::Authorization;
     }
     if lower.contains("network")
@@ -551,6 +570,7 @@ mod tests {
     fn authorization_catches_forbidden_and_denied() {
         for msg in [
             "403 Forbidden",
+            "Authorization failed: Arcee AI API returned Cloudflare Access Denied",
             "Permission denied for resource",
             "Tool 'edit_file' denied by user",
         ] {

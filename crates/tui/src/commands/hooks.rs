@@ -63,6 +63,14 @@ fn events() -> CommandResult {
             HookEvent::OnError,
             "fires on transport / capacity / tool errors",
         ),
+        (
+            HookEvent::SubagentSpawn,
+            "fires when a sub-agent starts (observer-only)",
+        ),
+        (
+            HookEvent::SubagentComplete,
+            "fires when a sub-agent completes, fails, or is cancelled (observer-only)",
+        ),
     ];
     for (event, desc) in ordered {
         out.push_str(&format!("  - `{}` — {desc}\n", event_label(event)));
@@ -138,6 +146,8 @@ fn event_label(event: HookEvent) -> &'static str {
         HookEvent::ToolCallAfter => "tool_call_after",
         HookEvent::ModeChange => "mode_change",
         HookEvent::OnError => "on_error",
+        HookEvent::SubagentSpawn => "subagent_spawn",
+        HookEvent::SubagentComplete => "subagent_complete",
         HookEvent::ShellEnv => "shell_env",
     }
 }
@@ -261,6 +271,8 @@ mod tests {
             "tool_call_after",
             "mode_change",
             "on_error",
+            "subagent_spawn",
+            "subagent_complete",
         ]
         .iter()
         .map(|name| {
@@ -298,6 +310,11 @@ mod tests {
         assert_eq!(event_label(HookEvent::MessageSubmit), "message_submit");
         assert_eq!(event_label(HookEvent::ModeChange), "mode_change");
         assert_eq!(event_label(HookEvent::OnError), "on_error");
+        assert_eq!(event_label(HookEvent::SubagentSpawn), "subagent_spawn");
+        assert_eq!(
+            event_label(HookEvent::SubagentComplete),
+            "subagent_complete"
+        );
     }
 
     #[test]

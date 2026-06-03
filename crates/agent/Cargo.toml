@@ -7,5 +7,5 @@ repository.workspace = true
 description = "Model/provider registry and fallback strategy for DeepSeek workspace architecture"
 
 [dependencies]
-codewhale-config = { path = "../config", version = "0.8.50" }
+codewhale-config = { path = "../config", version = "0.8.52" }
 serde.workspace = true

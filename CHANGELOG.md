@@ -7,6 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.52] - 2026-06-03
+
+### Added
+
+- **SiliconFlow China region provider.** Added the `siliconflow-CN` provider
+  variant for the China regional endpoint, sharing the existing
+  `[providers.siliconflow]` credentials and `SILICONFLOW_API_KEY` slot
+  instead of creating a second credential namespace; the provider picker and
+  registry docs now expose the regional route explicitly (#2588, #2615).
+- **Multimodal `/attach` image forwarding.** Attached images are now sent as
+  OpenAI-compatible `image_url` content blocks so multimodal providers can
+  actually see image attachments (#2584, #2587, #2607).
+- **Sub-agent lifecycle hooks and runtime metadata.** Sub-agent spawn/complete
+  hook events, mode-change runtime messages, mode metadata on turns, localized
+  context-inspector strings, and drag-to-resize sidebar width are included in
+  this release slice.
+
+### Fixed
+
+- **Sub-agents now auto-cancel after stale heartbeats.** Running sub-agents
+  track manager-visible progress and are auto-cancelled after the configurable
+  `[subagents] heartbeat_timeout_secs` window (default 300s), releasing their
+  concurrency slot and unblocking parent turns that would otherwise wait
+  forever (#2603, #2614, #2620).
+- **Work panel state survives transient lock misses.** The sidebar caches the
+  last successful Work summary so checklist and strategy progress no longer
+  disappear into "Work state updating..." while the engine briefly owns the
+  shared todo/plan locks (#2606, #2616).
+- **SiliconFlow-CN no longer breaks main.** Filled the missing CLI provider
+  exhaustiveness arms and removed the duplicate/unreachable TUI config arms
+  left by the #2615 landing; direct auth now stores the China-region variant in
+  the shared SiliconFlow provider table (#2616, #2618, #2619).
+- **v0.8.51 image-attach closure corrected.** The `/attach` multimodal fix
+  landed after the v0.8.51 tag, so this release is the first version that
+  actually contains it for users installing from the published release line
+  (#2584, #2607).
+- **Legacy SSE MCP reconnects are retryable again.** Closed or reset
+  `POST /messages` requests on stale legacy SSE sessions now trigger the same
+  reconnect-and-retry path as closed SSE streams, removing a release-gate flake
+  and matching the intended recovery behavior (#2597).
+
+### Community
+
+Thanks to **@xyuai** (#2587), **@IcedOranges** (#2584), **@BH8GCJ** (#2588),
+**@shenjackyuanjie** (#2618, #2619), **@idling11** (#2606, #2616),
+**@AresNing** (#2578), **@gordonlu**, **@encyc**, and **@simuusang** (#2603,
+#2620) for reports, patches, retesting, and release-stabilization signals that
+shaped this pass.
+
+## [0.8.51] - 2026-06-02
+
+### Added
+
+- **Arcee AI as a direct provider.** New `[providers.arcee]` config block and
+  `ARCEE_API_KEY` / `ARCEE_BASE_URL` / `ARCEE_MODEL` environment variables,
+  wired through CLI auth (`codewhale auth set --provider arcee`), the TUI
+  provider picker, and the model registry. The default direct-API model is
+  `trinity-large-thinking` (reasoning-capable, 262K context and 262K max
+  output); `trinity-large-preview` (262K context, non-reasoning) and
+  `trinity-mini` (128K context) are also selectable. OpenRouter's
+  `arcee-ai/trinity-large-thinking` route remains separate.
+- **Arcee Cloudflare-WAF compatibility.** The opening turn to the Arcee gateway
+  uses a benign read-only tool surface (`read_file`, `list_dir`, `file_search`,
+  `grep_files`, `git_status`, `git_diff`, `checklist_write`, `update_plan`) and
+  splits example payloads such as `python -c …` out of the system prompt, so the
+  WAF does not reject the first request; the full tool catalog stays reachable
+  through tool-search. `trinity-large-thinking`'s `reasoning_content` is
+  recognized and replayed on tool-call turns.
+- **Expanded model catalog.** Added context-window, max-output, and
+  reasoning-capability metadata for additional model IDs, including
+  `qwen/qwen3.6-flash`, `qwen/qwen3.6-plus`, `qwen/qwen3.6-max-preview`, and
+  Xiaomi MiMo v2.5 chat/ASR/TTS variants; `trinity-large-preview`'s context
+  window was corrected to 262K.
+- **Provider-aware model picker.** The picker groups models by provider, shows
+  per-model hints, and remembers a saved model per provider.
+
+### Changed
+
+- **Auto-compaction is now percentage- and model-aware.** The per-model
+  threshold helper is `compaction_threshold_for_model_at_percent(model,
+  percent)` (replacing the effort-based variant), and the default
+  `auto_compact_threshold_percent` is 80%. Auto-compaction defaults on for
+  models with a context window of 256K or smaller and stays opt-in for 1M-token
+  models (e.g. DeepSeek V4) to protect prefix-cache economics, unless the user
+  has explicitly set `auto_compact`.
+- **Clearer provider/gateway errors.** HTTP error bodies are sanitized before
+  display — HTML interstitials and Cloudflare "Access Denied" pages collapse to
+  a one-line reason (with the ray/error ID) instead of dumping raw markup into
+  the transcript — and 403s are split into authentication vs. authorization
+  (gateway/WAF block) categories.
+- The invalid-model error now names the active provider and lists Arcee among
+  the options.
+
+### Removed
+
+- **The session "cycle" / checkpoint-restart system.** Removed the `/cycles`,
+  `/cycle <n>`, and `/recall` commands, the `recall_archive` tool, the
+  cycle-handoff briefing prompt, the sidebar "cycles" lines, and the
+  `cycle_manager` engine plumbing (`EngineConfig.cycle`, `Event::CycleAdvanced`,
+  seam-manager cycle thresholds and flash briefings). Long sessions no longer
+  auto-reset their context at a fixed token boundary — reclaim budget with
+  `/compact` or model-aware auto-compaction instead. Existing on-disk cycle
+  archives are left untouched but are no longer read or written.
+
+### Fixed
+
+- Assistant turns no longer leave an orphaned role glyph (the stray "blue dot")
+  when a turn streams only whitespace between reasoning and a tool call.
+- Scrolling the mouse wheel over the right-hand sidebar no longer leaks into the
+  transcript scroll.
+- The sidebar hover tooltip now appears only for truncated lines, sits below the
+  cursor, and uses a neutral surface color instead of the warning-orange
+  highlight that overlapped neighbouring rows.
+- Corrected the README's description of the Constitution (Article VII is the
+  hierarchy itself; Article II's truth duty overrides even a user request) to
+  match `prompts/base.md`.
+- Repaired release-blocking unit and integration tests left failing by the
+  cycle-removal and compaction-threshold refactors (relay instruction,
+  model-reject message, compaction budget, mock-LLM threshold helper).
+- Fixed DEC private-mode CSI fragment leakage into composer text after
+  terminal resets, restoring clean prompt editing (#2592).
+- The engine now recovers from turn-level panics instead of killing the
+  main event loop, keeping the session alive through transient failures
+  (#2583, #1269).
+- Deeply nested files are now discoverable via @-mention and Ctrl+P file
+  picker; the default walk depth was relaxed to handle monorepo layouts (#2488).
+- Command-palette selection stays visible when scrolling through long lists
+  instead of scrolling off-screen (#2590).
+- exec_shell child processes now inherit .NET/NuGet and Windows app-data
+  environment variables, fixing toolchain resolution on Windows (#1857).
+- A warning is emitted when shell/sandbox config keys are nested under
+  unknown top-level sections instead of being silently ignored (#2589).
+- Diff-render now preserves leading whitespace in patch content lines,
+  fixing an extra-space regression in PR previews (#2591). Thanks @zlh124.
+- Model selection from the /model command now persists per-provider across
+  restarts, with a warning when persistence fails.
+
+### Community
+
+Thanks to **@zlh124** (#2591) and **@reidliu41** (#2601) for the fixes
+harvested into this release. Thanks also to **@idling11** (#2602),
+**@gordonlu** (#2585), **@cyq1017** (#2593), **@xyuai** (#2587, #2584),
+and **@IcedOranges** (#2584) for reports, drafts, and investigations
+that shaped this release cycle.
+
 ## [0.8.50] - 2026-06-02
 
 ### Added
@@ -5233,7 +5378,9 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.52...HEAD
+[0.8.52]: https://github.com/Hmbown/CodeWhale/compare/v0.8.51...v0.8.52
+[0.8.51]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...v0.8.51
 [0.8.50]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...v0.8.50
 [0.8.49]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...v0.8.49
 [0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48

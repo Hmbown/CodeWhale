@@ -548,8 +548,7 @@ fn compaction_config_defaults_are_enabled_for_session_survivability() {
     // This test is a smoke check that the defaults compile and are correct.
     // The production `CompactionConfig::default()` is exercised by
     // `compaction::tests::should_compact_respects_enabled_flag` etc.
-    let config =
-        crate::models::compaction_threshold_for_model_and_effort("deepseek-v4-pro", Some("high"));
+    let config = crate::models::compaction_threshold_for_model_at_percent("deepseek-v4-pro", 80.0);
     // Verify the threshold is reasonable (> 0 and < context window).
     assert!(config > 0, "compaction threshold must be positive");
     assert!(config < 1_000_000, "compaction threshold must be below 1M");

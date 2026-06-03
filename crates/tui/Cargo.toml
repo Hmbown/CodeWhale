@@ -27,11 +27,11 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-codewhale-config = { path = "../config", version = "0.8.50" }
-codewhale-protocol = { path = "../protocol", version = "0.8.50" }
-codewhale-release = { path = "../release", version = "0.8.50" }
-codewhale-secrets = { path = "../secrets", version = "0.8.50" }
-codewhale-tools = { path = "../tools", version = "0.8.50" }
+codewhale-config = { path = "../config", version = "0.8.52" }
+codewhale-protocol = { path = "../protocol", version = "0.8.52" }
+codewhale-release = { path = "../release", version = "0.8.52" }
+codewhale-secrets = { path = "../secrets", version = "0.8.52" }
+codewhale-tools = { path = "../tools", version = "0.8.52" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
