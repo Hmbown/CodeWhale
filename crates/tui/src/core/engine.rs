@@ -630,6 +630,7 @@ impl Engine {
                     translation_enabled: config.translation_enabled,
                     model_id: &config.model,
                     show_thinking: config.show_thinking,
+                    allow_shell: config.allow_shell,
                 },
                 session.approval_mode,
             );
@@ -2362,6 +2363,7 @@ In {new} mode: {policy}\n\n\
                 translation_enabled: self.config.translation_enabled,
                 model_id: &self.config.model,
                 show_thinking: self.config.show_thinking,
+                allow_shell: self.session.allow_shell,
             },
             self.session.approval_mode,
         );

@@ -4860,6 +4860,7 @@ async fn dispatch_user_message(
                 translation_enabled: app.translation_enabled,
                 model_id: &app.model,
                 show_thinking: app.show_thinking,
+                allow_shell: app.allow_shell,
             },
         ),
     );
