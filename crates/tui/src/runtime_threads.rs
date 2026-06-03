@@ -596,7 +596,7 @@ pub struct UpdateThreadRequest {
     pub mode: Option<String>,
     pub title: Option<String>,
     pub system_prompt: Option<String>,
-    pub workspace: Option<String>,
+    pub workspace: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1105,6 +1105,11 @@ impl RuntimeThreadManager {
         {
             bail!("mode must not be empty");
         }
+        if let Some(workspace) = req.workspace.as_ref()
+            && workspace.as_os_str().is_empty()
+        {
+            bail!("workspace must not be empty");
+        }
 
         let mut thread = self.get_thread(id).await?;
         let mut changes = serde_json::Map::new();
@@ -1171,13 +1176,31 @@ impl RuntimeThreadManager {
         if let Some(workspace) = req.workspace
             && thread.workspace != workspace
         {
-            thread.workspace = workspace.clone().into();
             changes.insert("workspace".to_string(), json!(workspace));
+            thread.workspace = workspace;
         }
 
         if !changes.is_empty() {
             thread.updated_at = Utc::now();
             self.store.save_thread(&thread)?;
+
+            // If workspace changed, evict the cached engine so the next turn
+            // spawns a new engine with the updated workspace. Without this,
+            // ensure_engine_loaded would return the stale engine configured
+            // for the old workspace, silently ignoring the update.
+            if changes.contains_key("workspace") {
+                let evicted = {
+                    let mut active = self.active.lock().await;
+                    active
+                        .engines
+                        .remove(&thread.id)
+                        .map(|state| state.engine)
+                };
+                if let Some(engine) = evicted {
+                    let _ = engine.send(Op::Shutdown).await;
+                }
+            }
+
             self.emit_event(
                 &thread.id,
                 None,
