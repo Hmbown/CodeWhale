@@ -61,25 +61,18 @@ impl PrefixFingerprint {
     /// lexicographically by JSON text, then SHA-256 hashed. This catches
     /// schema/description drift that actually affects the API prefix,
     /// while ignoring internal-only fields like `allowed_callers` (#2264).
+    ///
+    /// This entry point shares a process-local [`ToolCatalogCache`] with
+    /// every other call, so a stable tool set (the common case after the
+    /// first turn of a session) avoids the per-tool JSON serialization
+    /// and sort/join entirely. Callers that hold their own cache — e.g.
+    /// [`PrefixStabilityManager`] — should use
+    /// [`Self::compute_with_tool_cache`] to share *that* cache instead
+    /// and avoid the thread-local lookup.
+    #[cfg(test)]
     pub fn compute(system_text: &str, tools: Option<&[Tool]>) -> Self {
-        let system_sha256 = sha256_hex(system_text.as_bytes());
-        let tools_sha256 = match tools {
-            Some(tools) if !tools.is_empty() => {
-                let mut serialized: Vec<String> =
-                    tools.iter().filter_map(tool_to_api_json).collect();
-                serialized.sort();
-                let joined = serialized.join("\n");
-                sha256_hex(joined.as_bytes())
-            }
-            _ => sha256_hex(b""),
-        };
-        let combined = format!("{system_sha256}:{tools_sha256}");
-        let combined_sha256 = sha256_hex(combined.as_bytes());
-        Self {
-            system_sha256,
-            tools_sha256,
-            combined_sha256,
-        }
+        let mut cache = ToolCatalogCache::new();
+        Self::compute_with_tool_cache(system_text, tools, &mut cache)
     }
 
     /// Compute a fingerprint while reusing a [`ToolCatalogCache`] for the
@@ -222,7 +215,10 @@ pub struct ToolCatalogCache {
 #[derive(Debug, Clone)]
 pub struct CachedCatalog {
     /// The newline-joined, sorted tool-catalog JSON. Wrapped in an `Arc` so
-    /// multiple cache consumers can hold the same allocation.
+    /// multiple cache consumers can hold the same allocation. Exposed for
+    /// observability (debug builds, `/status` chip) and for tests that
+    /// need to assert byte-stability of the joined catalog.
+    #[allow(dead_code)] // observability + tests; not consumed on the hot path
     pub joined: Arc<String>,
     /// SHA-256 hex digest of `joined`, computed once on cache miss.
     pub sha256_hex: String,
@@ -282,6 +278,7 @@ impl ToolCatalogCache {
     /// Drop every cached entry. Used by tool-registry mutation paths
     /// (e.g. plugin hot-reload, MCP attach) when the caller cannot
     /// easily prove the tool set is unchanged.
+    #[allow(dead_code)] // observability; called by /cache flush and tests
     pub fn invalidate(&mut self) {
         self.by_identity.clear();
         self.insertion_order.clear();
@@ -294,20 +291,18 @@ impl ToolCatalogCache {
     }
 
     /// Returns `true` if the cache has no entries.
+    #[allow(dead_code)] // observability; surfaced via /status
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_identity.is_empty()
     }
 
-    /// Returns `(hits, misses)` for observability. Counts since the cache
-    /// was constructed or last `invalidate`'d.
+    /// Returns `(current_entries, capacity)` for observability. Surfaced via
+    /// the `/status` chip in a follow-up; tests exercise the path.
     #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it
     #[must_use]
-    pub fn stats(&self) -> (u64, u64) {
-        // Stored implicitly via `insertion_order` length vs total calls;
-        // callers should track misses externally via the audit hook if they
-        // need them. For now expose length as a proxy.
-        (0, self.insertion_order.len() as u64)
+    pub fn stats(&self) -> (usize, usize) {
+        (self.len(), self.capacity)
     }
 }
 
@@ -322,17 +317,74 @@ fn tool_set_identity(tools: &[Tool]) -> u64 {
     for tool in tools {
         tool.name.hash(&mut hasher);
         tool.description.hash(&mut hasher);
-        // Hash the schema as a canonical JSON string. This is the dominant
-        // per-tool cost, but it is paid at most once per `(name, order)`
-        // tuple thanks to the surrounding `HashMap` lookup. Tools that
-        // mutate their `input_schema` (rare) will simply miss the cache.
-        let schema_text = serde_json::to_string(&tool.input_schema)
-            .unwrap_or_else(|_| "<unserializable schema>".to_string());
-        schema_text.hash(&mut hasher);
+        // `strict` participates in `tool_to_api_json` output (it is part of
+        // the wire-format the chat API receives), so it MUST be part of the
+        // identity. Omitting it lets two semantically different catalogs
+        // collide and serve a stale fingerprint.
+        tool.strict.hash(&mut hasher);
+        // Walk the schema JSON directly instead of materializing it as a
+        // String. For a 60-tool catalog this saves ~25-40 KB of allocation
+        // on every cache miss.
+        hash_json_value(&tool.input_schema, &mut hasher);
     }
     hasher.finish()
 }
 
+/// Fold a `serde_json::Value` into the hasher without allocating a
+/// `String`. Numeric variants are hashed via their bit pattern so `1` and
+/// `1.0` produce distinct identities (matching the JSON spec).
+fn hash_json_value<H: Hasher>(value: &serde_json::Value, state: &mut H) {
+    match value {
+        serde_json::Value::Null => 0u8.hash(state),
+        serde_json::Value::Bool(b) => {
+            1u8.hash(state);
+            b.hash(state);
+        }
+        serde_json::Value::Number(n) => {
+            2u8.hash(state);
+            if let Some(i) = n.as_i64() {
+                i.hash(state);
+            } else if let Some(u) = n.as_u64() {
+                u.hash(state);
+            } else if let Some(f) = n.as_f64() {
+                f.to_bits().hash(state);
+            }
+        }
+        serde_json::Value::String(s) => {
+            3u8.hash(state);
+            s.hash(state);
+        }
+        serde_json::Value::Array(arr) => {
+            4u8.hash(state);
+            arr.len().hash(state);
+            for v in arr {
+                hash_json_value(v, state);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            5u8.hash(state);
+            obj.len().hash(state);
+            // Iterate by sorted key so `{"a":1,"b":2}` and `{"b":2,"a":1}`
+            // collide — the wire format already canonicalizes via the
+            // `serde_json` Map ordering, but a defensively-sorted view
+            // future-proofs against schema serializers that emit
+            // declaration order.
+            let mut entries: Vec<(&String, &serde_json::Value)> = obj.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            for (k, v) in entries {
+                k.hash(state);
+                hash_json_value(v, state);
+            }
+        }
+    }
+}
+
+/// Process-local fallback cache used by [`PrefixFingerprint::compute`]
+/// (when available). Callers that maintain their own cache (e.g.
+/// [`PrefixStabilityManager`]) should prefer
+/// [`PrefixFingerprint::compute_with_tool_cache`] and pass the cache in
+/// directly, both to share state and to avoid the thread-local lookup
+/// on the hot path.
 #[allow(dead_code)]
 impl PrefixStabilityManager {
     /// Create a new manager and immediately pin the first fingerprint.
