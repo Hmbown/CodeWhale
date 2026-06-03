@@ -262,7 +262,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         };
 
         Some(SidebarWorkSummary {
-            goal_objective: if app.paused || app.paused_cancelled {
+            goal_objective: if app.paused_quarry.is_some() || app.paused_cancelled {
                 app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
             } else {
                 app.hunt.quarry.clone()
@@ -272,7 +272,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             goal_started_at: app.hunt.started_at,
             tokens_used: app.session.total_conversation_tokens,
             checklist_completion_pct,
-            pause_indicator: if app.paused {
+            pause_indicator: if app.paused || app.paused_quarry.is_some() {
                 Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
             } else if app.paused_cancelled {
                 Some("(Cancelled)".to_string())
@@ -293,7 +293,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
 
     if let Some(cached) = app.cached_work_summary.as_ref() {
         let mut summary = cached.clone();
-        summary.goal_objective = if app.paused || app.paused_cancelled {
+        summary.goal_objective = if app.paused_quarry.is_some() || app.paused_cancelled {
             app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
         } else {
             app.hunt.quarry.clone()
@@ -302,7 +302,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
-        summary.pause_indicator = if app.paused {
+        summary.pause_indicator = if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
@@ -313,7 +313,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     }
 
     SidebarWorkSummary {
-        goal_objective: if app.paused || app.paused_cancelled {
+        goal_objective: if app.paused_quarry.is_some() || app.paused_cancelled {
             app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
         } else {
             app.hunt.quarry.clone()
@@ -323,7 +323,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
-        pause_indicator: if app.paused {
+        pause_indicator: if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
