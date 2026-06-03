@@ -113,7 +113,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     {
         apply_to_fanout(card, message);
         app.subagent_card_index.insert(agent_id, idx);
-        app.mark_history_updated();
+        app.bump_history_cell(idx);
         return;
     }
 
@@ -129,7 +129,9 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             _ => false,
         };
         if updated {
-            app.mark_history_updated();
+            // idx is already in scope from the outer
+            // `if let Some(&idx) = app.subagent_card_index.get(&agent_id)`.
+            app.bump_history_cell(idx);
         }
         return;
     }
@@ -168,13 +170,13 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
         let card = DelegateCard::new(agent_id.clone(), agent_type.clone());
         app.add_message(HistoryCell::SubAgent(SubAgentCell::Delegate(card)));
         let idx = app.history.len().saturating_sub(1);
-        app.subagent_card_index.insert(agent_id, idx);
+        app.subagent_card_index.insert(agent_id.clone(), idx);
         // Single delegate consumes the pending dispatch label so a follow-on
         // tool call doesn't accidentally inherit it.
         app.pending_subagent_dispatch = None;
+        // idx was just inserted on the line above — no need to re-query.
+        app.bump_history_cell(idx);
     }
-
-    app.mark_history_updated();
 }
 
 pub(super) fn task_mode_label(mode: AppMode) -> &'static str {

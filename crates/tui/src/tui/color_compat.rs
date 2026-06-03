@@ -43,6 +43,11 @@ pub(crate) struct ColorCompatBackend<W: Write> {
     /// Forcing the expected size prevents ratatui's internal `autoresize` from
     /// shrinking the viewport back to the stale dimension inside `draw()`.
     forced_size: Option<Size>,
+    /// Cached terminal size from `crossterm::terminal::size()`, set after
+    /// re-entering alt-screen to avoid stale buffer dimensions on Windows.
+    /// Used as the primary fallback in `size()` before falling through to
+    /// the live crossterm query.
+    terminal_size: Option<Size>,
     render_debug: Option<RenderDebugLog>,
 }
 
@@ -59,6 +64,7 @@ impl<W: Write> ColorCompatBackend<W> {
             // to a community preset.
             active_ui_theme: UiTheme::detect(),
             forced_size: None,
+            terminal_size: None,
             render_debug: RenderDebugLog::from_env(),
         }
     }
@@ -69,6 +75,10 @@ impl<W: Write> ColorCompatBackend<W> {
 
     pub(crate) fn clear_forced_size(&mut self) {
         self.forced_size = None;
+    }
+
+    pub(crate) fn set_terminal_size(&mut self, size: Size) {
+        self.terminal_size = Some(size);
     }
 
     pub(crate) fn set_palette_mode(&mut self, palette_mode: PaletteMode) {
@@ -152,10 +162,14 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
     }
 
     fn size(&self) -> io::Result<Size> {
-        match self.forced_size {
-            Some(size) => Ok(size),
-            None => self.inner.size(),
+        // forced_size takes priority: it is set during resize events to prevent
+        // ratatui's autoresize from shrinking the viewport back to a stale
+        // dimension. terminal_size is the cached real terminal size used as a
+        // fallback after alt-screen re-entry (Windows buffer width workaround).
+        if let Some(size) = self.forced_size.or(self.terminal_size) {
+            return Ok(size);
         }
+        self.inner.size()
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {
@@ -495,5 +509,35 @@ mod tests {
         assert!(body.contains("frame=1"), "{body}");
         assert!(body.contains("diff_cells=1"), "{body}");
         assert!(body.contains("sample=3:4"), "{body}");
+    }
+
+    #[test]
+    fn size_returns_terminal_size_when_set() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        backend.set_terminal_size(Size::new(120, 40));
+        assert_eq!(backend.size().unwrap(), Size::new(120, 40));
+    }
+
+    #[test]
+    fn forced_size_takes_priority_over_terminal_size() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        // forced_size is set during resize events to temporarily override the
+        // cached terminal_size — it must win to prevent viewport shrinking.
+        backend.set_terminal_size(Size::new(120, 40));
+        backend.force_size(Size::new(80, 25));
+        assert_eq!(backend.size().unwrap(), Size::new(80, 25));
+    }
+
+    #[test]
+    fn size_falls_back_to_forced_size_when_terminal_size_unset() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        backend.force_size(Size::new(80, 25));
+        assert_eq!(backend.size().unwrap(), Size::new(80, 25));
     }
 }

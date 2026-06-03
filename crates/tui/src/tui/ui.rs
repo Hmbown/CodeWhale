@@ -2161,7 +2161,7 @@ async fn run_event_loop(
                                 subagent_elapsed,
                             );
                         }
-                        if should_recapture_terminal {
+                        if should_recapture_terminal && event_broker.is_paused() {
                             resume_terminal(
                                 terminal,
                                 app.use_alt_screen,
@@ -2694,7 +2694,9 @@ async fn run_event_loop(
                 // this single draw so the buffer matches the real viewport.
                 {
                     let backend = terminal.backend_mut();
-                    backend.force_size(Size::new(final_w, final_h));
+                    let new_size = Size::new(final_w, final_h);
+                    backend.force_size(new_size);
+                    backend.set_terminal_size(new_size);
                 }
                 draw_app_frame_inner(terminal, app, true)?;
                 draws_since_last_full_repaint = 0;
@@ -7915,6 +7917,16 @@ fn resume_terminal(
         use_mouse_capture,
         use_bracketed_paste,
     );
+    // Cache the real terminal size *before* resetting the viewport, so that
+    // reset_terminal_viewport → terminal.clear() → autoresize() → backend.size()
+    // picks up the cached size instead of falling through to
+    // crossterm::terminal::size() which may return stale buffer metadata
+    // (especially on Windows after a secondary EnterAlternateScreen).
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        terminal
+            .backend_mut()
+            .set_terminal_size(Size::new(cols, rows));
+    }
     reset_terminal_viewport(terminal, sync_output_enabled)?;
     Ok(())
 }

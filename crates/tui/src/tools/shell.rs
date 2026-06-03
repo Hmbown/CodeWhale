@@ -269,7 +269,7 @@ impl WindowsJob {
             )
             .map_err(windows_io_error)?;
 
-            let process_handle = HANDLE(child.as_raw_handle() as *mut core::ffi::c_void);
+            let process_handle = HANDLE(child.as_raw_handle());
             AssignProcessToJobObject(job.handle, process_handle).map_err(windows_io_error)?;
         }
 
