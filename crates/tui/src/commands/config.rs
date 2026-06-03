@@ -1364,7 +1364,7 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// Logout - clear API key and return to onboarding
+/// Logout - clear saved config API keys and return to onboarding
 pub fn logout(app: &mut App) -> CommandResult {
     match clear_api_key() {
         Ok(()) => {
@@ -1372,7 +1372,12 @@ pub fn logout(app: &mut App) -> CommandResult {
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message("Logged out. Enter a new API key to continue.")
+            CommandResult::message(
+                "Cleared saved config API keys and returned to setup.\n\
+                 `/logout` is not provider-scoped. To replace one provider key, run \
+                 `codewhale auth clear --provider <id>` then \
+                 `codewhale auth set --provider <id>`.",
+            )
         }
         Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
     }
@@ -2183,7 +2188,10 @@ mod tests {
 
         let mut app = create_test_app();
         let result = logout(&mut app);
-        assert!(result.message.is_some());
+        let message = result.message.expect("logout message");
+        assert!(message.contains("Cleared saved config API keys"));
+        assert!(message.contains("not provider-scoped"));
+        assert!(message.contains("codewhale auth clear --provider <id>"));
         assert_eq!(app.onboarding, OnboardingState::ApiKey);
         assert!(app.onboarding_needs_api_key);
         assert!(app.api_key_input.is_empty());

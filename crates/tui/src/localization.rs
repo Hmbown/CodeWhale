@@ -1134,7 +1134,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdJobsDescription => "Inspect and control background commands",
         MessageId::CmdLinksDescription => "Show DeepSeek dashboard and docs links",
         MessageId::CmdLoadDescription => "Load session from file",
-        MessageId::CmdLogoutDescription => "Clear API key and return to setup",
+        MessageId::CmdLogoutDescription => "Clear saved config API keys and return to setup",
         MessageId::CmdMcpDescription => "Open or manage MCP servers",
         MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
         MessageId::CmdModeDescription => {
@@ -1606,7 +1606,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Hiển thị các liên kết đến bảng điều khiển và tài liệu của DeepSeek"
         }
         MessageId::CmdLoadDescription => "Tải phiên làm việc từ tệp",
-        MessageId::CmdLogoutDescription => "Xóa khóa API và quay lại bước thiết lập",
+        MessageId::CmdLogoutDescription => {
+            "Xóa các khóa API đã lưu trong config và quay lại bước thiết lập"
+        }
         MessageId::CmdMcpDescription => "Mở hoặc quản lý các máy chủ MCP",
         MessageId::CmdMemoryDescription => "Kiểm tra hoặc quản lý tệp bộ nhớ người dùng liên tục",
         MessageId::CmdModeDescription => {
@@ -2155,7 +2157,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdJobsDescription => "バックグラウンドのシェルジョブを確認・制御",
         MessageId::CmdLinksDescription => "DeepSeek ダッシュボードとドキュメントへのリンクを表示",
         MessageId::CmdLoadDescription => "ファイルからセッションを読み込み",
-        MessageId::CmdLogoutDescription => "API キーを消去してセットアップに戻る",
+        MessageId::CmdLogoutDescription => "保存済みの config API キーを消去してセットアップに戻る",
         MessageId::CmdMcpDescription => "MCP サーバを開く・管理する",
         MessageId::CmdMemoryDescription => "永続ユーザーメモリファイルを確認・管理",
         MessageId::CmdModeDescription => {
@@ -2601,7 +2603,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdJobsDescription => "查看并管理后台 shell 作业",
         MessageId::CmdLinksDescription => "显示 DeepSeek 控制台与文档链接",
         MessageId::CmdLoadDescription => "从文件加载会话",
-        MessageId::CmdLogoutDescription => "清除 API 密钥并返回设置",
+        MessageId::CmdLogoutDescription => "清除已保存的 config API 密钥并返回设置",
         MessageId::CmdMcpDescription => "打开或管理 MCP 服务器",
         MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
         MessageId::CmdModeDescription => "切换运行模式或打开选择器：/mode [agent|plan|yolo|1|2|3]",
@@ -3019,7 +3021,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdJobsDescription => "Inspecionar e controlar jobs de shell em segundo plano",
         MessageId::CmdLinksDescription => "Exibir links do painel e da documentação do DeepSeek",
         MessageId::CmdLoadDescription => "Carregar a sessão de um arquivo",
-        MessageId::CmdLogoutDescription => "Limpar a chave de API e voltar à configuração",
+        MessageId::CmdLogoutDescription => {
+            "Limpar as chaves de API salvas no config e voltar à configuração"
+        }
         MessageId::CmdMcpDescription => "Abrir ou gerenciar servidores MCP",
         MessageId::CmdMemoryDescription => {
             "Inspecionar ou gerenciar o arquivo persistente de memória do usuário"
@@ -3507,7 +3511,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdLinksDescription => "Mostrar enlaces del panel y documentación de DeepSeek",
         MessageId::CmdLoadDescription => "Cargar la sesión desde un archivo",
-        MessageId::CmdLogoutDescription => "Limpiar la clave de API y volver a la configuración",
+        MessageId::CmdLogoutDescription => {
+            "Limpiar las claves de API guardadas en config y volver a la configuración"
+        }
         MessageId::CmdMcpDescription => "Abrir o gestionar servidores MCP",
         MessageId::CmdMemoryDescription => {
             "Inspeccionar o gestionar el archivo persistente de memoria del usuario"
