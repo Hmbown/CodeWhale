@@ -6472,13 +6472,8 @@ async fn submit_or_steer_message(
     // "continue" or "resume", restore the goal BEFORE deciding disposition.
     // This catches messages sent while is_loading=true (which go through
     // the Steer path and bypass dispatch_user_message entirely).
-    // DEBUG: force output to stderr so we can see it in tui-stderr-*.log
-    eprintln!("[pausable debug] submit_or_steer: paused_quarry.is_some()={}", app.paused_quarry.is_some());
     if app.paused_quarry.is_some() {
-        eprintln!("[pausable debug] submit_or_steer: message.display={:?}", message.display);
-        tracing::debug!(target: "pausable", display=?message.display, "submit_or_steer: paused_quarry present, checking");
         let trimmed = message.display.trim().to_lowercase();
-        eprintln!("[pausable debug] submit_or_steer: trimmed={:?}", trimmed);
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
