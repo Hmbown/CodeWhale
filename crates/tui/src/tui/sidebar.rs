@@ -3261,4 +3261,105 @@ mod tests {
         assert_eq!(summary.goal_objective.as_deref(), Some("new task"));
         assert!(summary.pause_indicator.is_none(), "new command must have no pause indicator, got: {:?}", summary.pause_indicator);
     }
+
+    // ── Full lifecycle workflow tests ───────────────────────────────
+
+    #[test]
+    fn lifecycle_pause_continue_complete() {
+        // 1. Start pausable command
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Scan nested git repos".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+        app.pausable = true;
+        app.is_loading = true;
+
+        // → WorkBench should show "▶" play icon
+        let summary = sidebar_work_summary(&mut app);
+        assert!(!summary.goal_completed, "command is still running");
+        assert!(summary.pause_indicator.is_none(), "not paused yet");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "goal must show original description");
+
+        // 2. User presses ESC — pause
+        app.paused_quarry = app.hunt.quarry.clone();
+        app.hunt.quarry = None;
+        app.paused = true;
+        app.pausable = true;
+        app.is_loading = false; // past tool drain
+
+        // → WorkBench should show "⏸ (Paused)"
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
+            "must show paused after ESC");
+        // quarry is cleared — no active goal shown in system prompt
+        assert!(summary.goal_objective.is_none(),
+            "goal objective must be None when paused so model is not prompted to continue the scan");
+
+        // 3. User types "continue" — restore quarry, unpause
+        app.hunt.quarry = app.paused_quarry.take();
+        app.paused = false;
+        app.pausable = false;
+        app.is_loading = true;
+
+        // → WorkBench should show "▶" play icon with original goal
+        let summary = sidebar_work_summary(&mut app);
+        assert!(!summary.goal_completed, "continue -> still running");
+        assert!(summary.pause_indicator.is_none(), "pause indicator must be gone after resume");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "original goal must be restored on continue");
+
+        // 4. Command completes successfully
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+        app.hunt.quarry = None;
+        app.is_loading = false;
+
+        // → WorkBench should show "✓" green checkmark
+        let summary = sidebar_work_summary(&mut app);
+        assert!(summary.goal_completed, "must be marked completed");
+        assert!(summary.pause_indicator.is_none(), "no pause indicator when completed");
+        assert!(app.hunt.quarry.is_none(),
+            "quarry cleared so model is not prompted to continue");
+    }
+
+    #[test]
+    fn lifecycle_pause_cancel_new_command() {
+        // 1. Start pausable command
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Scan nested git repos".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+        app.pausable = true;
+
+        // 2. User presses ESC — pause
+        app.paused_quarry = app.hunt.quarry.clone();
+        app.hunt.quarry = None;
+        app.paused = true;
+
+        assert!(app.paused, "must be paused");
+        assert!(app.paused_quarry.is_some(), "original goal must be saved");
+        assert!(app.hunt.quarry.is_none(), "active goal must be cleared");
+
+        // 3. User presses ESC again — cancel (simulate CancelRequest handler)
+        app.paused = false;
+        app.pausable = false;
+        app.paused_cancelled = true;
+        app.hunt.quarry = None;
+        app.paused_quarry = None;
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+
+        // → WorkBench should show "✘ (Cancelled)"
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Cancelled)"),
+            "must show cancelled indicator");
+        assert!(app.paused_quarry.is_none(), "paused_quarry cleared on cancel");
+
+        // 4. User starts a fresh slash command
+        app.paused_cancelled = false;
+        app.hunt.quarry = Some("Deploy to staging".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert!(summary.pause_indicator.is_none(), "new command must have no pause indicator");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Deploy to staging"),
+            "new command's goal must be shown");
+    }
 }
