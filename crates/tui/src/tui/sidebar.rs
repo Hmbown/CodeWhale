@@ -3169,4 +3169,29 @@ mod tests {
             "guard must discard late Paused event when cancelled"
         );
     }
+
+    #[test]
+    fn new_slash_command_after_cancel_clears_all_pause_state() {
+        // Simulate the full lifecycle:
+        // 1. Command running → cancel (paused_cancelled=true)
+        // 2. User types /git-scan → try_dispatch_user_command clears all state
+        // 3. New command should have NO trace of old pause state
+        let mut app = create_test_app();
+        app.paused_cancelled = true;
+        app.paused = false;
+        app.pausable = false;
+        app.active_snapshot = Some("stash".to_string());
+        app.hunt.quarry = Some("old scan".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+
+        // Simulate try_dispatch_user_command clearing:
+        app.paused_cancelled = false;
+        app.active_snapshot = None;
+        app.hunt.quarry = Some("new task".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.goal_objective.as_deref(), Some("new task"));
+        assert!(summary.pause_indicator.is_none(), "new command must have no pause indicator, got: {:?}", summary.pause_indicator);
+    }
 }
