@@ -206,6 +206,13 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
             app.hunt.verdict = HuntVerdict::Hunting;
             app.hunt.token_budget = None;
             app.active_allowed_tools = None;
+            // Clear todos and plan state from the previous command.
+            if let Ok(mut todos) = app.todos.try_lock() {
+                todos.clear();
+            }
+            if let Ok(mut plan) = app.plan_state.try_lock() {
+                *plan = crate::tools::plan::PlanState::default();
+            }
             for (key, value) in &metadata {
                 match key.as_str() {
                     "description" => {
