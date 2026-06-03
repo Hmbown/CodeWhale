@@ -261,6 +261,14 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             )
         };
 
+        // Debug: log the state used for pause indicator
+        tracing::debug!(target: "pausable",
+            paused = app.paused,
+            paused_quarry = ?app.paused_quarry,
+            is_loading = app.is_loading,
+            paused_cancelled = app.paused_cancelled,
+            "sidebar_work_summary pause state"
+        );
         Some(SidebarWorkSummary {
             goal_objective: if app.paused_quarry.is_some() || app.paused_cancelled {
                 app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
