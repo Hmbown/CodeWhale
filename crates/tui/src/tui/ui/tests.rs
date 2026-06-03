@@ -2286,6 +2286,54 @@ async fn provider_switch_model_override_updates_target_provider_model_slot() {
     );
 }
 
+#[test]
+fn logout_clears_in_memory_mimo_and_other_provider_keys_without_wiping_settings() {
+    let mut config = Config {
+        api_key: Some("deepseek-key".to_string()),
+        providers: Some(ProvidersConfig {
+            xiaomi_mimo: ProviderConfig {
+                api_key: Some("mimo-key".to_string()),
+                model: Some("mimo-v2.5-pro".to_string()),
+                base_url: Some("https://token-plan-sgp.xiaomimimo.com/v1".to_string()),
+                ..Default::default()
+            },
+            moonshot: ProviderConfig {
+                api_key: Some("moonshot-key".to_string()),
+                auth_mode: Some("kimi_oauth".to_string()),
+                ..Default::default()
+            },
+            volcengine: ProviderConfig {
+                api_key: Some("volcengine-key".to_string()),
+                model: Some("deepseek-v4-pro".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    clear_in_memory_api_keys(&mut config);
+
+    assert!(config.api_key.is_none());
+    let providers = config.providers.expect("provider config");
+    assert!(providers.xiaomi_mimo.api_key.is_none());
+    assert!(providers.moonshot.api_key.is_none());
+    assert!(providers.volcengine.api_key.is_none());
+    assert_eq!(
+        providers.xiaomi_mimo.model.as_deref(),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(
+        providers.xiaomi_mimo.base_url.as_deref(),
+        Some("https://token-plan-sgp.xiaomimimo.com/v1")
+    );
+    assert_eq!(providers.moonshot.auth_mode.as_deref(), Some("kimi_oauth"));
+    assert_eq!(
+        providers.volcengine.model.as_deref(),
+        Some("deepseek-v4-pro")
+    );
+}
+
 #[tokio::test]
 async fn provider_switch_to_openrouter_canonicalizes_deepseek_default_model() {
     let _home = SettingsHomeGuard::new();

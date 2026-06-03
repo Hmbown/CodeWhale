@@ -6188,20 +6188,7 @@ async fn execute_command_input(
     // (#343). The on-disk side is handled by clear_api_key() inside
     // commands::config::logout.
     if input.trim().eq_ignore_ascii_case("/logout") {
-        config.api_key = None;
-        if let Some(providers) = config.providers.as_mut() {
-            providers.deepseek.api_key = None;
-            providers.deepseek_cn.api_key = None;
-            providers.nvidia_nim.api_key = None;
-            providers.openai.api_key = None;
-            providers.atlascloud.api_key = None;
-            providers.openrouter.api_key = None;
-            providers.novita.api_key = None;
-            providers.fireworks.api_key = None;
-            providers.sglang.api_key = None;
-            providers.vllm.api_key = None;
-            providers.ollama.api_key = None;
-        }
+        clear_in_memory_api_keys(config);
         app.api_key_env_only = crate::config::active_provider_uses_env_only_api_key(config);
     }
     apply_command_result(
@@ -6214,6 +6201,55 @@ async fn execute_command_input(
         result,
     )
     .await
+}
+
+fn clear_in_memory_api_keys(config: &mut Config) {
+    config.api_key = None;
+    if config.providers.is_none() {
+        return;
+    }
+    config
+        .provider_config_for_mut(ApiProvider::Deepseek)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::DeepseekCN)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::NvidiaNim)
+        .api_key = None;
+    config.provider_config_for_mut(ApiProvider::Openai).api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Atlascloud)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::WanjieArk)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Volcengine)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Openrouter)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::XiaomiMimo)
+        .api_key = None;
+    config.provider_config_for_mut(ApiProvider::Novita).api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Fireworks)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Siliconflow)
+        .api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::SiliconflowCn)
+        .api_key = None;
+    config.provider_config_for_mut(ApiProvider::Arcee).api_key = None;
+    config
+        .provider_config_for_mut(ApiProvider::Moonshot)
+        .api_key = None;
+    config.provider_config_for_mut(ApiProvider::Sglang).api_key = None;
+    config.provider_config_for_mut(ApiProvider::Vllm).api_key = None;
+    config.provider_config_for_mut(ApiProvider::Ollama).api_key = None;
 }
 
 async fn steer_user_message(
