@@ -262,7 +262,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         };
 
         Some(SidebarWorkSummary {
-            goal_objective: app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone()),
+            goal_objective: if app.paused || app.paused_cancelled {
+                app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+            } else {
+                app.hunt.quarry.clone()
+            },
             goal_token_budget: app.hunt.token_budget,
             goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
             goal_started_at: app.hunt.started_at,
@@ -289,7 +293,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
 
     if let Some(cached) = app.cached_work_summary.as_ref() {
         let mut summary = cached.clone();
-        summary.goal_objective = app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone());
+        summary.goal_objective = if app.paused || app.paused_cancelled {
+            app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+        } else {
+            app.hunt.quarry.clone()
+        };
         summary.goal_token_budget = app.hunt.token_budget;
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
@@ -305,7 +313,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     }
 
     SidebarWorkSummary {
-        goal_objective: app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone()),
+        goal_objective: if app.paused || app.paused_cancelled {
+            app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+        } else {
+            app.hunt.quarry.clone()
+        },
         goal_token_budget: app.hunt.token_budget,
         goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
         goal_started_at: app.hunt.started_at,
