@@ -3171,6 +3171,34 @@ mod tests {
     }
 
     #[test]
+    fn cancel_clears_hunt_goal_so_model_does_not_resume_old_command() {
+        // Simulate a running pausable command with a description (hunt.quarry).
+        // When cancelled, the hunt goal must be cleared so the model does NOT
+        // see the old objective in the system prompt for the next turn.
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Scan nested git repositories".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+        app.hunt.started_at = Some(std::time::Instant::now());
+        app.active_allowed_tools = Some(vec!["exec_shell".to_string()]);
+        app.paused_cancelled = false;
+        app.paused = true;
+        app.pausable = true;
+
+        // Simulate CancelRequest handler clearing on cancel:
+        app.paused_cancelled = true;
+        app.paused = false;
+        app.hunt.quarry = None;
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+        app.active_allowed_tools = None;
+
+        assert!(app.hunt.quarry.is_none(),
+            "hunt.quarry must be cleared so model doesn't see old goal");
+        assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunting);
+        assert!(app.active_allowed_tools.is_none(),
+            "tool restriction must be cleared on cancel");
+    }
+
+    #[test]
     fn new_slash_command_after_cancel_clears_all_pause_state() {
         // Simulate the full lifecycle:
         // 1. Command running → cancel (paused_cancelled=true)

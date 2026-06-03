@@ -3483,6 +3483,12 @@ async fn run_event_loop(
                                 // the cancellation status message.
                                 app.paused_cancelled = true;
                                 app.paused = false;
+                                // Clear the hunt goal so the model doesn't
+                                // see the old command's objective in the
+                                // system prompt for the next conversation.
+                                app.hunt.quarry = None;
+                                app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+                                app.active_allowed_tools = None;
                                 if let Ok(mut slot) = engine_handle.shared_paused.lock() {
                                     *slot = false;
                                 }
@@ -4890,6 +4896,10 @@ async fn dispatch_user_message(
                 *slot = false;
             }
             engine_handle.cancel();
+            // Clear the hunt goal so the model doesn't carry over the
+            // cancelled command's objective into the next turn.
+            app.hunt.quarry = None;
+            app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
             app.is_loading = false;
             app.status_message = Some("Request was Cancelled".to_string());
             return Ok(());
