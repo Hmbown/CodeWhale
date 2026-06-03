@@ -1719,10 +1719,11 @@ async fn run_event_loop(
                             }
                             crate::core::events::TurnOutcomeStatus::Failed => "failed".to_string(),
                         });
-                        // Turn ended in any terminal state — clear pausable lifecycle.
+                        // Keep pause state visible after the turn ends so the
+                        // WorkBench continues to show the pause indicator.
+                        // Clear `pausable` so a fresh user message starts clean,
+                        // but keep `paused`/`paused_cancelled` for the sidebar.
                         app.pausable = false;
-                        app.paused = false;
-                        app.paused_cancelled = false;
 
                         if matches!(
                             status,
@@ -3482,7 +3483,7 @@ async fn run_event_loop(
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
                                 app.paused_cancelled = false;
-                                app.status_message = Some("Command paused. Press Esc again to cancel, or type 'continue'/'resume' to resume.".to_string());
+                                app.status_message = Some("Pausing…".to_string());
                             }
                         }
                         EscapeAction::DiscardQueuedDraft => {
@@ -4838,7 +4839,7 @@ async fn dispatch_user_message(
         if trimmed == "continue" || trimmed == "resume" {
             app.paused = false;
             app.paused_at = None;
-            app.status_message = Some("Command resumed".to_string());
+            app.status_message = Some("Resumed".to_string());
             app.is_loading = false;
             engine_handle.set_paused(false);
             return Ok(());
