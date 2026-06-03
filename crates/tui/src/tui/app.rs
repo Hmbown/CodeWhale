@@ -1184,6 +1184,8 @@ pub struct App {
     pub paused_cancelled: bool,
     /// Snapshot ID for rollback of a pausable command.
     pub active_snapshot: Option<String>,
+    /// Saved hunt.quarry from before pause — restored on "continue".
+    pub paused_quarry: Option<String>,
     pub history: Vec<HistoryCell>,
     pub history_version: u64,
     /// Per-cell revision counter, kept in lockstep with `history`.
@@ -2000,6 +2002,7 @@ impl App {
             pausable: false,
             paused_cancelled: false,
             active_snapshot: None,
+            paused_quarry: None,
             history: Vec::new(),
             history_version: 0,
             history_revisions: Vec::new(),

@@ -3510,18 +3510,20 @@ async fn run_event_loop(
                             if app.paused {
                                 // Already paused — resume
                                 tracing::debug!(target: "pausable", "PauseCommand — resuming");
+                                app.hunt.quarry = app.paused_quarry.take();
                                 engine_handle.set_paused(false);
                                 app.paused = false;
                                 app.paused_at = None;
-                                app.status_message = Some("Request was Resumed".to_string());
                             } else {
                                 // First ESC — pause
                                 tracing::debug!(target: "pausable", "PauseCommand — pausing");
+                                // Save the current goal so we can restore it on resume.
+                                app.paused_quarry = app.hunt.quarry.clone();
+                                app.hunt.quarry = None;
                                 engine_handle.set_paused(true);
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
                                 app.paused_cancelled = false;
-                                app.status_message = Some("Request is Pausing".to_string());
                             }
                         }
                         EscapeAction::DiscardQueuedDraft => {
@@ -4870,43 +4872,24 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused and user types:
-    //   "continue"/"resume" → unpause + let message through (model sees it)
-    //   anything else → cancel the old turn (message consumed, user retypes)
+    // When paused, let all messages through — the user can ask questions or
+    // give instructions while the old command is on hold.
+    // "continue"/"resume" restores the paused goal so the model continues it.
+    // Any other message goes through with no active goal (hunt.quarry is None).
     if app.paused {
         let trimmed = message.display.trim().to_lowercase();
         if trimmed == "continue" || trimmed == "resume" {
-            // Unpause and let the message flow through as a normal user message.
-            // The model sees "continue" in context of the paused command and
-            // resumes the scan naturally.
-            app.paused = false;
-            app.paused_at = None;
-            app.paused_cancelled = false;
-            app.pausable = false;
-            app.active_snapshot = None;
-            engine_handle.set_paused(false);
-            app.status_message = None;
-            // Fall through — message goes to engine as a normal user message.
-        } else {
-            // Any other message while paused: cancel the old turn, consume.
-            app.paused = false;
-            app.paused_at = None;
-            app.paused_cancelled = false;
-            app.pausable = false;
-            app.active_snapshot = None;
-            // Clear engine flag directly (not via set_paused which sends Op)
-            if let Ok(mut slot) = engine_handle.shared_paused.lock() {
-                *slot = false;
-            }
-            engine_handle.cancel();
-            // Clear the hunt goal so the model doesn't carry over the
-            // cancelled command's objective into the next turn.
-            app.hunt.quarry = None;
-            app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
-            app.is_loading = false;
-            app.status_message = Some("Request was Cancelled".to_string());
-            return Ok(());
+            // Restore the saved goal so the model sees it and continues.
+            app.hunt.quarry = app.paused_quarry.take();
         }
+        app.paused = false;
+        app.paused_at = None;
+        app.paused_cancelled = false;
+        app.pausable = false;
+        app.active_snapshot = None;
+        engine_handle.set_paused(false);
+        app.status_message = None;
+        // Fall through — message goes to engine as a normal user message.
     }
 
     // Safety sync: if the app-level pause was cleared (e.g. by a new slash
