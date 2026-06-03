@@ -887,46 +887,44 @@ async fn create_session_from_thread(
         .runtime_threads
         .get_thread_detail(&req.thread_id)
         .await
-        .map_err(|e| ApiError::not_found(format!("Thread {} not found: {}", req.thread_id, e)))?;
+        .map_err(|e| {
+            // Distinguish between "not found" and internal errors
+            let msg = e.to_string();
+            if msg.contains("not found") || msg.contains("no rows") {
+                ApiError::not_found(format!("Thread {} not found", req.thread_id))
+            } else {
+                ApiError::internal(format!("Failed to get thread {}: {}", req.thread_id, e))
+            }
+        })?;
 
     let thread = detail.thread;
 
     // Extract messages from items (UserMessage and AgentMessage items)
+    // Iterate directly over items to preserve all messages, including
+    // multiple user/agent messages within a single turn (e.g. steered turns)
     let mut messages: Vec<Message> = Vec::new();
 
-    // Group items by turn, then extract user/agent messages
-    for turn in &detail.turns {
-        let turn_items: Vec<_> = detail
-            .items
-            .iter()
-            .filter(|item| item.turn_id == turn.id)
-            .collect();
-
-        // Find user message item
-        let user_item = turn_items.iter().find(|item| item.kind == TurnItemKind::UserMessage);
-        // Find agent message item
-        let agent_item = turn_items.iter().find(|item| item.kind == TurnItemKind::AgentMessage);
-
-        // Create user message if present
-        if let Some(user) = user_item {
-            let text = user.detail.clone().unwrap_or_else(|| user.summary.clone());
-            if !text.trim().is_empty() {
-                messages.push(Message {
-                    role: "user".to_string(),
-                    content: vec![ContentBlock::Text { text, cache_control: None }],
-                });
+    for item in &detail.items {
+        match item.kind {
+            TurnItemKind::UserMessage => {
+                let text = item.detail.clone().unwrap_or_else(|| item.summary.clone());
+                if !text.trim().is_empty() {
+                    messages.push(Message {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text { text, cache_control: None }],
+                    });
+                }
             }
-        }
-
-        // Create assistant message if present
-        if let Some(agent) = agent_item {
-            let text = agent.detail.clone().unwrap_or_else(|| agent.summary.clone());
-            if !text.trim().is_empty() {
-                messages.push(Message {
-                    role: "assistant".to_string(),
-                    content: vec![ContentBlock::Text { text, cache_control: None }],
-                });
+            TurnItemKind::AgentMessage => {
+                let text = item.detail.clone().unwrap_or_else(|| item.summary.clone());
+                if !text.trim().is_empty() {
+                    messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: vec![ContentBlock::Text { text, cache_control: None }],
+                    });
+                }
             }
+            _ => {}
         }
     }
 
@@ -950,14 +948,7 @@ async fn create_session_from_thread(
                     .find(|m| m.role == "user")
                     .and_then(|m| {
                         m.content.iter().find_map(|block| match block {
-                            ContentBlock::Text { text, .. } => {
-                                let truncated = if text.len() > 50 {
-                                    text.chars().take(50).collect::<String>() + "..."
-                                } else {
-                                    text.clone()
-                                };
-                                Some(truncated)
-                            }
+                            ContentBlock::Text { text, .. } => Some(truncate_text(text, 50)),
                             _ => None,
                         })
                     })
