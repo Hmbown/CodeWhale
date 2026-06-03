@@ -4895,6 +4895,17 @@ async fn dispatch_user_message(
         } else {
             // Non-continue message: cancel old turn, clear quarry, but
             // keep paused_quarry so the user can still resume later.
+            // Prepend a cancellation notice to the message so the model
+            // sees it in the conversation and does NOT continue the old
+            // paused command unprompted.
+            let paused_name = app.paused_quarry.as_deref()
+                .map(|q| q.split(|c: char| c == '\n' || c == '\r')
+                    .next().unwrap_or(q))
+                .unwrap_or("the previous command");
+            let notice = format!(
+                "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"
+            );
+            message.display.push_str(&notice);
             engine_handle.cancel();
             app.hunt.quarry = None;
             // paused_quarry is preserved here for later "continue"/"resume"
@@ -4907,6 +4918,21 @@ async fn dispatch_user_message(
         engine_handle.set_paused(false);
         app.status_message = None;
         // Fall through — message goes to engine as a normal user message.
+    }
+
+    // Even when not paused: if there's a paused_quarry (from a previous
+    // pause that was interrupted by a non-continue message), detect
+    // "continue"/"resume" and restore the saved goal. This lets the user
+    // type "how are you?" then later "resume the paused command" and still
+    // have the quarry restored.
+    if app.paused_quarry.is_some() {
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue" || trimmed == "resume"
+            || trimmed.starts_with("continue ")
+            || trimmed.starts_with("resume ")
+        {
+            app.hunt.quarry = app.paused_quarry.take();
+        }
     }
 
     // Safety sync: if the app-level pause was cleared (e.g. by a new slash
