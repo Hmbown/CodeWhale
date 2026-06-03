@@ -661,8 +661,10 @@ impl Engine {
 
         // The replan path needs the *full* messages, not summaries.
         // `scan_canonical_inputs` already located the indices in a single
-        // reverse pass; clone from the live `messages` slice once.
-        let scan = scan_canonical_inputs(&self.session.messages);
+        // reverse pass; clone from the live `messages` slice once. We
+        // pass `true` because the replan path consumes
+        // `latest_verified_user_idx` below.
+        let scan = scan_canonical_inputs(&self.session.messages, true);
         let latest_user = scan
             .latest_user_text_idx
             .and_then(|idx| self.session.messages.get(idx).cloned());
@@ -752,8 +754,11 @@ impl Engine {
         // message index. Previously this function did two reverse
         // `.iter().rev().find_map()` walks and a third for facts; the
         // dedicated scan below replaces all three with one pass that
-        // also early-exits once every collector is satisfied.
-        let scan = scan_canonical_inputs(&self.session.messages);
+        // also early-exits once every collector is satisfied. We pass
+        // `false` here because build_canonical_state does not consume
+        // `latest_verified_user_idx`, so we don't need the scan to keep
+        // looking for it.
+        let scan = scan_canonical_inputs(&self.session.messages, false);
         let goal = scan
             .goal
             .unwrap_or_else(|| "Continue current task from compact state".to_string());
@@ -969,11 +974,16 @@ struct CanonicalStateScan {
 }
 
 impl CanonicalStateScan {
-    /// `true` once every collector is satisfied. The single-pass
-    /// caller can use this to break out of the reverse iteration.
-    fn is_complete(&self) -> bool {
+    /// `true` once every collector the caller actually needs is satisfied.
+    ///
+    /// `find_verified` controls whether `latest_verified_user_idx` is part
+    /// of the early-exit gate. The build_canonical_state path does not
+    /// consume that field, so passing `false` lets the scan stop as soon
+    /// as the goal and `CANONICAL_SCAN_MAX_FACTS` facts are found — a
+    /// huge win on long histories with no verification replay.
+    fn is_complete(&self, find_verified: bool) -> bool {
         self.goal.is_some()
-            && self.latest_verified_user_idx.is_some()
+            && (!find_verified || self.latest_verified_user_idx.is_some())
             && self.facts_collected >= CANONICAL_SCAN_MAX_FACTS
     }
 }
@@ -982,20 +992,25 @@ impl CanonicalStateScan {
 /// state and re-plan paths need. Replaces the previous pattern of three
 /// independent reverse scans: one for the goal, one for confirmed facts,
 /// and one for the latest verified user message.
-fn scan_canonical_inputs(messages: &[Message]) -> CanonicalStateScan {
+///
+/// `find_verified` controls whether the scan bothers locating the
+/// latest verified user message. Callers that don't need it (e.g.
+/// `build_canonical_state`) should pass `false` so the early-exit
+/// condition can fire as soon as the goal + facts are gathered.
+fn scan_canonical_inputs(messages: &[Message], find_verified: bool) -> CanonicalStateScan {
     let mut scan = CanonicalStateScan::default();
     for (idx, msg) in messages.iter().enumerate().rev() {
         if msg.role == "user" {
-            if scan.goal.is_none() {
-                if let Some(text) = msg.content.iter().find_map(|b| match b {
+            if scan.goal.is_none()
+                && let Some(text) = msg.content.iter().find_map(|b| match b {
                     ContentBlock::Text { text, .. } => Some(text.as_str()),
                     _ => None,
-                }) {
-                    scan.goal = Some(summarize_text(text, 220));
-                    scan.latest_user_text_idx = Some(idx);
-                }
+                })
+            {
+                scan.goal = Some(summarize_text(text, 220));
+                scan.latest_user_text_idx = Some(idx);
             }
-            if scan.latest_verified_user_idx.is_none() {
+            if find_verified && scan.latest_verified_user_idx.is_none() {
                 let verified = msg.content.iter().any(|b| match b {
                     ContentBlock::ToolResult { content, .. } => {
                         content.contains("[verification replay]")
@@ -1020,7 +1035,7 @@ fn scan_canonical_inputs(messages: &[Message]) -> CanonicalStateScan {
                 }
             }
         }
-        if scan.is_complete() {
+        if scan.is_complete(find_verified) {
             break;
         }
     }
@@ -1045,15 +1060,18 @@ mod canonical_scan_tests {
     fn user_with_verified_replay(text: &str) -> Message {
         Message {
             role: "user".to_string(),
-            content: vec![ContentBlock::Text {
-                text: text.to_string(),
-                cache_control: None,
-            }, ContentBlock::ToolResult {
-                tool_use_id: "x".to_string(),
-                content: "[verification replay] pass=true".to_string(),
-                is_error: None,
-                content_blocks: None,
-            }],
+            content: vec![
+                ContentBlock::Text {
+                    text: text.to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "x".to_string(),
+                    content: "[verification replay] pass=true".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                },
+            ],
         }
     }
 
@@ -1078,10 +1096,13 @@ mod canonical_scan_tests {
             tool_result_msg("b"),
             user_text_msg("third"),
         ];
-        let scan = scan_canonical_inputs(&messages);
+        let scan = scan_canonical_inputs(&messages, false);
         // Goal should be the most recent user text.
         let goal = scan.goal.expect("goal");
-        assert!(goal.contains("third"), "expected the most recent, got {goal}");
+        assert!(
+            goal.contains("third"),
+            "expected the most recent, got {goal}"
+        );
         assert_eq!(scan.latest_user_text_idx, Some(4));
     }
 
@@ -1094,7 +1115,7 @@ mod canonical_scan_tests {
             tool_result_msg("fact-D"),
             tool_result_msg("fact-E"),
         ];
-        let scan = scan_canonical_inputs(&messages);
+        let scan = scan_canonical_inputs(&messages, false);
         assert_eq!(scan.confirmed_facts.len(), 4);
         // The four most recent (newest first) are E, D, C, B.
         assert!(scan.confirmed_facts[0].contains("fact-E"));
@@ -1110,7 +1131,7 @@ mod canonical_scan_tests {
             tool_result_msg("Error: bad"),
             tool_result_msg("good-B"),
         ];
-        let scan = scan_canonical_inputs(&messages);
+        let scan = scan_canonical_inputs(&messages, false);
         assert_eq!(scan.confirmed_facts.len(), 2);
         assert!(scan.confirmed_facts[0].contains("good-B"));
         assert!(scan.confirmed_facts[1].contains("good-A"));
@@ -1123,7 +1144,7 @@ mod canonical_scan_tests {
             user_with_verified_replay("verified"),
             user_text_msg("third"),
         ];
-        let scan = scan_canonical_inputs(&messages);
+        let scan = scan_canonical_inputs(&messages, true);
         // The verified marker is on the *middle* message, not the most
         // recent. The scan should report its actual position.
         assert_eq!(scan.latest_verified_user_idx, Some(1));
@@ -1133,7 +1154,7 @@ mod canonical_scan_tests {
 
     #[test]
     fn scan_handles_empty_input() {
-        let scan = scan_canonical_inputs(&[]);
+        let scan = scan_canonical_inputs(&[], false);
         assert!(scan.goal.is_none());
         assert!(scan.latest_verified_user_idx.is_none());
         assert!(scan.latest_user_text_idx.is_none());
@@ -1145,13 +1166,15 @@ mod canonical_scan_tests {
         // 1000 tool results — the scan should stop walking once the
         // first 4 facts and a goal are found. We can't directly assert
         // "didn't visit every element" without instrumentation, but the
-        // call must return promptly with the right slice.
+        // call must return promptly with the right slice. We pass
+        // `find_verified=false` so the scan does not have to keep
+        // walking looking for a verified user message that isn't there.
         let mut messages: Vec<Message> = (0..1000)
             .map(|i| tool_result_msg(&format!("fact-{i}")))
             .collect();
         // Most recent user message comes last.
         messages.push(user_text_msg("goal"));
-        let scan = scan_canonical_inputs(&messages);
+        let scan = scan_canonical_inputs(&messages, false);
         assert!(scan.goal.as_deref().unwrap_or("").contains("goal"));
         assert_eq!(scan.confirmed_facts.len(), 4);
     }
