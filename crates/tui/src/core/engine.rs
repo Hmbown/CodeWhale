@@ -1086,7 +1086,7 @@ impl Engine {
                         Err(poisoned) => *poisoned.into_inner() = paused,
                     }
                     let _ = self.tx_event
-                        .send(Event::status(if paused { "Command paused" } else { "Command resumed" }))
+                        .send(Event::status(if paused { "Request was Paused" } else { "Request was Resumed" }))
                         .await;
                 }
                 Op::ApproveToolCall { id } => {

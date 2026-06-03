@@ -3480,7 +3480,7 @@ async fn run_event_loop(
                                 engine_handle.cancel();
                                 mark_active_turn_cancelled_locally(app);
                                 current_streaming_text.clear();
-                                app.status_message = Some("Command cancelled".to_string());
+                                app.status_message = Some("Request was Cancelled".to_string());
                             } else {
                                 engine_handle.cancel();
                                 mark_active_turn_cancelled_locally(app);
@@ -3495,7 +3495,7 @@ async fn run_event_loop(
                                 engine_handle.set_paused(false);
                                 app.paused = false;
                                 app.paused_at = None;
-                                app.status_message = Some("Command resumed".to_string());
+                                app.status_message = Some("Request was Resumed".to_string());
                             } else {
                                 // First ESC — pause
                                 tracing::debug!(target: "pausable", "PauseCommand — pausing");
@@ -3503,7 +3503,7 @@ async fn run_event_loop(
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
                                 app.paused_cancelled = false;
-                                app.status_message = Some("Pausing…".to_string());
+                                app.status_message = Some("Request is Pausing".to_string());
                             }
                         }
                         EscapeAction::DiscardQueuedDraft => {
@@ -4882,7 +4882,7 @@ async fn dispatch_user_message(
             }
             engine_handle.cancel();
             app.is_loading = false;
-            app.status_message = Some("Cancelled — type a new message".to_string());
+            app.status_message = Some("Request was Cancelled".to_string());
             return Ok(());
         }
     }
