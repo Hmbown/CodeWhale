@@ -349,9 +349,8 @@ impl ModalView for PlanPromptView {
                         crate::tools::plan::StepStatus::InProgress => "\u{25b6}",
                         crate::tools::plan::StepStatus::Completed => "\u{2713}",
                     };
-                    let step_text = truncate_step(&item.step, 60);
                     lines.push(Line::from(Span::styled(
-                        format!("  {status_mark} {}. {}", i + 1, step_text),
+                        format!("  {status_mark} {}. {}", i + 1, &item.step),
                         Style::default().fg(palette::TEXT_PRIMARY),
                     )));
                 }
@@ -463,22 +462,6 @@ impl ModalView for PlanPromptView {
 
             paragraph.render(popup_area, buf);
         }
-    }
-}
-
-/// Truncate a plan step description to `max_len` chars, breaking at a word
-/// boundary and appending an ellipsis when truncation occurs.
-fn truncate_step(text: &str, max_len: usize) -> String {
-    if text.chars().count() <= max_len {
-        return text.to_string();
-    }
-    // Walk back from the cutoff to find a natural word boundary.
-    let cutoff = max_len.saturating_sub(3); // reserve room for "..."
-    let truncated: String = text.chars().take(cutoff).collect();
-    if let Some(last_space) = truncated.rfind(' ') {
-        format!("{}...", &truncated[..last_space])
-    } else {
-        format!("{truncated}...")
     }
 }
 
