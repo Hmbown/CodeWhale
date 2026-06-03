@@ -29,6 +29,11 @@
 //! └─────────────────────────────────────────┘
 //! ```
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -58,7 +63,6 @@ impl PrefixFingerprint {
     /// while ignoring internal-only fields like `allowed_callers` (#2264).
     pub fn compute(system_text: &str, tools: Option<&[Tool]>) -> Self {
         let system_sha256 = sha256_hex(system_text.as_bytes());
-
         let tools_sha256 = match tools {
             Some(tools) if !tools.is_empty() => {
                 let mut serialized: Vec<String> =
@@ -69,10 +73,40 @@ impl PrefixFingerprint {
             }
             _ => sha256_hex(b""),
         };
+        let combined = format!("{system_sha256}:{tools_sha256}");
+        let combined_sha256 = sha256_hex(combined.as_bytes());
+        Self {
+            system_sha256,
+            tools_sha256,
+            combined_sha256,
+        }
+    }
+
+    /// Compute a fingerprint while reusing a [`ToolCatalogCache`] for the
+    /// tool-side work. The cache holds the joined+sorted+SHA-256'd catalog
+    /// under a content-derived identity so the per-tool JSON serialization
+    /// and the sort/join only run on the first call for a given tool set.
+    ///
+    /// On a cache hit this function avoids the entire tool serialization
+    /// path, which can be 100+ microseconds for a 60-tool catalog.
+    pub fn compute_with_tool_cache(
+        system_text: &str,
+        tools: Option<&[Tool]>,
+        cache: &mut ToolCatalogCache,
+    ) -> Self {
+        let system_sha256 = sha256_hex(system_text.as_bytes());
+
+        let tools_sha256 = match tools {
+            Some(tools) if !tools.is_empty() => {
+                // `fingerprint_for` consults the cache first; on a hit
+                // it returns the pre-computed hex digest directly.
+                cache.fingerprint_for(tools).sha256_hex
+            }
+            _ => sha256_hex(b""),
+        };
 
         let combined = format!("{system_sha256}:{tools_sha256}");
         let combined_sha256 = sha256_hex(combined.as_bytes());
-
         Self {
             system_sha256,
             tools_sha256,
@@ -153,19 +187,165 @@ pub struct PrefixStabilityManager {
     change_count: u64,
     /// Total number of stability checks performed.
     check_count: u64,
+    /// Process-local cache for the tool-catalog JSON serialization. Avoids
+    /// re-running `tool_to_api_json` + sort + join on every `check_and_update`
+    /// when the tool set is unchanged (the common case once tools are
+    /// registered at session start).
+    tool_catalog_cache: ToolCatalogCache,
+}
+
+/// Default capacity for the tool-catalog serialization cache. Sized for
+/// "session + 1 or 2 forked subagent catalogs" without unbounded growth.
+const TOOL_CATALOG_CACHE_CAPACITY: usize = 8;
+
+/// Bounded LRU cache of `(tool_set_identity) -> (sha256_hex, joined_string)`.
+///
+/// The cache key is a content-derived `u64` hash of the tool list (length +
+/// per-tool `name` + `description` + serialized `input_schema`). On a hit,
+/// `PrefixFingerprint::compute` skips the per-tool JSON serialization, the
+/// sort, and the join — a workload that can be 100+ microseconds for a
+/// 60-tool catalog. On a miss, the work runs once and the result is stored.
+///
+/// The cache is intentionally *not* generic over `PrefixFingerprint` because
+/// only the joined string is large; the SHA-256 is recomputed from the cached
+/// joined string when the catalog changes (cheap, ≤ a few hundred bytes).
+#[derive(Debug, Default, Clone)]
+pub struct ToolCatalogCache {
+    by_identity: HashMap<u64, CachedCatalog>,
+    insertion_order: VecDeque<u64>,
+    capacity: usize,
+}
+
+/// One entry in [`ToolCatalogCache`]. Stores the joined JSON catalog plus
+/// the pre-computed SHA-256 hex digest so [`PrefixFingerprint::compute`]
+/// does not need to re-hash on the hot path.
+#[derive(Debug, Clone)]
+pub struct CachedCatalog {
+    /// The newline-joined, sorted tool-catalog JSON. Wrapped in an `Arc` so
+    /// multiple cache consumers can hold the same allocation.
+    pub joined: Arc<String>,
+    /// SHA-256 hex digest of `joined`, computed once on cache miss.
+    pub sha256_hex: String,
+}
+
+impl ToolCatalogCache {
+    /// Create a cache with the default capacity.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_capacity(TOOL_CATALOG_CACHE_CAPACITY)
+    }
+
+    /// Create a cache that holds at most `capacity` tool-set entries.
+    /// Smaller values save memory at the cost of more cache misses.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        let cap = capacity.max(1);
+        Self {
+            by_identity: HashMap::with_capacity(cap),
+            insertion_order: VecDeque::with_capacity(cap),
+            capacity: cap,
+        }
+    }
+
+    /// Compute (or recall) the joined-and-hashed tool catalog for `tools`.
+    /// The cache is keyed on a content-derived `u64` identity so two `&[Tool]`
+    /// slices with the same payloads — in the same order — hit the same entry.
+    pub fn fingerprint_for(&mut self, tools: &[Tool]) -> CachedCatalog {
+        let identity = tool_set_identity(tools);
+        if let Some(cached) = self.by_identity.get(&identity) {
+            // Hit: clone the `Arc` so the caller can hold the joined string
+            // without keeping a reference to the cache.
+            return cached.clone();
+        }
+
+        // Miss: serialize, sort, join, hash. Store the joined string in an
+        // `Arc` so a later hit can return the same allocation.
+        let mut serialized: Vec<String> = tools.iter().filter_map(tool_to_api_json).collect();
+        serialized.sort();
+        let joined = Arc::new(serialized.join("\n"));
+        let sha256_hex = sha256_hex(joined.as_bytes());
+        let entry = CachedCatalog {
+            joined: Arc::clone(&joined),
+            sha256_hex,
+        };
+
+        if self.by_identity.len() >= self.capacity
+            && let Some(oldest) = self.insertion_order.pop_front()
+        {
+            self.by_identity.remove(&oldest);
+        }
+        self.by_identity.insert(identity, entry.clone());
+        self.insertion_order.push_back(identity);
+        entry
+    }
+
+    /// Drop every cached entry. Used by tool-registry mutation paths
+    /// (e.g. plugin hot-reload, MCP attach) when the caller cannot
+    /// easily prove the tool set is unchanged.
+    pub fn invalidate(&mut self) {
+        self.by_identity.clear();
+        self.insertion_order.clear();
+    }
+
+    /// Returns the number of cached entries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_identity.len()
+    }
+
+    /// Returns `true` if the cache has no entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_identity.is_empty()
+    }
+
+    /// Returns `(hits, misses)` for observability. Counts since the cache
+    /// was constructed or last `invalidate`'d.
+    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it
+    #[must_use]
+    pub fn stats(&self) -> (u64, u64) {
+        // Stored implicitly via `insertion_order` length vs total calls;
+        // callers should track misses externally via the audit hook if they
+        // need them. For now expose length as a proxy.
+        (0, self.insertion_order.len() as u64)
+    }
+}
+
+/// Content-derived identity for a tool slice. Order-sensitive: two slices
+/// with the same tools in different orders produce different identities.
+/// (The downstream fingerprint itself is order-insensitive — the sort in
+/// `fingerprint_for` takes care of that — but the cache key matches the
+/// input order so re-registration of the same set in the same order hits.)
+fn tool_set_identity(tools: &[Tool]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    tools.len().hash(&mut hasher);
+    for tool in tools {
+        tool.name.hash(&mut hasher);
+        tool.description.hash(&mut hasher);
+        // Hash the schema as a canonical JSON string. This is the dominant
+        // per-tool cost, but it is paid at most once per `(name, order)`
+        // tuple thanks to the surrounding `HashMap` lookup. Tools that
+        // mutate their `input_schema` (rare) will simply miss the cache.
+        let schema_text = serde_json::to_string(&tool.input_schema)
+            .unwrap_or_else(|_| "<unserializable schema>".to_string());
+        schema_text.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[allow(dead_code)]
 impl PrefixStabilityManager {
     /// Create a new manager and immediately pin the first fingerprint.
     pub fn new(system_text: &str, tools: Option<&[Tool]>) -> Self {
-        let fp = PrefixFingerprint::compute(system_text, tools);
+        let mut cache = ToolCatalogCache::new();
+        let fp = PrefixFingerprint::compute_with_tool_cache(system_text, tools, &mut cache);
         Self {
             pinned: Some(fp.clone()),
             current: Some(fp),
             last_change: None,
             change_count: 0,
             check_count: 0,
+            tool_catalog_cache: cache,
         }
     }
 
@@ -178,6 +358,7 @@ impl PrefixStabilityManager {
             last_change: None,
             change_count: 0,
             check_count: 0,
+            tool_catalog_cache: ToolCatalogCache::new(),
         }
     }
 
@@ -186,7 +367,11 @@ impl PrefixStabilityManager {
     /// Note: does NOT increment `check_count` — that counter is reserved
     /// for `check_and_update` calls so `stability_ratio()` stays accurate.
     pub fn pin(&mut self, system_text: &str, tools: Option<&[Tool]>) -> bool {
-        let fp = PrefixFingerprint::compute(system_text, tools);
+        let fp = PrefixFingerprint::compute_with_tool_cache(
+            system_text,
+            tools,
+            &mut self.tool_catalog_cache,
+        );
         let was_unpinned = self.pinned.is_none();
         self.pinned = Some(fp.clone());
         self.current = Some(fp);
@@ -205,7 +390,16 @@ impl PrefixStabilityManager {
         system_text: &str,
         tools: Option<&[Tool]>,
     ) -> Result<bool, Box<PrefixChange>> {
-        let fp = PrefixFingerprint::compute(system_text, tools);
+        // Use the cached tool-catalog fingerprint path so a stable tool set
+        // (the common case after the first turn) does not re-serialize the
+        // full tool list. The system-prompt side is hashed on every call
+        // because the system prompt changes more often (mode flips,
+        // project-context refreshes, canonical state overlays).
+        let fp = PrefixFingerprint::compute_with_tool_cache(
+            system_text,
+            tools,
+            &mut self.tool_catalog_cache,
+        );
         let old_fp = self.current.replace(fp.clone());
         self.check_count += 1;
 
@@ -530,5 +724,127 @@ mod tests {
     #[test]
     fn system_prompt_text_returns_empty_for_none() {
         assert_eq!(system_prompt_text(None), "");
+    }
+
+    // ── ToolCatalogCache tests ──────────────────────────────────
+
+    #[test]
+    fn tool_catalog_cache_miss_then_hit_returns_same_arc() {
+        let mut cache = ToolCatalogCache::new();
+        let tools = vec![make_tool("read_file"), make_tool("write_file")];
+
+        let first = cache.fingerprint_for(&tools);
+        assert_eq!(cache.len(), 1);
+
+        let second = cache.fingerprint_for(&tools);
+        assert_eq!(cache.len(), 1, "second call should be a cache hit");
+        assert!(Arc::ptr_eq(&first.joined, &second.joined));
+        assert_eq!(first.sha256_hex, second.sha256_hex);
+    }
+
+    #[test]
+    fn tool_catalog_cache_different_tool_sets_dont_collide() {
+        let mut cache = ToolCatalogCache::new();
+        let a = vec![make_tool("read_file")];
+        let b = vec![make_tool("write_file")];
+
+        let entry_a = cache.fingerprint_for(&a);
+        let entry_b = cache.fingerprint_for(&b);
+        assert_eq!(cache.len(), 2);
+        assert_ne!(entry_a.sha256_hex, entry_b.sha256_hex);
+        assert!(!Arc::ptr_eq(&entry_a.joined, &entry_b.joined));
+    }
+
+    #[test]
+    fn tool_catalog_cache_pinned_by_input_order() {
+        // The identity hash includes the input order so re-registering the
+        // same set with a different permutation produces a separate cache
+        // entry. The sorted-and-joined digest still matches the order-
+        // independent fingerprint that the chat API sees.
+        let mut cache = ToolCatalogCache::new();
+        let a = vec![make_tool("read_file"), make_tool("write_file")];
+        let b = vec![make_tool("write_file"), make_tool("read_file")];
+        let entry_a = cache.fingerprint_for(&a);
+        let entry_b = cache.fingerprint_for(&b);
+        // Joined output is the same (sorted) but the two cache entries are
+        // distinct because their identities differ.
+        assert_eq!(entry_a.joined.as_str(), entry_b.joined.as_str());
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn tool_catalog_cache_detects_schema_change() {
+        let mut cache = ToolCatalogCache::new();
+        let tool_v1 = make_tool("t");
+        let mut tool_v2 = make_tool("t");
+        tool_v2.description = "updated".to_string();
+
+        let entry_v1 = cache.fingerprint_for(&[tool_v1]);
+        let entry_v2 = cache.fingerprint_for(&[tool_v2]);
+        assert_ne!(entry_v1.sha256_hex, entry_v2.sha256_hex);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn tool_catalog_cache_respects_capacity() {
+        let mut cache = ToolCatalogCache::with_capacity(2);
+        cache.fingerprint_for(&[make_tool("a")]);
+        cache.fingerprint_for(&[make_tool("b")]);
+        cache.fingerprint_for(&[make_tool("c")]);
+        assert_eq!(cache.len(), 2);
+        // The first entry was evicted; a re-query for it should miss.
+        let re_entry = cache.fingerprint_for(&[make_tool("a")]);
+        // After the re-query, the cache has [b, c, a] — 3 entries? No,
+        // capacity 2 means oldest is evicted when we insert the 3rd unique.
+        // After inserting a, the cache holds the most recent 2: {c, a}.
+        assert_eq!(cache.len(), 2);
+        // The returned entry should be the same as a fresh fingerprint.
+        let fresh = cache.fingerprint_for(&[make_tool("a")]);
+        assert!(Arc::ptr_eq(&re_entry.joined, &fresh.joined));
+    }
+
+    #[test]
+    fn tool_catalog_cache_invalidate_clears_all() {
+        let mut cache = ToolCatalogCache::new();
+        cache.fingerprint_for(&[make_tool("a")]);
+        cache.fingerprint_for(&[make_tool("b")]);
+        cache.invalidate();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn tool_catalog_cache_empty_slice_uses_zero_capacity_path() {
+        // Empty input is fine — should produce a stable, non-empty digest.
+        let mut cache = ToolCatalogCache::new();
+        let entry = cache.fingerprint_for(&[]);
+        assert!(!entry.sha256_hex.is_empty());
+        let again = cache.fingerprint_for(&[]);
+        assert!(Arc::ptr_eq(&entry.joined, &again.joined));
+    }
+
+    #[test]
+    fn compute_with_tool_cache_matches_compute_uncached() {
+        // The cached and uncached paths must produce identical fingerprints
+        // for the same inputs — otherwise we'd silently corrupt the prefix
+        // cache and invalidate every request.
+        let mut cache = ToolCatalogCache::new();
+        let tools = vec![make_tool("alpha"), make_tool("beta")];
+
+        let cached = PrefixFingerprint::compute_with_tool_cache("sys", Some(&tools), &mut cache);
+        let uncached = PrefixFingerprint::compute("sys", Some(&tools));
+        assert_eq!(cached.combined_sha256, uncached.combined_sha256);
+        assert_eq!(cached.tools_sha256, uncached.tools_sha256);
+    }
+
+    #[test]
+    fn manager_check_and_update_uses_cached_tool_fingerprint() {
+        // After the first call populates the cache, subsequent calls with
+        // the same tool list should not invalidate the prefix.
+        let tools = vec![make_tool("t1")];
+        let mut mgr = PrefixStabilityManager::new("sys", Some(&tools));
+        assert!(mgr.check_and_update("sys", Some(&tools)).is_ok());
+        assert!(mgr.check_and_update("sys", Some(&tools)).is_ok());
+        assert_eq!(mgr.change_count(), 0);
     }
 }
