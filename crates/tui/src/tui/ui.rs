@@ -3467,10 +3467,13 @@ async fn run_event_loop(
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
                             if app.paused {
-                                // Cancelling while paused — mark as cancelled.
+                                // Cancelling while paused — stop the engine turn.
                                 app.paused_cancelled = true;
                                 app.paused = false;
                                 engine_handle.set_paused(false);
+                                engine_handle.cancel();
+                                mark_active_turn_cancelled_locally(app);
+                                current_streaming_text.clear();
                                 app.status_message = Some("Command cancelled".to_string());
                             } else {
                                 engine_handle.cancel();
