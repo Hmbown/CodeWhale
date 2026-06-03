@@ -1,5 +1,7 @@
 //! Modal prompt for selecting what to do after a plan is generated.
 
+use std::cell::Cell;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::prelude::*;
@@ -119,6 +121,10 @@ pub struct PlanPromptView {
     scroll: usize,
     /// Tracks a previous 'g' press for the 'gg' (jump to top) combo.
     pending_g: bool,
+    /// The effective `max_scroll` computed during the last render, used so
+    /// the Esc handler can check the clamped scroll (not the raw `self.scroll`)
+    /// and avoid a spurious exit-confirmation on short plans.
+    last_max_scroll: Cell<usize>,
     /// When true, an "are you sure?" prompt is shown instead of the option list
     /// because the user pressed Esc after scrolling away from the top.
     confirming_exit: bool,
@@ -132,6 +138,7 @@ impl PlanPromptView {
             selected: 0,
             scroll: 0,
             pending_g: false,
+            last_max_scroll: Cell::new(0),
             confirming_exit: false,
             plan,
         }
@@ -150,7 +157,7 @@ impl PlanPromptView {
     fn submit_number(number: u32) -> ViewAction {
         if (1..=u32::try_from(PLAN_OPTIONS.len()).unwrap_or(0)).contains(&number) {
             ViewAction::EmitAndClose(ViewEvent::PlanPromptSelected {
-                option: usize::from(number),
+                option: number as usize,
             })
         } else {
             ViewAction::None
@@ -234,7 +241,9 @@ impl ModalView for PlanPromptView {
             }
             KeyCode::Enter => self.submit_selected(),
             KeyCode::Esc => {
-                if self.scroll > 0 {
+                // Use the effective (clamped) scroll from the last render so a
+                // short plan that fits entirely never triggers a false positive.
+                if self.scroll.min(self.last_max_scroll.get()) > 0 {
                     // User scrolled; ask for confirmation before discarding.
                     self.confirming_exit = true;
                     ViewAction::None
@@ -370,6 +379,7 @@ impl ModalView for PlanPromptView {
         let total_lines = wrapped_line_count(&lines, content_width);
         let visible_lines = usize::from(popup_area.height).saturating_sub(4).max(1);
         let max_scroll = total_lines.saturating_sub(visible_lines);
+        self.last_max_scroll.set(max_scroll);
         let scroll = self.scroll.min(max_scroll);
 
         // Build footer: scroll indicator (left) + data-driven option shortcuts +
@@ -815,6 +825,7 @@ mod tests {
     fn plan_prompt_esc_after_scroll_confirms_then_cancels() {
         let mut view = PlanPromptView::new(None);
         view.scroll = 5; // simulate user having scrolled
+        view.last_max_scroll.set(5);
 
         // First Esc: enters confirmation mode, does not close.
         let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -831,6 +842,7 @@ mod tests {
     fn plan_prompt_esc_then_esc_cancels_confirmation() {
         let mut view = PlanPromptView::new(None);
         view.scroll = 3;
+        view.last_max_scroll.set(3);
 
         // Enter confirmation.
         view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -855,6 +867,7 @@ mod tests {
     fn plan_prompt_confirm_then_y_exits() {
         let mut view = PlanPromptView::new(None);
         view.scroll = 2;
+        view.last_max_scroll.set(2);
 
         view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -865,6 +878,7 @@ mod tests {
     fn plan_prompt_other_keys_ignored_during_confirmation() {
         let mut view = PlanPromptView::new(None);
         view.scroll = 2;
+        view.last_max_scroll.set(2);
 
         view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(view.confirming_exit);
