@@ -17,7 +17,10 @@ pub(crate) enum EscapeAction {
 pub(crate) fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeAction {
     if slash_menu_open {
         EscapeAction::CloseSlashMenu
-    } else if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
+    } else if app.is_loading
+        || matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
+        || app.pausable
+        || app.paused {
         if app.pausable && !app.paused {
             EscapeAction::PauseCommand
         } else {
