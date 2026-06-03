@@ -3468,9 +3468,15 @@ async fn run_event_loop(
                             app.backtrack.reset();
                             if app.paused {
                                 // Cancelling while paused — stop the engine turn.
+                                // Clear the shared flag directly (not via
+                                // set_paused) to avoid sending Op::SetPaused
+                                // which fires a "resumed" event that overwrites
+                                // the cancellation status message.
                                 app.paused_cancelled = true;
                                 app.paused = false;
-                                engine_handle.set_paused(false);
+                                if let Ok(mut slot) = engine_handle.shared_paused.lock() {
+                                    *slot = false;
+                                }
                                 engine_handle.cancel();
                                 mark_active_turn_cancelled_locally(app);
                                 current_streaming_text.clear();
