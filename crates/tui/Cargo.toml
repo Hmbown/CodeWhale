@@ -47,10 +47,10 @@ fd-lock = "4.0.4"
 futures-util = "0.3.31"
 ratatui = "0.30"
 regex = "1.11"
-reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls", "http2", "gzip", "brotli"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls-no-provider", "http2", "gzip", "brotli"] }
+rustls.workspace = true
 qrcode = { version = "0.14", default-features = false }
 similar = "2"
-rustyline = "15.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 schemars = { version = "1.2.1", features = ["derive", "preserve_order"] }
@@ -89,6 +89,9 @@ vt100 = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+arboard = "3.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"

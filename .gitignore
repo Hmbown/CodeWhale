@@ -50,6 +50,8 @@ docs/*.pdf
 # Local dev scripts and temp files
 *.sh
 *.cmd
+!ohos-clang.cmd
+!ohos-clangxx.cmd
 !scripts/**
 !.github/scripts/**
 test.txt

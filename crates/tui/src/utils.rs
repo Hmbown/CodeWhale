@@ -242,7 +242,7 @@ fn browser_open_command(url: &str) -> Result<Command> {
         Ok(command)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         let mut command = Command::new("xdg-open");
         command.arg(url);
@@ -256,7 +256,11 @@ fn browser_open_command(url: &str) -> Result<Command> {
         Ok(cmd)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos")),
+        target_os = "windows"
+    )))]
     Err(anyhow::anyhow!(
         "browser opening is unsupported on this platform"
     ))
@@ -863,7 +867,7 @@ mod project_mapping_tests {
             );
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             assert_eq!(command.get_program(), "xdg-open");
             assert_eq!(

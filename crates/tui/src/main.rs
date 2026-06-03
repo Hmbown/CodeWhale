@@ -109,6 +109,10 @@ fn configure_windows_console_utf8() {
 #[cfg(not(windows))]
 fn configure_windows_console_utf8() {}
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "codewhale-tui",
@@ -846,6 +850,7 @@ enum SandboxCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     configure_windows_console_utf8();
+    install_rustls_crypto_provider();
 
     // ── Process hardening (#2183) ─────────────────────────────────────────
     // MUST run before Tokio is booted and before any threads are spawned.

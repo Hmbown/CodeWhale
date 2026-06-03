@@ -13,16 +13,53 @@ use std::path::{Path, PathBuf};
 #[cfg(any(
     all(test, unix),
     all(
-        any(target_os = "macos", target_os = "windows", target_os = "linux"),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        ),
         not(test)
     )
 ))]
 use std::process::{Command, Stdio};
+#[cfg(any(
+    test,
+    all(
+        not(test),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
+    )
+))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+#[cfg(any(
+    test,
+    all(
+        not(test),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
+    )
+))]
 use arboard::{Clipboard, ImageData};
 use base64::Engine as _;
+#[cfg(any(
+    test,
+    all(
+        not(test),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
+    )
+))]
 use image::{ImageBuffer, Rgba};
 
 const OSC52_MAX_BYTES: usize = 100 * 1024;
@@ -53,6 +90,7 @@ impl PastedImage {
 }
 
 /// Clipboard payloads supported by the TUI.
+#[cfg_attr(all(target_env = "ohos", not(test)), allow(dead_code))]
 pub enum ClipboardContent {
     Text(String),
     Image(PastedImage),
@@ -60,7 +98,29 @@ pub enum ClipboardContent {
 
 /// Clipboard reader/writer helper.
 pub struct ClipboardHandler {
+    #[cfg(any(
+        test,
+        all(
+            not(test),
+            any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
+        )
+    ))]
     clipboard: Option<Clipboard>,
+    #[cfg(any(
+        test,
+        all(
+            not(test),
+            any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
+        )
+    ))]
     clipboard_init_attempted: bool,
     #[cfg(test)]
     written_text: Vec<String>,
@@ -74,7 +134,29 @@ impl ClipboardHandler {
     /// server (headless, WSL2) never blocks the TUI event loop.
     pub fn new() -> Self {
         Self {
+            #[cfg(any(
+                test,
+                all(
+                    not(test),
+                    any(
+                        target_os = "macos",
+                        target_os = "windows",
+                        all(target_os = "linux", not(target_env = "ohos"))
+                    )
+                )
+            ))]
             clipboard: None,
+            #[cfg(any(
+                test,
+                all(
+                    not(test),
+                    any(
+                        target_os = "macos",
+                        target_os = "windows",
+                        all(target_os = "linux", not(target_env = "ohos"))
+                    )
+                )
+            ))]
             clipboard_init_attempted: false,
             #[cfg(test)]
             written_text: Vec::new(),
@@ -89,6 +171,17 @@ impl ClipboardHandler {
     /// temporary thread and give it 500 ms; if it doesn't return in time the
     /// handler stays in fallback/no-op mode and `read`/`write_text` fall
     /// through to their OSC 52 and pbcopy/powershell fallbacks.
+    #[cfg(any(
+        test,
+        all(
+            not(test),
+            any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
+        )
+    ))]
     fn ensure_clipboard(&mut self) {
         if self.clipboard_init_attempted {
             return;
@@ -110,23 +203,37 @@ impl ClipboardHandler {
     /// `workspace` is used as a fallback location when `~/.codewhale/` cannot
     /// be resolved (e.g. running with a stripped HOME in CI sandboxes).
     pub fn read(&mut self, workspace: &Path) -> Option<ClipboardContent> {
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(all(target_os = "linux", not(target_env = "ohos"), not(test)))]
         if let Ok(text) = read_text_with_wlpaste() {
             return Some(ClipboardContent::Text(text));
         }
 
-        self.ensure_clipboard();
-        let clipboard = self.clipboard.as_mut()?;
-        if let Ok(text) = clipboard.get_text() {
-            return Some(ClipboardContent::Text(text));
-        }
-
-        if let Ok(image) = clipboard.get_image()
-            && let Ok(pasted) = save_image_as_png(workspace, &image)
+        #[cfg(any(
+            test,
+            all(
+                not(test),
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_env = "ohos"))
+                )
+            )
+        ))]
         {
-            return Some(ClipboardContent::Image(pasted));
+            self.ensure_clipboard();
+            let clipboard = self.clipboard.as_mut()?;
+            if let Ok(text) = clipboard.get_text() {
+                return Some(ClipboardContent::Text(text));
+            }
+
+            if let Ok(image) = clipboard.get_image()
+                && let Ok(pasted) = save_image_as_png(workspace, &image)
+            {
+                return Some(ClipboardContent::Image(pasted));
+            }
         }
 
+        let _ = workspace;
         None
     }
 
@@ -140,16 +247,23 @@ impl ClipboardHandler {
 
         #[cfg(not(test))]
         {
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             if write_text_with_wlcopy(text).is_ok() {
                 return Ok(());
             }
 
-            self.ensure_clipboard();
-            if let Some(clipboard) = self.clipboard.as_mut()
-                && clipboard.set_text(text.to_string()).is_ok()
+            #[cfg(any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_env = "ohos"))
+            ))]
             {
-                return Ok(());
+                self.ensure_clipboard();
+                if let Some(clipboard) = self.clipboard.as_mut()
+                    && clipboard.set_text(text.to_string()).is_ok()
+                {
+                    return Ok(());
+                }
             }
 
             #[cfg(target_os = "macos")]
@@ -215,17 +329,17 @@ fn write_text_with_stdin_command(
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(all(target_os = "linux", not(target_env = "ohos"), not(test)))]
 fn write_text_with_wlcopy(text: &str) -> Result<()> {
     write_text_with_wlcopy_using_argv("wl-copy", text)
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(all(target_os = "linux", not(target_env = "ohos"), not(test)))]
 fn read_text_with_wlpaste() -> Result<String> {
     read_text_with_wlpaste_using_argv("wl-paste")
 }
 
-#[cfg(any(all(test, unix), target_os = "linux"))]
+#[cfg(any(all(test, unix), all(target_os = "linux", not(target_env = "ohos"))))]
 fn read_text_with_wlpaste_using_argv(program: &str) -> Result<String> {
     let output = Command::new(program)
         .arg("--no-newline")
@@ -241,7 +355,7 @@ fn read_text_with_wlpaste_using_argv(program: &str) -> Result<String> {
     String::from_utf8(output.stdout).context("wl-paste returned non-UTF-8 text")
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(all(target_os = "linux", not(target_env = "ohos"), not(test)))]
 fn write_text_with_wlcopy_using_argv(program: &str, text: &str) -> Result<()> {
     let mut child = Command::new(program)
         .stdin(Stdio::piped())
@@ -310,12 +424,34 @@ fn clipboard_images_dir_for_home(workspace: &Path, home: Option<&Path>) -> PathB
 
 /// Encode an RGBA `ImageData` from arboard as PNG and persist it. Returns
 /// the resulting path along with metadata used to render the paste hint.
+#[cfg(any(
+    test,
+    all(
+        not(test),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
+    )
+))]
 fn save_image_as_png(workspace: &Path, image: &ImageData) -> Result<PastedImage> {
     save_image_as_png_in(&clipboard_images_dir(workspace), image)
 }
 
 /// Lower-level variant that writes into an explicit directory. Exposed so the
 /// unit tests don't have to scribble inside the user's real home directory.
+#[cfg(any(
+    test,
+    all(
+        not(test),
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
+    )
+))]
 fn save_image_as_png_in(dir: &Path, image: &ImageData) -> Result<PastedImage> {
     std::fs::create_dir_all(dir).context("create clipboard-images dir")?;
 

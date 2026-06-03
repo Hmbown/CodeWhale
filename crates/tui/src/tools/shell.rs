@@ -165,7 +165,7 @@ fn kill_child_process_group(child: &mut Child) -> std::io::Result<()> {
 /// path (`kill_child_process_group` from the cancellation token) still
 /// handles normal shutdown; abnormal exit can leak children — tracked as a
 /// follow-up watchdog item per the original issue's acceptance criteria.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 fn install_parent_death_signal(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
     // SAFETY: `pre_exec` runs in the child between fork and exec. The closure
@@ -227,7 +227,7 @@ fn push_shell_args(cmd: &mut Command, _program: &str, args: &[String]) {
     cmd.args(args);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
 fn install_parent_death_signal(_cmd: &mut Command) {
     // No kernel-level equivalent on macOS / Windows. The cooperative
     // cancellation + process_group SIGKILL path covers normal shutdown;

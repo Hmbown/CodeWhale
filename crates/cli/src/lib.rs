@@ -471,7 +471,13 @@ struct AppServerArgs {
 
 const MCP_SERVER_DEFINITIONS_KEY: &str = "mcp.server_definitions";
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pub fn run_cli() -> std::process::ExitCode {
+    install_rustls_crypto_provider();
+
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {

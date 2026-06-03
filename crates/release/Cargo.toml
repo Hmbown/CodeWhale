@@ -9,6 +9,7 @@ description = "Shared CodeWhale release discovery and version comparison helpers
 [dependencies]
 anyhow.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
+rustls.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

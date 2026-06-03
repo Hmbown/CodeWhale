@@ -1,0 +1,8 @@
+[target.aarch64-unknown-linux-ohos]
+linker = "D:/githubs/hmnext/CodeWhale/ohos-clang.cmd"
+
+[env]
+AR_aarch64_unknown_linux_ohos = "D:/apps/DevEco Studio/app/sdk/default/openharmony/native/llvm/bin/llvm-ar.exe"
+CC_aarch64_unknown_linux_ohos = "D:/githubs/hmnext/CodeWhale/ohos-clang.cmd"
+CXX_aarch64_unknown_linux_ohos = "D:/githubs/hmnext/CodeWhale/ohos-clangxx.cmd"
+CMAKE_TOOLCHAIN_FILE_aarch64_unknown_linux_ohos = "D:/apps/DevEco Studio/app/sdk/default/openharmony/native/build/cmake/ohos.toolchain.cmake"
