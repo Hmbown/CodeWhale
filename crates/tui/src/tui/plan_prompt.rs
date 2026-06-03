@@ -526,7 +526,8 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
             continue;
         }
         let leading_bytes = text.len() - text.trim_start().len();
-        let leading_spaces = UnicodeWidthStr::width(&text[..leading_bytes]).min(width.saturating_sub(1));
+        let leading_spaces =
+            UnicodeWidthStr::width(&text[..leading_bytes]).min(width.saturating_sub(1));
         let mut line_count = 0;
         let mut current_width = leading_spaces;
         let mut first_word = true;
