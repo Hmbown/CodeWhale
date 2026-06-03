@@ -65,6 +65,12 @@ pub struct SystemBlock {
     pub cache_control: Option<CacheControl>,
 }
 
+/// OpenAI-compatible image URL payload inside a multimodal message.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
 /// A chat message with role and content blocks.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
@@ -82,6 +88,8 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "tool_use")]
