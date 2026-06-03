@@ -1357,6 +1357,13 @@ impl Engine {
                     )));
                 }
 
+                // Pause gate: when the command is paused, block all tool calls.
+                if blocked_error.is_none() && self.paused {
+                    blocked_error = Some(ToolError::execution_failed(
+                        "Command is paused. Press Esc and select Resume to continue.".to_string(),
+                    ));
+                }
+
                 if blocked_error.is_none()
                     && let Some(hook_executor) = self.config.hook_executor.as_ref()
                     && hook_executor.has_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)

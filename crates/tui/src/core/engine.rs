@@ -505,6 +505,8 @@ pub struct Engine {
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
+    /// Whether the current command is paused (for pausable commands).
+    paused: bool,
 }
 
 // === Internal tool helpers ===
@@ -752,6 +754,7 @@ impl Engine {
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
+            paused: false,
         };
         engine.rehydrate_latest_canonical_state();
 
@@ -1070,6 +1073,12 @@ impl Engine {
                 Op::CancelRequest => {
                     self.cancel_token.cancel();
                     self.reset_cancel_token();
+                }
+                Op::SetPaused { paused } => {
+                    self.paused = paused;
+                    let _ = self.tx_event
+                        .send(Event::status(if paused { "Command paused" } else { "Command resumed" }))
+                        .await;
                 }
                 Op::ApproveToolCall { id } => {
                     // Tool approval handling will be implemented in tools module

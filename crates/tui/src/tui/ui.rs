@@ -1623,6 +1623,10 @@ async fn run_event_loop(
                         app.streaming_state.reset();
                         app.streaming_message_index = None;
                         app.streaming_thinking_active_entry = None;
+                        // Reset pause state for new turn
+                        app.paused = false;
+                        app.pausable = false;
+                        app.paused_cancelled = false;
                         let now = Instant::now();
                         app.turn_started_at = Some(now);
                         app.turn_last_activity_at = Some(now);
@@ -3450,6 +3454,22 @@ async fn run_event_loop(
                             current_streaming_text.clear();
                             app.status_message = Some("Request cancelled".to_string());
                         }
+                        EscapeAction::PauseCommand => {
+                            if app.paused {
+                                // Already paused — resume
+                                app.paused = false;
+                                app.paused_at = None;
+                                app.status_message = Some("Command resumed".to_string());
+                                let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
+                            } else {
+                                // First ESC — pause
+                                app.paused = true;
+                                app.paused_at = Some(std::time::Instant::now());
+                                app.paused_cancelled = false;
+                                app.status_message = Some("Command paused. Press Esc again to cancel, or type 'continue'/'resume' to resume.".to_string());
+                                let _ = engine_handle.send(Op::SetPaused { paused: true }).await;
+                            }
+                        }
                         EscapeAction::DiscardQueuedDraft => {
                             app.backtrack.reset();
                             app.queued_draft = None;
@@ -4796,6 +4816,24 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
+    // Resume handling: if the command is paused, typed "continue" or "resume"
+    // resumes execution instead of sending a new message.
+    if app.paused {
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue" || trimmed == "resume" {
+            app.paused = false;
+            app.paused_at = None;
+            app.status_message = Some("Command resumed".to_string());
+            app.is_loading = false;
+            let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
+            return Ok(());
+        }
+        // Any other message while paused is queued for after resume.
+        app.status_message = Some("Command is paused. Type 'continue' or 'resume', or press Esc to cancel.".to_string());
+        app.is_loading = false;
+        return Ok(());
+    }
+
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
     // user's display text and may replace or block it before file mentions,
     // skill wrapping, history, and model input are resolved.

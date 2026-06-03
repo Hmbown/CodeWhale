@@ -6,7 +6,7 @@
 //! `/name`, the file contents are sent as a user message.
 //!
 //! Files may include optional YAML-like frontmatter between `---` markers.
-//! Supported fields are `description`, `argument-hint`, and `allowed-tools`.
+//! Supported fields are `description`, `argument-hint`, `allowed-tools`, and `pausable`.
 //! Frontmatter is stripped before the command body is sent to the model.
 //!
 //! ## Precedence
@@ -214,6 +214,36 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
                     }
                     "allowed-tools" => {
                         app.active_allowed_tools = Some(parse_allowed_tools(value));
+                    }
+                    "pausable" if value.trim().eq_ignore_ascii_case("true") => {
+                        // Snapshot workspace for potential rollback via git stash
+                        if let Some(snap_id) = app.active_snapshot.take() {
+                            if let Ok(repo) = crate::snapshot::repo::SnapshotRepo::open_or_init(&app.workspace) {
+                                let _ = repo.restore(&crate::snapshot::repo::SnapshotId(snap_id));
+                            }
+                        }
+                        let git_stash_cmd = std::process::Command::new("git")
+                            .args(["-C", &app.workspace.to_string_lossy(), "stash", "push", "--include-untracked", "-m", "codewhale-pausable"])
+                            .output();
+                        if let Ok(output) = git_stash_cmd {
+                            if output.status.success() {
+                                tracing::debug!(target: "pausable", "created git stash snapshot");
+                            } else {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                tracing::warn!(target: "pausable", "git stash failed: {stderr}");
+                            }
+                        }
+                        app.pausable = true;
+                        app.paused = false;
+                        app.paused_cancelled = false;
+                    }
+                    "pausable" => {
+                        // Explicitly set pausable: false
+                        app.pausable = false;
+                        app.paused = false;
+                        app.paused_cancelled = false;
+                        app.active_snapshot = None;
+                        tracing::debug!(target: "pausable", "pausable explicitly set to false");
                     }
                     _ => {}
                 }

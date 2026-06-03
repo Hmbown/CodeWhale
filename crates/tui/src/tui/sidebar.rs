@@ -179,6 +179,8 @@ pub(crate) struct SidebarWorkSummary {
     strategy_explanation: Option<String>,
     strategy_steps: Vec<SidebarWorkStrategyStep>,
     state_updating: bool,
+    /// Optional pause indicator text ("(Paused)" or "(Cancelled)").
+    pause_indicator: Option<String>,
 }
 
 impl SidebarWorkSummary {
@@ -266,6 +268,13 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             goal_started_at: app.hunt.started_at,
             tokens_used: app.session.total_conversation_tokens,
             checklist_completion_pct,
+            pause_indicator: if app.paused {
+                Some("(Paused)".to_string())
+            } else if app.paused_cancelled {
+                Some("(Cancelled)".to_string())
+            } else {
+                None
+            },
             checklist_items,
             strategy_explanation,
             strategy_steps,
@@ -285,6 +294,13 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
+        summary.pause_indicator = if app.paused {
+            Some("(Paused)".to_string())
+        } else if app.paused_cancelled {
+            Some("(Cancelled)".to_string())
+        } else {
+            None
+        };
         return summary;
     }
 
@@ -295,6 +311,13 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
+        pause_indicator: if app.paused {
+            Some("(Paused)".to_string())
+        } else if app.paused_cancelled {
+            Some("(Cancelled)".to_string())
+        } else {
+            None
+        },
         ..SidebarWorkSummary::default()
     }
 }
@@ -310,6 +333,23 @@ fn work_panel_lines(
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
 
     push_work_goal_lines(summary, content_width, max_rows, &mut lines, ui_theme);
+
+    // Pause/cancel indicator
+    if let Some(indicator) = &summary.pause_indicator {
+        if lines.len() < max_rows {
+            let (fg, symbol) = match indicator.as_str() {
+                "(Cancelled)" => (ui_theme.error_icon, "✘"),
+                _ => (ui_theme.accent, "⏸"),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {symbol} "), Style::default().fg(fg)),
+                Span::styled(
+                    indicator.clone(),
+                    Style::default().fg(ui_theme.text_muted),
+                ),
+            ]));
+        }
+    }
 
     if summary.state_updating && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
