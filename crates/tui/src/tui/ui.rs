@@ -3523,7 +3523,11 @@ async fn run_event_loop(
                                 // the model the command is on hold instead of
                                 // continuing the original request.
                                 app.paused_quarry = app.hunt.quarry.clone();
-                                app.hunt.quarry = Some("Command is PAUSED by user. Do NOT execute the previous request. Only respond to the user's new message. Type 'continue' to resume the paused command.".to_string());
+                                // Clear the quarry so the goal continuation
+                                // system doesn't prompt the model to resolve
+                                // a "pause" goal. The pause gate + system
+                                // prompt are sufficient to prevent execution.
+                                app.hunt.quarry = None;
                                 engine_handle.set_paused(true);
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());

@@ -3176,17 +3176,17 @@ mod tests {
         // message so the system prompt tells the model the command is on hold.
         let mut app = create_test_app();
         app.hunt.quarry = Some("Scan nested git repositories".to_string());
-        let _original = app.hunt.quarry.clone();
 
-        // Simulate PauseCommand handler saving + replacing the quarry:
+
+        // Simulate PauseCommand handler saving + clearing the quarry:
         app.paused_quarry = app.hunt.quarry.clone();
-        app.hunt.quarry = Some("Command is PAUSED by user. Do NOT execute the previous request. Only respond to the user's new message. Type 'continue' to resume the paused command.".to_string());
+        app.hunt.quarry = None;
         app.paused = true;
 
         assert_eq!(app.paused_quarry.as_deref(), Some("Scan nested git repositories"),
             "paused_quarry must save the original goal");
-        assert!(app.hunt.quarry.as_deref().unwrap_or("").contains("PAUSED"),
-            "hunt.quarry must be set to pause message so model sees it in system prompt");
+        assert!(app.hunt.quarry.is_none(),
+            "hunt.quarry must be None so goal system doesn't prompt model to resolve a pause goal");
         assert!(app.paused, "app.paused must be true");
     }
 
