@@ -3407,4 +3407,49 @@ mod tests {
         assert!(app.hunt.quarry.is_none(), "quarry must stay None for non-continue: system prompt has no goal");
         assert_eq!(app.paused_quarry.as_deref(), Some("Scan repos"), "paused_quarry preserved for WorkBench");
     }
+
+    #[test]
+    fn workbench_visible_through_pause_ask_resume() {
+        // Full user workflow: start -> ESC (pause) -> ask "how are you?"
+        // -> resume -> WorkBench must persist through every step.
+        let mut app = create_test_app();
+
+        // 1. Start pausable command
+        app.hunt.quarry = Some("Scan nested git repos".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench shows the goal when running");
+        assert!(summary.pause_indicator.is_none(), "no pause when running");
+
+        // 2. ESC -- pause (quarry saved to paused_quarry, cleared from hunt)
+        app.paused_quarry = app.hunt.quarry.clone();
+        app.hunt.quarry = None;
+        app.paused = true;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"), "(paused) when paused");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench still shows the goal via paused_quarry fallback");
+
+        // 3. Type "how are you?" (non-continue message) -- unpause,
+        //    quarry stays None, paused_quarry preserved for WorkBench
+        app.paused = false;
+        app.paused_cancelled = false;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
+            "(paused) still visible after 'how are you?' -- paused_quarry preserved");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench shows the paused command so user remembers to resume");
+
+        // 4. Type "resume" -- restore quarry from paused_quarry
+        app.hunt.quarry = app.paused_quarry.take();
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), None, "pause gone after resume");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench shows the goal again with (play) after resume");
+    }
 }
