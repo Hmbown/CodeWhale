@@ -123,7 +123,9 @@ impl EngineHandle {
             }
             Err(poisoned) => *poisoned.into_inner() = paused,
         }
-        // Also send the Op so it's processed when the engine is between turns.
-        let _ = self.tx_op.try_send(Op::SetPaused { paused });
+        // Note: intentionally NOT sending Op::SetPaused here — doing so would
+        // make the engine fire Event::status("Request was Paused/Resumed") which
+        // arrives asynchronously and can race with cancel/continue status from
+        // the UI, overwriting the correct status message.
     }
 }

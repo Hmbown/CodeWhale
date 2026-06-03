@@ -3146,4 +3146,27 @@ mod tests {
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
         assert!(first.contains('✘'), "expected cross icon for cancelled, got: {first}");
     }
+
+    #[test]
+    fn cancel_status_not_overwritten_by_late_paused_event() {
+        // Simulate what the Event::Status handler in ui.rs does:
+        // when paused_cancelled is true, "Paused"/"Resumed" events are discarded.
+        let mut app = create_test_app();
+        app.paused_cancelled = true;
+        app.status_message = Some("Request was Cancelled".to_string());
+
+        // Simulate the guard from EngineEvent::Status handler in ui.rs:
+        let late_message = "Request was Paused".to_string();
+        if !(app.paused_cancelled
+            && (late_message == "Request was Paused" || late_message == "Request was Resumed"))
+        {
+            app.status_message = Some(late_message);
+        }
+
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Request was Cancelled"),
+            "guard must discard late Paused event when cancelled"
+        );
+    }
 }

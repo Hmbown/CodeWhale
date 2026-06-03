@@ -1970,7 +1970,16 @@ async fn run_event_loop(
                         apply_engine_error_to_app(app, envelope);
                     }
                     EngineEvent::Status { message } => {
-                        app.status_message = Some(message);
+                        // Late engine status events (e.g. "Request was Paused"
+                        // from a stale Op::SetPaused) must not overwrite a
+                        // more recent cancellation status set by the UI.
+                        if app.paused_cancelled
+                            && (message == "Request was Paused" || message == "Request was Resumed")
+                        {
+                            // discard — cancel/resume status takes priority
+                        } else {
+                            app.status_message = Some(message);
+                        }
                     }
                     EngineEvent::SessionUpdated {
                         session_id,
