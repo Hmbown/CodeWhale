@@ -4892,6 +4892,10 @@ async fn dispatch_user_message(
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
+            || trimmed.contains(" continue ")
+            || trimmed.contains(" resume ")
+            || trimmed.ends_with(" continue")
+            || trimmed.ends_with(" resume")
         {
             app.hunt.quarry = app.paused_quarry.take();
         } else {
@@ -4932,6 +4936,10 @@ async fn dispatch_user_message(
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
+            || trimmed.contains(" continue ")
+            || trimmed.contains(" resume ")
+            || trimmed.ends_with(" continue")
+            || trimmed.ends_with(" resume")
         {
             app.hunt.quarry = app.paused_quarry.take();
         }
@@ -6390,6 +6398,10 @@ async fn steer_user_message(
         if trimmed == "continue" || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
+            || trimmed.contains(" continue ")
+            || trimmed.contains(" resume ")
+            || trimmed.ends_with(" continue")
+            || trimmed.ends_with(" resume")
         {
             app.hunt.quarry = app.paused_quarry.take();
             app.paused = false;

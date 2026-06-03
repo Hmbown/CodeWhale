@@ -3431,6 +3431,10 @@ mod tests {
             if trimmed == "continue" || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
+                || trimmed.contains(" continue ")
+                || trimmed.contains(" resume ")
+                || trimmed.ends_with(" continue")
+                || trimmed.ends_with(" resume")
             {
                 app.hunt.quarry = app.paused_quarry.take();
             } else {
@@ -3454,6 +3458,10 @@ mod tests {
             if trimmed == "continue" || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
+                || trimmed.contains(" continue ")
+                || trimmed.contains(" resume ")
+                || trimmed.ends_with(" continue")
+                || trimmed.ends_with(" resume")
             {
                 app.hunt.quarry = app.paused_quarry.take();
             }
@@ -3760,6 +3768,10 @@ mod tests {
             if trimmed == "continue" || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
+                || trimmed.contains(" continue ")
+                || trimmed.contains(" resume ")
+                || trimmed.ends_with(" continue")
+                || trimmed.ends_with(" resume")
             {
                 app.hunt.quarry = app.paused_quarry.take();
             }
@@ -3784,5 +3796,17 @@ mod tests {
             summary.pause_indicator);
         assert!(summary.goal_completed,
             "completed command must show checkmark");
+    }
+
+    #[test]
+    fn resume_detected_in_middle_of_sentence() {
+        let mut app = create_test_app();
+        app.paused_quarry = Some("Scan repos".to_string());
+        app.hunt.quarry = None;
+
+        simulate_dispatch_non_continue(&mut app, "can you please continue the paused slash command");
+
+        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
+            "FAIL: 'can you please continue...' did not trigger resume (contains ' continue ')");
     }
 }
