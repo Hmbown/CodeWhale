@@ -57,9 +57,6 @@ pub enum Op {
     /// Cancel the current request
     #[allow(dead_code)]
     CancelRequest,
-    /// Pause/resume the current turn (for pausable commands).
-    /// When paused, the turn loop blocks tool calls.
-    SetPaused { paused: bool },
 
     /// Approve a tool call that requires permission
     #[allow(dead_code)]

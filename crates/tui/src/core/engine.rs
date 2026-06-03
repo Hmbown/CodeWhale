@@ -1080,15 +1080,6 @@ impl Engine {
                     self.cancel_token.cancel();
                     self.reset_cancel_token();
                 }
-                Op::SetPaused { paused } => {
-                    match self.shared_paused.lock() {
-                        Ok(mut slot) => *slot = paused,
-                        Err(poisoned) => *poisoned.into_inner() = paused,
-                    }
-                    let _ = self.tx_event
-                        .send(Event::status(if paused { "Request was Paused" } else { "Request was Resumed" }))
-                        .await;
-                }
                 Op::ApproveToolCall { id } => {
                     // Tool approval handling will be implemented in tools module
                     let _ = self

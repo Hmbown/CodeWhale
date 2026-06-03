@@ -123,9 +123,8 @@ impl EngineHandle {
             }
             Err(poisoned) => *poisoned.into_inner() = paused,
         }
-        // Note: intentionally NOT sending Op::SetPaused here — doing so would
-        // make the engine fire Event::status("Request was Paused/Resumed") which
-        // arrives asynchronously and can race with cancel/continue status from
-        // the UI, overwriting the correct status message.
+        // Note: Op::SetPaused was removed — the shared flag is the single
+        // source of truth. Sending an Op would make the engine fire a status
+        // event that races with cancel/continue status from the UI.
     }
 }
