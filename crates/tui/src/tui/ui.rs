@@ -1719,6 +1719,15 @@ async fn run_event_loop(
                             }
                             crate::core::events::TurnOutcomeStatus::Failed => "failed".to_string(),
                         });
+                        // Mark goal as completed when turn finishes successfully
+                        // so the WorkBench shows a green checkmark instead of
+                        // the diamond icon.
+                        if status == crate::core::events::TurnOutcomeStatus::Completed
+                            && app.hunt.quarry.is_some()
+                        {
+                            app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+                        }
+
                         // Keep pause state visible after the turn ends so the
                         // WorkBench continues to show the pause indicator.
                         // Clear `pausable` so a fresh user message starts clean,
