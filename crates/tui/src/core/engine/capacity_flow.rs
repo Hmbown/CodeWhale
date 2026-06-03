@@ -16,9 +16,8 @@ impl Engine {
         client: Option<&DeepSeekClient>,
         mode: AppMode,
     ) -> bool {
-        let snapshot = self
-            .capacity_controller
-            .observe_pre_turn(self.capacity_observation(turn));
+        let observation = self.capacity_observation(turn);
+        let snapshot = self.capacity_controller.observe_pre_turn(observation);
         let decision = self
             .capacity_controller
             .decide(self.turn_counter, snapshot.as_ref());
@@ -44,9 +43,8 @@ impl Engine {
         _step_error_count: usize,
         _consecutive_tool_error_steps: u32,
     ) -> bool {
-        let snapshot = self
-            .capacity_controller
-            .observe_post_tool(self.capacity_observation(turn));
+        let observation = self.capacity_observation(turn);
+        let snapshot = self.capacity_controller.observe_post_tool(observation);
         let decision = self
             .capacity_controller
             .decide(self.turn_counter, snapshot.as_ref());
@@ -111,8 +109,8 @@ impl Engine {
             .last_snapshot()
             .cloned()
             .or_else(|| {
-                self.capacity_controller
-                    .observe_pre_turn(self.capacity_observation(turn))
+                let observation = self.capacity_observation(turn);
+                self.capacity_controller.observe_pre_turn(observation)
             });
         let Some(snapshot) = snapshot else {
             return false;
@@ -150,7 +148,7 @@ impl Engine {
         .await
     }
 
-    pub(super) fn capacity_observation(&self, turn: &TurnContext) -> CapacityObservationInput {
+    pub(super) fn capacity_observation(&mut self, turn: &TurnContext) -> CapacityObservationInput {
         let message_window = self.config.capacity.profile_window.max(8) * 3;
         let action_count_this_turn = usize::try_from(turn.step)
             .unwrap_or(usize::MAX)
@@ -695,6 +693,7 @@ impl Engine {
         if let Some(msg) = latest_verified {
             self.session.messages.push(msg);
         }
+        self.session.bump_messages_revision();
 
         self.merge_compaction_summary(Some(self.canonical_prompt(
             &canonical,

@@ -505,6 +505,13 @@ pub struct Engine {
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
+    /// Process-local cache for `estimated_input_tokens`. Memoizes the most
+    /// recent token estimate keyed on `(session.messages_revision,
+    /// system_prompt_fingerprint)`. Five call sites per turn consult this
+    /// (engine capacity checkpoints, seam manager, trim budget, etc.) plus
+    /// four TUI / command consumers; the cache turns N×O(messages) walks
+    /// into a single recompute on a content change.
+    token_estimate_cache: TokenEstimateCache,
 }
 
 // === Internal tool helpers ===
@@ -752,6 +759,7 @@ impl Engine {
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
+            token_estimate_cache: TokenEstimateCache::new(),
         };
         engine.rehydrate_latest_canonical_state();
 
@@ -1280,6 +1288,7 @@ impl Engine {
                     }
                     if let Some(idx) = cut {
                         self.session.messages.truncate(idx);
+                        self.session.bump_messages_revision();
                     }
                     // Now dispatch the new message as a normal send,
                     // reusing the engine's stored mode/model config.
@@ -2009,10 +2018,15 @@ In {new} mode: {policy}\n\n\
             .await;
     }
 
-    fn estimated_input_tokens(&self) -> usize {
-        estimate_input_tokens_conservative(
-            &self.session.messages,
+    fn estimated_input_tokens(&mut self) -> usize {
+        // Memoized on (session.messages_revision, system-prompt fingerprint).
+        // The cache invalidates as soon as either input changes; until then
+        // repeated calls (capacity checkpoints, /status, context inspector,
+        // TUI footer) all hit the cached value.
+        self.token_estimate_cache.lookup_or_compute(
+            self.session.messages_revision,
             self.session.system_prompt.as_ref(),
+            &self.session.messages,
         )
     }
 
@@ -2022,6 +2036,7 @@ In {new} mode: {policy}\n\n\
             && self.estimated_input_tokens() > target_input_budget
         {
             self.session.messages.remove(0);
+            self.session.bump_messages_revision();
             removed = removed.saturating_add(1);
         }
         removed
@@ -2245,15 +2260,20 @@ In {new} mode: {policy}\n\n\
     /// assistant message. Called from `handle_deepseek_turn` before each API
     /// request so the model always has the latest navigation aids.
     async fn layered_context_checkpoint(&mut self) {
-        let Some(ref seam_mgr) = self.seam_manager else {
+        if self.seam_manager.is_none() {
             return;
-        };
-        if !seam_mgr.config().enabled {
+        }
+        if !self.seam_manager.as_ref().unwrap().config().enabled {
             return;
         }
 
+        // Compute the estimated token count *before* taking a long-lived
+        // `&SeamManager` borrow — `estimated_input_tokens` mutates the
+        // engine's token-estimate cache, which would conflict.
+        let estimated_tokens = self.estimated_input_tokens();
+        let seam_mgr = self.seam_manager.as_ref().unwrap();
         let highest = seam_mgr.highest_level().await;
-        let Some(level) = seam_mgr.seam_level_for(self.estimated_input_tokens(), highest) else {
+        let Some(level) = seam_mgr.seam_level_for(estimated_tokens, highest) else {
             return;
         };
 
@@ -2633,17 +2653,19 @@ mod handle;
 pub(crate) use context::compact_tool_result_for_context;
 use context::{
     COMPACTION_SUMMARY_MARKER, MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    context_input_budget, effective_max_output_tokens, estimate_input_tokens_conservative,
-    extract_compaction_summary_prompt, is_context_length_error_message, summarize_text,
+    context_input_budget, effective_max_output_tokens, extract_compaction_summary_prompt,
+    is_context_length_error_message, summarize_text,
 };
 mod dispatch;
 mod loop_guard;
 mod lsp_hooks;
 mod streaming;
+mod token_estimate_cache;
 mod tool_catalog;
 mod tool_execution;
 mod tool_setup;
 mod turn_loop;
+pub(crate) use token_estimate_cache::TokenEstimateCache;
 
 pub(crate) fn default_active_native_tool_names() -> &'static [&'static str] {
     tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS

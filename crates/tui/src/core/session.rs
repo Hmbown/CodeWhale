@@ -82,6 +82,14 @@ pub struct Session {
     /// request of the session; verified against the current system+tool
     /// state before every subsequent request. None until the first turn.
     pub frozen_prefix: Option<FrozenPrefix>,
+
+    /// Monotonic counter bumped on every direct mutation of `messages`.
+    /// Consumed by [`crate::core::engine::token_estimate_cache::TokenEstimateCache`]
+    /// to memoize the per-turn token estimate without re-walking the message
+    /// list. Defaults to 0; bumped in [`Session::add_message`],
+    /// [`Session::replace_messages`], and at every other mutation site in
+    /// `core/engine.rs` / `core/engine/capacity_flow.rs`.
+    pub messages_revision: u64,
 }
 
 /// Cumulative usage statistics for a session.
@@ -155,12 +163,33 @@ impl Session {
             working_set: WorkingSet::default(),
             prefix_stability: None,
             frozen_prefix: None,
+            messages_revision: 0,
         }
     }
 
     /// Add a message to the conversation
     pub fn add_message(&mut self, message: Message) {
         self.messages.push(message);
+        self.messages_revision = self.messages_revision.saturating_add(1);
+    }
+
+    /// Replace the entire message history. Used by session resume and
+    /// capacity interventions. Bumps `messages_revision` exactly once even
+    /// when the new history has a different length, so downstream caches
+    /// invalidate atomically.
+    #[allow(dead_code)]
+    pub fn replace_messages(&mut self, messages: Vec<Message>) {
+        self.messages = messages;
+        self.messages_revision = self.messages_revision.saturating_add(1);
+    }
+
+    /// Bump `messages_revision` without otherwise mutating the message list.
+    /// Reserved for sites that mutate the message list in place (e.g. an
+    /// in-place rewrite of a content block). Most call sites do not need
+    /// this — prefer [`add_message`](Self::add_message) and
+    /// [`replace_messages`](Self::replace_messages).
+    pub fn bump_messages_revision(&mut self) {
+        self.messages_revision = self.messages_revision.saturating_add(1);
     }
 
     /// Rebuild the working set from current messages (best effort).
