@@ -319,6 +319,47 @@ impl ModalView for PlanPromptView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        // When the user pressed Esc after scrolling, show a confirmation prompt
+        // instead of the normal plan + options.  Render it early so we skip the
+        // plan-content construction entirely.
+        if self.confirming_exit {
+            let confirm_lines = vec![
+                Line::from(Span::styled(
+                    "Exit without implementing?",
+                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "You've scrolled through the plan content. Are you sure you want to exit?",
+                    Style::default().fg(palette::TEXT_PRIMARY),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  y — Yes, exit Plan mode",
+                    Style::default().fg(palette::DEEPSEEK_SKY),
+                )),
+                Line::from(Span::styled(
+                    "  n / Esc — Cancel, go back to plan",
+                    Style::default().fg(palette::TEXT_MUTED),
+                )),
+            ];
+            let confirm_footer = Line::from(vec![
+                Span::styled(" y ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("confirm exit", Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw("  "),
+                Span::styled("n / Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
+            ]);
+            let popup_area = centered_rect(66, 34, area);
+            render_modal_chrome(area, popup_area, buf);
+            let confirm = Paragraph::new(confirm_lines)
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true })
+                .block(modal_block().title_bottom(confirm_footer));
+            confirm.render(popup_area, buf);
+            return;
+        }
+
         let popup_area = centered_rect(72, 52, area);
         let content_width = usize::from(popup_area.width.saturating_sub(4).max(1));
         let mut lines: Vec<Line> = Vec::new();
@@ -417,53 +458,14 @@ impl ModalView for PlanPromptView {
         );
         footer_spans.push(desc_span);
 
-        // When the user pressed Esc after scrolling, show a confirmation prompt
-        // instead of the normal plan + options.
-        if self.confirming_exit {
-            let confirm_lines = vec![
-                Line::from(Span::styled(
-                    "Exit without implementing?",
-                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "You've scrolled through the plan content. Are you sure you want to exit?",
-                    Style::default().fg(palette::TEXT_PRIMARY),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  y — Yes, exit Plan mode",
-                    Style::default().fg(palette::DEEPSEEK_SKY),
-                )),
-                Line::from(Span::styled(
-                    "  n / Esc — Cancel, go back to plan",
-                    Style::default().fg(palette::TEXT_MUTED),
-                )),
-            ];
-            let confirm_footer = Line::from(vec![
-                Span::styled(" y ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-                Span::styled("confirm exit", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("  "),
-                Span::styled("n / Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-                Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
-            ]);
-            let popup_area = centered_rect(66, 34, area);
-            render_modal_chrome(area, popup_area, buf);
-            let confirm = Paragraph::new(confirm_lines)
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: true })
-                .block(modal_block().title_bottom(confirm_footer));
-            confirm.render(popup_area, buf);
-        } else {
-            render_modal_chrome(area, popup_area, buf);
-            let paragraph = Paragraph::new(lines)
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: true })
-                .block(modal_block().title_bottom(Line::from(footer_spans)))
-                .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
+        render_modal_chrome(area, popup_area, buf);
+        let paragraph = Paragraph::new(lines)
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true })
+            .block(modal_block().title_bottom(Line::from(footer_spans)))
+            .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
 
-            paragraph.render(popup_area, buf);
-        }
+        paragraph.render(popup_area, buf);
     }
 }
 
@@ -481,21 +483,35 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         let words: Vec<&str> = paragraph.split_whitespace().collect();
         let mut current = String::new();
         for word in words {
-            let word_width = word.chars().count();
+            let word_width = UnicodeWidthStr::width(word);
             if word_width > width {
                 if !current.is_empty() {
                     lines.push(current.trim_end().to_string());
                     current.clear();
                 }
-                let mut chars = word.chars();
-                loop {
-                    let segment: String = chars.by_ref().take(width).collect();
-                    if segment.is_empty() {
-                        break;
+                // Split an over-width word by display width, not code points,
+                // so CJK characters are measured consistently with
+                // wrapped_line_count and ratatui's Paragraph::wrap.
+                let mut remaining = word;
+                while !remaining.is_empty() {
+                    let mut split_at = 0usize;
+                    for (i, ch) in remaining.char_indices() {
+                        // Use the exclusive byte range [..end) so the prefix is
+                        // always valid UTF-8, even for multi-byte characters.
+                        let end = i + ch.len_utf8();
+                        if UnicodeWidthStr::width(&remaining[..end]) > width {
+                            break;
+                        }
+                        split_at = end;
                     }
-                    lines.push(segment);
+                    if split_at == 0 {
+                        // Even one character is wider than width; take it anyway.
+                        split_at = remaining.chars().next().unwrap().len_utf8();
+                    }
+                    lines.push(remaining[..split_at].to_string());
+                    remaining = &remaining[split_at..];
                 }
-            } else if current.chars().count() + 1 + word_width > width {
+            } else if UnicodeWidthStr::width(current.as_str()) + 1 + word_width > width {
                 lines.push(current.trim_end().to_string());
                 current.clear();
                 current.push_str(word);
