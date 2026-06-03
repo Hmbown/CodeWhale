@@ -8,7 +8,8 @@
 //!    and an "API key configured" / "needs API key" hint. Enter on a
 //!    configured provider applies the switch immediately
 //!    ([`ViewEvent::ProviderPickerApplied`]). Enter on an un-configured one
-//!    transitions the same modal into the key-entry state.
+//!    transitions the same modal into the key-entry state. Press `r` on any
+//!    selected provider to edit / replace its API key inline.
 //! 2. **Key entry** — masked input box pre-filled with the provider's
 //!    canonical env-var name as a hint. Enter submits
 //!    [`ViewEvent::ProviderPickerApiKeySubmitted`], which the UI handler
@@ -94,6 +95,11 @@ impl ProviderPickerView {
         self.providers[self.selected_idx].1
     }
 
+    fn enter_key_entry(&mut self) {
+        self.stage = Stage::KeyEntry;
+        self.api_key_input.clear();
+    }
+
     fn env_var_for(provider: ApiProvider) -> &'static str {
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
@@ -153,6 +159,11 @@ impl ProviderPickerView {
     }
 
     fn render_list(&self, area: Rect, buf: &mut Buffer) {
+        let enter_action = if self.selected_has_key() {
+            "apply"
+        } else {
+            "set key"
+        };
         let outer = Block::default()
             .title(Line::from(Span::styled(
                 " Provider ",
@@ -164,7 +175,9 @@ impl ProviderPickerView {
                 Span::styled(" ↑↓ ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("move "),
                 Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("apply "),
+                Span::raw(format!("{enter_action} ")),
+                Span::styled(" R ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw("edit key "),
                 Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("cancel "),
             ]))
@@ -357,10 +370,13 @@ impl ModalView for ProviderPickerView {
                             provider,
                         })
                     } else {
-                        self.stage = Stage::KeyEntry;
-                        self.api_key_input.clear();
+                        self.enter_key_entry();
                         ViewAction::None
                     }
+                }
+                KeyCode::Char(c) if c.eq_ignore_ascii_case(&'r') => {
+                    self.enter_key_entry();
+                    ViewAction::None
                 }
                 _ => ViewAction::None,
             },
@@ -541,6 +557,28 @@ mod tests {
     }
 
     #[test]
+    fn configured_provider_can_reenter_key_entry_with_r() {
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::XiaomiMimo);
+
+        let action = picker.handle_key(key(KeyCode::Char('r')));
+
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert!(picker.api_key_input.is_empty());
+    }
+
+    #[test]
     fn enter_with_existing_key_emits_apply_and_closes() {
         let config = Config {
             api_key: Some("existing-deepseek-key".to_string()),
@@ -648,6 +686,21 @@ mod tests {
 
         assert!(rendered.contains("DeepSeek *"));
         assert!(rendered.contains("Ollama"));
+    }
+
+    #[test]
+    fn configured_provider_footer_mentions_edit_key() {
+        let config = Config {
+            api_key: Some("existing-deepseek-key".to_string()),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+
+        let rendered = render_text(&picker, 80, 12);
+
+        assert!(rendered.contains("Enter"));
+        assert!(rendered.contains("apply"));
+        assert!(rendered.contains("edit key"));
     }
 
     #[test]
