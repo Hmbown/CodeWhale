@@ -583,7 +583,8 @@ impl DeepSeekClient {
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client = Self::build_http_client(&api_key, &http_headers)?;
+        let http_client =
+            Self::build_http_client(&api_key, &http_headers, api_provider, &base_url)?;
 
         Ok(Self {
             http_client,
@@ -600,8 +601,10 @@ impl DeepSeekClient {
     fn build_http_client(
         api_key: &str,
         extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
     ) -> Result<reqwest::Client> {
-        let headers = build_default_headers(api_key, extra_headers)?;
+        let headers = build_default_headers(api_key, extra_headers, api_provider, base_url)?;
         let mut builder = reqwest::Client::builder()
             .default_headers(headers)
             .user_agent(concat!(
@@ -631,21 +634,52 @@ impl DeepSeekClient {
         api_key: &str,
         extra_headers: &HashMap<String, String>,
     ) -> Result<HeaderMap> {
-        build_default_headers(api_key, extra_headers)
+        build_default_headers(
+            api_key,
+            extra_headers,
+            ApiProvider::Deepseek,
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+        )
+    }
+
+    #[cfg(test)]
+    fn default_headers_for_provider(
+        api_key: &str,
+        extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
+    ) -> Result<HeaderMap> {
+        build_default_headers(api_key, extra_headers, api_provider, base_url)
     }
 }
 
 fn build_default_headers(
     api_key: &str,
     extra_headers: &HashMap<String, String>,
+    api_provider: ApiProvider,
+    base_url: &str,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    if !api_key.trim().is_empty() {
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_key}"))?,
-        );
+    let api_key = api_key.trim();
+    let auth_header_name = if !api_key.is_empty()
+        && api_provider == ApiProvider::XiaomiMimo
+        && (xiaomi_mimo_base_url_uses_token_plan(base_url)
+            || xiaomi_mimo_api_key_uses_token_plan(api_key))
+    {
+        Some(HeaderName::from_static("api-key"))
+    } else if !api_key.is_empty() {
+        Some(AUTHORIZATION)
+    } else {
+        None
+    };
+    if let Some(header_name) = auth_header_name.as_ref() {
+        let header_value = if *header_name == AUTHORIZATION {
+            HeaderValue::from_str(&format!("Bearer {api_key}"))?
+        } else {
+            HeaderValue::from_str(api_key)?
+        };
+        headers.insert(header_name.clone(), header_value);
     }
     for (name, value) in extra_headers {
         let name = name.trim();
@@ -654,12 +688,33 @@ fn build_default_headers(
             continue;
         }
         let header_name = HeaderName::from_bytes(name.as_bytes())?;
-        if header_name == AUTHORIZATION || header_name == CONTENT_TYPE {
+        if header_name == AUTHORIZATION
+            || header_name == CONTENT_TYPE
+            || auth_header_name.as_ref() == Some(&header_name)
+        {
             continue;
         }
         headers.insert(header_name, HeaderValue::from_str(value)?);
     }
     Ok(headers)
+}
+
+fn xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
+    let normalized = base_url.trim().to_ascii_lowercase();
+    let without_scheme = normalized
+        .strip_prefix("https://")
+        .or_else(|| normalized.strip_prefix("http://"))
+        .unwrap_or(&normalized);
+    let host = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = host.split(':').next().unwrap_or(host);
+    host.starts_with("token-plan-") && host.ends_with(".xiaomimimo.com")
+}
+
+fn xiaomi_mimo_api_key_uses_token_plan(api_key: &str) -> bool {
+    api_key.trim().starts_with("tp-")
 }
 
 impl DeepSeekClient {
@@ -1601,6 +1656,68 @@ mod tests {
         extra.insert("X-Blank".to_string(), "   ".to_string());
         let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
         assert!(headers.get("x-blank").is_none());
+    }
+
+    #[test]
+    fn xiaomi_mimo_token_plan_uses_api_key_header() {
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "tp-test",
+            &HashMap::new(),
+            ApiProvider::XiaomiMimo,
+            crate::config::XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers.get("api-key").and_then(|value| value.to_str().ok()),
+            Some("tp-test")
+        );
+        assert!(
+            headers.get(AUTHORIZATION).is_none(),
+            "Token Plan requires api-key instead of Authorization Bearer"
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_tp_key_uses_api_key_header_with_custom_base_url() {
+        let mut extra = HashMap::new();
+        extra.insert("api-key".to_string(), "wrong".to_string());
+        extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "tp-custom",
+            &extra,
+            ApiProvider::XiaomiMimo,
+            "https://proxy.example.test/mimo/v1",
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers.get("api-key").and_then(|value| value.to_str().ok()),
+            Some("tp-custom")
+        );
+        assert!(
+            headers.get(AUTHORIZATION).is_none(),
+            "tp-* Token Plan keys should use api-key auth even through custom gateways"
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_standard_endpoint_keeps_bearer_header() {
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::XiaomiMimo,
+            crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer sk-test")
+        );
+        assert!(headers.get("api-key").is_none());
     }
 
     #[test]

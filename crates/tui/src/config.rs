@@ -91,6 +91,10 @@ pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 pub const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
+pub const DEFAULT_XIAOMI_MIMO_TOKEN_PLAN_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
+pub const XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
+pub const XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
+pub const XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL: &str = "https://token-plan-ams.xiaomimimo.com/v1";
 pub const XIAOMI_MIMO_V2_5_OMNI_MODEL: &str = "mimo-v2.5";
 pub const XIAOMI_MIMO_ASR_MODEL: &str = "mimo-v2.5-asr";
 pub const XIAOMI_MIMO_TTS_MODEL: &str = "mimo-v2.5-tts";
@@ -1826,6 +1830,7 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub mode: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
 }
@@ -2223,6 +2228,15 @@ impl Config {
             .provider_config()
             .and_then(|provider| provider.model.as_deref())
         {
+            if provider == ApiProvider::XiaomiMimo {
+                if let Some(canonical) = canonical_xiaomi_mimo_model_id(model) {
+                    return canonical.to_string();
+                }
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
             if provider_passes_model_through(provider)
                 || self.active_provider_preserves_custom_base_url_model()
             {
@@ -2346,7 +2360,15 @@ impl Config {
                 ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
                 ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
                 ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
-                ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
+                ApiProvider::XiaomiMimo => self
+                    .provider_config()
+                    .and_then(|config| {
+                        config
+                            .mode
+                            .as_deref()
+                            .and_then(xiaomi_mimo_base_url_for_mode)
+                    })
+                    .unwrap_or(DEFAULT_XIAOMI_MIMO_BASE_URL),
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
                 ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
@@ -2492,7 +2514,8 @@ impl Config {
             ),
             ApiProvider::XiaomiMimo => anyhow::bail!(
                 "Xiaomi MiMo API key not found. Run 'codewhale auth set --provider xiaomi-mimo', \
-                 set XIAOMI_MIMO_API_KEY/XIAOMI_API_KEY/MIMO_API_KEY, or add [providers.xiaomi_mimo] api_key in ~/.codewhale/config.toml."
+                 set XIAOMI_MIMO_TOKEN_PLAN_API_KEY/MIMO_TOKEN_PLAN_API_KEY/XIAOMI_MIMO_API_KEY/XIAOMI_API_KEY/MIMO_API_KEY, \
+                 or add [providers.xiaomi_mimo] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::Novita => anyhow::bail!(
                 "Novita API key not found. Run 'codewhale auth set --provider novita', \
@@ -3306,6 +3329,16 @@ fn apply_env_overrides(config: &mut Config) {
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::XiaomiMimo)
+        && let Ok(value) = std::env::var("XIAOMI_MIMO_MODE").or_else(|_| std::env::var("MIMO_MODE"))
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .xiaomi_mimo
+            .mode = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::XiaomiMimo)
         && let Ok(value) =
             std::env::var("XIAOMI_MIMO_BASE_URL").or_else(|_| std::env::var("MIMO_BASE_URL"))
         && !value.trim().is_empty()
@@ -3888,10 +3921,66 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
     }
 }
 
+fn xiaomi_mimo_base_url_for_mode(mode: &str) -> Option<&'static str> {
+    let normalized = mode.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    if normalized.is_empty() || xiaomi_mimo_mode_uses_standard_endpoint(&normalized) {
+        return None;
+    }
+    Some(match normalized.as_str() {
+        "token-plan" | "tokenplan" | "subscription" | "subscribed" | "plan" => {
+            DEFAULT_XIAOMI_MIMO_TOKEN_PLAN_BASE_URL
+        }
+        "token-plan-cn"
+        | "token-plan-china"
+        | "token-plan-mainland"
+        | "token-plan-mainland-china"
+        | "cn"
+        | "china" => XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL,
+        "token-plan-sgp"
+        | "token-plan-sg"
+        | "token-plan-singapore"
+        | "sgp"
+        | "sg"
+        | "singapore" => XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL,
+        "token-plan-ams"
+        | "token-plan-eu"
+        | "token-plan-europe"
+        | "token-plan-amsterdam"
+        | "ams"
+        | "eu"
+        | "europe"
+        | "amsterdam" => XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL,
+        // A non-empty, non-standard MiMo mode was deliberately configured.
+        // Keep it in the Token Plan endpoint family instead of silently
+        // falling back to the standard endpoint/auth scheme on typos.
+        _ => DEFAULT_XIAOMI_MIMO_TOKEN_PLAN_BASE_URL,
+    })
+}
+
+fn xiaomi_mimo_mode_uses_standard_endpoint(normalized_mode: &str) -> bool {
+    matches!(
+        normalized_mode,
+        "standard" | "default" | "payg" | "paygo" | "pay-as-you-go" | "pay-as-go"
+    )
+}
+
+fn xiaomi_mimo_base_url_is_official(base_url: &str) -> bool {
+    matches!(
+        normalize_base_url(base_url).to_ascii_lowercase().as_str(),
+        "https://api.xiaomimimo.com/v1"
+            | "https://token-plan-cn.xiaomimimo.com/v1"
+            | "https://token-plan-sgp.xiaomimimo.com/v1"
+            | "https://token-plan-ams.xiaomimimo.com/v1"
+    )
+}
+
 fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
     if (provider == ApiProvider::Siliconflow || provider == ApiProvider::SiliconflowCn)
         && siliconflow_base_url_is_official(base_url)
     {
+        return false;
+    }
+    if provider == ApiProvider::XiaomiMimo && xiaomi_mimo_base_url_is_official(base_url) {
         return false;
     }
     normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
@@ -4133,6 +4222,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
         model: override_cfg.model.or(base.model),
+        mode: override_cfg.mode.or(base.mode),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
     }
@@ -5440,6 +5530,8 @@ mod tests {
         wanjie_maas_model: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
+        xiaomi_mimo_token_plan_api_key: Option<OsString>,
+        mimo_token_plan_api_key: Option<OsString>,
         xiaomi_mimo_api_key: Option<OsString>,
         xiaomi_api_key: Option<OsString>,
         mimo_api_key: Option<OsString>,
@@ -5447,6 +5539,8 @@ mod tests {
         mimo_base_url: Option<OsString>,
         xiaomi_mimo_model: Option<OsString>,
         mimo_model: Option<OsString>,
+        xiaomi_mimo_mode: Option<OsString>,
+        mimo_mode: Option<OsString>,
         novita_api_key: Option<OsString>,
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
@@ -5522,6 +5616,8 @@ mod tests {
             let wanjie_maas_model_prev = env::var_os("WANJIE_MAAS_MODEL");
             let openrouter_api_key_prev = env::var_os("OPENROUTER_API_KEY");
             let openrouter_base_url_prev = env::var_os("OPENROUTER_BASE_URL");
+            let xiaomi_mimo_token_plan_api_key_prev = env::var_os("XIAOMI_MIMO_TOKEN_PLAN_API_KEY");
+            let mimo_token_plan_api_key_prev = env::var_os("MIMO_TOKEN_PLAN_API_KEY");
             let xiaomi_mimo_api_key_prev = env::var_os("XIAOMI_MIMO_API_KEY");
             let xiaomi_api_key_prev = env::var_os("XIAOMI_API_KEY");
             let mimo_api_key_prev = env::var_os("MIMO_API_KEY");
@@ -5529,6 +5625,8 @@ mod tests {
             let mimo_base_url_prev = env::var_os("MIMO_BASE_URL");
             let xiaomi_mimo_model_prev = env::var_os("XIAOMI_MIMO_MODEL");
             let mimo_model_prev = env::var_os("MIMO_MODEL");
+            let xiaomi_mimo_mode_prev = env::var_os("XIAOMI_MIMO_MODE");
+            let mimo_mode_prev = env::var_os("MIMO_MODE");
             let novita_api_key_prev = env::var_os("NOVITA_API_KEY");
             let novita_base_url_prev = env::var_os("NOVITA_BASE_URL");
             let fireworks_api_key_prev = env::var_os("FIREWORKS_API_KEY");
@@ -5599,6 +5697,8 @@ mod tests {
                 env::remove_var("WANJIE_MAAS_MODEL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
+                env::remove_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY");
+                env::remove_var("MIMO_TOKEN_PLAN_API_KEY");
                 env::remove_var("XIAOMI_MIMO_API_KEY");
                 env::remove_var("XIAOMI_API_KEY");
                 env::remove_var("MIMO_API_KEY");
@@ -5606,6 +5706,8 @@ mod tests {
                 env::remove_var("MIMO_BASE_URL");
                 env::remove_var("XIAOMI_MIMO_MODEL");
                 env::remove_var("MIMO_MODEL");
+                env::remove_var("XIAOMI_MIMO_MODE");
+                env::remove_var("MIMO_MODE");
                 env::remove_var("NOVITA_API_KEY");
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
@@ -5676,6 +5778,8 @@ mod tests {
                 wanjie_maas_model: wanjie_maas_model_prev,
                 openrouter_api_key: openrouter_api_key_prev,
                 openrouter_base_url: openrouter_base_url_prev,
+                xiaomi_mimo_token_plan_api_key: xiaomi_mimo_token_plan_api_key_prev,
+                mimo_token_plan_api_key: mimo_token_plan_api_key_prev,
                 xiaomi_mimo_api_key: xiaomi_mimo_api_key_prev,
                 xiaomi_api_key: xiaomi_api_key_prev,
                 mimo_api_key: mimo_api_key_prev,
@@ -5683,6 +5787,8 @@ mod tests {
                 mimo_base_url: mimo_base_url_prev,
                 xiaomi_mimo_model: xiaomi_mimo_model_prev,
                 mimo_model: mimo_model_prev,
+                xiaomi_mimo_mode: xiaomi_mimo_mode_prev,
+                mimo_mode: mimo_mode_prev,
                 novita_api_key: novita_api_key_prev,
                 novita_base_url: novita_base_url_prev,
                 fireworks_api_key: fireworks_api_key_prev,
@@ -5768,6 +5874,14 @@ mod tests {
                 Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
+                Self::restore_var(
+                    "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
+                    self.xiaomi_mimo_token_plan_api_key.take(),
+                );
+                Self::restore_var(
+                    "MIMO_TOKEN_PLAN_API_KEY",
+                    self.mimo_token_plan_api_key.take(),
+                );
                 Self::restore_var("XIAOMI_MIMO_API_KEY", self.xiaomi_mimo_api_key.take());
                 Self::restore_var("XIAOMI_API_KEY", self.xiaomi_api_key.take());
                 Self::restore_var("MIMO_API_KEY", self.mimo_api_key.take());
@@ -5775,6 +5889,8 @@ mod tests {
                 Self::restore_var("MIMO_BASE_URL", self.mimo_base_url.take());
                 Self::restore_var("XIAOMI_MIMO_MODEL", self.xiaomi_mimo_model.take());
                 Self::restore_var("MIMO_MODEL", self.mimo_model.take());
+                Self::restore_var("XIAOMI_MIMO_MODE", self.xiaomi_mimo_mode.take());
+                Self::restore_var("MIMO_MODE", self.mimo_mode.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
@@ -7020,6 +7136,7 @@ api_key = "old-openrouter-key"
             );
         }
         for speech_model in [
+            "mimo-v2.5-asr",
             "mimo-v2.5-tts",
             "mimo-v2.5-tts-voicedesign",
             "mimo-v2.5-tts-voiceclone",
@@ -7509,6 +7626,68 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
     }
 
     #[test]
+    fn xiaomi_mimo_token_plan_mode_uses_token_plan_endpoint() -> Result<()> {
+        let config: Config = toml::from_str(
+            r#"
+provider = "xiaomi-mimo"
+
+[providers.xiaomi_mimo]
+mode = "token-plan"
+model = "tts"
+"#,
+        )?;
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            config.deepseek_base_url(),
+            DEFAULT_XIAOMI_MIMO_TOKEN_PLAN_BASE_URL
+        );
+        assert_eq!(config.default_model(), XIAOMI_MIMO_TTS_MODEL);
+        Ok(())
+    }
+
+    #[test]
+    fn xiaomi_mimo_token_plan_mode_accepts_region_aliases() -> Result<()> {
+        let config: Config = toml::from_str(
+            r#"
+provider = "mimo"
+
+[providers.mimo]
+mode = "token-plan-ams"
+"#,
+        )?;
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            config.deepseek_base_url(),
+            XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn xiaomi_mimo_unknown_mode_stays_on_token_plan_endpoint() -> Result<()> {
+        let config: Config = toml::from_str(
+            r#"
+provider = "mimo"
+
+[providers.mimo]
+mode = "token-plan-usa"
+"#,
+        )?;
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            config.deepseek_base_url(),
+            DEFAULT_XIAOMI_MIMO_TOKEN_PLAN_BASE_URL
+        );
+        Ok(())
+    }
+
+    #[test]
     fn xiaomi_mimo_provider_ignores_non_mimo_root_default_model() -> Result<()> {
         let config = Config {
             provider: Some("xiaomi-mimo".to_string()),
@@ -7578,6 +7757,40 @@ model = "mimo-v2.5-pro"
             "https://mimo-gateway.example/v1"
         );
         assert_eq!(config.default_model(), "mimo-v2.5");
+        Ok(())
+    }
+
+    #[test]
+    fn xiaomi_mimo_env_token_plan_mode_uses_token_plan_key_and_endpoint() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-xiaomi-mimo-token-plan-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "xiaomi-mimo");
+            env::set_var("XIAOMI_MIMO_MODE", "token-plan-sgp");
+            env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "tp-env-key");
+            env::set_var("XIAOMI_MIMO_MODEL", "voiceclone");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.deepseek_api_key()?, "tp-env-key");
+        assert_eq!(
+            config.deepseek_base_url(),
+            XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL
+        );
+        assert_eq!(config.default_model(), XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL);
         Ok(())
     }
 

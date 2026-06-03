@@ -238,6 +238,7 @@ max_subagents = 10 # optional (1-20)
 #   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL, VOLCENGINE_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
 #   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
+#                Token Plan: XIAOMI_MIMO_TOKEN_PLAN_API_KEY (or MIMO_TOKEN_PLAN_API_KEY), XIAOMI_MIMO_MODE/MIMO_MODE
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
@@ -316,6 +317,11 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://api.xiaomimimo.com/v1"
 # model = "mimo-v2.5-pro"              # chat/reasoning
 # Chat model IDs: mimo-v2.5-pro, mimo-v2.5
+# Token Plan subscriptions use separate tp-* API keys plus api-key auth.
+# mode = "token-plan"                  # default Token Plan endpoint: https://token-plan-cn.xiaomimimo.com/v1
+# mode = "token-plan-sgp"              # Singapore cluster
+# mode = "token-plan-ams"              # Europe cluster
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1" # override if your subscription page shows a different URL
 # TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
 # TTS model IDs: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone, mimo-v2-tts
 

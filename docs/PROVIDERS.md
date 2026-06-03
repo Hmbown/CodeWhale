@@ -118,7 +118,7 @@ endpoint.
 | `wanjie-ark` | `[providers.wanjie_ark]` | `WANJIE_ARK_API_KEY`, `WANJIE_API_KEY`, `WANJIE_MAAS_API_KEY` | `WANJIE_ARK_BASE_URL`, `WANJIE_BASE_URL`, `WANJIE_MAAS_BASE_URL`; default `https://maas-openapi.wanjiedata.com/api/v1` | `deepseek-reasoner` | OpenAI-compatible hosted route. `WANJIE_ARK_MODEL`, `WANJIE_MODEL`, and `WANJIE_MAAS_MODEL` are accepted. |
 | `volcengine` | `[providers.volcengine]` | `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, `ARK_API_KEY` | `VOLCENGINE_BASE_URL`, `VOLCENGINE_ARK_BASE_URL`, `ARK_BASE_URL`; default `https://ark.cn-beijing.volces.com/api/coding/v3` | `DeepSeek-V4-Pro`, `DeepSeek-V4-Flash` | Volcengine/Volcano Engine Ark OpenAI-compatible coding endpoint. `VOLCENGINE_MODEL` and `VOLCENGINE_ARK_MODEL` are accepted. |
 | `openrouter` | `[providers.openrouter]` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL`; default `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash`; recent large IDs include `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `qwen/qwen3.6-flash`, `qwen/qwen3.6-35b-a3b`, `qwen/qwen3.6-max-preview`, `qwen/qwen3.6-27b`, `qwen/qwen3.6-plus`, `google/gemma-4-31b-it`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.6` | Additive open-model routing layer. It does not replace DeepSeek; it lets users route supported model IDs through OpenRouter when they choose it. |
-| `xiaomi-mimo` | `[providers.xiaomi_mimo]` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` | `XIAOMI_MIMO_BASE_URL`, `MIMO_BASE_URL`; default `https://api.xiaomimimo.com/v1` | Chat: `mimo-v2.5-pro`, `mimo-v2.5`; speech/TTS: `mimo-v2.5-tts`, `mimo-v2.5-tts-voicedesign`, `mimo-v2.5-tts-voiceclone`, `mimo-v2-tts` | Xiaomi MiMo OpenAI-compatible chat completions route. It sends `max_completion_tokens` and uses MiMo's `thinking` field for reasoning control. `codewhale speech` / `tts` uses the TTS models. |
+| `xiaomi-mimo` | `[providers.xiaomi_mimo]` | `XIAOMI_MIMO_TOKEN_PLAN_API_KEY`, `MIMO_TOKEN_PLAN_API_KEY`, `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` | `XIAOMI_MIMO_BASE_URL`, `MIMO_BASE_URL`; default `https://api.xiaomimimo.com/v1`; `mode = "token-plan"` selects `https://token-plan-cn.xiaomimimo.com/v1` (`token-plan-sgp` / `token-plan-ams` for other clusters) | Chat: `mimo-v2.5-pro`, `mimo-v2.5`; ASR/TTS: `mimo-v2.5-asr`, `mimo-v2.5-tts`, `mimo-v2.5-tts-voicedesign`, `mimo-v2.5-tts-voiceclone`, `mimo-v2-tts` | Xiaomi MiMo OpenAI-compatible chat completions route. It sends `max_completion_tokens` and uses MiMo's `thinking` field for reasoning control. Token Plan hosts and `tp-*` keys use the `api-key` header instead of `Authorization: Bearer`. `codewhale speech` / `tts` uses the TTS models. |
 | `novita` | `[providers.novita]` | `NOVITA_API_KEY` | `NOVITA_BASE_URL`; default `https://api.novita.ai/v1` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` | OpenAI-compatible hosted route for DeepSeek model IDs. Use config or `CODEWHALE_MODEL` / `DEEPSEEK_MODEL` for model overrides. |
 | `fireworks` | `[providers.fireworks]` | `FIREWORKS_API_KEY` | `FIREWORKS_BASE_URL`; default `https://api.fireworks.ai/inference/v1` | `accounts/fireworks/models/deepseek-v4-pro` | OpenAI-compatible hosted route. Use config or `CODEWHALE_MODEL` / `DEEPSEEK_MODEL` for model overrides. |
 | `siliconflow` | `[providers.siliconflow]` | `SILICONFLOW_API_KEY` | `SILICONFLOW_BASE_URL`; default `https://api.siliconflow.com/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | OpenAI-compatible hosted route. Official docs use the `.com` endpoint. `SILICONFLOW_MODEL` is accepted. Reasoning aliases `deepseek-reasoner` and `deepseek-r1` map to Pro; `deepseek-chat` and `deepseek-v3` map to Flash. |
@@ -142,6 +142,15 @@ Voice-design and voice-clone shorthands map to `mimo-v2.5-tts-voicedesign` and
 includes `mimo-v2.5` for image input. CodeWhale exposes image analysis through the
 separate `[vision_model]` / `image_analyze` path; set that model to
 `mimo-v2.5` when using MiMo for vision.
+
+For Xiaomi MiMo Token Plan subscriptions, set `[providers.xiaomi_mimo]
+mode = "token-plan"` and store the `tp-*` key as the Xiaomi MiMo API key (or
+export `XIAOMI_MIMO_TOKEN_PLAN_API_KEY`). The default Token Plan cluster is
+China (`https://token-plan-cn.xiaomimimo.com/v1`); use `token-plan-sgp`,
+`token-plan-ams`, or an explicit `base_url` if your subscription page lists a
+different cluster. CodeWhale detects Token Plan hosts (and `tp-*` keys behind
+custom gateways) and sends `api-key: <key>` per Xiaomi's Token Plan
+OpenAI-compatible examples.
 
 ### Recent OpenRouter Large Models
 
@@ -172,7 +181,7 @@ endpoint when the endpoint supports model listing.
 | `wanjie-ark` | `deepseek-reasoner` | yes | yes |
 | `volcengine` | `DeepSeek-V4-Pro`, `DeepSeek-V4-Flash` | yes | yes |
 | `openrouter` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash`, `arcee-ai/trinity-large-thinking`, `minimax/minimax-m3`, `xiaomi/mimo-v2.5-pro`, `xiaomi/mimo-v2.5`, `qwen/qwen3.6-flash`, `qwen/qwen3.6-35b-a3b`, `qwen/qwen3.6-max-preview`, `qwen/qwen3.6-27b`, `qwen/qwen3.6-plus`, `moonshotai/kimi-k2.6`, `z-ai/glm-5.1`, `tencent/hy3-preview`, `google/gemma-4-31b-it`, `google/gemma-4-26b-a4b-it`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | yes | yes |
-| `xiaomi-mimo` | `mimo-v2.5-pro`, `mimo-v2.5`; speech/TTS IDs are selected through `codewhale speech` / `tts` | yes | yes for chat models; no for speech/TTS models |
+| `xiaomi-mimo` | `mimo-v2.5-pro`, `mimo-v2.5`, `mimo-v2.5-asr`, `mimo-v2.5-tts`, `mimo-v2.5-tts-voicedesign`, `mimo-v2.5-tts-voiceclone`, `mimo-v2-tts` | yes | yes for chat models; speech/TTS models are used by `codewhale speech` / `tts` |
 | `novita` | `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` | yes | yes |
 | `fireworks` | `accounts/fireworks/models/deepseek-v4-pro` | yes | yes |
 | `siliconflow` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |

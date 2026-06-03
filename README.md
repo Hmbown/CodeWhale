@@ -362,6 +362,10 @@ codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
 codewhale --provider xiaomi-mimo --model mimo-v2.5
 codewhale --provider xiaomi-mimo speech "Hello from MiMo" --model tts -o hello.wav
 
+# Xiaomi MiMo Token Plan (tp-* keys use api-key auth)
+XIAOMI_MIMO_TOKEN_PLAN_API_KEY="tp-..." XIAOMI_MIMO_MODE="token-plan-sgp" codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
+# or set in config: [providers.xiaomi_mimo] mode = "token-plan" (cn), "token-plan-sgp", or "token-plan-ams"
+
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
 codewhale --provider novita --model deepseek/deepseek-v4-pro
@@ -565,12 +569,12 @@ Key environment variables:
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_API_KEY` / `XIAOMI_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `ARCEE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_TOKEN_PLAN_API_KEY` / `MIMO_TOKEN_PLAN_API_KEY` / `XIAOMI_MIMO_API_KEY` / `XIAOMI_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `ARCEE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
 | `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Wanjie Ark endpoint and model override |
 | `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
-| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` | Xiaomi MiMo endpoint and model override |
+| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` / `XIAOMI_MIMO_MODE` / `MIMO_MODE` | Xiaomi MiMo endpoint, model, and Token Plan mode override |
 | `NOVITA_BASE_URL` | Novita endpoint override |
 | `FIREWORKS_BASE_URL` | Fireworks endpoint override |
 | `SILICONFLOW_BASE_URL` / `SILICONFLOW_MODEL` | SiliconFlow endpoint and model override |
