@@ -6604,7 +6604,9 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::XiaomiMimo => Some("MiMo"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
-            crate::config::ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => Some("SiliconFlow"),
+            crate::config::ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
+                Some("SiliconFlow")
+            }
             crate::config::ApiProvider::Arcee => Some("Arcee"),
             crate::config::ApiProvider::Moonshot => Some("Kimi"),
             crate::config::ApiProvider::Sglang => Some("SGLang"),

@@ -2465,7 +2465,9 @@ impl EnvRuntimeOverrides {
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
-            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => self.siliconflow_base_url.clone(),
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => {
+                self.siliconflow_base_url.clone()
+            }
             ProviderKind::Arcee => self.arcee_base_url.clone(),
             ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
@@ -2478,7 +2480,9 @@ impl EnvRuntimeOverrides {
         let model = match provider {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
             ProviderKind::Volcengine => self.volcengine_model.clone(),
-            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => self.siliconflow_model.clone(),
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => {
+                self.siliconflow_model.clone()
+            }
             ProviderKind::Arcee => self.arcee_model.clone(),
             ProviderKind::Moonshot => self.moonshot_model.clone(),
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_model.clone(),

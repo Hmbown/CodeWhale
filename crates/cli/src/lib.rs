@@ -749,6 +749,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
+        ProviderKind::SiliconflowCN => "siliconflow",
     }
 }
 
@@ -839,6 +840,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
             "WANJIE_API_KEY",
             "WANJIE_MAAS_API_KEY",
         ],
+        ProviderKind::SiliconflowCN => &["SILICONFLOW_API_KEY"],
     }
 }
 
