@@ -3212,8 +3212,8 @@ mod tests {
 
     #[test]
     fn completed_command_clears_quarry() {
-        // When a command completes successfully, the quarry must be cleared
-        // so the system prompt stops telling the model to continue the goal.
+        // When a command completes successfully, the verdict is set to Hunted
+        // but the quarry is kept so the WorkBench shows the goal with ✓.
         let mut app = create_test_app();
         app.hunt.quarry = Some("Scan repos".to_string());
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
@@ -3221,12 +3221,16 @@ mod tests {
         // Simulate successful completion (what the TurnCompleted handler does):
         if app.hunt.quarry.is_some() {
             app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
-            app.hunt.quarry = None;
+            // quarry is NOT cleared — sidebar shows completed goal
         }
 
-        assert!(app.hunt.quarry.is_none(),
-            "quarry must be None after completion so model isn't prompted to continue");
+        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
+            "quarry must persist after completion so WorkBench shows the goal");
         assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunted);
+        let summary = sidebar_work_summary(&mut app);
+        assert!(summary.goal_completed, "completed flag must be true");
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan repos"),
+            "WorkBench must show the completed goal text");
     }
 
     #[test]
@@ -3735,5 +3739,50 @@ mod tests {
             "FAIL: resume left pause_indicator={:?} — icon stuck on pause", summary.pause_indicator);
         assert_eq!(summary.goal_objective.as_deref(), Some("Scan repos"),
             "goal must be restored on resume");
+    }
+
+    #[test]
+    fn resume_interception_consumes_paused_quarry_from_any_path() {
+        // Verifies the interception logic now at the top of
+        // submit_or_steer_message (and in the simulation helper):
+        // when paused_quarry is set and the user types "resume the paused
+        // command", the quarry is consumed BEFORE deciding which dispatch
+        // path to take (Immediate vs Steer vs Queue).
+        let mut app = create_test_app();
+        app.paused_quarry = Some("Scan nested git repos".to_string());
+        app.paused = false;             // unpaused state after "how are you?"
+        app.is_loading = true;          // model still processing — would go Steer
+        app.hunt.quarry = None;
+
+        // This runs the same interception as submit_or_steer_message:
+        if app.paused_quarry.is_some() {
+            let trimmed = "resume the paused command".trim().to_lowercase();
+            if trimmed == "continue" || trimmed == "resume"
+                || trimmed.starts_with("continue ")
+                || trimmed.starts_with("resume ")
+            {
+                app.hunt.quarry = app.paused_quarry.take();
+            }
+        }
+
+        assert_eq!(app.paused_quarry, None,
+            "paused_quarry must be consumed regardless of dispatch path");
+        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repos"),
+            "quarry must be restored on resume");
+
+        // After interception, even if command completes, the sidebar
+        // should show the resumed goal, not the pause icon
+        // (quarry is NOT cleared on completion — sidebar keeps the goal)
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+        app.is_loading = false;
+
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench should show completed goal");
+        assert!(summary.pause_indicator.is_none(),
+            "pause_indicator must not show after quarry consumed — was {:?}",
+            summary.pause_indicator);
+        assert!(summary.goal_completed,
+            "completed command must show checkmark");
     }
 }

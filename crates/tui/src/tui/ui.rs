@@ -1726,9 +1726,11 @@ async fn run_event_loop(
                             && app.hunt.quarry.is_some()
                         {
                             app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
-                            // Clear the quarry so the model is no longer prompted
-                            // to continue this goal in future system prompts.
-                            app.hunt.quarry = None;
+                            // quarry is NOT cleared — the sidebar shows the
+                            // completed goal with a ✓ checkmark. It will be
+                            // implicitly replaced when the user types a new
+                            // message (dispatch_user_message sends whatever
+                            // app.hunt.quarry contains at that point).
                         }
 
                         // Keep pause state visible after the turn ends so the
@@ -6434,8 +6436,28 @@ async fn submit_or_steer_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
-    message: QueuedMessage,
+    mut message: QueuedMessage,
 ) -> Result<()> {
+    // INTERCEPT: if paused_quarry has a saved command and the user types
+    // "continue" or "resume", restore the goal BEFORE deciding disposition.
+    // This catches messages sent while is_loading=true (which go through
+    // the Steer path and bypass dispatch_user_message entirely).
+    if app.paused_quarry.is_some() {
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue" || trimmed == "resume"
+            || trimmed.starts_with("continue ")
+            || trimmed.starts_with("resume ")
+        {
+            app.hunt.quarry = app.paused_quarry.take();
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            app.status_message = None;
+        }
+    }
     match app.decide_submit_disposition() {
         SubmitDisposition::Immediate => {
             dispatch_user_message(app, config, engine_handle, message).await
