@@ -98,6 +98,7 @@ pub const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference
 pub const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_SILICONFLOW_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
+pub const DEFAULT_SILICONFLOW_CN_BASE_URL: &str = "https://api.siliconflow.cn/v1";
 pub const DEFAULT_ARCEE_MODEL: &str = "trinity-large-thinking";
 pub const ARCEE_TRINITY_LARGE_PREVIEW_MODEL: &str = "trinity-large-preview";
 pub const ARCEE_TRINITY_MINI_MODEL: &str = "trinity-mini";
@@ -147,6 +148,7 @@ pub enum ApiProvider {
     Novita,
     Fireworks,
     Siliconflow,
+    SiliconflowCn,
     Arcee,
     Moonshot,
     Sglang,
@@ -176,6 +178,10 @@ impl ApiProvider {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
+            "siliconflow-cn" | "siliconflow-CN"
+            | "silicon-flow-cn" | "silicon-flow-CN"
+            | "silicon_flow_cn" | "silicon_flow_CN"
+            | "siliconflow-china" => Some(Self::SiliconflowCn),
             "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
@@ -200,6 +206,7 @@ impl ApiProvider {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
+            Self::SiliconflowCn => "siliconflow-CN",
             Self::Arcee => "arcee",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
@@ -224,6 +231,7 @@ impl ApiProvider {
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
             Self::Siliconflow => "SiliconFlow",
+            Self::SiliconflowCn => "SiliconFlow (China)",
             Self::Arcee => "Arcee AI",
             Self::Moonshot => "Moonshot/Kimi",
             Self::Sglang => "SGLang",
@@ -689,7 +697,7 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
         }
         return Some(canonical.to_string());
     }
-    if matches!(provider, ApiProvider::Siliconflow) {
+    if matches!(provider, ApiProvider::Siliconflow | ApiProvider::SiliconflowCn) {
         let provider_model = model_for_provider(provider, normalized.clone());
         if provider_model != normalized {
             return Some(provider_model);
@@ -730,7 +738,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::XiaomiMimo => vec![DEFAULT_XIAOMI_MIMO_MODEL, XIAOMI_MIMO_V2_5_OMNI_MODEL],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
-        ApiProvider::Siliconflow => {
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
             vec![DEFAULT_SILICONFLOW_MODEL, DEFAULT_SILICONFLOW_FLASH_MODEL]
         }
         ApiProvider::Arcee => vec![DEFAULT_ARCEE_MODEL, ARCEE_TRINITY_LARGE_PREVIEW_MODEL],
@@ -1995,7 +2003,7 @@ impl Config {
             ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
-            ApiProvider::Siliconflow => "providers.siliconflow",
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "providers.siliconflow",
             ApiProvider::Arcee => "providers.arcee",
             ApiProvider::Moonshot => "providers.moonshot",
             ApiProvider::Sglang => "providers.sglang",
@@ -2018,7 +2026,7 @@ impl Config {
             && ApiProvider::parse(provider).is_none()
         {
             anyhow::bail!(
-                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, wanjie-ark, volcengine, openrouter, xiaomi-mimo, novita, fireworks, siliconflow, arcee, moonshot, sglang, vllm, or ollama."
+                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, wanjie-ark, volcengine, openrouter, xiaomi-mimo, novita, fireworks, siliconflow, siliconflow-CN, arcee, moonshot, sglang, vllm, or ollama."
             );
         }
         if let Some(ref key) = self.api_key
@@ -2141,7 +2149,7 @@ impl Config {
             ApiProvider::XiaomiMimo => &providers.xiaomi_mimo,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
-            ApiProvider::Siliconflow => &providers.siliconflow,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &providers.siliconflow,
             ApiProvider::Arcee => &providers.arcee,
             ApiProvider::Moonshot => &providers.moonshot,
             ApiProvider::Sglang => &providers.sglang,
@@ -2164,7 +2172,7 @@ impl Config {
             ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
-            ApiProvider::Siliconflow => &mut providers.siliconflow,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &mut providers.siliconflow,
             ApiProvider::Arcee => &mut providers.arcee,
             ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
@@ -2267,7 +2275,7 @@ impl Config {
             ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
-            ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_MODEL,
             ApiProvider::Arcee => DEFAULT_ARCEE_MODEL,
             ApiProvider::Moonshot => DEFAULT_MOONSHOT_MODEL,
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
@@ -2303,7 +2311,7 @@ impl Config {
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
-            | ApiProvider::Siliconflow
+            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
             | ApiProvider::Arcee
             | ApiProvider::Moonshot
             | ApiProvider::Sglang
@@ -2324,6 +2332,8 @@ impl Config {
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
                 ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+            ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
+                ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
                 ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
                 ApiProvider::Moonshot => {
                     if self
@@ -2377,6 +2387,8 @@ impl Config {
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
             ApiProvider::Siliconflow => "siliconflow",
+            ApiProvider::SiliconflowCn => "siliconflow-CN",
+            ApiProvider::SiliconflowCn => "siliconflow-CN",
             ApiProvider::Arcee => "arcee",
             ApiProvider::Moonshot => "moonshot",
             ApiProvider::Sglang => "sglang",
@@ -2474,7 +2486,7 @@ impl Config {
                 "Fireworks AI API key not found. Run 'codewhale auth set --provider fireworks', \
                  set FIREWORKS_API_KEY, or add [providers.fireworks] api_key in ~/.codewhale/config.toml."
             ),
-            ApiProvider::Siliconflow => anyhow::bail!(
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => anyhow::bail!(
                 "SiliconFlow API key not found. Run 'codewhale auth set --provider siliconflow', \
                  set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.codewhale/config.toml."
             ),
@@ -3146,7 +3158,7 @@ fn apply_env_overrides(config: &mut Config) {
                     .fireworks
                     .base_url = Some(value);
             }
-            ApiProvider::Siliconflow => {
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
                 config
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
@@ -3291,7 +3303,7 @@ fn apply_env_overrides(config: &mut Config) {
             .fireworks
             .base_url = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Siliconflow)
+    if matches!(config.api_provider(), ApiProvider::Siliconflow | ApiProvider::SiliconflowCn)
         && let Ok(value) = std::env::var("SILICONFLOW_BASE_URL")
         && !value.trim().is_empty()
     {
@@ -3365,7 +3377,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
-            ApiProvider::Siliconflow => &mut providers.siliconflow,
+            ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &mut providers.siliconflow,
             ApiProvider::Arcee => &mut providers.arcee,
             ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
@@ -3448,7 +3460,7 @@ fn apply_env_overrides(config: &mut Config) {
             .moonshot
             .model = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Siliconflow)
+    if matches!(config.api_provider(), ApiProvider::Siliconflow | ApiProvider::SiliconflowCn)
         && let Ok(value) = std::env::var("SILICONFLOW_MODEL")
         && !value.trim().is_empty()
     {
@@ -3503,7 +3515,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
-                ApiProvider::Siliconflow => &mut providers.siliconflow,
+                ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => &mut providers.siliconflow,
                 ApiProvider::Arcee => &mut providers.arcee,
                 ApiProvider::Moonshot => &mut providers.moonshot,
                 ApiProvider::Sglang => &mut providers.sglang,
@@ -3817,6 +3829,8 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+            ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
+                ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
         ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
         ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
@@ -3827,7 +3841,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
 }
 
 fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
-    if provider == ApiProvider::Siliconflow && siliconflow_base_url_is_official(base_url) {
+    if (provider == ApiProvider::Siliconflow || provider == ApiProvider::SiliconflowCn) && siliconflow_base_url_is_official(base_url) {
         return false;
     }
     normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
@@ -4559,7 +4573,7 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Fireworks => {
             std::env::var("FIREWORKS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
-        ApiProvider::Siliconflow => {
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
             std::env::var("SILICONFLOW_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
         ApiProvider::Arcee => std::env::var("ARCEE_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
@@ -4598,7 +4612,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
-        ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "SILICONFLOW_API_KEY",
         ApiProvider::Arcee => "ARCEE_API_KEY",
         ApiProvider::Moonshot => "MOONSHOT_API_KEY",
         ApiProvider::Sglang => "SGLANG_API_KEY",
@@ -4702,7 +4716,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
-        ApiProvider::Siliconflow => "providers.siliconflow",
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "providers.siliconflow",
         ApiProvider::Arcee => "providers.arcee",
         ApiProvider::Moonshot => "providers.moonshot",
         ApiProvider::Sglang => "providers.sglang",
@@ -4744,6 +4758,8 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
         ApiProvider::Siliconflow => "siliconflow",
+            ApiProvider::SiliconflowCn => "siliconflow-CN",
+            ApiProvider::SiliconflowCn => "siliconflow-CN",
         ApiProvider::Arcee => "arcee",
         ApiProvider::Moonshot => "moonshot",
         ApiProvider::Sglang => "sglang",
@@ -4838,6 +4854,7 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::Novita => Ok("novita"),
         ApiProvider::Fireworks => Ok("fireworks"),
         ApiProvider::Siliconflow => Ok("siliconflow"),
+            ApiProvider::SiliconflowCn => Ok("siliconflow-CN"),
         ApiProvider::Arcee => Ok("arcee"),
         ApiProvider::Moonshot => Ok("moonshot"),
         ApiProvider::Sglang => Ok("sglang"),

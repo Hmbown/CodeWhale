@@ -72,6 +72,7 @@ const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
+const DEFAULT_SILICONFLOW_CN_BASE_URL: &str = "https://api.siliconflow.cn/v1";
 const DEFAULT_ARCEE_BASE_URL: &str = "https://api.arcee.ai/api/v1";
 const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
@@ -115,6 +116,8 @@ pub enum ProviderKind {
     Siliconflow,
     #[serde(alias = "arcee-ai", alias = "arcee_ai")]
     Arcee,
+    #[serde(alias = "siliconflow-cn", alias = "siliconflow-CN")]
+    SiliconflowCN,
     Moonshot,
     Sglang,
     Vllm,
@@ -136,6 +139,7 @@ impl ProviderKind {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
+            Self::SiliconflowCN => "siliconflow-CN",
             Self::Arcee => "arcee",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
@@ -163,6 +167,7 @@ impl ProviderKind {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
+            "siliconflow-cn" | "siliconflow-CN" => Some(Self::SiliconflowCN),
             "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
@@ -170,6 +175,11 @@ impl ProviderKind {
             "ollama" | "ollama-local" => Some(Self::Ollama),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn is_siliconflow(self) -> bool {
+        matches!(self, Self::Siliconflow | Self::SiliconflowCN)
     }
 }
 
@@ -252,7 +262,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &self.xiaomi_mimo,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
-            ProviderKind::Siliconflow => &self.siliconflow,
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &self.siliconflow,
             ProviderKind::Arcee => &self.arcee,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
@@ -273,7 +283,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &mut self.xiaomi_mimo,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
-            ProviderKind::Siliconflow => &mut self.siliconflow,
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &mut self.siliconflow,
             ProviderKind::Arcee => &mut self.arcee,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
@@ -1306,6 +1316,7 @@ impl ConfigToml {
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
                 ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
+                ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL.to_string(),
                 ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL.to_string(),
                 ProviderKind::Moonshot => {
                     if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
@@ -1712,7 +1723,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
-        ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
+        ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_MODEL,
         ProviderKind::Arcee => DEFAULT_ARCEE_MODEL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
@@ -1734,6 +1745,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+        ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL,
         ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
@@ -1750,7 +1762,7 @@ fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
 }
 
 fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
-    if provider == ProviderKind::Siliconflow && siliconflow_base_url_is_official(base_url) {
+    if provider.is_siliconflow() && siliconflow_base_url_is_official(base_url) {
         return false;
     }
     let actual = base_url.trim_end_matches('/');
@@ -2453,7 +2465,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
-            ProviderKind::Siliconflow => self.siliconflow_base_url.clone(),
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => self.siliconflow_base_url.clone(),
             ProviderKind::Arcee => self.arcee_base_url.clone(),
             ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
@@ -2466,7 +2478,7 @@ impl EnvRuntimeOverrides {
         let model = match provider {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
             ProviderKind::Volcengine => self.volcengine_model.clone(),
-            ProviderKind::Siliconflow => self.siliconflow_model.clone(),
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => self.siliconflow_model.clone(),
             ProviderKind::Arcee => self.arcee_model.clone(),
             ProviderKind::Moonshot => self.moonshot_model.clone(),
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_model.clone(),

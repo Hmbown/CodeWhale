@@ -407,6 +407,7 @@ fn compact_content_block(block: &ContentBlock) -> Value {
             "tool_use_id": tool_use_id,
             "content": content,
         }),
+        ContentBlock::ImageUrl { .. } => serde_json::Value::Null,
     }
 }
 

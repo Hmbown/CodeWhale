@@ -699,6 +699,7 @@ pub fn latest_assistant_text(messages: &[Message]) -> Option<String> {
                     | ContentBlock::ServerToolUse { .. }
                     | ContentBlock::ToolSearchToolResult { .. }
                     | ContentBlock::CodeExecutionToolResult { .. } => None,
+                    | ContentBlock::ImageUrl { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
