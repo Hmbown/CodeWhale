@@ -4834,18 +4834,21 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused and user types a new message: cancel the old turn so the
-    // model doesn't resume the original command after handling the new input.
+    // When paused and user types a message: cancel the old turn so the
+    // model does NOT see the old command in the same conversation turn.
+    // The message is consumed here — the user retypes after the cancel
+    // confirmation, starting a completely fresh turn with no old context.
     if app.paused {
         app.paused = false;
         app.paused_at = None;
         app.paused_cancelled = false;
         app.pausable = false;
         app.active_snapshot = None;
-        app.status_message = None;
         engine_handle.set_paused(false);
         engine_handle.cancel();
-        // Fall through — message goes to engine as a normal user message.
+        app.is_loading = false;
+        app.status_message = Some("Cancelled — type a new message".to_string());
+        return Ok(());
     }
 
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
