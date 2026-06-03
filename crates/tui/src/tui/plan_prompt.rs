@@ -551,7 +551,7 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
             if first_word {
                 let total_width = leading_spaces + word_width;
                 if total_width > width {
-                    let lines_needed = (total_width + width - 1) / width;
+                    let lines_needed = total_width.div_ceil(width);
                     line_count = lines_needed;
                     current_width = total_width % width;
                     if current_width == 0 {
@@ -565,7 +565,7 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
             } else if current_width + 1 + word_width > width {
                 line_count += 1;
                 if word_width > width {
-                    let lines_needed = (word_width + width - 1) / width;
+                    let lines_needed = word_width.div_ceil(width);
                     line_count += lines_needed - 1;
                     current_width = word_width % width;
                     if current_width == 0 {
