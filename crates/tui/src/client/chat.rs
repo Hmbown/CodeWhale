@@ -95,34 +95,6 @@ impl DeepSeekClient {
         // Streaming and tool-carrying requests bypass the cache.
         let cacheable =
             request.stream != Some(true) && request.tools.as_ref().is_none_or(|t| t.is_empty());
-        let cache_key = if cacheable {
-            let system_text = request
-                .system
-                .as_ref()
-                .map(|s| match s {
-                    crate::models::SystemPrompt::Text(t) => t.clone(),
-                    crate::models::SystemPrompt::Blocks(blocks) => blocks
-                        .iter()
-                        .map(|b| b.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                })
-                .unwrap_or_default();
-            let messages_json = serde_json::to_vec(&request.messages).unwrap_or_default();
-            let key = crate::llm_response_cache::LlmResponseCache::make_key(
-                &format!("{:?}", self.api_provider),
-                &request.model,
-                &self.base_url,
-                &system_text,
-                &messages_json,
-            );
-            if let Some(cached) = crate::llm_response_cache::response_cache().get(&key) {
-                return Ok(cached);
-            }
-            Some(key)
-        } else {
-            None
-        };
 
         let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
         let model = wire_model_for_provider(self.api_provider, &request.model);
@@ -169,6 +141,22 @@ impl DeepSeekClient {
             request.reasoning_effort.as_deref(),
             self.api_provider,
         );
+
+        // Key on the final canonical wire body. This ensures that all
+        // provider/model normalizations, reasoning-effort mappings, tool
+        // sanitizations, and max_tokens adjustments are reflected in the
+        // key — two requests that produce the same wire body always share
+        // a cache entry, and any transformation difference always misses.
+        let cache_key = if cacheable {
+            let wire_bytes = serde_json::to_vec(&body).unwrap_or_default();
+            let key = crate::llm_response_cache::LlmResponseCache::make_key(&wire_bytes);
+            if let Some(cached) = crate::llm_response_cache::response_cache().get(&key) {
+                return Ok(cached);
+            }
+            Some(key)
+        } else {
+            None
+        };
 
         let url = api_url_with_suffix(
             &self.base_url,

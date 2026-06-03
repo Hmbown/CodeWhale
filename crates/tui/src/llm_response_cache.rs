@@ -8,7 +8,13 @@
 //! responses and tool-carrying requests are excluded to avoid complexity and
 //! side-effect issues.
 //!
-//! **Cache key**: SHA-256(provider | model | base_url | system_hash | messages_hash)
+//! **Cache key**: SHA-256 of the *canonical wire body* — the final JSON
+//! object that would be sent to the chat completions API, after all
+//! provider/model normalizations, reasoning-effort transformations, tool
+//! sanitization, and max_tokens adjustments have been applied. This
+//! ensures that any transformation applied to the request is reflected in
+//! the key, preventing false cache hits on requests that differ only in
+//! their post-processing.
 //!
 //! **Value**: Complete `MessageResponse` including usage tokens, so cost
 //! tracking remains accurate on cache hits.
@@ -67,31 +73,15 @@ impl LlmResponseCache {
         }
     }
 
-    /// Compute a cache key from request parameters.
+    /// Compute a cache key from the canonical wire body bytes.
     ///
-    /// The key is SHA-256(provider | model | base_url | system_hash | messages_hash).
-    /// This ensures that any change in the request parameters produces a
-    /// different key, preventing false cache hits.
-    pub fn make_key(
-        provider: &str,
-        model: &str,
-        base_url: &str,
-        system: &str,
-        messages_json: &[u8],
-    ) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(provider.as_bytes());
-        hasher.update(b"|");
-        hasher.update(model.as_bytes());
-        hasher.update(b"|");
-        hasher.update(base_url.as_bytes());
-        hasher.update(b"|");
-        // Hash system prompt separately to avoid concatenation collisions.
-        let system_hash = Sha256::digest(system.as_bytes());
-        hasher.update(system_hash);
-        hasher.update(b"|");
-        hasher.update(messages_json);
-        hasher.finalize().into()
+    /// The key is SHA-256 of the final JSON body that would be sent to the
+    /// chat completions API. Using the wire body (rather than individual
+    /// pre-transformation fields) ensures that any provider-specific
+    /// normalization, reasoning-effort mapping, tool sanitization, or
+    /// max_tokens adjustment is reflected in the key.
+    pub fn make_key(wire_body: &[u8]) -> [u8; 32] {
+        Sha256::digest(wire_body).into()
     }
 
     /// Look up a cached response.
@@ -181,46 +171,43 @@ mod tests {
 
     #[test]
     fn make_key_different_inputs_produce_different_keys() {
-        let key1 =
-            LlmResponseCache::make_key("deepseek", "v4", "https://api.example.com", "sys", b"msg1");
-        let key2 =
-            LlmResponseCache::make_key("deepseek", "v4", "https://api.example.com", "sys", b"msg2");
-        let key3 =
-            LlmResponseCache::make_key("openai", "v4", "https://api.example.com", "sys", b"msg1");
-        let key4 = LlmResponseCache::make_key(
-            "deepseek",
-            "v4",
-            "https://api.example.com",
-            "other",
-            b"msg1",
+        let key1 = LlmResponseCache::make_key(
+            b"{\"model\":\"v4\",\"messages\":[{\"role\":\"user\",\"content\":\"msg1\"}]}",
         );
-        assert_ne!(
-            key1, key2,
-            "different messages should produce different keys"
+        let key2 = LlmResponseCache::make_key(
+            b"{\"model\":\"v4\",\"messages\":[{\"role\":\"user\",\"content\":\"msg2\"}]}",
         );
-        assert_ne!(
-            key1, key3,
-            "different providers should produce different keys"
+        let key3 = LlmResponseCache::make_key(
+            b"{\"model\":\"other\",\"messages\":[{\"role\":\"user\",\"content\":\"msg1\"}]}",
         );
-        assert_ne!(
-            key1, key4,
-            "different system prompts should produce different keys"
-        );
+        assert_ne!(key1, key2, "different bodies should produce different keys");
+        assert_ne!(key1, key3, "different models should produce different keys");
     }
 
     #[test]
-    fn make_key_same_inputs_produce_same_key() {
-        let key1 =
-            LlmResponseCache::make_key("deepseek", "v4", "https://api.example.com", "sys", b"msg");
-        let key2 =
-            LlmResponseCache::make_key("deepseek", "v4", "https://api.example.com", "sys", b"msg");
-        assert_eq!(key1, key2, "same inputs should produce same key");
+    fn make_key_same_input_produces_same_key() {
+        let body = b"{\"model\":\"v4\",\"messages\":[{\"role\":\"user\",\"content\":\"msg\"}]}";
+        let key1 = LlmResponseCache::make_key(body);
+        let key2 = LlmResponseCache::make_key(body);
+        assert_eq!(key1, key2, "same body should produce same key");
+    }
+
+    #[test]
+    fn make_key_reflects_transformations() {
+        // Two bodies that differ only in reasoning_effort should produce
+        // different keys. This is the primary correctness property the
+        // wire-body key design provides.
+        let base = b"{\"model\":\"v4\",\"messages\":[]}";
+        let with_effort = b"{\"model\":\"v4\",\"messages\":[],\"reasoning_effort\":\"high\"}";
+        let k1 = LlmResponseCache::make_key(base);
+        let k2 = LlmResponseCache::make_key(with_effort);
+        assert_ne!(k1, k2, "reasoning_effort difference must change the key");
     }
 
     #[test]
     fn put_and_get_returns_cached_response() {
         let cache = LlmResponseCache::new();
-        let key = LlmResponseCache::make_key("p", "m", "u", "s", b"msg");
+        let key = LlmResponseCache::make_key(b"msg");
         let response = make_response("resp1");
 
         cache.put(key, response.clone());
@@ -231,7 +218,7 @@ mod tests {
     #[test]
     fn get_miss_returns_none() {
         let cache = LlmResponseCache::new();
-        let key = LlmResponseCache::make_key("p", "m", "u", "s", b"msg");
+        let key = LlmResponseCache::make_key(b"msg");
         assert!(cache.get(&key).is_none());
     }
 
@@ -239,9 +226,9 @@ mod tests {
     fn capacity_evicts_oldest() {
         let cache = LlmResponseCache::with_capacity(NonZeroUsize::new(2).unwrap());
 
-        let key1 = LlmResponseCache::make_key("p", "m", "u", "s", b"msg1");
-        let key2 = LlmResponseCache::make_key("p", "m", "u", "s", b"msg2");
-        let key3 = LlmResponseCache::make_key("p", "m", "u", "s", b"msg3");
+        let key1 = LlmResponseCache::make_key(b"msg1");
+        let key2 = LlmResponseCache::make_key(b"msg2");
+        let key3 = LlmResponseCache::make_key(b"msg3");
 
         cache.put(key1, make_response("r1"));
         cache.put(key2, make_response("r2"));
@@ -262,12 +249,12 @@ mod tests {
     #[test]
     fn hit_rate_tracks_correctly() {
         let cache = LlmResponseCache::new();
-        let key = LlmResponseCache::make_key("p", "m", "u", "s", b"msg");
+        let key = LlmResponseCache::make_key(b"msg");
 
         cache.put(key, make_response("r1"));
         cache.get(&key); // hit
         cache.get(&key); // hit
-        let miss_key = LlmResponseCache::make_key("p", "m", "u", "s", b"other");
+        let miss_key = LlmResponseCache::make_key(b"other");
         cache.get(&miss_key); // miss
 
         let stats = cache.stats();
@@ -279,8 +266,8 @@ mod tests {
     #[test]
     fn stats_reports_size_and_capacity() {
         let cache = LlmResponseCache::with_capacity(NonZeroUsize::new(10).unwrap());
-        let key1 = LlmResponseCache::make_key("p", "m", "u", "s", b"msg1");
-        let key2 = LlmResponseCache::make_key("p", "m", "u", "s", b"msg2");
+        let key1 = LlmResponseCache::make_key(b"msg1");
+        let key2 = LlmResponseCache::make_key(b"msg2");
 
         cache.put(key1, make_response("r1"));
         cache.put(key2, make_response("r2"));
