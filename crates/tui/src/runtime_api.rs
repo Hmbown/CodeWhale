@@ -41,6 +41,7 @@ use crate::runtime_threads::{
     ThreadDetail, ThreadListFilter, ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest,
     UsageGroupBy,
 };
+use crate::models::{ContentBlock, Message};
 use crate::session_manager::{SavedSession, SessionManager, SessionMetadata, default_sessions_dir};
 use crate::skill_state::SkillStateStore;
 use crate::task_manager::{
@@ -514,7 +515,7 @@ pub async fn run_http_server(
 
 pub fn build_router(state: RuntimeApiState) -> Router {
     let api_routes = Router::new()
-        .route("/v1/sessions", get(list_sessions))
+        .route("/v1/sessions", get(list_sessions).post(create_session_from_thread))
         .route("/v1/sessions/{id}", get(get_session).delete(delete_session))
         .route(
             "/v1/sessions/{id}/resume-thread",
@@ -855,6 +856,151 @@ async fn delete_session(
         .delete_session(&id)
         .map_err(|e| map_session_err(&id, e, "delete"))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Request body for creating a session from a thread
+#[derive(Debug, Deserialize)]
+struct CreateSessionRequest {
+    /// Thread ID to save as session
+    thread_id: String,
+    /// Optional custom title (defaults to thread title or first message)
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Response for session creation
+#[derive(Debug, Serialize)]
+struct CreateSessionResponse {
+    session_id: String,
+    thread_id: String,
+    message_count: usize,
+    title: String,
+}
+
+/// Save a thread as a session for cross-workspace resumption
+async fn create_session_from_thread(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<(StatusCode, Json<CreateSessionResponse>), ApiError> {
+    // Get thread detail
+    let detail = state
+        .runtime_threads
+        .get_thread_detail(&req.thread_id)
+        .await
+        .map_err(|e| ApiError::not_found(format!("Thread {} not found: {}", req.thread_id, e)))?;
+
+    let thread = detail.thread;
+
+    // Extract messages from items (UserMessage and AgentMessage items)
+    let mut messages: Vec<Message> = Vec::new();
+
+    // Group items by turn, then extract user/agent messages
+    for turn in &detail.turns {
+        let turn_items: Vec<_> = detail
+            .items
+            .iter()
+            .filter(|item| item.turn_id == turn.id)
+            .collect();
+
+        // Find user message item
+        let user_item = turn_items.iter().find(|item| item.kind == TurnItemKind::UserMessage);
+        // Find agent message item
+        let agent_item = turn_items.iter().find(|item| item.kind == TurnItemKind::AgentMessage);
+
+        // Create user message if present
+        if let Some(user) = user_item {
+            let text = user.detail.clone().unwrap_or_else(|| user.summary.clone());
+            if !text.trim().is_empty() {
+                messages.push(Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text { text, cache_control: None }],
+                });
+            }
+        }
+
+        // Create assistant message if present
+        if let Some(agent) = agent_item {
+            let text = agent.detail.clone().unwrap_or_else(|| agent.summary.clone());
+            if !text.trim().is_empty() {
+                messages.push(Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text { text, cache_control: None }],
+                });
+            }
+        }
+    }
+
+    // Calculate total tokens from turns
+    let total_tokens: u64 = detail
+        .turns
+        .iter()
+        .filter_map(|t| t.usage.as_ref())
+        .map(|u| u.input_tokens as u64 + u.output_tokens as u64)
+        .sum();
+
+    // Determine title
+    let title = req.title.clone().unwrap_or_else(|| {
+        thread
+            .title
+            .clone()
+            .unwrap_or_else(|| {
+                // Fallback: first user message
+                messages
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .and_then(|m| {
+                        m.content.iter().find_map(|block| match block {
+                            ContentBlock::Text { text, .. } => {
+                                let truncated = if text.len() > 50 {
+                                    text.chars().take(50).collect::<String>() + "..."
+                                } else {
+                                    text.clone()
+                                };
+                                Some(truncated)
+                            }
+                            _ => None,
+                        })
+                    })
+                    .unwrap_or_else(|| "Saved Session".to_string())
+            })
+    });
+
+    // Create session using session_manager helper
+    let manager = SessionManager::new(state.sessions_dir.clone())
+        .map_err(|e| ApiError::internal(format!("Failed to open sessions dir: {e}")))?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    // Convert thread system_prompt (String) to SystemPrompt enum
+    let system_prompt = thread.system_prompt.as_ref().map(|s| crate::models::SystemPrompt::Text(s.clone()));
+    
+    let session = crate::session_manager::create_saved_session_with_id_and_mode(
+        session_id.clone(),
+        &messages,
+        &thread.model,
+        &thread.workspace,
+        total_tokens,
+        system_prompt.as_ref(),
+        Some(&thread.mode),
+    );
+
+    // Override title if provided
+    let mut session = session;
+    session.metadata.title = title.clone();
+
+    // Save session
+    manager
+        .save_session(&session)
+        .map_err(|e| ApiError::internal(format!("Failed to save session: {e}")))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateSessionResponse {
+            session_id,
+            thread_id: thread.id,
+            message_count: messages.len(),
+            title,
+        }),
+    ))
 }
 
 fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
