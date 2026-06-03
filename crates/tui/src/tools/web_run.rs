@@ -173,15 +173,6 @@ impl WebRunState {
             self.pages.remove(&evicted_ref);
         }
     }
-
-    fn get_page(&mut self, ref_id: &str) -> Option<WebPage> {
-        self.cleanup();
-        let stored = self.pages.get(ref_id)?.clone();
-        if let Some(session) = self.sessions.get_mut(&stored.namespace) {
-            session.last_access = Instant::now();
-        }
-        Some(stored.page)
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -670,11 +661,11 @@ impl ToolSpec for WebRunTool {
     }
 }
 
+/// Obtain an exclusive lock on both maps and run `f` against a temporary
+/// `WebRunState`. The split-lock design exists for the read path; write
+/// paths that need both maps use this helper.
 fn with_state<T>(f: impl FnOnce(&mut WebRunState) -> T) -> T {
     let cache = WEB_RUN_STATE.get_or_init(WebRunCache::default);
-    // Take exclusive locks on both maps to maintain the same semantics as
-    // the original single-Mutex design. The split is beneficial for the
-    // read path (`get_page`) which uses read locks instead.
     let mut sessions = cache.sessions.write();
     let mut pages = cache.pages.write();
     let mut state = WebRunState {
@@ -701,12 +692,32 @@ fn store_page(namespace: &str, ref_id: &str, page: WebPage) {
     });
 }
 
-/// Retrieve a cached page by ref_id.
+/// Retrieve a cached page by ref_id using read locks only.
 ///
-/// Returns `Arc<WebPage>` so callers share the same allocation instead of
-/// cloning the (potentially large) page content on every read.
+/// This is the hot path — `click`, `find`, and `screenshot` all call
+/// this once per ref_id. Using a read lock means concurrent calls on
+/// different ref_ids don't block each other, and they don't block the
+/// write path (`store_page`, `with_state`) while they hold the page
+/// lock.
+///
+/// `last_access` is bumped lazily: we take a short write lock on
+/// `sessions` only if the session exists. If the session was evicted
+/// between the page read and the session write (a benign race), we
+/// simply skip the touch — the next `with_state` call will clean it up.
 fn get_page(ref_id: &str) -> Option<Arc<WebPage>> {
-    with_state(|state| state.get_page(ref_id).map(Arc::new))
+    let cache = WEB_RUN_STATE.get_or_init(WebRunCache::default);
+    let stored = {
+        let pages = cache.pages.read();
+        pages.get(ref_id).cloned()
+    }?;
+    // Bump last_access under a short session write lock.
+    {
+        let mut sessions = cache.sessions.write();
+        if let Some(session) = sessions.get_mut(&stored.namespace) {
+            session.last_access = Instant::now();
+        }
+    }
+    Some(Arc::new(stored.page))
 }
 
 #[cfg(test)]
