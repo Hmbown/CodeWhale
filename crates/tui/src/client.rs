@@ -1092,7 +1092,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Openrouter
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
-            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["thinking"] = json!({ "type": "disabled" });
@@ -1128,7 +1129,8 @@ pub(super) fn apply_reasoning_effort(
             // DeepSeek compatibility: low/medium both map to high
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
-            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("high");
@@ -1189,7 +1191,8 @@ pub(super) fn apply_reasoning_effort(
         "xhigh" | "max" | "highest" => match provider {
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
-            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("max");

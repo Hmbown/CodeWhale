@@ -178,10 +178,10 @@ impl ApiProvider {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
-            "siliconflow-cn" | "siliconflow-CN"
-            | "silicon-flow-cn" | "silicon-flow-CN"
-            | "silicon_flow_cn" | "silicon_flow_CN"
-            | "siliconflow-china" => Some(Self::SiliconflowCn),
+            "siliconflow-cn" | "siliconflow-CN" | "silicon-flow-cn" | "silicon-flow-CN"
+            | "silicon_flow_cn" | "silicon_flow_CN" | "siliconflow-china" => {
+                Some(Self::SiliconflowCn)
+            }
             "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
@@ -697,7 +697,10 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
         }
         return Some(canonical.to_string());
     }
-    if matches!(provider, ApiProvider::Siliconflow | ApiProvider::SiliconflowCn) {
+    if matches!(
+        provider,
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+    ) {
         let provider_model = model_for_provider(provider, normalized.clone());
         if provider_model != normalized {
             return Some(provider_model);
@@ -2311,7 +2314,8 @@ impl Config {
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
-            | ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Arcee
             | ApiProvider::Moonshot
             | ApiProvider::Sglang
@@ -2332,7 +2336,6 @@ impl Config {
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
                 ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
-            ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
                 ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
                 ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
                 ApiProvider::Moonshot => {
@@ -2387,7 +2390,6 @@ impl Config {
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
             ApiProvider::Siliconflow => "siliconflow",
-            ApiProvider::SiliconflowCn => "siliconflow-CN",
             ApiProvider::SiliconflowCn => "siliconflow-CN",
             ApiProvider::Arcee => "arcee",
             ApiProvider::Moonshot => "moonshot",
@@ -3303,8 +3305,10 @@ fn apply_env_overrides(config: &mut Config) {
             .fireworks
             .base_url = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Siliconflow | ApiProvider::SiliconflowCn)
-        && let Ok(value) = std::env::var("SILICONFLOW_BASE_URL")
+    if matches!(
+        config.api_provider(),
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+    ) && let Ok(value) = std::env::var("SILICONFLOW_BASE_URL")
         && !value.trim().is_empty()
     {
         config
@@ -3460,8 +3464,10 @@ fn apply_env_overrides(config: &mut Config) {
             .moonshot
             .model = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Siliconflow | ApiProvider::SiliconflowCn)
-        && let Ok(value) = std::env::var("SILICONFLOW_MODEL")
+    if matches!(
+        config.api_provider(),
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+    ) && let Ok(value) = std::env::var("SILICONFLOW_MODEL")
         && !value.trim().is_empty()
     {
         config
@@ -3829,8 +3835,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
-            ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
-                ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
+        ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
         ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
         ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
@@ -3841,7 +3846,9 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
 }
 
 fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
-    if (provider == ApiProvider::Siliconflow || provider == ApiProvider::SiliconflowCn) && siliconflow_base_url_is_official(base_url) {
+    if (provider == ApiProvider::Siliconflow || provider == ApiProvider::SiliconflowCn)
+        && siliconflow_base_url_is_official(base_url)
+    {
         return false;
     }
     normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
@@ -4758,8 +4765,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
         ApiProvider::Siliconflow => "siliconflow",
-            ApiProvider::SiliconflowCn => "siliconflow-CN",
-            ApiProvider::SiliconflowCn => "siliconflow-CN",
+        ApiProvider::SiliconflowCn => "siliconflow-CN",
         ApiProvider::Arcee => "arcee",
         ApiProvider::Moonshot => "moonshot",
         ApiProvider::Sglang => "sglang",
@@ -4854,7 +4860,7 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::Novita => Ok("novita"),
         ApiProvider::Fireworks => Ok("fireworks"),
         ApiProvider::Siliconflow => Ok("siliconflow"),
-            ApiProvider::SiliconflowCn => Ok("siliconflow-CN"),
+        ApiProvider::SiliconflowCn => Ok("siliconflow-CN"),
         ApiProvider::Arcee => Ok("arcee"),
         ApiProvider::Moonshot => Ok("moonshot"),
         ApiProvider::Sglang => Ok("sglang"),
