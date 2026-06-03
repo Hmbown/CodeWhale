@@ -316,6 +316,8 @@ impl ModalView for PlanPromptView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        let popup_area = centered_rect(72, 52, area);
+        let content_width = usize::from(popup_area.width.saturating_sub(4).max(1));
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(vec![Span::styled(
             "Action required",
@@ -330,7 +332,7 @@ impl ModalView for PlanPromptView {
         // v0.8.44: render plan details when update_plan was called (#834)
         if let Some(ref plan) = self.plan {
             if let Some(ref explanation) = plan.explanation {
-                for line in wrap_text(explanation, 68) {
+                for line in wrap_text(explanation, content_width) {
                     lines.push(Line::from(Span::styled(
                         line,
                         Style::default().fg(palette::TEXT_MUTED),
@@ -369,12 +371,10 @@ impl ModalView for PlanPromptView {
             );
         }
 
-        let popup_area = centered_rect(72, 52, area);
         render_modal_chrome(area, popup_area, buf);
 
         // Calculate scroll bounds so long plan content doesn't clip the options.
         // Use wrapped_line_count to estimate post-wrap line count.
-        let content_width = usize::from(popup_area.width.saturating_sub(4).max(1));
         let total_lines = wrapped_line_count(&lines, content_width);
         let visible_lines = usize::from(popup_area.height).saturating_sub(4).max(1);
         let max_scroll = total_lines.saturating_sub(visible_lines);
@@ -525,7 +525,8 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
             total += 1;
             continue;
         }
-        let leading_spaces = (text.len() - text.trim_start().len()).min(width.saturating_sub(1));
+        let leading_bytes = text.len() - text.trim_start().len();
+        let leading_spaces = UnicodeWidthStr::width(&text[..leading_bytes]).min(width.saturating_sub(1));
         let mut line_count = 0;
         let mut current_width = leading_spaces;
         let mut first_word = true;
