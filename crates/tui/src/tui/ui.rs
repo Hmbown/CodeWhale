@@ -4834,14 +4834,17 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // Resume handling: any message while paused unpauses and sends.
-    // The pause gate simply stops tool execution for the old turn; typing
-    // anything starts a fresh turn with the paused flag cleared.
+    // When paused and user types a new message: cancel the old turn so the
+    // model doesn't resume the original command after handling the new input.
     if app.paused {
         app.paused = false;
         app.paused_at = None;
+        app.paused_cancelled = false;
+        app.pausable = false;
+        app.active_snapshot = None;
         app.status_message = None;
         engine_handle.set_paused(false);
+        engine_handle.cancel();
         // Fall through — message goes to engine as a normal user message.
     }
 
