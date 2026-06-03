@@ -439,6 +439,9 @@ pub struct EngineHandle {
     tx_user_input: mpsc::Sender<UserInputDecision>,
     /// Send steer input for an in-flight turn.
     tx_steer: mpsc::Sender<String>,
+    /// Shared paused flag — set by the UI, read by the turn loop.
+    /// Uses the same pattern as `cancel_token` to bypass the Op channel.
+    pub shared_paused: Arc<StdMutex<bool>>,
 }
 
 // `impl EngineHandle { ... }` moved to `engine/handle.rs` so the
@@ -505,8 +508,9 @@ pub struct Engine {
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
-    /// Whether the current command is paused (for pausable commands).
-    paused: bool,
+    /// Shared paused flag — set by the UI (via EngineHandle::set_paused),
+    /// read by the turn-loop pause gate.
+    shared_paused: Arc<StdMutex<bool>>,
 }
 
 // === Internal tool helpers ===
@@ -593,6 +597,7 @@ impl Engine {
         let cancel_token = CancellationToken::new();
         let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
         let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
+        let shared_paused = Arc::new(StdMutex::new(false));
         let tool_exec_lock = Arc::new(RwLock::new(()));
 
         // Create clients for both providers
@@ -754,7 +759,7 @@ impl Engine {
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
-            paused: false,
+            shared_paused: shared_paused.clone(),
         };
         engine.rehydrate_latest_canonical_state();
 
@@ -763,6 +768,7 @@ impl Engine {
             rx_event: Arc::new(RwLock::new(rx_event)),
             cancel_token: shared_cancel_token,
             cancel_reason,
+            shared_paused,
             tx_approval,
             tx_user_input,
             tx_steer,
@@ -1075,7 +1081,10 @@ impl Engine {
                     self.reset_cancel_token();
                 }
                 Op::SetPaused { paused } => {
-                    self.paused = paused;
+                    match self.shared_paused.lock() {
+                        Ok(mut slot) => *slot = paused,
+                        Err(poisoned) => *poisoned.into_inner() = paused,
+                    }
                     let _ = self.tx_event
                         .send(Event::status(if paused { "Command paused" } else { "Command resumed" }))
                         .await;

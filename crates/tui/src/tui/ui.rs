@@ -3460,8 +3460,8 @@ async fn run_event_loop(
                                 // Cancelling while paused — mark as cancelled.
                                 app.paused_cancelled = true;
                                 app.paused = false;
+                                engine_handle.set_paused(false);
                                 app.status_message = Some("Command cancelled".to_string());
-                                let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
                             } else {
                                 engine_handle.cancel();
                                 mark_active_turn_cancelled_locally(app);
@@ -3472,17 +3472,17 @@ async fn run_event_loop(
                         EscapeAction::PauseCommand => {
                             if app.paused {
                                 // Already paused — resume
+                                engine_handle.set_paused(false);
                                 app.paused = false;
                                 app.paused_at = None;
                                 app.status_message = Some("Command resumed".to_string());
-                                let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
                             } else {
                                 // First ESC — pause
+                                engine_handle.set_paused(true);
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
                                 app.paused_cancelled = false;
                                 app.status_message = Some("Command paused. Press Esc again to cancel, or type 'continue'/'resume' to resume.".to_string());
-                                let _ = engine_handle.send(Op::SetPaused { paused: true }).await;
                             }
                         }
                         EscapeAction::DiscardQueuedDraft => {
@@ -4840,7 +4840,7 @@ async fn dispatch_user_message(
             app.paused_at = None;
             app.status_message = Some("Command resumed".to_string());
             app.is_loading = false;
-            let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
+            engine_handle.set_paused(false);
             return Ok(());
         }
         // Any other message while paused is queued for after resume.
