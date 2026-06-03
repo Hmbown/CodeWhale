@@ -3660,4 +3660,72 @@ mod tests {
         assert!(app.hunt.quarry.is_none(),
             "FAIL: system prompt must have no goal (hunt.quarry must be None)");
     }
+
+    #[test]
+    fn workbench_rendered_output_keeps_paused_after_non_continue() {
+        // Renders the actual work panel lines and checks the final output
+        // — catches regressions where summary is correct but the render
+        // path produces nothing (e.g. push_work_goal_lines exits early).
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Deploy to staging".to_string());
+        app.paused_quarry = app.hunt.quarry.clone();
+        app.hunt.quarry = None;
+        app.paused = true;
+
+        simulate_dispatch_non_continue(&mut app, "how are you?");
+
+        let summary = sidebar_work_summary(&mut app);
+        let lines = work_panel_lines(
+            &summary,
+            80,
+            10,
+            PaletteMode::Dark,
+            &palette::UI_THEME,
+        );
+
+        // If the goal_objective or pause_indicator is somehow lost in the
+        // render pipeline, lines will be empty or not contain the expected
+        // text. This catches the "WorkBench went blank" bug directly.
+        assert!(!lines.is_empty(),
+            "FAIL: rendered lines are empty — WorkBench went blank");
+        let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
+        assert!(first.contains('⏸'),
+            "FAIL: rendered line missing pause icon, got: {first}");
+        assert!(first.contains("Deploy to staging"),
+            "FAIL: rendered line missing goal text, got: {first}");
+    }
+
+    #[test]
+    fn resume_switches_icon_from_pause_to_play() {
+        // When the user resumes a paused command, the WorkBench icon must
+        // change from ⏸ (pause) to ▶ (play). The (Pausing)/(Paused)
+        // indicator must disappear because paused_quarry is consumed.
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Scan repos".to_string());
+        app.pausable = true;
+
+        // Pause
+        app.paused_quarry = app.hunt.quarry.clone();
+        app.hunt.quarry = None;
+        app.paused = true;
+
+        // Verify paused state shows pause icon
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"));
+
+        // Resume: consume paused_quarry, restore hunt.quarry
+        app.hunt.quarry = app.paused_quarry.take();
+        app.paused = false;
+        app.pausable = false;
+
+        // Simulate TurnStarted (engine started processing)
+        app.is_loading = true;
+
+        // The icon should now be ▶ (play), NOT ⏳/⏸
+        let summary = sidebar_work_summary(&mut app);
+        assert!(summary.pause_indicator.is_none(),
+            "FAIL: resume left pause_indicator={:?} — icon stuck on pause", summary.pause_indicator);
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan repos"),
+            "goal must be restored on resume");
+    }
 }
