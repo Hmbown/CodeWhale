@@ -143,6 +143,8 @@ codewhale doctor                         # セットアップを検証
 
 `npm i -g codewhale` は v0.8.8 以降、glibc ベースの ARM64 Linux で動作します。[Releases ページ](https://github.com/Hmbown/CodeWhale/releases) からビルド済みバイナリをダウンロードし、`PATH` 上に並べて配置することもできます。
 
+HarmonyOS PC と OpenHarmony クロスビルドの設定は [docs/HarmonyOS.md](docs/HarmonyOS.md) を参照してください。
+
 ### 中国 / ミラーフレンドリーなインストール
 
 中国本土から GitHub または npm のダウンロードが遅い場合は、Cargo レジストリのミラーを利用してください:

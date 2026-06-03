@@ -44,6 +44,8 @@ systems such as Alpine should use [Build from source](#7-build-from-source).
 > and `codewhale-tui-linux-arm64`, so a plain `npm i -g codewhale` works
 > on any glibc-based ARM64 Linux. If you're stuck on v0.8.7, jump to
 > [Build from source](#7-build-from-source) — `cargo install` works fine.
+> For HarmonyOS PC and OpenHarmony cross-build setup, see
+> [HarmonyOS and OpenHarmony](HarmonyOS.md).
 
 ---
 

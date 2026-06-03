@@ -235,6 +235,8 @@ Use a fixed model or fixed thinking level when you want repeatable benchmarking,
 
 `npm i -g codewhale` works on glibc-based ARM64 Linux from v0.8.8 onward. You can also download prebuilt binaries from the [Releases page](https://github.com/Hmbown/CodeWhale/releases) and place them side by side on your `PATH`.
 
+For HarmonyOS PC and OpenHarmony cross-build setup, see [docs/HarmonyOS.md](docs/HarmonyOS.md).
+
 ### China / Mirror-friendly Installation
 
 If GitHub or npm downloads are slow from mainland China, use a Cargo registry mirror:

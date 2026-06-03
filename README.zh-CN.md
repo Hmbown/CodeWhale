@@ -186,6 +186,8 @@ Auto 模式同时控制两个设置：
 
 从 v0.8.8 起，`npm i -g codewhale` 直接支持 glibc 系的 ARM64 Linux。你也可以从 [Releases 页面](https://github.com/Hmbown/CodeWhale/releases) 下载预编译二进制，放到 `PATH` 目录中。
 
+HarmonyOS PC 运行和 OpenHarmony 交叉编译配置见 [docs/HarmonyOS.md](docs/HarmonyOS.md)。
+
 ### 中国大陆 / 镜像友好安装
 
 如果在中国大陆访问 GitHub 或 npm 下载较慢，可以通过 Cargo 注册表镜像安装：
