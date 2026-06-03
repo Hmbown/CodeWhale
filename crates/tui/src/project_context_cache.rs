@@ -22,15 +22,15 @@
 //! `tui::transcript_cache` and `tui::output_rows_cache`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::project_context::{ProjectContext, PROJECT_CONTEXT_FILES};
+use crate::project_context::{PROJECT_CONTEXT_FILES, ProjectContext};
 
-/// Default capacity for the workspace cache. Sized for "current workspace
-/// + 1 or 2 recently-visited ones" without unbounded growth on a session
-/// that hops between many repositories.
+/// Default capacity for the workspace cache. Sized for the current
+/// workspace plus one or two recently-visited ones, without unbounded
+/// growth on a session that hops between many repositories.
 const DEFAULT_CAPACITY: usize = 8;
 
 /// Composite key for the cache. Two `load_project_context_with_parents`
@@ -39,10 +39,12 @@ const DEFAULT_CAPACITY: usize = 8;
 /// between.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CacheKey {
-    /// Canonicalized workspace path. `None` when canonicalization fails
-    /// (rare, e.g. cwd removed) — such entries are never shared between
-    /// callers.
-    pub canonical_workspace: Option<PathBuf>,
+    /// Canonicalized workspace path, falling back to the raw path when
+    /// canonicalization fails. Storing the raw path is a correctness fix:
+    /// two distinct workspaces whose canonicalization both fails (e.g. a
+    /// deleted cwd) would otherwise collide under the previous
+    /// `Option<PathBuf>` layout.
+    pub workspace: PathBuf,
     /// Cheap content fingerprint: sorted list of `(path, mtime)` for
     /// every candidate file the loader would inspect.
     pub signature: MtimeSignature,
@@ -64,16 +66,28 @@ struct MtimeEntry {
     mtime: Option<SystemTime>,
 }
 
+/// Bounded LRU cache of `CacheKey -> ProjectContext`. Insertion-order
+/// eviction (FIFO) matches the strategy used in the other per-tui caches
+/// (`transcript_cache`, `output_rows_cache`).
+#[derive(Debug, Default)]
+struct WorkspaceCache {
+    by_key: HashMap<CacheKey, ProjectContext>,
+    /// Insertion order, oldest first. Popping from the front gives O(1)
+    /// FIFO eviction — cheaper than the `Vec::remove(0)` shuffle the
+    /// earlier patch used.
+    order: VecDeque<CacheKey>,
+}
+
 thread_local! {
-    static CACHE: RefCell<HashMap<CacheKey, ProjectContext>> = RefCell::new(HashMap::new());
-    /// FIFO order for eviction. Mirrors the `VecDeque<CacheKey>` pattern
-    /// used in the other caches.
-    static ORDER: RefCell<Vec<CacheKey>> = RefCell::new(Vec::new());
+    /// Thread-local cache. The TUI render loop and the engine both call
+    /// into the loader from the main thread, so a `!Sync` cache avoids
+    /// any cross-thread coordination.
+    static CACHE: RefCell<WorkspaceCache> = RefCell::new(WorkspaceCache::default());
 }
 
 /// Look up a `ProjectContext` by key. Returns `Some` clone on hit.
 pub fn lookup(key: &CacheKey) -> Option<ProjectContext> {
-    CACHE.with(|c| c.borrow().get(key).cloned())
+    CACHE.with(|c| c.borrow().by_key.get(key).cloned())
 }
 
 /// Store a `ProjectContext` under `key`, evicting the oldest entry if
@@ -81,35 +95,27 @@ pub fn lookup(key: &CacheKey) -> Option<ProjectContext> {
 /// `ProjectContext` instance the caller already has — no extra clone.
 pub fn store(key: CacheKey, value: ProjectContext) {
     CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if cache.insert(key.clone(), value).is_none() {
-            ORDER.with(|o| o.borrow_mut().push(key.clone()));
+        let mut state = c.borrow_mut();
+        if state.by_key.insert(key.clone(), value).is_none() {
+            state.order.push_back(key);
+        }
+        while state.by_key.len() > DEFAULT_CAPACITY {
+            if let Some(oldest) = state.order.pop_front() {
+                state.by_key.remove(&oldest);
+            } else {
+                break;
+            }
         }
     });
-    evict_if_needed();
 }
 
 /// Drop every cached entry. Used by tests and `/clear` paths.
 #[cfg(test)]
 pub fn clear() {
-    CACHE.with(|c| c.borrow_mut().clear());
-    ORDER.with(|o| o.borrow_mut().clear());
-}
-
-fn evict_if_needed() {
     CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        ORDER.with(|o| {
-            let mut order = o.borrow_mut();
-            while cache.len() > DEFAULT_CAPACITY {
-                if let Some(oldest) = order.first().cloned() {
-                    cache.remove(&oldest);
-                    order.remove(0);
-                } else {
-                    break;
-                }
-            }
-        });
+        let mut state = c.borrow_mut();
+        state.by_key.clear();
+        state.order.clear();
     });
 }
 
@@ -118,7 +124,7 @@ fn evict_if_needed() {
 #[must_use]
 pub fn compute_cache_key(workspace: &Path, home_dir: Option<&Path>) -> CacheKey {
     CacheKey {
-        canonical_workspace: std::fs::canonicalize(workspace).ok(),
+        workspace: std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf()),
         signature: MtimeSignature::for_loader(workspace, home_dir),
     }
 }
@@ -162,10 +168,11 @@ impl MtimeSignature {
 }
 
 fn mtime_entry(path: &Path) -> MtimeEntry {
-    let mtime = std::fs::metadata(path)
-        .ok()
-        .and_then(|m| m.modified().ok());
-    MtimeEntry { path: path.to_path_buf(), mtime }
+    let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    MtimeEntry {
+        path: path.to_path_buf(),
+        mtime,
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +206,7 @@ mod tests {
     fn signature_changes_when_file_is_overwritten() {
         let ws = make_workspace(&["AGENTS.md"]);
         let home = tempfile::tempdir().expect("home");
-        let k1 = compute_cache_key(ws.path(), Some(home.path()));
+        let _k1 = compute_cache_key(ws.path(), Some(home.path()));
         // Bump the mtime by writing a new version. The mtime may match
         // at coarse resolution, so write with a small sleep fallback:
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -221,7 +228,10 @@ mod tests {
         let k1 = compute_cache_key(ws.path(), Some(home.path()));
         fs::write(ws.path().join("WHALE.md"), "new file").expect("write");
         let k2 = compute_cache_key(ws.path(), Some(home.path()));
-        assert_ne!(k1, k2, "adding a new context file must change the signature");
+        assert_ne!(
+            k1, k2,
+            "adding a new context file must change the signature"
+        );
     }
 
     #[test]
@@ -229,7 +239,7 @@ mod tests {
         let _ = TempDir::new(); // discard the previous one
         clear();
         let key = CacheKey {
-            canonical_workspace: None,
+            workspace: PathBuf::from("/tmp/whatever"),
             signature: MtimeSignature::default(),
         };
         let ctx = ProjectContext::empty(PathBuf::from("/tmp/whatever"));
@@ -249,12 +259,36 @@ mod tests {
                 path: PathBuf::from(format!("/synthetic/{i}")),
                 mtime: None,
             });
-            let key = CacheKey { canonical_workspace: None, signature: sig };
+            let key = CacheKey {
+                workspace: PathBuf::from("/tmp"),
+                signature: sig,
+            };
             store(key, ProjectContext::empty(PathBuf::from("/tmp")));
         }
         // After all the inserts, the cache should hold at most
         // DEFAULT_CAPACITY entries.
-        let count = CACHE.with(|c| c.borrow().len());
+        let count = CACHE.with(|c| c.borrow().by_key.len());
         assert!(count <= DEFAULT_CAPACITY, "cache held {count} entries");
+    }
+
+    #[test]
+    fn distinct_workspaces_do_not_collide() {
+        clear();
+        let ws_a = make_workspace(&[]);
+        let ws_b = make_workspace(&[]);
+        let key_a = compute_cache_key(ws_a.path(), None);
+        let key_b = compute_cache_key(ws_b.path(), None);
+        store(
+            key_a.clone(),
+            ProjectContext::empty(ws_a.path().to_path_buf()),
+        );
+        store(
+            key_b.clone(),
+            ProjectContext::empty(ws_b.path().to_path_buf()),
+        );
+        let hit_a = lookup(&key_a).expect("hit a");
+        let hit_b = lookup(&key_b).expect("hit b");
+        assert_eq!(hit_a.project_root, ws_a.path());
+        assert_eq!(hit_b.project_root, ws_b.path());
     }
 }

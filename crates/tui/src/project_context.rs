@@ -649,17 +649,24 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// This allows for monorepo setups where a root AGENTS.md applies to all subdirectories.
 pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
+    // Canonicalize at the entry so the parent-directory walk and the
+    // cache key both agree on the absolute path. Without this, a caller
+    // passing a relative path would produce a different cache key on
+    // every call (each one resolves relative to a different cwd).
+    let canonical_workspace =
+        std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let home_dir = dirs::home_dir();
     // Compute a content signature (canonical workspace + per-file mtimes)
     // and consult the process-local cache before doing any file reads.
     // Repeated calls within a session — common during the layered
     // context checkpoint and prompt-assembly paths — short-circuit when
     // none of the candidate files have been written since the last call.
-    let cache_key = crate::project_context_cache::compute_cache_key(workspace, home_dir.as_deref());
+    let cache_key =
+        crate::project_context_cache::compute_cache_key(&canonical_workspace, home_dir.as_deref());
     if let Some(ctx) = crate::project_context_cache::lookup(&cache_key) {
         return ctx;
     }
-    let ctx = load_project_context_with_parents_and_home(workspace, home_dir.as_deref());
+    let ctx = load_project_context_with_parents_and_home(&canonical_workspace, home_dir.as_deref());
     crate::project_context_cache::store(cache_key, ctx.clone());
     ctx
 }
