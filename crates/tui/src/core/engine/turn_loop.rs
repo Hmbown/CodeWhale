@@ -56,6 +56,14 @@ impl Engine {
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
             ensure_advanced_tooling(&mut tool_catalog, mode, &self.config.tools_always_load);
+            // Provider-specific first-turn surface (e.g. Arcee's Cloudflare WAF
+            // rejects CodeWhale's full agent catalog). Runs after advanced
+            // tooling so code/js-execution and tool-search rows are policed too.
+            apply_provider_tool_policy(
+                &mut tool_catalog,
+                client.api_provider(),
+                &self.config.tools_always_load,
+            );
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();
@@ -314,7 +322,9 @@ impl Engine {
             // Three-zone prefix contract (#2264): freeze baseline on first
             // turn, verify against it on subsequent turns. Operates alongside
             // PrefixStabilityManager as an independent diagnostic layer.
-            // Phase 2: warn-only, auto-re-freeze on drift.
+            // Phase 3: emit a one-shot 'frozen' event on first turn.
+            // Drift is logged (tracing::debug!) but not re-emitted —
+            // PrefixStabilityManager already reports the change above.
             let system_text =
                 crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
             let current_tools: &[crate::models::Tool] = active_tools.as_deref().unwrap_or_default();
@@ -338,7 +348,19 @@ impl Engine {
                         self.session.system_prompt.as_ref(),
                         current_tools.to_vec(),
                     );
-                    self.session.frozen_prefix = Some(pinned.freeze());
+                    let frozen = pinned.freeze();
+                    let _ = self
+                        .tx_event
+                        .send(Event::PrefixCacheChange {
+                            description: format!("frozen: {}", frozen.short_id()),
+                            system_prompt_changed: false,
+                            tools_changed: false,
+                            stability_pct: 100,
+                            changed: false,
+                            pinned_combined_hash: frozen.hash().to_string(),
+                        })
+                        .await;
+                    self.session.frozen_prefix = Some(frozen);
                 }
             }
 

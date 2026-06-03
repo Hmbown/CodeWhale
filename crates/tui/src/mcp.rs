@@ -4902,7 +4902,24 @@ mod tests {
                         "result": result
                     })
                     .to_string();
-                    if let Some(tx) = active_sse.lock().unwrap().as_ref() {
+                    // Deliver the response over the *current* SSE channel. The
+                    // retry tool call can race ahead of the reconnecting GET
+                    // /sse that re-stores the sender; under parallel load those
+                    // two server tasks are scheduled in either order, so wait
+                    // briefly for the channel instead of dropping the response
+                    // (which left the client hanging until timeout) (#2597).
+                    let send_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    let tx = loop {
+                        if let Some(tx) = active_sse.lock().unwrap().as_ref().cloned() {
+                            break Some(tx);
+                        }
+                        if std::time::Instant::now() >= send_deadline {
+                            break None;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    };
+                    if let Some(tx) = tx {
                         let _ = tx.send(Some(response));
                     }
                 });

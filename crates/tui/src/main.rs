@@ -30,7 +30,6 @@ mod config;
 mod config_ui;
 mod core;
 mod cost_status;
-mod cycle_manager;
 mod deepseek_theme;
 mod dependencies;
 mod error_taxonomy;
@@ -2005,6 +2004,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "SILICONFLOW_API_KEY",
                     "codewhale auth set --provider siliconflow --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Arcee => (
+                    "ARCEE_API_KEY",
+                    "codewhale auth set --provider arcee --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Moonshot => (
                     "MOONSHOT_API_KEY/KIMI_API_KEY",
                     "codewhale auth set --provider moonshot --api-key \"...\"",
@@ -2042,6 +2045,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
                     crate::config::ApiProvider::Siliconflow => "siliconflow",
+                    crate::config::ApiProvider::Arcee => "arcee",
                     crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
@@ -5632,7 +5636,9 @@ async fn run_exec_agent(
     use crate::core::engine::{EngineConfig, spawn_engine};
     use crate::core::events::Event;
     use crate::core::ops::Op;
-    use crate::models::compaction_threshold_for_model;
+    use crate::models::{
+        auto_compact_default_for_model, compaction_threshold_for_model_at_percent,
+    };
     use crate::tools::plan::new_shared_plan_state;
     use crate::tools::todo::new_shared_todo_list;
     use crate::tui::app::AppMode;
@@ -5644,15 +5650,19 @@ async fn run_exec_agent(
         .reasoning_effort
         .map(|effort| effort.as_setting().to_string());
 
-    // Compaction defaults to disabled in v0.6.6: the checkpoint-restart cycle
-    // architecture (issue #124) handles long-context resets via fresh contexts
-    // rather than progressive summarization. The compaction config is still
-    // wired through so users who explicitly opt back in through TUI settings
-    // or direct engine config keep their old behavior.
+    let settings = crate::settings::Settings::load().unwrap_or_default();
+    let auto_compact_enabled = if crate::settings::Settings::auto_compact_explicitly_configured() {
+        settings.auto_compact
+    } else {
+        auto_compact_default_for_model(&effective_model)
+    };
     let compaction = CompactionConfig {
-        enabled: false,
+        enabled: auto_compact_enabled,
         model: effective_model.clone(),
-        token_threshold: compaction_threshold_for_model(&effective_model),
+        token_threshold: compaction_threshold_for_model_at_percent(
+            &effective_model,
+            settings.auto_compact_threshold_percent,
+        ),
         ..Default::default()
     };
 
@@ -5664,8 +5674,6 @@ async fn run_exec_agent(
         .lsp
         .clone()
         .map(crate::config::LspConfigToml::into_runtime);
-    let settings = crate::settings::Settings::load().unwrap_or_default();
-
     let engine_config = EngineConfig {
         model: effective_model.clone(),
         workspace: workspace.clone(),
@@ -5686,7 +5694,6 @@ async fn run_exec_agent(
         max_subagents,
         features: config.features(),
         compaction,
-        cycle: crate::cycle_manager::CycleConfig::default(),
         capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(config),
         todos: new_shared_todo_list(),
         plan_state: new_shared_plan_state(),

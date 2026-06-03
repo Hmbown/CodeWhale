@@ -39,6 +39,7 @@ enum Pane {
 
 pub struct ModelPickerView {
     initial_model: String,
+    initial_provider: ApiProvider,
     initial_effort: ReasoningEffort,
     /// Working selection (separate from the initial values so we can offer a
     /// clean Esc-to-cancel without mutating App state).
@@ -48,7 +49,14 @@ pub struct ModelPickerView {
     /// True when the active model is one we don't list — we still show it
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
-    model_ids: Vec<&'static str>,
+    model_rows: Vec<ModelPickerRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelPickerRow {
+    id: String,
+    provider: Option<ApiProvider>,
+    hint: String,
 }
 
 impl ModelPickerView {
@@ -59,11 +67,14 @@ impl ModelPickerView {
         } else {
             app.model.clone()
         };
-        let model_ids = picker_model_ids_for_provider(app.api_provider);
-        let mut selected_model_idx = model_ids.iter().position(|id| *id == initial_model);
+        let model_rows = picker_model_rows_for_app(app);
+        let mut selected_model_idx = model_rows.iter().position(|row| {
+            row.id == initial_model
+                && (row.provider.is_none() || row.provider == Some(app.api_provider))
+        });
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
-            selected_model_idx = Some(model_ids.len());
+            selected_model_idx = Some(model_rows.len());
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
 
@@ -80,33 +91,47 @@ impl ModelPickerView {
 
         Self {
             initial_model,
+            initial_provider: app.api_provider,
             initial_effort,
             selected_model_idx,
             selected_effort_idx,
             focus: Pane::Model,
             show_custom_model_row,
-            model_ids,
+            model_rows,
         }
     }
 
-    fn visible_model_ids(&self) -> Vec<&'static str> {
-        self.model_ids.clone()
+    #[cfg(test)]
+    fn visible_model_ids(&self) -> Vec<&str> {
+        self.model_rows.iter().map(|row| row.id.as_str()).collect()
+    }
+
+    fn visible_model_rows(&self) -> &[ModelPickerRow] {
+        &self.model_rows
     }
 
     fn model_row_count(&self) -> usize {
-        self.visible_model_ids().len() + if self.show_custom_model_row { 1 } else { 0 }
+        self.model_rows.len() + if self.show_custom_model_row { 1 } else { 0 }
     }
 
     /// Resolve the currently highlighted row to a model id.
     fn resolved_model(&self) -> String {
-        let visible = self.visible_model_ids();
-        if self.show_custom_model_row && self.selected_model_idx == visible.len() {
+        if self.show_custom_model_row && self.selected_model_idx == self.model_rows.len() {
             self.initial_model.clone()
-        } else if self.selected_model_idx < visible.len() {
-            visible[self.selected_model_idx].to_string()
+        } else if self.selected_model_idx < self.model_rows.len() {
+            self.model_rows[self.selected_model_idx].id.clone()
         } else {
             self.initial_model.clone()
         }
+    }
+
+    fn resolved_provider(&self) -> Option<ApiProvider> {
+        if self.show_custom_model_row && self.selected_model_idx == self.model_rows.len() {
+            return Some(self.initial_provider);
+        }
+        self.model_rows
+            .get(self.selected_model_idx)
+            .and_then(|row| row.provider)
     }
 
     fn resolved_effort(&self) -> ReasoningEffort {
@@ -162,8 +187,12 @@ impl ModelPickerView {
     }
 
     fn build_event(&self) -> ViewEvent {
+        let provider = self
+            .resolved_provider()
+            .filter(|provider| *provider != self.initial_provider);
         ViewEvent::ModelPickerApplied {
             model: self.resolved_model(),
+            provider,
             effort: self.resolved_effort(),
             previous_model: self.initial_model.clone(),
             previous_effort: self.initial_effort,
@@ -311,6 +340,7 @@ fn fit_text(text: &str, width: usize) -> String {
     out
 }
 
+#[cfg(test)]
 fn picker_model_ids_for_provider(provider: ApiProvider) -> Vec<&'static str> {
     let mut models = vec!["auto"];
     for id in model_completion_names_for_provider(provider) {
@@ -319,6 +349,58 @@ fn picker_model_ids_for_provider(provider: ApiProvider) -> Vec<&'static str> {
         }
     }
     models
+}
+
+fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
+    let mut rows = Vec::new();
+    push_model_row(
+        &mut rows,
+        "auto".to_string(),
+        None,
+        picker_model_hint("auto").to_string(),
+    );
+
+    for id in model_completion_names_for_provider(app.api_provider) {
+        if id != "auto" {
+            push_model_row(
+                &mut rows,
+                id.to_string(),
+                Some(app.api_provider),
+                picker_model_hint(id).to_string(),
+            );
+        }
+    }
+
+    if let Some(model) = app
+        .provider_models
+        .get(app.api_provider.as_str())
+        .map(|model| model.trim())
+        .filter(|model| !model.is_empty())
+    {
+        push_model_row(
+            &mut rows,
+            model.to_string(),
+            Some(app.api_provider),
+            format!("{} saved", app.api_provider.display_name()),
+        );
+    }
+
+    rows
+}
+
+fn push_model_row(
+    rows: &mut Vec<ModelPickerRow>,
+    id: String,
+    provider: Option<ApiProvider>,
+    hint: String,
+) {
+    if rows
+        .iter()
+        .any(|row| row.id == id && row.provider == provider)
+    {
+        return;
+    }
+    rows.push(ModelPickerRow { id, provider, hint });
 }
 
 fn picker_model_hint(id: &str) -> &'static str {
@@ -331,7 +413,8 @@ fn picker_model_hint(id: &str) -> &'static str {
             "faster model"
         }
         "arcee-ai/trinity-large-thinking" => "large thinking",
-        "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => "long context",
+        "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => "reasoning / coding",
+        "xiaomi/mimo-v2.5" | "mimo-v2.5" => "v2.5 omni",
         "mimo-v2.5-tts" | "mimo-v2-tts" => "speech / TTS",
         "mimo-v2.5-tts-voicedesign" => "voice design",
         "mimo-v2.5-tts-voiceclone" => "voice clone",
@@ -474,9 +557,9 @@ impl ModelPickerView {
             .split(inner);
 
         let mut model_rows: Vec<(String, String)> = self
-            .visible_model_ids()
-            .into_iter()
-            .map(|id| (id.to_string(), picker_model_hint(id).to_string()))
+            .visible_model_rows()
+            .iter()
+            .map(|row| (row.id.clone(), row.hint.clone()))
             .collect();
         if self.show_custom_model_row {
             model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
@@ -558,6 +641,7 @@ mod tests {
         app.reasoning_effort = ReasoningEffort::Max;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
+        app.provider_models.clear();
         (app, lock)
     }
 
@@ -662,6 +746,38 @@ mod tests {
     }
 
     #[test]
+    fn picker_lists_xiaomi_mimo_chat_models_without_speech_models() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.model = "mimo-v2.5-pro".to_string();
+        app.auto_model = false;
+
+        let view = ModelPickerView::new(&app);
+        let model_ids = view.visible_model_ids();
+
+        for expected in ["mimo-v2.5-pro", "mimo-v2.5"] {
+            assert!(model_ids.contains(&expected), "missing {expected}");
+        }
+        for deprecated in ["mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"] {
+            assert!(
+                !model_ids.contains(&deprecated),
+                "{deprecated} is deprecated and should not be promoted"
+            );
+        }
+        for speech_model in [
+            "mimo-v2.5-tts",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2-tts",
+        ] {
+            assert!(
+                !model_ids.contains(&speech_model),
+                "{speech_model} should not appear in the chat model picker"
+            );
+        }
+    }
+
+    #[test]
     fn visible_row_window_tracks_selection_in_short_panes() {
         assert_eq!(visible_row_window(0, 16, 8), (0, 8));
         assert_eq!(visible_row_window(7, 16, 8), (3, 11));
@@ -702,6 +818,88 @@ mod tests {
 
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "opencode-go/glm-5.1");
+    }
+
+    #[test]
+    fn picker_exposes_saved_model_for_active_provider() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.model = "mimo-v2.5-custom".to_string();
+        app.auto_model = false;
+        app.provider_models
+            .insert("xiaomi-mimo".to_string(), "mimo-v2.5-custom".to_string());
+
+        let mut view = ModelPickerView::new(&app);
+        view.selected_model_idx = view
+            .model_rows
+            .iter()
+            .position(|row| {
+                row.id == "mimo-v2.5-custom"
+                    && row.provider == Some(crate::config::ApiProvider::XiaomiMimo)
+            })
+            .expect("saved Xiaomi MiMo model row");
+
+        let action = view.handle_key(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied {
+                model, provider, ..
+            }) => {
+                assert_eq!(model, "mimo-v2.5-custom");
+                assert_eq!(provider, None);
+            }
+            other => panic!("expected ModelPickerApplied EmitAndClose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn picker_hides_saved_models_from_other_providers() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.model = "mimo-v2.5-pro".to_string();
+        app.auto_model = false;
+        app.provider_models
+            .insert("deepseek".to_string(), "deepseek-v4-pro".to_string());
+        app.provider_models
+            .insert("moonshot".to_string(), "kimi-k2.6".to_string());
+
+        let view = ModelPickerView::new(&app);
+        let model_ids = view.visible_model_ids();
+
+        assert!(model_ids.contains(&"mimo-v2.5-pro"));
+        assert!(!model_ids.contains(&"deepseek-v4-pro"));
+        assert!(!model_ids.contains(&"kimi-k2.6"));
+        assert!(!view.show_custom_model_row);
+    }
+
+    #[test]
+    fn picker_does_not_hijack_current_custom_model_with_saved_provider_row() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openai;
+        app.model_ids_passthrough = true;
+        app.model = "kimi-k2.6".to_string();
+        app.provider_models
+            .insert("moonshot".to_string(), "kimi-k2.6".to_string());
+
+        let mut view = ModelPickerView::new(&app);
+
+        assert!(view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "kimi-k2.6");
+        let action = view.handle_key(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied {
+                model, provider, ..
+            }) => {
+                assert_eq!(model, "kimi-k2.6");
+                assert_eq!(provider, None);
+            }
+            other => panic!("expected ModelPickerApplied EmitAndClose, got {other:?}"),
+        }
     }
 
     #[test]

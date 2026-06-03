@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::config::ApiProvider;
 use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, optional_u64, required_str};
 use crate::tui::app::AppMode;
@@ -87,6 +88,63 @@ pub(super) fn apply_native_tool_deferral(
 ) {
     for tool in catalog {
         tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
+    }
+}
+
+/// First-turn native tool surface for Arcee (Trinity).
+///
+/// Arcee's hosted API is fronted by Cloudflare, whose managed WAF returns
+/// HTTP 403 "Access Denied" when a request body contains injection-like text.
+/// CodeWhale's full agent catalog trips it: shell/patch/code-execution tool
+/// descriptions and schemas carry example payloads (`rm -rf`, `../../`,
+/// `<script>`, `DROP TABLE`, `eval(base64_decode(...))`) that match the
+/// ruleset. Keeping only this benign, read-only set active on the first turn
+/// lets the request clear the gateway; every other tool stays deferred in the
+/// catalog and remains discoverable through tool-search. Live-verified: a
+/// benign `list_dir` tool returns 200 while a risky shell description returns
+/// 403 from `api.arcee.ai`.
+pub(super) const ARCEE_FIRST_TURN_NATIVE_TOOLS: &[&str] = &[
+    "checklist_write",
+    "file_search",
+    "git_diff",
+    "git_status",
+    "grep_files",
+    "list_dir",
+    "read_file",
+    "update_plan",
+];
+
+/// Returns the provider-specific first-turn allow-list, or `None` when the
+/// provider should use the default deferral policy.
+fn provider_first_turn_native_tools(provider: ApiProvider) -> Option<&'static [&'static str]> {
+    match provider {
+        ApiProvider::Arcee => Some(ARCEE_FIRST_TURN_NATIVE_TOOLS),
+        _ => None,
+    }
+}
+
+/// Narrow the *active* tool surface for WAF-fronted providers on top of the
+/// default deferral flags. The full catalog is preserved (deferred tools stay
+/// present and discoverable via tool-search); only the first-turn `active`
+/// partition is reduced so the opening request clears the provider gateway.
+///
+/// Tool-search tools and any user-pinned `always_load` tools stay active so the
+/// model can still hydrate the deferred tail when it needs a tool outside the
+/// reduced set.
+pub(super) fn apply_provider_tool_policy(
+    catalog: &mut [Tool],
+    provider: ApiProvider,
+    always_load: &HashSet<String>,
+) {
+    let Some(active) = provider_first_turn_native_tools(provider) else {
+        return;
+    };
+    for tool in catalog {
+        if is_tool_search_tool(&tool.name) || always_load.contains(&tool.name) {
+            tool.defer_loading = Some(false);
+            continue;
+        }
+        tool.defer_loading = Some(!active.contains(&tool.name.as_str()));
     }
 }
 

@@ -17,7 +17,7 @@ use super::CommandResult;
 /// With no args, opens the picker modal. With `<provider> [model]`, performs
 /// the switch directly (e.g. `/provider nim flash` lands on
 /// `deepseek-ai/deepseek-v4-flash`). The optional model accepts shorthand
-/// (`flash`, `pro`, `v4-flash`, `v4-pro`) or any normal DeepSeek model ID.
+/// (`flash`, `pro`, `v4-flash`, `v4-pro`) or any normal provider model ID.
 pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     let trimmed = args.map(str::trim).filter(|s| !s.is_empty());
     let Some(args) = trimmed else {
@@ -52,7 +52,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
                 Some(normalized) => Some(normalized),
                 None => {
                     return CommandResult::error(format!(
-                        "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro, or xiaomi-mimo tts."
+                        "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro, or xiaomi-mimo omni."
                     ));
                 }
             }
@@ -74,7 +74,7 @@ fn expand_model_alias_for_provider(provider: ApiProvider, name: &str) -> String 
     if matches!(provider, ApiProvider::XiaomiMimo) {
         return match lower.as_str() {
             "pro" | "mimo" => "mimo-v2.5-pro".to_string(),
-            "text" => "mimo-v2.5".to_string(),
+            "text" | "omni" | "v2.5-omni" => "mimo-v2.5".to_string(),
             "tts" | "speech" | "mimo-tts" => "mimo-v2.5-tts".to_string(),
             "voicedesign" | "voice-design" | "mimo-voice-design" => {
                 "mimo-v2.5-tts-voicedesign".to_string()
@@ -193,6 +193,24 @@ mod tests {
                 assert_eq!(model.as_deref(), Some("mimo-v2.5-tts-voiceclone"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_xiaomi_mimo_accepts_chat_shorthands() {
+        let mut app = create_test_app();
+        for (input, expected) in [
+            ("xiaomi-mimo omni", "mimo-v2.5"),
+            ("xiaomi-mimo v2.5-omni", "mimo-v2.5"),
+        ] {
+            let result = provider(&mut app, Some(input));
+            match result.action {
+                Some(AppAction::SwitchProvider { provider, model }) => {
+                    assert_eq!(provider, ApiProvider::XiaomiMimo);
+                    assert_eq!(model.as_deref(), Some(expected));
+                }
+                other => panic!("expected SwitchProvider for {input}, got {other:?}"),
+            }
         }
     }
 

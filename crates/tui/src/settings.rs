@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{expand_path, normalize_model_name};
+use crate::config::{ApiProvider, expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
 use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
 
@@ -322,24 +322,20 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            // v0.8.11: default flipped to `false` to stop the engine from
-            // routinely rewriting the prompt prefix, which breaks DeepSeek
-            // V4's prefix cache (~90% discount on cached prefix tokens) and
-            // ends up costing more than the compaction itself saves. With
-            // V4's 1M-token window the user has plenty of headroom to run
-            // long sessions without auto-trimming, and the explicit
-            // `/compact` slash command + `auto_compact = on` opt-in remain
-            // available for users / agents that decide compaction is
-            // worth the cache hit on their workload (#664).
+            // Keep the persisted fallback `false`; startup code may enable
+            // auto-compaction by model window when the user has not saved an
+            // explicit preference. V4-class 1M-token models stay opt-in to
+            // preserve prefix-cache behavior, while 256K-class models default
+            // on at the configured percent threshold.
             auto_compact: false,
-            auto_compact_threshold_percent: 70.0,
+            auto_compact_threshold_percent: 80.0,
             calm_mode: false,
             low_motion: false,
             fancy_animations: true,
             bracketed_paste: true,
             paste_burst_detection: true,
             mention_menu_limit: 128,
-            mention_walk_depth: 6,
+            mention_walk_depth: 10,
             mention_menu_behavior: "fuzzy".to_string(),
             show_thinking: true,
             show_tool_details: true,
@@ -426,6 +422,23 @@ impl Settings {
         };
         settings.apply_env_overrides();
         Ok(settings)
+    }
+
+    /// Whether the user explicitly persisted an `auto_compact` preference.
+    /// When absent, callers may choose a model-aware default.
+    pub fn auto_compact_explicitly_configured() -> bool {
+        let Ok(path) = Self::path() else {
+            return false;
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+            return false;
+        };
+        value
+            .as_table()
+            .is_some_and(|table| table.contains_key("auto_compact"))
     }
 
     /// Apply environment-driven overlays after disk load. Used for
@@ -530,6 +543,12 @@ impl Settings {
         std::fs::write(&path, content)
             .with_context(|| format!("Failed to write settings to {}", path.display()))?;
         Ok(())
+    }
+
+    /// Update and persist sidebar width percentage (10-50) — used by the
+    /// drag-to-resize handle in the TUI.
+    pub fn update_sidebar_width(&mut self, percent: u16) {
+        self.sidebar_width_percent = percent.clamp(10, 50);
     }
 
     /// Set a single setting by key
@@ -826,7 +845,7 @@ impl Settings {
             ),
             (
                 "auto_compact_threshold_percent",
-                "Auto-compact trigger threshold percent when auto_compact is on: 10-100 (default 70)",
+                "Auto-compact trigger threshold percent when auto_compact is on: 10-100 (default 80)",
             ),
             ("calm_mode", "Calmer UI defaults: on/off"),
             (
@@ -928,6 +947,32 @@ impl Settings {
         self.provider_models
             .get_or_insert_with(std::collections::HashMap::new)
             .insert(provider.to_string(), model.to_string());
+    }
+
+    /// Persist the active provider/model tuple that runtime selection UI and
+    /// slash commands should restore on the next startup.
+    pub fn set_provider_model_selection(
+        &mut self,
+        provider: ApiProvider,
+        model: &str,
+    ) -> Result<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            anyhow::bail!("model cannot be empty");
+        }
+        self.default_provider = Some(provider.as_str().to_string());
+        self.set_model_for_provider(provider.as_str(), model);
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+            self.set("default_model", model)?;
+        }
+        Ok(())
+    }
+
+    /// Load, update, and save the runtime provider/model selection.
+    pub fn persist_provider_model_selection(provider: ApiProvider, model: &str) -> Result<()> {
+        let mut settings = Self::load()?;
+        settings.set_provider_model_selection(provider, model)?;
+        settings.save()
     }
 
     /// Resolved boolean for whether the renderer should wrap each frame in
@@ -1222,7 +1267,7 @@ mod tests {
         // flipped so the cache-friendly path is the one users get
         // without configuring anything (#664).
         assert!(!settings.auto_compact);
-        assert_eq!(settings.auto_compact_threshold_percent, 70.0);
+        assert_eq!(settings.auto_compact_threshold_percent, 80.0);
     }
 
     #[test]
@@ -1287,7 +1332,7 @@ mod tests {
     fn mention_completion_caps_are_configurable() {
         let mut settings = Settings::default();
         assert_eq!(settings.mention_menu_limit, 128);
-        assert_eq!(settings.mention_walk_depth, 6);
+        assert_eq!(settings.mention_walk_depth, 10);
         assert_eq!(settings.mention_menu_behavior, "fuzzy");
 
         settings

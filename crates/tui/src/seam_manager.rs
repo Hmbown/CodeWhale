@@ -22,11 +22,9 @@
 //! | L1    | 192K             | 0–128K             | ~2,500 tokens  |
 //! | L2    | 384K             | 0–320K             | ~1,800 tokens  |
 //! | L3    | 576K             | 0–512K             | ~1,200 tokens  |
-//! | Cycle | 768K             | All -> archive     | <=3,000 tokens  |
 //!
 //! Thresholds derived from V4 paper Figure 9 (MMR): 128K->256K is the real
-//! cliff at -0.09. L1 triggers at 192K, before the cliff. Hard cycle at
-//! 768K (~75% of 1M window).
+//! cliff at -0.09. L1 triggers at 192K, before the cliff.
 
 use std::fmt::Write;
 use std::path::Path;
@@ -40,7 +38,7 @@ use crate::client::DeepSeekClient;
 use crate::compaction::KEEP_RECENT_MESSAGES;
 use crate::compaction::plan_compaction;
 use crate::llm_client::LlmClient;
-use crate::models::{ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt};
+use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
 /// Default seam model — Flash is cheap and fast, ideal for summarization.
 pub const DEFAULT_SEAM_MODEL: &str = "deepseek-v4-flash";
@@ -49,7 +47,6 @@ pub const DEFAULT_SEAM_MODEL: &str = "deepseek-v4-flash";
 pub const DEFAULT_L1_THRESHOLD: usize = 192_000;
 pub const DEFAULT_L2_THRESHOLD: usize = 384_000;
 pub const DEFAULT_L3_THRESHOLD: usize = 576_000;
-pub const DEFAULT_CYCLE_THRESHOLD: usize = 768_000;
 
 /// Verbatim window: last N turns never summarized.
 pub const VERBATIM_WINDOW_TURNS: usize = 16;
@@ -70,8 +67,6 @@ pub struct SeamConfig {
     pub l1_threshold: usize,
     pub l2_threshold: usize,
     pub l3_threshold: usize,
-    /// Hard cycle boundary.
-    pub cycle_threshold: usize,
     /// Model used for seam/briefing work.
     pub seam_model: String,
 }
@@ -84,7 +79,6 @@ impl Default for SeamConfig {
             l1_threshold: DEFAULT_L1_THRESHOLD,
             l2_threshold: DEFAULT_L2_THRESHOLD,
             l3_threshold: DEFAULT_L3_THRESHOLD,
-            cycle_threshold: DEFAULT_CYCLE_THRESHOLD,
             seam_model: DEFAULT_SEAM_MODEL.to_string(),
         }
     }
@@ -151,16 +145,6 @@ impl SeamManager {
         highest_existing_level: Option<u8>,
     ) -> Option<u8> {
         seam_level_for_active_input(&self.config, active_input_tokens, highest_existing_level)
-    }
-
-    /// Check whether the hard cycle boundary is crossed.
-    ///
-    /// Note: not currently called — cycle detection uses an inline check.
-    /// Kept as the canonical boundary definition for future wiring.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn should_cycle(&self, active_input_tokens: usize) -> bool {
-        self.config.enabled && active_input_tokens >= self.config.cycle_threshold
     }
 
     /// Compute the verbatim window: the last N message indices that must
@@ -368,82 +352,6 @@ impl SeamManager {
         ))
     }
 
-    /// Produce a cycle briefing using Flash. Unlike the current
-    /// `produce_briefing` in cycle_manager.rs (which uses the main model),
-    /// this consumes existing `<archived_context>` blocks as input rather
-    /// than scanning raw history.
-    pub async fn produce_flash_briefing(
-        &self,
-        existing_seams: &[String],
-        structured_state: Option<&str>,
-    ) -> Result<String> {
-        let mut input = String::from(
-            "## Briefing Request\n\n\
-             Produce a <carry_forward> block summarizing the session state. \
-             Include: decisions made + why, constraints discovered, \
-             hypotheses being tested, approaches that failed, open questions. \
-             Do NOT include tool output bytes, file contents, or step-by-step recaps.\n\n",
-        );
-
-        if let Some(state) = structured_state {
-            let _ = write!(input, "## Structured State\n\n{state}\n\n");
-        }
-
-        if !existing_seams.is_empty() {
-            input.push_str("## Prior Context Summaries\n\n");
-            for (i, seam) in existing_seams.iter().enumerate() {
-                let _ = write!(input, "### Seam {}\n{seam}\n\n", i + 1);
-            }
-        } else {
-            input.push_str(
-                "No prior context summaries available. Produce a brief carry-forward \
-                 from the structured state alone.\n",
-            );
-        }
-
-        let request = MessageRequest {
-            model: self.config.seam_model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![ContentBlock::Text {
-                    text: input,
-                    cache_control: None,
-                }],
-            }],
-            max_tokens: 4_096,
-            system: Some(SystemPrompt::Blocks(vec![SystemBlock {
-                block_type: "text".to_string(),
-                text: crate::cycle_manager::CYCLE_HANDOFF_TEMPLATE.to_string(),
-                cache_control: None,
-            }])),
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            reasoning_effort: None,
-            stream: Some(false),
-            temperature: Some(0.2),
-            top_p: None,
-        };
-
-        let response = self.flash_client.create_message(request).await?;
-        // Seam recompaction calls are billed; route through the
-        // side-channel (#526) so the footer total matches the
-        // DeepSeek website.
-        crate::cost_status::report(&response.model, &response.usage);
-        let raw = response
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Ok(crate::cycle_manager::extract_carry_forward(&raw))
-    }
-
     /// Internal: summarize a slice of messages using Flash.
     async fn summarize_messages(
         &self,
@@ -568,11 +476,6 @@ impl SeamManager {
         let seams = self.active_seams.lock().await;
         seams.last().map(|s| s.level)
     }
-
-    /// Clear seam tracking (called on hard cycle reset).
-    pub async fn reset(&self) {
-        self.active_seams.lock().await.clear();
-    }
 }
 
 #[must_use]
@@ -658,13 +561,6 @@ mod tests {
             seam_level_for_active_input(&config, active_request_input, None),
             None
         );
-    }
-
-    #[test]
-    fn cycle_threshold_check() {
-        let config = SeamConfig::default();
-        assert!(768_000 >= config.cycle_threshold);
-        assert!(700_000 < config.cycle_threshold);
     }
 
     #[test]

@@ -16,7 +16,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::config::{ApiProvider, Config, RetryPolicy, wire_model_for_provider};
 use crate::llm_client::{
-    LlmClient, LlmError, RetryConfig as LlmRetryConfig, extract_retry_after, with_retry,
+    LlmClient, LlmError, RetryConfig as LlmRetryConfig, extract_retry_after,
+    sanitize_http_error_body, with_retry,
 };
 use crate::logging;
 use crate::models::{MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage};
@@ -667,6 +668,13 @@ impl DeepSeekClient {
         &self.base_url
     }
 
+    /// Returns the active API provider for this client. Used by the turn loop
+    /// to apply provider-specific request policies (e.g. Arcee's reduced
+    /// first-turn tool surface that clears the Cloudflare WAF).
+    pub fn api_provider(&self) -> ApiProvider {
+        self.api_provider
+    }
+
     /// Translate text to the requested target language using a focused
     /// non-streaming chat completion call on the supplied model.
     ///
@@ -731,7 +739,12 @@ impl DeepSeekClient {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("Failed to list models: HTTP {status}: {error_text}");
         }
         let response_text = response.text().await.unwrap_or_default();
@@ -806,7 +819,12 @@ impl DeepSeekClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("Speech synthesis failed: HTTP {status}: {error_text}");
         }
 
@@ -897,6 +915,11 @@ impl DeepSeekClient {
                     }
                     let retry_after = extract_retry_after(response.headers());
                     let body = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+                    let body = sanitize_http_error_body(
+                        Some(self.api_provider.display_name()),
+                        status.as_u16(),
+                        &body,
+                    );
                     Err(LlmError::from_http_response_with_retry_after(
                         status.as_u16(),
                         &body,
@@ -1092,6 +1115,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Arcee
             | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
@@ -1124,6 +1148,15 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Arcee => {
+                let value = match normalized.as_str() {
+                    "minimal" => "minimal",
+                    "low" => "low",
+                    "medium" | "mid" => "medium",
+                    _ => "high",
+                };
+                body["reasoning_effort"] = json!(value);
             }
             ApiProvider::Fireworks => {
                 body["reasoning_effort"] = json!("high");
@@ -1168,6 +1201,9 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Arcee => {
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Fireworks => {
                 body["reasoning_effort"] = json!("max");
@@ -1288,7 +1324,12 @@ impl DeepSeekClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("FIM API error: HTTP {status}: {error_text}");
         }
         let response_text = response.text().await.unwrap_or_default();
@@ -2299,6 +2340,30 @@ mod tests {
             body.get("thinking").is_none(),
             "Fireworks strict-validates OpenAI-compatible requests and rejects top-level thinking"
         );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_arcee_reasoning_effort_without_thinking_object() {
+        for (input, expected) in [
+            ("minimal", "minimal"),
+            ("low", "low"),
+            ("mid", "medium"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("max", "high"),
+        ] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(input), ApiProvider::Arcee);
+
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                Some(expected)
+            );
+            assert!(
+                body.get("thinking").is_none(),
+                "Arcee documents reasoning_effort rather than a DeepSeek thinking object"
+            );
+        }
     }
 
     #[test]

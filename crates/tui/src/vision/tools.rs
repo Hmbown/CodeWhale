@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
 use crate::config::VisionModelConfig;
-use crate::llm_client::{LlmError, RetryConfig, with_retry};
+use crate::llm_client::{LlmError, RetryConfig, sanitize_http_error_body, with_retry};
 use crate::tools::spec::{
     ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, required_str,
 };
@@ -213,6 +213,11 @@ impl ToolSpec for ImageAnalyzeTool {
                             .text()
                             .await
                             .unwrap_or_else(|_| "Unknown error".to_string());
+                        let error_text = sanitize_http_error_body(
+                            Some("Vision provider"),
+                            status.as_u16(),
+                            &error_text,
+                        );
                         return Err(LlmError::from_http_response(status.as_u16(), &error_text));
                     }
                     Ok(response)

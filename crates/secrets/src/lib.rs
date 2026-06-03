@@ -682,6 +682,7 @@ impl Secrets {
 /// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
 /// | `fireworks` | `FIREWORKS_API_KEY` |
 /// | `siliconflow` | `SILICONFLOW_API_KEY` |
+/// | `arcee` / `arcee-ai` | `ARCEE_API_KEY` |
 /// | `moonshot` / `kimi` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
 /// | `sglang` | `SGLANG_API_KEY` |
 /// | `vllm` | `VLLM_API_KEY` |
@@ -710,6 +711,7 @@ pub fn env_for(name: &str) -> Option<String> {
         }
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
         "siliconflow" | "silicon-flow" | "silicon_flow" => &["SILICONFLOW_API_KEY"],
+        "arcee" | "arcee-ai" | "arcee_ai" => &["ARCEE_API_KEY"],
         "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
@@ -764,6 +766,7 @@ mod tests {
             "NVIDIA_NIM_API_KEY",
             "FIREWORKS_API_KEY",
             "SILICONFLOW_API_KEY",
+            "ARCEE_API_KEY",
             "SGLANG_API_KEY",
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
@@ -1143,6 +1146,20 @@ mod tests {
         assert_eq!(env_for("silicon_flow").as_deref(), Some("sf-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("SILICONFLOW_API_KEY") };
+    }
+
+    #[test]
+    fn arcee_env_aliases_resolve() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("ARCEE_API_KEY", "arcee-key") };
+
+        assert_eq!(env_for("arcee").as_deref(), Some("arcee-key"));
+        assert_eq!(env_for("arcee-ai").as_deref(), Some("arcee-key"));
+        assert_eq!(env_for("arcee_ai").as_deref(), Some("arcee-key"));
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::remove_var("ARCEE_API_KEY") };
     }
 
     #[test]

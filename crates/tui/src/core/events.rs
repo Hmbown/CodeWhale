@@ -148,17 +148,6 @@ pub enum Event {
         message: String,
     },
 
-    /// Checkpoint-restart cycle boundary advanced (issue #124). The previous
-    /// cycle has already been archived to disk; the engine has swapped its
-    /// in-memory message buffer for the seed messages of cycle `to`.
-    /// Carries the full briefing record so the UI can populate
-    /// `app.cycle_briefings` for `/cycle <n>`.
-    CycleAdvanced {
-        from: u32,
-        to: u32,
-        briefing: crate::cycle_manager::CycleBriefing,
-    },
-
     /// Capacity decision telemetry.
     #[allow(dead_code)]
     CapacityDecision {

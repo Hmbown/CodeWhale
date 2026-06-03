@@ -282,13 +282,7 @@ where
         use futures_util::FutureExt;
         let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
         if let Err(panic_info) = result {
-            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
+            let msg = panic_message(&*panic_info);
             tracing::error!(
                 target: "panic",
                 "Task '{name}' panicked at {}: {msg}",
@@ -298,6 +292,32 @@ where
             let _ = write_panic_dump(name, location, &msg);
         }
     })
+}
+
+/// Extract a human-readable message from a caught panic payload (the `Err`
+/// value of `catch_unwind`). Mirrors how the panic hook formats `&str` and
+/// `String` payloads so crash dumps stay consistent across call sites.
+#[must_use]
+pub fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Record a panic that was caught at a call site (via `catch_unwind`) rather
+/// than by a task supervisor. Logs it on the `panic` target and writes a
+/// best-effort crash dump to `~/.codewhale/crashes/`, so diagnostics land in
+/// the same place `spawn_supervised` writes them even when the caller recovers
+/// and keeps running.
+#[track_caller]
+pub fn record_caught_panic(name: &'static str, message: &str) {
+    let location = std::panic::Location::caller();
+    tracing::error!(target: "panic", "Task '{name}' panicked at {location}: {message}");
+    let _ = write_panic_dump(name, location, message);
 }
 
 /// Write a panic dump file to `~/.codewhale/crashes/`.
@@ -362,13 +382,7 @@ where
     tokio::task::spawn_blocking(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         if let Err(panic_info) = result {
-            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
+            let msg = panic_message(&*panic_info);
             tracing::error!(
                 target: "panic",
                 "Blocking task '{name}' panicked at {location}: {msg}",

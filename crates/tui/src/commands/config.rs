@@ -512,6 +512,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     match key.as_str() {
         "auto_compact" | "compact" => {
             app.auto_compact = settings.auto_compact;
+            app.auto_compact_user_configured = true;
             action = Some(AppAction::UpdateCompaction(app.compaction_config()));
         }
         "calm_mode" | "calm" => {

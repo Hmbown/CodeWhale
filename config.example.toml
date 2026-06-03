@@ -14,12 +14,12 @@
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
 # `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
-# `--provider siliconflow`, `/provider moonshot`, `/provider sglang`,
+# `--provider siliconflow`, `/provider arcee`, `/provider moonshot`, `/provider sglang`,
 # `/provider vllm`, `/provider ollama`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | moonshot | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | arcee | moonshot | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -45,14 +45,17 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
-#   mimo-v2.5-tts                   ? Xiaomi MiMo speech/TTS model ID
-#   mimo-v2.5-tts-voicedesign       ? Xiaomi MiMo voice-design TTS model ID
-#   mimo-v2.5-tts-voiceclone        ? Xiaomi MiMo voice-clone TTS model ID
+#   mimo-v2.5                       — Xiaomi MiMo V2.5 Omni model ID
+#   mimo-v2.5-tts                   — Xiaomi MiMo speech/TTS model ID
+#   mimo-v2.5-tts-voicedesign       — Xiaomi MiMo voice-design TTS model ID
+#   mimo-v2.5-tts-voiceclone        — Xiaomi MiMo voice-clone TTS model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
-#   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
-#   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
-#   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
-#   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
+#   deepseek-ai/DeepSeek-V4-Pro      — SiliconFlow hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash    — SiliconFlow hosted Flash model ID
+#   trinity-large-thinking           — default direct Arcee AI API model ID
+#   trinity-large-preview            — direct Arcee AI API model ID
+#   deepseek-ai/DeepSeek-V4-Pro      — SGLang self-hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash    — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -225,7 +228,7 @@ max_subagents = 10 # optional (1-20)
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
 # `--provider wanjie-ark` / `/provider volcengine` / `/provider fireworks` /
-# `--provider siliconflow` / `/provider moonshot`
+# `--provider siliconflow` / `/provider arcee` / `/provider moonshot`
 # switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
@@ -238,6 +241,7 @@ max_subagents = 10 # optional (1-20)
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
+#   Arcee:      ARCEE_API_KEY, ARCEE_BASE_URL, ARCEE_MODEL
 #   Moonshot/Kimi: MOONSHOT_API_KEY (or KIMI_API_KEY), MOONSHOT_BASE_URL, MOONSHOT_MODEL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
@@ -301,7 +305,8 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://openrouter.ai/api/v1"
 # model = "deepseek/deepseek-v4-pro"
 # Recent large model IDs also accepted here include arcee-ai/trinity-large-thinking,
-# xiaomi/mimo-v2.5-pro, qwen/qwen3.6-35b-a3b,
+# xiaomi/mimo-v2.5-pro, qwen/qwen3.6-flash, qwen/qwen3.6-35b-a3b,
+# qwen/qwen3.6-max-preview, qwen/qwen3.6-27b, qwen/qwen3.6-plus,
 # google/gemma-4-31b-it, z-ai/glm-5.1, moonshotai/kimi-k2.6, and
 # nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free.
 
@@ -310,6 +315,7 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_XIAOMI_KEY"
 # base_url = "https://api.xiaomimimo.com/v1"
 # model = "mimo-v2.5-pro"              # chat/reasoning
+# Chat model IDs: mimo-v2.5-pro, mimo-v2.5
 # TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
 # TTS model IDs: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone, mimo-v2-tts
 
@@ -330,6 +336,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_SILICONFLOW_API_KEY"
 # base_url = "https://api.siliconflow.com/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# Arcee AI direct OpenAI-compatible endpoint (https://docs.arcee.ai)
+[providers.arcee]
+# api_key = "YOUR_ARCEE_API_KEY"
+# base_url = "https://api.arcee.ai/api/v1"
+# model = "trinity-large-thinking"          # or trinity-large-preview
 
 # Moonshot/Kimi OpenAI-compatible endpoint (https://platform.moonshot.ai)
 [providers.moonshot]
@@ -501,7 +513,7 @@ exponential_base = 2.0
 # ─────────────────────────────────────────────────────────────────────────────────
 # Auto-compaction is a saved UI setting edited with `/config` (`auto_compact`).
 # The optional saved threshold setting is `auto_compact_threshold_percent`
-# (default 70, still gated by the 500K-token floor). There is no config-file
+# (default 80). There is no config-file
 # `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
 # from the active model/context window.
 
@@ -515,9 +527,6 @@ verbatim_window_turns = 16
 l1_threshold = 192000
 l2_threshold = 384000
 l3_threshold = 576000
-# Hard cycle reserves the normal 262144-token internal turn budget plus 1024
-# safety tokens, separate from V4's official 384000 max-output metadata.
-cycle_threshold = 768000
 seam_model = "deepseek-v4-flash"
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -678,7 +687,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # Configure as `[[hooks.hooks]]` under a `[hooks]` table.
 #
 # Available events: session_start, session_end, message_submit,
-# tool_call_before, tool_call_after, mode_change, on_error, shell_env.
+# tool_call_before, tool_call_after, mode_change, on_error,
+# subagent_spawn, subagent_complete, shell_env.
 #
 # `shell_env` (#456) is special: the hook runs immediately before each
 # `exec_shell` invocation and its stdout is parsed as `KEY=VALUE\n` lines.
@@ -705,6 +715,15 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # command = "aws-vault export my-profile --format=env"
 # # Optionally limit to specific tool names / categories:
 # # condition = { type = "tool_category", category = "shell" }
+#
+# # Observe sub-agent lifecycle events. These hooks receive bounded JSON
+# # metadata on stdin and are warn-only: failures do not affect sub-agent
+# # scheduling, prompts, or results. continue_on_error has no effect for
+# # these observer events; later matching hooks always continue.
+# [[hooks.hooks]]
+# name = "subagent-audit"
+# event = "subagent_complete"
+# command = "~/.codewhale/hooks/subagent-audit.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Runtime API (`deepseek serve --http`) (#561)

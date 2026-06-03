@@ -508,7 +508,7 @@ fn macos_display_notification(msg: &str) {
 /// Examples:
 /// * `"45s"`, `"1m"`, `"1m 12s"`
 /// * `"1h"`, `"3h 12m"` (#447 — was previously `"192m"` form)
-/// * `"1d"`, `"2d 5h"` (#447 — multi-day sessions/cycles)
+/// * `"1d"`, `"2d 5h"` (#447 — multi-day sessions)
 /// * `"1w"`, `"3w 2d"` (#447 — long-running automations)
 ///
 /// The output drops the secondary unit when it's zero, so `"1h"`

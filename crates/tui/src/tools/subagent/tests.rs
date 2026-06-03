@@ -453,9 +453,7 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
     let fork_context = SubAgentForkContext {
         system: Some(parent_system.clone()),
         messages: vec![parent_message.clone()],
-        structured_state_block: Some(
-            "## Cycle State (Auto-Preserved)\n- Mode: `AGENT`".to_string(),
-        ),
+        structured_state_block: Some("## Fork State\n- Mode: `AGENT`".to_string()),
     };
 
     let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));

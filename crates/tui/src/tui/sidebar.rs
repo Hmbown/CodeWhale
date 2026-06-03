@@ -174,7 +174,6 @@ struct SidebarWorkSummary {
     goal_completed: bool,
     goal_started_at: Option<Instant>,
     tokens_used: u32,
-    cycle_count: u32,
     checklist_completion_pct: u8,
     checklist_items: Vec<SidebarWorkChecklistItem>,
     strategy_explanation: Option<String>,
@@ -194,7 +193,6 @@ impl SidebarWorkSummary {
         self.goal_objective
             .as_deref()
             .is_some_and(|s| !s.trim().is_empty())
-            || self.cycle_count > 0
             || !self.checklist_items.is_empty()
             || self.has_strategy()
             || self.state_updating
@@ -235,7 +233,6 @@ fn sidebar_work_summary(app: &App) -> SidebarWorkSummary {
         goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
         goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
-        cycle_count: app.cycle_count,
         ..SidebarWorkSummary::default()
     };
 
@@ -302,17 +299,6 @@ fn work_panel_lines(
 
     push_work_checklist_lines(summary, content_width, max_rows, &mut lines, ui_theme);
     push_work_strategy_lines(summary, content_width, max_rows, &mut lines, &theme);
-
-    if summary.cycle_count > 0 && lines.len() < max_rows {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "cycles: {} (active: {})",
-                summary.cycle_count,
-                summary.cycle_count.saturating_add(1)
-            ),
-            Style::default().fg(ui_theme.text_muted),
-        )));
-    }
 
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -1853,18 +1839,6 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
         format!("lsp: {lsp_label}"),
         Style::default().fg(theme.text_muted),
     )));
-
-    // ── Cycles ───────────────────────────────────────────────────
-    if app.cycle_count > 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "cycles: {} crossed, {} briefing(s)",
-                app.cycle_count,
-                app.cycle_briefings.len()
-            ),
-            Style::default().fg(theme.text_muted),
-        )));
-    }
 
     // ── Memory ───────────────────────────────────────────────────
     if app.use_memory {

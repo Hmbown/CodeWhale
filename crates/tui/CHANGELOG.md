@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.51] - 2026-06-02
+
+### Added
+
+- **Arcee AI as a direct provider.** New `[providers.arcee]` config block and
+  `ARCEE_API_KEY` / `ARCEE_BASE_URL` / `ARCEE_MODEL` environment variables,
+  wired through CLI auth (`codewhale auth set --provider arcee`), the TUI
+  provider picker, and the model registry. The default direct-API model is
+  `trinity-large-thinking` (reasoning-capable, 262K context and 262K max
+  output); `trinity-large-preview` (262K context, non-reasoning) and
+  `trinity-mini` (128K context) are also selectable. OpenRouter's
+  `arcee-ai/trinity-large-thinking` route remains separate.
+- **Arcee Cloudflare-WAF compatibility.** The opening turn to the Arcee gateway
+  uses a benign read-only tool surface (`read_file`, `list_dir`, `file_search`,
+  `grep_files`, `git_status`, `git_diff`, `checklist_write`, `update_plan`) and
+  splits example payloads such as `python -c …` out of the system prompt, so the
+  WAF does not reject the first request; the full tool catalog stays reachable
+  through tool-search. `trinity-large-thinking`'s `reasoning_content` is
+  recognized and replayed on tool-call turns.
+- **Expanded model catalog.** Added context-window, max-output, and
+  reasoning-capability metadata for additional model IDs, including
+  `qwen/qwen3.6-flash`, `qwen/qwen3.6-plus`, `qwen/qwen3.6-max-preview`, and
+  Xiaomi MiMo v2.5 chat/ASR/TTS variants; `trinity-large-preview`'s context
+  window was corrected to 262K.
+- **Provider-aware model picker.** The picker groups models by provider, shows
+  per-model hints, and remembers a saved model per provider.
+
+### Changed
+
+- **Auto-compaction is now percentage- and model-aware.** The per-model
+  threshold helper is `compaction_threshold_for_model_at_percent(model,
+  percent)` (replacing the effort-based variant), and the default
+  `auto_compact_threshold_percent` is 80%. Auto-compaction defaults on for
+  models with a context window of 256K or smaller and stays opt-in for 1M-token
+  models (e.g. DeepSeek V4) to protect prefix-cache economics, unless the user
+  has explicitly set `auto_compact`.
+- **Clearer provider/gateway errors.** HTTP error bodies are sanitized before
+  display — HTML interstitials and Cloudflare "Access Denied" pages collapse to
+  a one-line reason (with the ray/error ID) instead of dumping raw markup into
+  the transcript — and 403s are split into authentication vs. authorization
+  (gateway/WAF block) categories.
+- The invalid-model error now names the active provider and lists Arcee among
+  the options.
+
+### Removed
+
+- **The session "cycle" / checkpoint-restart system.** Removed the `/cycles`,
+  `/cycle <n>`, and `/recall` commands, the `recall_archive` tool, the
+  cycle-handoff briefing prompt, the sidebar "cycles" lines, and the
+  `cycle_manager` engine plumbing (`EngineConfig.cycle`, `Event::CycleAdvanced`,
+  seam-manager cycle thresholds and flash briefings). Long sessions no longer
+  auto-reset their context at a fixed token boundary — reclaim budget with
+  `/compact` or model-aware auto-compaction instead. Existing on-disk cycle
+  archives are left untouched but are no longer read or written.
+
+### Fixed
+
+- Assistant turns no longer leave an orphaned role glyph (the stray "blue dot")
+  when a turn streams only whitespace between reasoning and a tool call.
+- Scrolling the mouse wheel over the right-hand sidebar no longer leaks into
+  the transcript scroll.
+- The sidebar hover tooltip now appears only for truncated lines, sits below
+  the cursor, and uses a neutral surface color instead of the warning-orange
+  highlight that overlapped neighbouring rows.
+- Corrected the README's description of the Constitution (Article VII is the
+  hierarchy itself; Article II's truth duty overrides even a user request) to
+  match `prompts/base.md`.
+- Repaired release-blocking unit and integration tests left failing by the
+  cycle-removal and compaction-threshold refactors (relay instruction,
+  model-reject message, compaction budget, mock-LLM threshold helper).
+
 ## [0.8.50] - 2026-06-02
 
 ### Added
@@ -5233,7 +5304,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.51...HEAD
+[0.8.51]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...v0.8.51
 [0.8.50]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...v0.8.50
 [0.8.49]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...v0.8.49
 [0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48

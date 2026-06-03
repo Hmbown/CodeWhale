@@ -38,12 +38,17 @@ const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
 const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
 const OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL: &str =
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
+const OPENROUTER_QWEN_3_6_FLASH_MODEL: &str = "qwen/qwen3.6-flash";
 const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
+const OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL: &str = "qwen/qwen3.6-max-preview";
 const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
+const OPENROUTER_QWEN_3_6_PLUS_MODEL: &str = "qwen/qwen3.6-plus";
 const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
 const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
+const XIAOMI_MIMO_V2_5_OMNI_MODEL: &str = "mimo-v2.5";
+const XIAOMI_MIMO_ASR_MODEL: &str = "mimo-v2.5-asr";
 const XIAOMI_MIMO_TTS_MODEL: &str = "mimo-v2.5-tts";
 const XIAOMI_MIMO_TTS_VOICE_DESIGN_MODEL: &str = "mimo-v2.5-tts-voicedesign";
 const XIAOMI_MIMO_TTS_VOICE_CLONE_MODEL: &str = "mimo-v2.5-tts-voiceclone";
@@ -53,6 +58,9 @@ const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
 const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_SILICONFLOW_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
+const DEFAULT_ARCEE_MODEL: &str = "trinity-large-thinking";
+const ARCEE_TRINITY_LARGE_PREVIEW_MODEL: &str = "trinity-large-preview";
+const ARCEE_TRINITY_MINI_MODEL: &str = "trinity-mini";
 const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
 const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
@@ -64,6 +72,7 @@ const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
+const DEFAULT_ARCEE_BASE_URL: &str = "https://api.arcee.ai/api/v1";
 const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
@@ -104,6 +113,8 @@ pub enum ProviderKind {
     Fireworks,
     #[serde(alias = "silicon-flow", alias = "silicon_flow")]
     Siliconflow,
+    #[serde(alias = "arcee-ai", alias = "arcee_ai")]
+    Arcee,
     Moonshot,
     Sglang,
     Vllm,
@@ -125,6 +136,7 @@ impl ProviderKind {
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
             Self::Siliconflow => "siliconflow",
+            Self::Arcee => "arcee",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
@@ -151,6 +163,7 @@ impl ProviderKind {
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
+            "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
@@ -186,7 +199,7 @@ pub struct ProvidersToml {
     pub volcengine: ProviderConfigToml,
     #[serde(default)]
     pub openrouter: ProviderConfigToml,
-    #[serde(default)]
+    #[serde(default, alias = "xiaomi", alias = "mimo", alias = "xiaomimimo")]
     pub xiaomi_mimo: ProviderConfigToml,
     #[serde(default)]
     pub novita: ProviderConfigToml,
@@ -194,6 +207,8 @@ pub struct ProvidersToml {
     pub fireworks: ProviderConfigToml,
     #[serde(default)]
     pub siliconflow: ProviderConfigToml,
+    #[serde(default)]
+    pub arcee: ProviderConfigToml,
     #[serde(default)]
     pub moonshot: ProviderConfigToml,
     #[serde(default)]
@@ -238,6 +253,7 @@ impl ProvidersToml {
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
             ProviderKind::Siliconflow => &self.siliconflow,
+            ProviderKind::Arcee => &self.arcee,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
@@ -258,6 +274,7 @@ impl ProvidersToml {
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
             ProviderKind::Siliconflow => &mut self.siliconflow,
+            ProviderKind::Arcee => &mut self.arcee,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
@@ -501,6 +518,7 @@ impl ConfigToml {
             &mut self.providers.siliconflow,
             &project.providers.siliconflow,
         );
+        merge_project_provider_config(&mut self.providers.arcee, &project.providers.arcee);
         merge_project_provider_config(&mut self.providers.sglang, &project.providers.sglang);
         merge_project_provider_config(&mut self.providers.vllm, &project.providers.vllm);
         merge_project_provider_config(&mut self.providers.ollama, &project.providers.ollama);
@@ -589,6 +607,12 @@ impl ConfigToml {
             "providers.siliconflow.model" => self.providers.siliconflow.model.clone(),
             "providers.siliconflow.http_headers" => {
                 serialize_http_headers(&self.providers.siliconflow.http_headers)
+            }
+            "providers.arcee.api_key" => self.providers.arcee.api_key.clone(),
+            "providers.arcee.base_url" => self.providers.arcee.base_url.clone(),
+            "providers.arcee.model" => self.providers.arcee.model.clone(),
+            "providers.arcee.http_headers" => {
+                serialize_http_headers(&self.providers.arcee.http_headers)
             }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key.clone(),
             "providers.moonshot.base_url" => self.providers.moonshot.base_url.clone(),
@@ -785,6 +809,18 @@ impl ConfigToml {
             "providers.siliconflow.http_headers" => {
                 self.providers.siliconflow.http_headers = parse_http_headers(value)?;
             }
+            "providers.arcee.api_key" => {
+                self.providers.arcee.api_key = Some(value.to_string());
+            }
+            "providers.arcee.base_url" => {
+                self.providers.arcee.base_url = Some(value.to_string());
+            }
+            "providers.arcee.model" => {
+                self.providers.arcee.model = Some(value.to_string());
+            }
+            "providers.arcee.http_headers" => {
+                self.providers.arcee.http_headers = parse_http_headers(value)?;
+            }
             "providers.moonshot.api_key" => {
                 self.providers.moonshot.api_key = Some(value.to_string());
             }
@@ -923,6 +959,12 @@ impl ConfigToml {
             "providers.siliconflow.model" => self.providers.siliconflow.model = None,
             "providers.siliconflow.http_headers" => {
                 self.providers.siliconflow.http_headers.clear();
+            }
+            "providers.arcee.api_key" => self.providers.arcee.api_key = None,
+            "providers.arcee.base_url" => self.providers.arcee.base_url = None,
+            "providers.arcee.model" => self.providers.arcee.model = None,
+            "providers.arcee.http_headers" => {
+                self.providers.arcee.http_headers.clear();
             }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key = None,
             "providers.moonshot.base_url" => self.providers.moonshot.base_url = None,
@@ -1134,6 +1176,18 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.siliconflow.http_headers) {
             out.insert("providers.siliconflow.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.arcee.api_key.as_ref() {
+            out.insert("providers.arcee.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.arcee.base_url.as_ref() {
+            out.insert("providers.arcee.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.arcee.model.as_ref() {
+            out.insert("providers.arcee.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.arcee.http_headers) {
+            out.insert("providers.arcee.http_headers".to_string(), v);
+        }
         if let Some(v) = self.providers.moonshot.api_key.as_ref() {
             out.insert("providers.moonshot.api_key".to_string(), redact_secret(v));
         }
@@ -1252,6 +1306,7 @@ impl ConfigToml {
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
                 ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
+                ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL.to_string(),
                 ProviderKind::Moonshot => {
                     if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
                         DEFAULT_KIMI_CODE_BASE_URL.to_string()
@@ -1510,6 +1565,16 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             ProviderKind::Siliconflow,
             "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-v3",
         ) => DEFAULT_SILICONFLOW_FLASH_MODEL.to_string(),
+        (
+            ProviderKind::Arcee,
+            "trinity" | "arcee-trinity" | "trinity-large-thinking" | "arcee-trinity-large-thinking",
+        ) => DEFAULT_ARCEE_MODEL.to_string(),
+        (ProviderKind::Arcee, "trinity-mini" | "arcee-trinity-mini") => {
+            ARCEE_TRINITY_MINI_MODEL.to_string()
+        }
+        (ProviderKind::Arcee, "arcee-trinity-large-preview") => {
+            ARCEE_TRINITY_LARGE_PREVIEW_MODEL.to_string()
+        }
         (ProviderKind::Moonshot, "kimi-k2.6" | "kimi-k2") => DEFAULT_MOONSHOT_MODEL.to_string(),
         (ProviderKind::Sglang, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_SGLANG_MODEL.to_string()
@@ -1540,8 +1605,22 @@ fn canonical_xiaomi_mimo_model_id(model: &str) -> Option<&'static str> {
         | "mimo-v2-5-pro"
         | "xiaomi-mimo-v2.5-pro"
         | "xiaomi-mimo-v2-5-pro" => Some(DEFAULT_XIAOMI_MIMO_MODEL),
-        "mimo-v2.5" | "mimo-v25" | "mimo-v2-5" | "xiaomi-mimo-v2.5" | "xiaomi-mimo-v2-5" => {
-            Some("mimo-v2.5")
+        "omni"
+        | "mimo-omni"
+        | "v2.5-omni"
+        | "v25-omni"
+        | "mimo-v2.5"
+        | "mimo-v25"
+        | "mimo-v2-5"
+        | "mimo-v2.5-omni"
+        | "mimo-v25-omni"
+        | "mimo-v2-5-omni"
+        | "xiaomi-mimo-v2.5"
+        | "xiaomi-mimo-v2-5"
+        | "xiaomi-mimo-v2.5-omni"
+        | "xiaomi-mimo-v2-5-omni" => Some(XIAOMI_MIMO_V2_5_OMNI_MODEL),
+        "asr" | "mimo-asr" | "mimo-v2.5-asr" | "speech-to-text" | "transcribe" => {
+            Some(XIAOMI_MIMO_ASR_MODEL)
         }
         "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" | "tts" | "speech" => {
             Some(XIAOMI_MIMO_TTS_MODEL)
@@ -1591,8 +1670,18 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         | "qwen3.6-35b-a3b"
         | "qwen-3.6-35b-a3b"
         | "qwen3-6-35b-a3b" => Some(OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+        OPENROUTER_QWEN_3_6_FLASH_MODEL | "qwen3.6-flash" | "qwen-3.6-flash" => {
+            Some(OPENROUTER_QWEN_3_6_FLASH_MODEL)
+        }
+        OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL
+        | "qwen3.6-max-preview"
+        | "qwen-3.6-max-preview"
+        | "qwen-max-preview" => Some(OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL),
         OPENROUTER_QWEN_3_6_27B_MODEL | "qwen3.6-27b" | "qwen-3.6-27b" | "qwen3-6-27b" => {
             Some(OPENROUTER_QWEN_3_6_27B_MODEL)
+        }
+        OPENROUTER_QWEN_3_6_PLUS_MODEL | "qwen3.6-plus" | "qwen-3.6-plus" => {
+            Some(OPENROUTER_QWEN_3_6_PLUS_MODEL)
         }
         OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
             Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
@@ -1624,6 +1713,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
         ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
+        ProviderKind::Arcee => DEFAULT_ARCEE_MODEL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
@@ -1644,6 +1734,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
         ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+        ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
@@ -2209,6 +2300,7 @@ struct EnvRuntimeOverrides {
     wanjie_ark_model: Option<String>,
     moonshot_model: Option<String>,
     xiaomi_mimo_model: Option<String>,
+    arcee_model: Option<String>,
     output_mode: Option<String>,
     auth_mode: Option<String>,
     log_level: Option<String>,
@@ -2229,6 +2321,7 @@ struct EnvRuntimeOverrides {
     fireworks_base_url: Option<String>,
     siliconflow_base_url: Option<String>,
     siliconflow_model: Option<String>,
+    arcee_base_url: Option<String>,
     moonshot_base_url: Option<String>,
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
@@ -2263,6 +2356,9 @@ impl EnvRuntimeOverrides {
                 .filter(|v| !v.trim().is_empty()),
             xiaomi_mimo_model: std::env::var("XIAOMI_MIMO_MODEL")
                 .or_else(|_| std::env::var("MIMO_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            arcee_model: std::env::var("ARCEE_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
@@ -2324,6 +2420,9 @@ impl EnvRuntimeOverrides {
             siliconflow_model: std::env::var("SILICONFLOW_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            arcee_base_url: std::env::var("ARCEE_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             moonshot_base_url: std::env::var("MOONSHOT_BASE_URL")
                 .or_else(|_| std::env::var("KIMI_BASE_URL"))
                 .ok()
@@ -2355,6 +2454,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
             ProviderKind::Siliconflow => self.siliconflow_base_url.clone(),
+            ProviderKind::Arcee => self.arcee_base_url.clone(),
             ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
@@ -2367,6 +2467,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
             ProviderKind::Volcengine => self.volcengine_model.clone(),
             ProviderKind::Siliconflow => self.siliconflow_model.clone(),
+            ProviderKind::Arcee => self.arcee_model.clone(),
             ProviderKind::Moonshot => self.moonshot_model.clone(),
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_model.clone(),
             _ => None,
@@ -2566,6 +2667,9 @@ mod tests {
         siliconflow_api_key: Option<OsString>,
         siliconflow_base_url: Option<OsString>,
         siliconflow_model: Option<OsString>,
+        arcee_api_key: Option<OsString>,
+        arcee_base_url: Option<OsString>,
+        arcee_model: Option<OsString>,
         moonshot_api_key: Option<OsString>,
         moonshot_base_url: Option<OsString>,
         moonshot_model: Option<OsString>,
@@ -2626,6 +2730,9 @@ mod tests {
                 siliconflow_api_key: env::var_os("SILICONFLOW_API_KEY"),
                 siliconflow_base_url: env::var_os("SILICONFLOW_BASE_URL"),
                 siliconflow_model: env::var_os("SILICONFLOW_MODEL"),
+                arcee_api_key: env::var_os("ARCEE_API_KEY"),
+                arcee_base_url: env::var_os("ARCEE_BASE_URL"),
+                arcee_model: env::var_os("ARCEE_MODEL"),
                 moonshot_api_key: env::var_os("MOONSHOT_API_KEY"),
                 moonshot_base_url: env::var_os("MOONSHOT_BASE_URL"),
                 moonshot_model: env::var_os("MOONSHOT_MODEL"),
@@ -2680,6 +2787,9 @@ mod tests {
                 env::remove_var("SILICONFLOW_API_KEY");
                 env::remove_var("SILICONFLOW_BASE_URL");
                 env::remove_var("SILICONFLOW_MODEL");
+                env::remove_var("ARCEE_API_KEY");
+                env::remove_var("ARCEE_BASE_URL");
+                env::remove_var("ARCEE_MODEL");
                 env::remove_var("MOONSHOT_API_KEY");
                 env::remove_var("MOONSHOT_BASE_URL");
                 env::remove_var("MOONSHOT_MODEL");
@@ -2752,6 +2862,9 @@ mod tests {
                 Self::restore_var("SILICONFLOW_API_KEY", self.siliconflow_api_key.take());
                 Self::restore_var("SILICONFLOW_BASE_URL", self.siliconflow_base_url.take());
                 Self::restore_var("SILICONFLOW_MODEL", self.siliconflow_model.take());
+                Self::restore_var("ARCEE_API_KEY", self.arcee_api_key.take());
+                Self::restore_var("ARCEE_BASE_URL", self.arcee_base_url.take());
+                Self::restore_var("ARCEE_MODEL", self.arcee_model.take());
                 Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
                 Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
                 Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
@@ -3614,7 +3727,39 @@ unix_socket_path = "/tmp/cw-hooks.sock"
     }
 
     #[test]
-    fn xiaomi_mimo_tts_aliases_resolve_to_canonical_models() {
+    fn xiaomi_provider_alias_table_maps_to_mimo_runtime_config() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config: ConfigToml = toml::from_str(
+            r#"
+provider = "xiaomi-mimo"
+default_text_model = "deepseek/deepseek-v4-pro"
+
+[providers.xiaomi]
+api_key = "mimo-table-key"
+base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
+model = "mimo-v2.5-pro"
+"#,
+        )
+        .expect("xiaomi provider alias config");
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.api_key.as_deref(), Some("mimo-table-key"));
+        assert_eq!(
+            resolved.base_url,
+            "https://token-plan-sgp.xiaomimimo.com/v1"
+        );
+        assert_eq!(resolved.model, DEFAULT_XIAOMI_MIMO_MODEL);
+    }
+
+    #[test]
+    fn xiaomi_mimo_aliases_resolve_to_canonical_models() {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::XiaomiMimo, "omni"),
+            "mimo-v2.5"
+        );
         assert_eq!(
             normalize_model_for_provider(ProviderKind::XiaomiMimo, "tts"),
             "mimo-v2.5-tts"
@@ -4132,6 +4277,63 @@ unix_socket_path = "/tmp/cw-hooks.sock"
     }
 
     #[test]
+    fn arcee_provider_defaults_to_direct_api_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Arcee,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.base_url, DEFAULT_ARCEE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_ARCEE_MODEL);
+    }
+
+    #[test]
+    fn arcee_env_overrides_key_base_url_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "arcee");
+            env::set_var("ARCEE_API_KEY", "arcee-env-key");
+            env::set_var("ARCEE_BASE_URL", "https://arcee-mirror.example/api/v1");
+            env::set_var("ARCEE_MODEL", "trinity-large-preview");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.api_key.as_deref(), Some("arcee-env-key"));
+        assert_eq!(resolved.base_url, "https://arcee-mirror.example/api/v1");
+        assert_eq!(resolved.model, "trinity-large-preview");
+    }
+
+    #[test]
+    fn arcee_provider_config_overrides_runtime_defaults() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Arcee,
+            ..ConfigToml::default()
+        };
+        config.providers.arcee.api_key = Some("arcee-file-key".to_string());
+        config.providers.arcee.base_url = Some(DEFAULT_ARCEE_BASE_URL.to_string());
+        config.providers.arcee.model = Some("arcee-trinity-large-preview".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Arcee);
+        assert_eq!(resolved.api_key.as_deref(), Some("arcee-file-key"));
+        assert_eq!(resolved.base_url, DEFAULT_ARCEE_BASE_URL);
+        assert_eq!(resolved.model, ARCEE_TRINITY_LARGE_PREVIEW_MODEL);
+    }
+
+    #[test]
     fn siliconflow_cn_base_url_env_normalizes_model_aliases() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4207,7 +4409,10 @@ unix_socket_path = "/tmp/cw-hooks.sock"
                 "trinity-large-thinking",
                 OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
             ),
+            ("qwen3.6-flash", OPENROUTER_QWEN_3_6_FLASH_MODEL),
             ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
+            ("qwen3.6-max-preview", OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL),
+            ("qwen3.6-plus", OPENROUTER_QWEN_3_6_PLUS_MODEL),
             ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
             ("kimi-k2.6", OPENROUTER_KIMI_K2_6_MODEL),
             ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),

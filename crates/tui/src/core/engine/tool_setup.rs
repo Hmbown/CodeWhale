@@ -64,8 +64,7 @@ impl Engine {
         builder = builder
             .with_review_tool(self.deepseek_client.clone(), self.session.model.clone())
             .with_user_input_tool()
-            .with_parallel_tool()
-            .with_recall_archive_tool();
+            .with_parallel_tool();
 
         // SlopLedger: plan mode only gets read-only query + export,
         // agent/yolo get the full set including append + update.
