@@ -262,7 +262,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         };
 
         Some(SidebarWorkSummary {
-            goal_objective: app.hunt.quarry.clone(),
+            goal_objective: app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone()),
             goal_token_budget: app.hunt.token_budget,
             goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
             goal_started_at: app.hunt.started_at,
@@ -289,7 +289,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
 
     if let Some(cached) = app.cached_work_summary.as_ref() {
         let mut summary = cached.clone();
-        summary.goal_objective = app.hunt.quarry.clone();
+        summary.goal_objective = app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone());
         summary.goal_token_budget = app.hunt.token_budget;
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
@@ -305,7 +305,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     }
 
     SidebarWorkSummary {
-        goal_objective: app.hunt.quarry.clone(),
+        goal_objective: app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone()),
         goal_token_budget: app.hunt.token_budget,
         goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
         goal_started_at: app.hunt.started_at,
@@ -3298,9 +3298,10 @@ mod tests {
         let summary = sidebar_work_summary(&mut app);
         assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
             "must show paused after ESC");
-        // quarry is cleared — no active goal shown in system prompt
-        assert!(summary.goal_objective.is_none(),
-            "goal objective must be None when paused so model is not prompted to continue the scan");
+        // quarry is cleared for system prompt, but paused_quarry keeps
+        // the goal visible in the WorkBench (with ⏸ icon).
+        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
+            "WorkBench must show the goal even when paused (from paused_quarry)");
 
         // 3. User types "continue" — restore quarry, unpause
         app.hunt.quarry = app.paused_quarry.take();
