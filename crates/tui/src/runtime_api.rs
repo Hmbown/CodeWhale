@@ -35,13 +35,13 @@ use crate::automation_manager::{
 };
 use crate::config::{Config, DEFAULT_TEXT_MODEL};
 use crate::mcp::{McpConfig, McpPool};
+use crate::models::{ContentBlock, Message};
 use crate::runtime_threads::{
     CompactThreadRequest, CreateThreadRequest, ExternalApprovalDecision, RuntimeThreadManager,
     RuntimeThreadManagerConfig, SharedRuntimeThreadManager, StartTurnRequest, SteerTurnRequest,
     ThreadDetail, ThreadListFilter, ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest,
     UsageGroupBy,
 };
-use crate::models::{ContentBlock, Message};
 use crate::session_manager::{SavedSession, SessionManager, SessionMetadata, default_sessions_dir};
 use crate::skill_state::SkillStateStore;
 use crate::task_manager::{
@@ -515,7 +515,10 @@ pub async fn run_http_server(
 
 pub fn build_router(state: RuntimeApiState) -> Router {
     let api_routes = Router::new()
-        .route("/v1/sessions", get(list_sessions).post(create_session_from_thread))
+        .route(
+            "/v1/sessions",
+            get(list_sessions).post(create_session_from_thread),
+        )
         .route("/v1/sessions/{id}", get(get_session).delete(delete_session))
         .route(
             "/v1/sessions/{id}/resume-thread",
@@ -911,7 +914,10 @@ async fn create_session_from_thread(
                 if !text.trim().is_empty() {
                     messages.push(Message {
                         role: "user".to_string(),
-                        content: vec![ContentBlock::Text { text, cache_control: None }],
+                        content: vec![ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        }],
                     });
                 }
             }
@@ -920,7 +926,10 @@ async fn create_session_from_thread(
                 if !text.trim().is_empty() {
                     messages.push(Message {
                         role: "assistant".to_string(),
-                        content: vec![ContentBlock::Text { text, cache_control: None }],
+                        content: vec![ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        }],
                     });
                 }
             }
@@ -938,22 +947,19 @@ async fn create_session_from_thread(
 
     // Determine title
     let title = req.title.clone().unwrap_or_else(|| {
-        thread
-            .title
-            .clone()
-            .unwrap_or_else(|| {
-                // Fallback: first user message
-                messages
-                    .iter()
-                    .find(|m| m.role == "user")
-                    .and_then(|m| {
-                        m.content.iter().find_map(|block| match block {
-                            ContentBlock::Text { text, .. } => Some(truncate_text(text, 50)),
-                            _ => None,
-                        })
+        thread.title.clone().unwrap_or_else(|| {
+            // Fallback: first user message
+            messages
+                .iter()
+                .find(|m| m.role == "user")
+                .and_then(|m| {
+                    m.content.iter().find_map(|block| match block {
+                        ContentBlock::Text { text, .. } => Some(truncate_text(text, 50)),
+                        _ => None,
                     })
-                    .unwrap_or_else(|| "Saved Session".to_string())
-            })
+                })
+                .unwrap_or_else(|| "Saved Session".to_string())
+        })
     });
 
     // Create session using session_manager helper
@@ -962,8 +968,11 @@ async fn create_session_from_thread(
 
     let session_id = uuid::Uuid::new_v4().to_string();
     // Convert thread system_prompt (String) to SystemPrompt enum
-    let system_prompt = thread.system_prompt.as_ref().map(|s| crate::models::SystemPrompt::Text(s.clone()));
-    
+    let system_prompt = thread
+        .system_prompt
+        .as_ref()
+        .map(|s| crate::models::SystemPrompt::Text(s.clone()));
+
     let session = crate::session_manager::create_saved_session_with_id_and_mode(
         session_id.clone(),
         &messages,
