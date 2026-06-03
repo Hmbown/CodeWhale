@@ -3490,6 +3490,7 @@ async fn run_event_loop(
                                 // see the old command's objective in the
                                 // system prompt for the next conversation.
                                 app.hunt.quarry = None;
+                                app.paused_quarry = None;
                                 app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
                                 app.active_allowed_tools = None;
                                 if let Ok(mut slot) = engine_handle.shared_paused.lock() {
@@ -3518,8 +3519,11 @@ async fn run_event_loop(
                                 // First ESC — pause
                                 tracing::debug!(target: "pausable", "PauseCommand — pausing");
                                 // Save the current goal so we can restore it on resume.
+                                // Set a pause message so the system prompt tells
+                                // the model the command is on hold instead of
+                                // continuing the original request.
                                 app.paused_quarry = app.hunt.quarry.clone();
-                                app.hunt.quarry = None;
+                                app.hunt.quarry = Some("Command is paused. Type 'continue' to resume it.".to_string());
                                 engine_handle.set_paused(true);
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
