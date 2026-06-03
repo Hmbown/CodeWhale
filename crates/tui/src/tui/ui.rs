@@ -1623,9 +1623,11 @@ async fn run_event_loop(
                         app.streaming_state.reset();
                         app.streaming_message_index = None;
                         app.streaming_thinking_active_entry = None;
-                        // Reset pause state for new turn
+                        // Reset pause state for new turn.
+                        // Note: pausable is NOT reset here — it is set by
+                        // try_dispatch_user_command for pausable commands and
+                        // persists until the user presses Esc or the turn ends.
                         app.paused = false;
-                        app.pausable = false;
                         app.paused_cancelled = false;
                         let now = Instant::now();
                         app.turn_started_at = Some(now);
@@ -1717,6 +1719,11 @@ async fn run_event_loop(
                             }
                             crate::core::events::TurnOutcomeStatus::Failed => "failed".to_string(),
                         });
+                        // Turn ended in any terminal state — clear pausable lifecycle.
+                        app.pausable = false;
+                        app.paused = false;
+                        app.paused_cancelled = false;
+
                         if matches!(
                             status,
                             crate::core::events::TurnOutcomeStatus::Interrupted
@@ -3449,10 +3456,18 @@ async fn run_event_loop(
                         }
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
-                            engine_handle.cancel();
-                            mark_active_turn_cancelled_locally(app);
-                            current_streaming_text.clear();
-                            app.status_message = Some("Request cancelled".to_string());
+                            if app.paused {
+                                // Cancelling while paused — mark as cancelled.
+                                app.paused_cancelled = true;
+                                app.paused = false;
+                                app.status_message = Some("Command cancelled".to_string());
+                                let _ = engine_handle.send(Op::SetPaused { paused: false }).await;
+                            } else {
+                                engine_handle.cancel();
+                                mark_active_turn_cancelled_locally(app);
+                                current_streaming_text.clear();
+                                app.status_message = Some("Request cancelled".to_string());
+                            }
                         }
                         EscapeAction::PauseCommand => {
                             if app.paused {
