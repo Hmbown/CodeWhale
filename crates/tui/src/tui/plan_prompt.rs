@@ -278,16 +278,8 @@ impl ModalView for PlanPromptView {
                         .modifiers
                         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                self.scroll = 0;
                 self.pending_g = false;
-                ViewAction::None
-            }
-            KeyCode::Char('g')
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.pending_g = true;
+                self.scroll = 0;
                 ViewAction::None
             }
             KeyCode::Char('G')
@@ -298,20 +290,24 @@ impl ModalView for PlanPromptView {
                 self.scroll = usize::MAX;
                 ViewAction::None
             }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll = self.scroll.saturating_add(6);
-                ViewAction::None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll = self.scroll.saturating_sub(6);
-                ViewAction::None
-            }
             KeyCode::Home => {
                 self.scroll = 0;
                 ViewAction::None
             }
             KeyCode::End => {
                 self.scroll = usize::MAX;
+                ViewAction::None
+            }
+            KeyCode::Char('g') => {
+                self.pending_g = true;
+                ViewAction::None
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_add(6);
+                ViewAction::None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll = self.scroll.saturating_sub(6);
                 ViewAction::None
             }
             _ => ViewAction::None,
@@ -395,10 +391,13 @@ impl ModalView for PlanPromptView {
                         crate::tools::plan::StepStatus::InProgress => "\u{25b6}",
                         crate::tools::plan::StepStatus::Completed => "\u{2713}",
                     };
-                    lines.push(Line::from(Span::styled(
-                        format!("  {status_mark} {}. {}", i + 1, &item.step),
-                        Style::default().fg(palette::TEXT_PRIMARY),
-                    )));
+                    let step_text = format!("  {status_mark} {}. {}", i + 1, &item.step);
+                    for line in wrap_text(&step_text, content_width) {
+                        lines.push(Line::from(Span::styled(
+                            line,
+                            Style::default().fg(palette::TEXT_PRIMARY),
+                        )));
+                    }
                 }
                 lines.push(Line::from(""));
             }
@@ -416,8 +415,9 @@ impl ModalView for PlanPromptView {
         }
 
         // Calculate scroll bounds so long plan content doesn't clip the options.
-        // Use wrapped_line_count to estimate post-wrap line count.
-        let total_lines = wrapped_line_count(&lines, content_width);
+        // Since plan steps are now pre-wrapped via wrap_text(), each Line is
+        // already width-bounded — use the raw line count directly.
+        let total_lines = lines.len();
         let visible_lines = usize::from(popup_area.height).saturating_sub(4).max(1);
         let max_scroll = total_lines.saturating_sub(visible_lines);
         self.last_max_scroll.set(max_scroll);
@@ -428,7 +428,11 @@ impl ModalView for PlanPromptView {
         let mut footer_spans: Vec<Span> = Vec::new();
         if total_lines > visible_lines {
             footer_spans.push(Span::styled(
-                format!(" [{}/{} PgUp/Dn · Ctrl+U/D] ", scroll + 1, max_scroll + 1),
+                format!(
+                    " [{}/{} PgUp/Dn \u{b7} Ctrl+U/D] ",
+                    scroll + 1,
+                    max_scroll + 1
+                ),
                 Style::default().fg(palette::DEEPSEEK_SKY),
             ));
         }
@@ -453,15 +457,20 @@ impl ModalView for PlanPromptView {
         // Selected option description, right-aligned by filling space.
         let desc = PLAN_OPTIONS[self.selected].description;
         let desc_span = Span::styled(
-            format!(" → {desc}"),
+            format!(" \u{2192} {desc}"),
             Style::default().fg(palette::TEXT_MUTED),
         );
         footer_spans.push(desc_span);
 
         render_modal_chrome(area, popup_area, buf);
+        // Wrap { trim: false } — disable ratatui's word-boundary-based line
+        // wrapping. All content is already pre-wrapped via wrap_text() above,
+        // which breaks only on display-width overflow, not on script boundaries
+        // (Latin ↔ CJK).  This avoids forced line-breaks between English and
+        // Chinese characters when there is still room on the current line.
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true })
+            .wrap(Wrap { trim: false })
             .block(modal_block().title_bottom(Line::from(footer_spans)))
             .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
 
@@ -527,66 +536,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines
-}
-
-/// Estimate the number of display lines after word-wrapping a set of logical
-/// lines to `width` columns. Simulates ratatui's word-wrapping (breaks at word
-/// boundaries) and accounts for CJK display widths via `UnicodeWidthStr`.
-fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
-    if width == 0 {
-        return lines.len().max(1);
-    }
-    let mut total = 0usize;
-    for line in lines {
-        let text: String = line.iter().map(|s| s.content.as_ref()).collect();
-        if text.is_empty() {
-            total += 1;
-            continue;
-        }
-        let leading_bytes = text.len() - text.trim_start().len();
-        let leading_spaces =
-            UnicodeWidthStr::width(&text[..leading_bytes]).min(width.saturating_sub(1));
-        let mut line_count = 0;
-        let mut current_width = leading_spaces;
-        let mut first_word = true;
-        for word in text.split_whitespace() {
-            let word_width = UnicodeWidthStr::width(word);
-            if first_word {
-                let total_width = leading_spaces + word_width;
-                if total_width > width {
-                    let lines_needed = total_width.div_ceil(width);
-                    line_count = lines_needed;
-                    current_width = total_width % width;
-                    if current_width == 0 {
-                        current_width = width;
-                    }
-                } else {
-                    current_width = total_width;
-                    line_count = 1;
-                }
-                first_word = false;
-            } else if current_width + 1 + word_width > width {
-                line_count += 1;
-                if word_width > width {
-                    let lines_needed = word_width.div_ceil(width);
-                    line_count += lines_needed - 1;
-                    current_width = word_width % width;
-                    if current_width == 0 {
-                        current_width = width;
-                    }
-                } else {
-                    current_width = word_width;
-                }
-            } else {
-                current_width += 1 + word_width;
-            }
-        }
-        if line_count == 0 {
-            line_count = 1;
-        }
-        total += line_count;
-    }
-    total
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
