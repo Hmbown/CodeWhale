@@ -386,14 +386,21 @@ fn push_work_goal_lines(
         return;
     }
 
-    let icon = if summary.goal_completed { "✓" } else { "◆" };
+    let icon = if summary.goal_completed {
+        "✓"
+    } else if summary.pause_indicator.is_some() {
+        // Paused/cancelled — indicator shown separately above
+        "◆"
+    } else {
+        "▶"
+    };
     let status_style = if summary.goal_completed {
         Style::default()
             .fg(theme.success)
             .add_modifier(ratatui::style::Modifier::BOLD)
     } else {
         Style::default()
-            .fg(theme.warning)
+            .fg(theme.status_working)
             .add_modifier(ratatui::style::Modifier::BOLD)
     };
 
