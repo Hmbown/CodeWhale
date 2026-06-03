@@ -3386,4 +3386,25 @@ mod tests {
         assert_eq!(summary.goal_objective.as_deref(), Some("Deploy to staging"),
             "new command's goal must be shown");
     }
+
+    #[test]
+    fn non_continue_while_paused_clears_system_prompt_goal() {
+        // When the user types something while paused (not "continue"/"resume"),
+        // the hunt.quarry must be None so the system prompt has no goal.
+        // This prevents the model from being prompted to continue the old command.
+        // The paused_quarry is preserved for WorkBench display.
+        let mut app = create_test_app();
+        app.hunt.quarry = None;          // set by PauseCommand handler
+        app.paused_quarry = Some("Scan repos".to_string());
+        app.paused = true;
+
+        // Simulate dispatch_user_message for a non-continue message:
+        app.paused = false;
+        app.paused_cancelled = false;
+        app.pausable = false;
+        // app.hunt.quarry stays None — NOT restored
+
+        assert!(app.hunt.quarry.is_none(), "quarry must stay None for non-continue: system prompt has no goal");
+        assert_eq!(app.paused_quarry.as_deref(), Some("Scan repos"), "paused_quarry preserved for WorkBench");
+    }
 }
