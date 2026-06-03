@@ -117,7 +117,10 @@ impl EngineHandle {
     /// channel so it takes effect immediately, even during a running turn.
     pub fn set_paused(&self, paused: bool) {
         match self.shared_paused.lock() {
-            Ok(mut slot) => *slot = paused,
+            Ok(mut slot) => {
+                *slot = paused;
+                tracing::debug!(target: "pausable", paused, "EngineHandle::set_paused");
+            }
             Err(poisoned) => *poisoned.into_inner() = paused,
         }
         // Also send the Op so it's processed when the engine is between turns.

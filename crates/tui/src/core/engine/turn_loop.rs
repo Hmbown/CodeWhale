@@ -1359,6 +1359,7 @@ impl Engine {
 
                 // Pause gate: when the command is paused, block all tool calls.
                 let is_paused = self.shared_paused.lock().map_or(false, |g| *g);
+                tracing::debug!(target: "pausable", is_paused, tool_name, "pause gate check");
                 if blocked_error.is_none() && is_paused {
                     blocked_error = Some(ToolError::execution_failed(
                         "Command is paused. Press Esc and select Resume to continue.".to_string(),

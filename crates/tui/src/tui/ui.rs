@@ -3473,12 +3473,14 @@ async fn run_event_loop(
                         EscapeAction::PauseCommand => {
                             if app.paused {
                                 // Already paused — resume
+                                tracing::debug!(target: "pausable", "PauseCommand — resuming");
                                 engine_handle.set_paused(false);
                                 app.paused = false;
                                 app.paused_at = None;
                                 app.status_message = Some("Command resumed".to_string());
                             } else {
                                 // First ESC — pause
+                                tracing::debug!(target: "pausable", "PauseCommand — pausing");
                                 engine_handle.set_paused(true);
                                 app.paused = true;
                                 app.paused_at = Some(std::time::Instant::now());
