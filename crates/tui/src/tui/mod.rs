@@ -45,6 +45,7 @@ pub mod model_picker;
 pub mod mouse_ui;
 pub mod notifications;
 pub mod onboarding;
+pub mod output_rows_cache;
 pub mod osc8;
 pub mod pager;
 pub mod paste;

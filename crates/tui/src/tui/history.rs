@@ -2614,10 +2614,10 @@ fn render_exec_output_mode(
     render_preserved_output_mode(output, width, line_limit, mode, "output")
 }
 
-#[derive(Debug, Clone)]
-struct OutputRow {
-    text: String,
-    intact: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputRow {
+    pub text: String,
+    pub intact: bool,
 }
 
 fn render_preserved_output_mode(
@@ -2636,7 +2636,12 @@ fn render_preserved_output_mode(
         return lines;
     }
 
-    let all_lines = output_rows(output, width);
+    let content_hash = crate::tui::output_rows_cache::hash_str(output);
+    let (all_lines, _rows_hash) = crate::tui::output_rows_cache::get_or_compute_rows(
+        output,
+        width,
+        || output_rows(output, width),
+    );
 
     if matches!(mode, RenderMode::Transcript) {
         // Full-content path: emit every wrapped line with no head/tail split,
@@ -2652,7 +2657,12 @@ fn render_preserved_output_mode(
         return lines;
     }
 
-    let selected = selected_output_indices(&all_lines, line_limit);
+    let selected = crate::tui::output_rows_cache::get_or_compute_indices(
+        content_hash,
+        width,
+        line_limit,
+        || selected_output_indices(&all_lines, line_limit),
+    );
     let mut previous: Option<usize> = None;
     for (rendered_idx, idx) in selected.iter().copied().enumerate() {
         if let Some(prev) = previous {
