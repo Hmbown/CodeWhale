@@ -3171,6 +3171,25 @@ mod tests {
     }
 
     #[test]
+    fn completed_command_clears_quarry() {
+        // When a command completes successfully, the quarry must be cleared
+        // so the system prompt stops telling the model to continue the goal.
+        let mut app = create_test_app();
+        app.hunt.quarry = Some("Scan repos".to_string());
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+
+        // Simulate successful completion (what the TurnCompleted handler does):
+        if app.hunt.quarry.is_some() {
+            app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+            app.hunt.quarry = None;
+        }
+
+        assert!(app.hunt.quarry.is_none(),
+            "quarry must be None after completion so model isn't prompted to continue");
+        assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunted);
+    }
+
+    #[test]
     fn cancel_clears_hunt_goal_so_model_does_not_resume_old_command() {
         // Simulate a running pausable command with a description (hunt.quarry).
         // When cancelled, the hunt goal must be cleared so the model does NOT

@@ -1726,6 +1726,9 @@ async fn run_event_loop(
                             && app.hunt.quarry.is_some()
                         {
                             app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+                            // Clear the quarry so the model is no longer prompted
+                            // to continue this goal in future system prompts.
+                            app.hunt.quarry = None;
                         }
 
                         // Keep pause state visible after the turn ends so the
