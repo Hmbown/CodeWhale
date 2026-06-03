@@ -2624,11 +2624,13 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
     let cancel_token = CancellationToken::new();
     let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
     let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
+    let shared_paused = Arc::new(StdMutex::new(false));
     let handle = EngineHandle {
         tx_op,
         rx_event: Arc::new(RwLock::new(rx_event)),
         cancel_token: shared_cancel_token,
         cancel_reason,
+        shared_paused,
         tx_approval,
         tx_user_input,
         tx_steer,

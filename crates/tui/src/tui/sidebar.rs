@@ -3058,4 +3058,92 @@ mod tests {
         // Mouse outside content area (above) — row < content_area.y
         assert!((1u16) < section.content_area.y);
     }
+
+    // ── Pause lifecycle tests ────────────────────────────────────────
+
+    #[test]
+    fn pause_indicator_none_when_not_paused_or_cancelled() {
+        let mut app = create_test_app();
+        app.paused = false;
+        app.paused_cancelled = false;
+        let summary = sidebar_work_summary(&mut app);
+        assert!(summary.pause_indicator.is_none(), "expected no indicator when not paused/cancelled");
+    }
+
+    #[test]
+    fn pause_indicator_paused_when_paused() {
+        let mut app = create_test_app();
+        app.paused = true;
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"));
+    }
+
+    #[test]
+    fn pause_indicator_pausing_when_loading() {
+        let mut app = create_test_app();
+        app.paused = true;
+        app.is_loading = true;
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Pausing)"));
+    }
+
+    #[test]
+    fn pause_indicator_cancelled_when_cancelled() {
+        let mut app = create_test_app();
+        app.paused_cancelled = true;
+        let summary = sidebar_work_summary(&mut app);
+        assert_eq!(summary.pause_indicator.as_deref(), Some("(Cancelled)"));
+    }
+
+    #[test]
+    fn goal_icon_play_when_running() {
+        let summary = SidebarWorkSummary {
+            goal_objective: Some("test".to_string()),
+            goal_completed: false,
+            pause_indicator: None,
+            ..SidebarWorkSummary::default()
+        };
+        let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
+        let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
+        assert!(first.contains('▶'), "expected play icon for running, got: {first}");
+    }
+
+    #[test]
+    fn goal_icon_check_when_completed() {
+        let summary = SidebarWorkSummary {
+            goal_objective: Some("test".to_string()),
+            goal_completed: true,
+            pause_indicator: None,
+            ..SidebarWorkSummary::default()
+        };
+        let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
+        let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
+        assert!(first.contains('✓'), "expected checkmark for completed, got: {first}");
+    }
+
+    #[test]
+    fn goal_icon_pause_when_paused() {
+        let summary = SidebarWorkSummary {
+            goal_objective: Some("test".to_string()),
+            goal_completed: false,
+            pause_indicator: Some("(Paused)".to_string()),
+            ..SidebarWorkSummary::default()
+        };
+        let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
+        let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
+        assert!(first.contains('⏸'), "expected pause icon for paused, got: {first}");
+    }
+
+    #[test]
+    fn goal_icon_cancelled_when_cancelled() {
+        let summary = SidebarWorkSummary {
+            goal_objective: Some("test".to_string()),
+            goal_completed: false,
+            pause_indicator: Some("(Cancelled)".to_string()),
+            ..SidebarWorkSummary::default()
+        };
+        let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
+        let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
+        assert!(first.contains('✘'), "expected cross icon for cancelled, got: {first}");
+    }
 }
