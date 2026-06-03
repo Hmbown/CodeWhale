@@ -338,8 +338,8 @@ fn work_panel_lines(
     if let Some(indicator) = &summary.pause_indicator {
         if lines.len() < max_rows {
             let (fg, symbol) = match indicator.as_str() {
-                "(Cancelled)" => (ui_theme.error_icon, "✘"),
-                _ => (ui_theme.accent, "⏸"),
+                "(Cancelled)" => (ui_theme.error_fg, "✘"),
+                _ => (ui_theme.accent_primary, "⏸"),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!(" {symbol} "), Style::default().fg(fg)),
