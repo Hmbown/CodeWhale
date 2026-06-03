@@ -4834,22 +4834,22 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // Resume handling: if the command is paused, typed "continue" or "resume"
-    // resumes execution instead of sending a new message.
+    // Resume handling: if the command is paused, "continue"/"resume" unpauses
+    // and lets the message flow through as a normal user message.
     if app.paused {
         let trimmed = message.display.trim().to_lowercase();
         if trimmed == "continue" || trimmed == "resume" {
             app.paused = false;
             app.paused_at = None;
-            app.status_message = Some("Resumed".to_string());
-            app.is_loading = false;
+            app.status_message = None; // cleared — this message goes to engine
             engine_handle.set_paused(false);
+            // Fall through — let the message be sent as a normal user message.
+        } else {
+            // Any other message while paused is rejected.
+            app.status_message = Some("Command is paused. Type 'continue' or 'resume', or press Esc to cancel.".to_string());
+            app.is_loading = false;
             return Ok(());
         }
-        // Any other message while paused is queued for after resume.
-        app.status_message = Some("Command is paused. Type 'continue' or 'resume', or press Esc to cancel.".to_string());
-        app.is_loading = false;
-        return Ok(());
     }
 
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the

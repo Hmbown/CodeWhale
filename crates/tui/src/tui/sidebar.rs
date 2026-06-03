@@ -269,7 +269,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             tokens_used: app.session.total_conversation_tokens,
             checklist_completion_pct,
             pause_indicator: if app.paused {
-                Some("(Paused)".to_string())
+                Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
             } else if app.paused_cancelled {
                 Some("(Cancelled)".to_string())
             } else {
@@ -295,7 +295,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
         summary.pause_indicator = if app.paused {
-            Some("(Paused)".to_string())
+            Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
         } else {
@@ -312,7 +312,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
         pause_indicator: if app.paused {
-            Some("(Paused)".to_string())
+            Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
         } else {
@@ -339,6 +339,7 @@ fn work_panel_lines(
         if lines.len() < max_rows {
             let (fg, symbol) = match indicator.as_str() {
                 "(Cancelled)" => (ui_theme.error_fg, "✘"),
+                "(Pausing)" => (ui_theme.warning, "⏳"),
                 _ => (ui_theme.accent_primary, "⏸"),
             };
             lines.push(Line::from(vec![
