@@ -10,27 +10,39 @@ use crate::palette;
 use crate::tools::plan::PlanSnapshot;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-const PLAN_OPTIONS: [(&str, &str); 4] = [
-    (
-        "Accept plan (Agent)",
-        "Start implementation in Agent mode with approvals",
-    ),
-    (
-        "Accept plan (YOLO)",
-        "Start implementation in YOLO mode (auto-approve)",
-    ),
-    ("Revise plan", "Ask follow-ups or request plan changes"),
-    (
-        "Exit Plan mode",
-        "Return to Agent mode without implementation",
-    ),
+struct PlanOption {
+    label: &'static str,
+    description: &'static str,
+    shortcut: char,
+    short_label: &'static str,
+}
+
+const PLAN_OPTIONS: [PlanOption; 4] = [
+    PlanOption {
+        label: "Accept plan (Agent)",
+        description: "Start implementation in Agent mode with approvals",
+        shortcut: 'a',
+        short_label: "Accept",
+    },
+    PlanOption {
+        label: "Accept plan (YOLO)",
+        description: "Start implementation in YOLO mode (auto-approve)",
+        shortcut: 'y',
+        short_label: "YOLO",
+    },
+    PlanOption {
+        label: "Revise plan",
+        description: "Ask follow-ups or request plan changes",
+        shortcut: 'r',
+        short_label: "Revise",
+    },
+    PlanOption {
+        label: "Exit Plan mode",
+        description: "Return to Agent mode without implementation",
+        shortcut: 'q',
+        short_label: "Exit",
+    },
 ];
-
-/// Shortcut letters for each plan option (used in the footer bar).
-const PLAN_SHORTCUTS: [char; 4] = ['a', 'y', 'r', 'q'];
-
-/// Compact labels for each plan option (used in the footer bar).
-const PLAN_SHORT_LABELS: [&str; 4] = ["Accept", "YOLO", "Revise", "Exit"];
 
 fn modal_block() -> Block<'static> {
     Block::default()
@@ -162,9 +174,7 @@ impl ModalView for PlanPromptView {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     ViewAction::EmitAndClose(ViewEvent::PlanPromptDismissed)
                 }
-                KeyCode::Char('n')
-                | KeyCode::Char('N')
-                | KeyCode::Esc => {
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.confirming_exit = false;
                     ViewAction::None
                 }
@@ -214,10 +224,7 @@ impl ModalView for PlanPromptView {
                 self.selected = 2;
                 self.submit_selected()
             }
-            KeyCode::Char('q')
-            | KeyCode::Char('Q')
-            | KeyCode::Char('e')
-            | KeyCode::Char('E') => {
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('e') | KeyCode::Char('E') => {
                 self.selected = 3;
                 self.submit_selected()
             }
@@ -227,11 +234,7 @@ impl ModalView for PlanPromptView {
             }
             KeyCode::Enter => self.submit_selected(),
             KeyCode::Esc => {
-                if self.confirming_exit {
-                    // Second Esc: cancel the confirmation prompt.
-                    self.confirming_exit = false;
-                    ViewAction::None
-                } else if self.scroll > 0 {
+                if self.scroll > 0 {
                     // User scrolled; ask for confirmation before discarding.
                     self.confirming_exit = true;
                     ViewAction::None
@@ -241,11 +244,11 @@ impl ModalView for PlanPromptView {
             }
             // Scroll the plan content when it overflows the popup.
             KeyCode::PageUp => {
-                self.scroll = self.scroll.saturating_sub(6);
+                self.scroll = self.scroll.saturating_sub(12);
                 ViewAction::None
             }
             KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_add(6);
+                self.scroll = self.scroll.saturating_add(12);
                 ViewAction::None
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -256,19 +259,30 @@ impl ModalView for PlanPromptView {
                 self.scroll = self.scroll.saturating_add(6);
                 ViewAction::None
             }
-            // Vim-style scroll keys.
-            KeyCode::Char('g') if self.pending_g => {
-                // Second g in sequence → jump to top.
+            // Vim-style scroll keys — only pure 'g'/'G' (no Ctrl/Alt).
+            KeyCode::Char('g')
+                if self.pending_g
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 self.scroll = 0;
                 self.pending_g = false;
                 ViewAction::None
             }
-            KeyCode::Char('g') => {
+            KeyCode::Char('g')
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 self.pending_g = true;
                 ViewAction::None
             }
-            KeyCode::Char('G') => {
-                // Vim 'G' (Shift+g) → jump to bottom.  Render clamps overshoot.
+            KeyCode::Char('G')
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 self.scroll = usize::MAX;
                 ViewAction::None
             }
@@ -336,9 +350,15 @@ impl ModalView for PlanPromptView {
             }
         }
 
-        for (idx, (label, description)) in PLAN_OPTIONS.iter().enumerate() {
+        for (idx, option) in PLAN_OPTIONS.iter().enumerate() {
             let number = idx + 1;
-            push_option_lines(&mut lines, self.selected == idx, number, label, description);
+            push_option_lines(
+                &mut lines,
+                self.selected == idx,
+                number,
+                option.label,
+                option.description,
+            );
         }
 
         let popup_area = centered_rect(72, 52, area);
@@ -361,9 +381,9 @@ impl ModalView for PlanPromptView {
                 Style::default().fg(palette::DEEPSEEK_SKY),
             ));
         }
-        for (idx, _) in PLAN_OPTIONS.iter().enumerate() {
-            let shortcut = PLAN_SHORTCUTS[idx];
-            let short_label = PLAN_SHORT_LABELS[idx];
+        for (idx, option) in PLAN_OPTIONS.iter().enumerate() {
+            let shortcut = option.shortcut;
+            let short_label = option.short_label;
             let is_current = self.selected == idx;
             let shortcut_style = if is_current {
                 Style::default()
@@ -380,7 +400,7 @@ impl ModalView for PlanPromptView {
             footer_spans.push(Span::raw("  "));
         }
         // Selected option description, right-aligned by filling space.
-        let desc = PLAN_OPTIONS[self.selected].1;
+        let desc = PLAN_OPTIONS[self.selected].description;
         let desc_span = Span::styled(
             format!(" → {desc}"),
             Style::default().fg(palette::TEXT_MUTED),
@@ -429,7 +449,7 @@ impl ModalView for PlanPromptView {
                 .alignment(Alignment::Left)
                 .wrap(Wrap { trim: true })
                 .block(modal_block().title_bottom(Line::from(footer_spans)))
-                .scroll((scroll as u16, 0));
+                .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
 
             paragraph.render(popup_area, buf);
         }
@@ -499,8 +519,8 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 }
 
 /// Estimate the number of display lines after word-wrapping a set of logical
-/// lines to `width` columns. Uses Unicode display widths so CJK characters
-/// count as 2 columns.
+/// lines to `width` columns. Simulates ratatui's word-wrapping (breaks at word
+/// boundaries) and accounts for CJK display widths via `UnicodeWidthStr`.
 fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
     if width == 0 {
         return lines.len().max(1);
@@ -512,8 +532,46 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
             total += 1;
             continue;
         }
-        let display_width = UnicodeWidthStr::width(text.as_str());
-        total += (display_width + width - 1) / width;
+        let leading_spaces = (text.len() - text.trim_start().len()).min(width.saturating_sub(1));
+        let mut line_count = 0;
+        let mut current_width = leading_spaces;
+        let mut first_word = true;
+        for word in text.split_whitespace() {
+            let word_width = UnicodeWidthStr::width(word);
+            if first_word {
+                let total_width = leading_spaces + word_width;
+                if total_width > width {
+                    let lines_needed = (total_width + width - 1) / width;
+                    line_count = lines_needed;
+                    current_width = total_width % width;
+                    if current_width == 0 {
+                        current_width = width;
+                    }
+                } else {
+                    current_width = total_width;
+                    line_count = 1;
+                }
+                first_word = false;
+            } else if current_width + 1 + word_width > width {
+                line_count += 1;
+                if word_width > width {
+                    let lines_needed = (word_width + width - 1) / width;
+                    line_count += lines_needed - 1;
+                    current_width = word_width % width;
+                    if current_width == 0 {
+                        current_width = width;
+                    }
+                } else {
+                    current_width = word_width;
+                }
+            } else {
+                current_width += 1 + word_width;
+            }
+        }
+        if line_count == 0 {
+            line_count = 1;
+        }
+        total += line_count;
     }
     total
 }
@@ -581,10 +639,13 @@ mod tests {
 
         let plan = PlanSnapshot {
             explanation: Some("A".repeat(500)),
-            items: vec![PlanItemArg {
-                step: "Line 1".into(),
-                status: StepStatus::Pending,
-            }; 20],
+            items: vec![
+                PlanItemArg {
+                    step: "Line 1".into(),
+                    status: StepStatus::Pending,
+                };
+                20
+            ],
         };
         let view = PlanPromptView::new(Some(plan));
         // Render into a small area so content overflows.
@@ -603,7 +664,7 @@ mod tests {
 
         let action = view.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.scroll, 6);
+        assert_eq!(view.scroll, 0);
     }
 
     #[test]
@@ -613,7 +674,7 @@ mod tests {
 
         let action = view.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.scroll, 6);
+        assert_eq!(view.scroll, 12);
     }
 
     #[test]
@@ -642,10 +703,13 @@ mod tests {
 
         let plan = PlanSnapshot {
             explanation: Some("x".repeat(600)),
-            items: vec![PlanItemArg {
-                step: "Step".into(),
-                status: StepStatus::Pending,
-            }; 30],
+            items: vec![
+                PlanItemArg {
+                    step: "Step".into(),
+                    status: StepStatus::Pending,
+                };
+                30
+            ],
         };
         let mut view = PlanPromptView::new(Some(plan));
         // Set scroll far beyond content.
@@ -693,8 +757,7 @@ mod tests {
         let mut view = PlanPromptView::new(None);
         view.scroll = 0;
 
-        let action =
-            view.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert!(matches!(action, ViewAction::None));
         assert_eq!(view.scroll, 6);
     }
@@ -704,8 +767,7 @@ mod tests {
         let mut view = PlanPromptView::new(None);
         view.scroll = 12;
 
-        let action =
-            view.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert!(matches!(action, ViewAction::None));
         assert_eq!(view.scroll, 6);
     }
