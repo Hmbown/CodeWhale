@@ -596,6 +596,7 @@ pub struct UpdateThreadRequest {
     pub mode: Option<String>,
     pub title: Option<String>,
     pub system_prompt: Option<String>,
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1089,6 +1090,7 @@ impl RuntimeThreadManager {
             && req.mode.is_none()
             && req.title.is_none()
             && req.system_prompt.is_none()
+            && req.workspace.is_none()
         {
             bail!("At least one thread field is required");
         }
@@ -1165,6 +1167,12 @@ impl RuntimeThreadManager {
                 thread.system_prompt = new_sys.clone();
                 changes.insert("system_prompt".to_string(), json!(new_sys));
             }
+        }
+        if let Some(workspace) = req.workspace
+            && thread.workspace != workspace
+        {
+            thread.workspace = workspace.clone().into();
+            changes.insert("workspace".to_string(), json!(workspace));
         }
 
         if !changes.is_empty() {
