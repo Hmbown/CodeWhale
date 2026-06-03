@@ -2637,11 +2637,9 @@ fn render_preserved_output_mode(
     }
 
     let content_hash = crate::tui::output_rows_cache::hash_str(output);
-    let (all_lines, _rows_hash) = crate::tui::output_rows_cache::get_or_compute_rows(
-        output,
-        width,
-        || output_rows(output, width),
-    );
+    let all_lines = crate::tui::output_rows_cache::get_or_compute_rows(output, width, || {
+        output_rows(output, width)
+    });
 
     if matches!(mode, RenderMode::Transcript) {
         // Full-content path: emit every wrapped line with no head/tail split,
