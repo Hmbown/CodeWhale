@@ -213,6 +213,12 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
             if let Ok(mut plan) = app.plan_state.try_lock() {
                 *plan = crate::tools::plan::PlanState::default();
             }
+            // Clear any previous pause state — new command, fresh start.
+            app.paused = false;
+            app.pausable = false;
+            app.paused_cancelled = false;
+            app.paused_at = None;
+            app.active_snapshot = None;
             for (key, value) in &metadata {
                 match key.as_str() {
                     "description" => {

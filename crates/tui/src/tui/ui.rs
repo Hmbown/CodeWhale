@@ -4876,11 +4876,23 @@ async fn dispatch_user_message(
             app.paused_cancelled = false;
             app.pausable = false;
             app.active_snapshot = None;
-            engine_handle.set_paused(false);
+            // Clear engine flag directly (not via set_paused which sends Op)
+            if let Ok(mut slot) = engine_handle.shared_paused.lock() {
+                *slot = false;
+            }
             engine_handle.cancel();
             app.is_loading = false;
             app.status_message = Some("Cancelled — type a new message".to_string());
             return Ok(());
+        }
+    }
+
+    // Safety sync: if the app-level pause was cleared (e.g. by a new slash
+    // command in try_dispatch_user_command), make sure the engine flag is
+    // also cleared so the pause gate doesn't block the new command's tools.
+    if !app.paused && !app.pausable {
+        if let Ok(mut slot) = engine_handle.shared_paused.lock() {
+            *slot = false;
         }
     }
 
