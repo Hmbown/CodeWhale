@@ -4890,7 +4890,10 @@ async fn dispatch_user_message(
     // Safety sync: if the app-level pause was cleared (e.g. by a new slash
     // command in try_dispatch_user_command), make sure the engine flag is
     // also cleared so the pause gate doesn't block the new command's tools.
-    if !app.paused && !app.pausable {
+    // NOTE: check only app.paused — app.pausable may be true because the
+    // new command's frontmatter already set it, but the engine flag from
+    // the OLD paused command may still be hanging.
+    if !app.paused {
         if let Ok(mut slot) = engine_handle.shared_paused.lock() {
             *slot = false;
         }
