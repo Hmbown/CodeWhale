@@ -6436,7 +6436,7 @@ async fn submit_or_steer_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
-    mut message: QueuedMessage,
+    message: QueuedMessage,
 ) -> Result<()> {
     // INTERCEPT: if paused_quarry has a saved command and the user types
     // "continue" or "resume", restore the goal BEFORE deciding disposition.
