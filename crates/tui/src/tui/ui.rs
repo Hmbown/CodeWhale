@@ -4846,21 +4846,36 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused and user types a message: cancel the old turn so the
-    // model does NOT see the old command in the same conversation turn.
-    // The message is consumed here — the user retypes after the cancel
-    // confirmation, starting a completely fresh turn with no old context.
+    // When paused and user types:
+    //   "continue"/"resume" → unpause + let message through (model sees it)
+    //   anything else → cancel the old turn (message consumed, user retypes)
     if app.paused {
-        app.paused = false;
-        app.paused_at = None;
-        app.paused_cancelled = false;
-        app.pausable = false;
-        app.active_snapshot = None;
-        engine_handle.set_paused(false);
-        engine_handle.cancel();
-        app.is_loading = false;
-        app.status_message = Some("Cancelled — type a new message".to_string());
-        return Ok(());
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue" || trimmed == "resume" {
+            // Unpause and let the message flow through as a normal user message.
+            // The model sees "continue" in context of the paused command and
+            // resumes the scan naturally.
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            app.status_message = None;
+            // Fall through — message goes to engine as a normal user message.
+        } else {
+            // Any other message while paused: cancel the old turn, consume.
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            engine_handle.cancel();
+            app.is_loading = false;
+            app.status_message = Some("Cancelled — type a new message".to_string());
+            return Ok(());
+        }
     }
 
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
