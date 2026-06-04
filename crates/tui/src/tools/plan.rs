@@ -84,6 +84,14 @@ pub struct UpdatePlanArgs {
     pub explanation: Option<String>,
 }
 
+/// Discriminant for plan artifacts serialised into the transcript.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanKind {
+    /// Standard `update_plan` outcome (plan mode, hunt protocol, etc.).
+    Update,
+}
+
 // === Plan State ===
 
 /// A plan step with timing information
@@ -140,6 +148,7 @@ impl PlanStep {
 /// Serializable snapshot for display
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanSnapshot {
+    pub kind: PlanKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,6 +202,11 @@ impl PlanState {
                 .as_deref()
                 .unwrap_or("")
                 .is_empty()
+            && self.verification_plan.as_deref().unwrap_or("").is_empty()
+            && self.risks_and_unknowns.as_deref().unwrap_or("").is_empty()
+            && self.handoff_packet.as_deref().unwrap_or("").is_empty()
+            && self.sources_used.is_empty()
+            && self.constraints.is_empty()
     }
 
     pub fn update(&mut self, args: UpdatePlanArgs) {
@@ -255,6 +269,7 @@ impl PlanState {
 
     pub fn snapshot(&self) -> PlanSnapshot {
         PlanSnapshot {
+            kind: PlanKind::Update,
             title: self.title.clone(),
             objective: self.objective.clone(),
             context_summary: self.context_summary.clone(),
@@ -498,7 +513,18 @@ impl ToolSpec for UpdatePlanTool {
                     "description": "Optional high-level explanation (legacy, prefer recommended_approach)"
                 }
             },
-            "required": ["plan"]
+            "required": [
+                "title",
+                "objective",
+                "context_summary",
+                "sources_used",
+                "constraints",
+                "recommended_approach",
+                "plan",
+                "verification_plan",
+                "risks_and_unknowns",
+                "handoff_packet"
+            ]
         })
     }
 
