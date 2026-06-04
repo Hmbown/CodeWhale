@@ -1165,6 +1165,9 @@ pub(crate) struct PendingProviderSwitch {
     pub previous_model: String,
     pub previous_model_ids_passthrough: bool,
     pub previous_config: Config,
+    pub previous_onboarding: OnboardingState,
+    pub previous_onboarding_needs_api_key: bool,
+    pub previous_api_key_env_only: bool,
 }
 
 /// Global UI state for the TUI.

@@ -6911,6 +6911,9 @@ async fn provider_switch_auth_error_restores_previous_provider_and_model() {
     app.api_provider = ApiProvider::Deepseek;
     app.model = "deepseek-v4-pro".to_string();
     app.model_ids_passthrough = false;
+    app.onboarding = OnboardingState::None;
+    app.onboarding_needs_api_key = false;
+    app.api_key_env_only = true;
     let mut engine = mock_engine_handle();
     let mut config = Config {
         provider: Some("deepseek".to_string()),
@@ -6953,6 +6956,9 @@ async fn provider_switch_auth_error_restores_previous_provider_and_model() {
     assert_eq!(app.model, "deepseek-v4-pro");
     assert!(!app.model_ids_passthrough);
     assert!(!app.offline_mode);
+    assert_eq!(app.onboarding, OnboardingState::None);
+    assert!(!app.onboarding_needs_api_key);
+    assert!(app.api_key_env_only);
     assert_eq!(config.provider.as_deref(), Some("deepseek"));
     assert_eq!(
         config.default_text_model.as_deref(),

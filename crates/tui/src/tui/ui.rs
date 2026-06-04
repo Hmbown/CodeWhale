@@ -4553,6 +4553,9 @@ fn rollback_provider_after_auth_failure(app: &mut App, config: &mut Config) -> O
         previous_model,
         previous_model_ids_passthrough,
         previous_config,
+        previous_onboarding,
+        previous_onboarding_needs_api_key,
+        previous_api_key_env_only,
     } = pending;
 
     *config = previous_config;
@@ -4564,6 +4567,9 @@ fn rollback_provider_after_auth_failure(app: &mut App, config: &mut Config) -> O
     app.update_model_compaction_budget();
     app.clear_model_scoped_telemetry();
     app.offline_mode = false;
+    app.onboarding = previous_onboarding;
+    app.onboarding_needs_api_key = previous_onboarding_needs_api_key;
+    app.api_key_env_only = previous_api_key_env_only;
 
     let persistence_error = (|| -> anyhow::Result<()> {
         commands::persist_root_string_key(
@@ -5379,6 +5385,9 @@ async fn switch_provider(
         previous_model: previous_model.clone(),
         previous_model_ids_passthrough,
         previous_config: previous_config.clone(),
+        previous_onboarding: app.onboarding,
+        previous_onboarding_needs_api_key: app.onboarding_needs_api_key,
+        previous_api_key_env_only: app.api_key_env_only,
     });
 
     config.provider = Some(target.as_str().to_string());
