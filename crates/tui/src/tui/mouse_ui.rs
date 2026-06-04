@@ -701,6 +701,39 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
+    // Cross-tab collaboration: only when there is more than one tab, since
+    // each action requires picking a *different* tab as the target.
+    if app.tab_manager.len() > 1 {
+        entries.push(ContextMenuEntry {
+            label: "Delegate task to tab…".to_string(),
+            description: "Send the current request to another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Delegate,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Request review from tab…".to_string(),
+            description: "Ask another tab to review the last response".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Review,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Invite tab to meeting…".to_string(),
+            description: "Start a multi-agent meeting with another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Meeting,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Share context with tab…".to_string(),
+            description: "Share the current session context with another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Share,
+            ),
+        });
+    }
+
     entries.push(ContextMenuEntry {
         label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
         description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),
@@ -802,6 +835,10 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
             let count = app.collapsed_cells.len();
             app.collapsed_cells.clear();
             app.status_message = Some(format!("{count} hidden cell(s) restored"));
+        }
+        ContextMenuAction::OpenTabPicker(kind) => {
+            app.view_stack
+                .push(crate::tui::views::tab_picker::TabPickerView::new(app, kind));
         }
     }
     app.needs_redraw = true;

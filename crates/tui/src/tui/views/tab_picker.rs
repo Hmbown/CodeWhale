@@ -101,37 +101,12 @@ impl ModalView for TabPickerView {
             }
             KeyCode::Enter => {
                 if let Some(tab_id) = self.selected_tab_id() {
-                    let event = match self.action {
-                        TabPickerAction::Delegate => {
-                            crate::tui::views::ViewEvent::ContextMenuSelected {
-                                action: crate::tui::views::ContextMenuAction::DelegateToTab {
-                                    target_tab: tab_id.0,
-                                },
-                            }
-                        }
-                        TabPickerAction::Review => {
-                            crate::tui::views::ViewEvent::ContextMenuSelected {
-                                action: crate::tui::views::ContextMenuAction::ReviewWithTab {
-                                    target_tab: tab_id.0,
-                                },
-                            }
-                        }
-                        TabPickerAction::Meeting => {
-                            crate::tui::views::ViewEvent::ContextMenuSelected {
-                                action: crate::tui::views::ContextMenuAction::InviteToMeeting {
-                                    target_tab: tab_id.0,
-                                },
-                            }
-                        }
-                        TabPickerAction::Share => {
-                            crate::tui::views::ViewEvent::ContextMenuSelected {
-                                action: crate::tui::views::ContextMenuAction::ShareContextWith {
-                                    target_tab: tab_id.0,
-                                },
-                            }
-                        }
-                    };
-                    ViewAction::EmitAndClose(event)
+                    ViewAction::EmitAndClose(
+                        crate::tui::views::ViewEvent::CollabRequested {
+                            kind: self.action,
+                            to_tab: tab_id.0,
+                        },
+                    )
                 } else {
                     ViewAction::Close
                 }

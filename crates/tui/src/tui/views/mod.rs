@@ -16,6 +16,9 @@ use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod mode_picker;
 pub mod status_picker;
+pub mod tab_switcher;
+pub mod tab_picker;
+pub mod meeting_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
@@ -39,6 +42,9 @@ pub enum ModalKind {
     ThemePicker,
     ContextMenu,
     ShellControl,
+    TabSwitcher,
+    TabPicker,
+    Meeting,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +83,10 @@ pub enum ContextMenuAction {
     },
     /// Show all currently hidden cells.
     ShowAllHidden,
+    /// Open the tab picker to choose a target tab for a cross-tab
+    /// collaboration action. The picker emits a `CollabRequested` event
+    /// with the user's selection.
+    OpenTabPicker(crate::tui::views::tab_picker::TabPickerAction),
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +214,19 @@ pub enum ViewEvent {
     CopyToClipboard {
         text: String,
         label: String,
+    },
+    /// Emitted by the tab switcher when the user confirms a tab. The host
+    /// handler activates that tab on `app.tab_manager` and updates the
+    /// status bar.
+    TabSwitch {
+        index: usize,
+    },
+    /// Emitted by the tab picker once the user has chosen a target tab
+    /// for a cross-tab collaboration action. The host dispatches the
+    /// `kind` against the active tab → `to_tab` pair.
+    CollabRequested {
+        kind: crate::tui::views::tab_picker::TabPickerAction,
+        to_tab: u64,
     },
 }
 
