@@ -2206,8 +2206,11 @@ In {new} mode: {policy}\n\n\
         if let Some(pool) = self.mcp_pool.as_ref() {
             return Ok(Arc::clone(pool));
         }
-        let mut pool = McpPool::from_config_path(&self.session.mcp_config_path)
-            .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
+        let mut pool = McpPool::from_config_path_with_workspace(
+            &self.session.mcp_config_path,
+            &self.session.workspace,
+        )
+        .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }

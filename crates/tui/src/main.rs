@@ -1020,7 +1020,8 @@ async fn main() -> Result<()> {
             Commands::Eval(args) => run_eval(args),
             Commands::Mcp { command } => {
                 let config = load_config_from_cli(&cli)?;
-                run_mcp_command(&config, command).await
+                let workspace = resolve_workspace(&cli);
+                run_mcp_command(&config, &workspace, command).await
             }
             Commands::Execpolicy(command) => {
                 let config = load_config_from_cli(&cli)?;
@@ -1533,6 +1534,7 @@ fn mcp_template_json() -> Result<String> {
             command: Some("node".to_string()),
             args: vec!["./path/to/your-mcp-server.js".to_string()],
             env: std::collections::HashMap::new(),
+            cwd: None,
             url: None,
             transport: None,
             connect_timeout: None,
@@ -2071,14 +2073,21 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
     println!("  · default_text_model: {model}");
 
     let mcp_path = config.mcp_config_path();
-    let mcp_count = match load_mcp_config(&mcp_path) {
+    let project_mcp_path = crate::mcp::workspace_mcp_config_path(workspace);
+    let mcp_count = match crate::mcp::load_config_with_workspace(&mcp_path, workspace) {
         Ok(cfg) => cfg.servers.len(),
         Err(_) => 0,
     };
     let mcp_present = if mcp_path.exists() { "" } else { "  (missing)" };
+    let project_mcp_present = if project_mcp_path.exists() {
+        ""
+    } else {
+        "  (missing)"
+    };
     println!(
-        "  · mcp servers: {mcp_count} at {}{mcp_present}",
-        mcp_path.display()
+        "  · mcp servers: {mcp_count} from {}{mcp_present} + {}{project_mcp_present}",
+        mcp_path.display(),
+        project_mcp_path.display()
     );
 
     let skills_dir = config.skills_dir();
@@ -2568,68 +2577,85 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     }
 
     let mcp_config_path = config.mcp_config_path();
+    let project_mcp_config_path = crate::mcp::workspace_mcp_config_path(workspace);
     if mcp_config_path.exists() {
         println!(
             "  {} MCP config found at {}",
             "✓".truecolor(aqua_r, aqua_g, aqua_b),
             crate::utils::display_path(&mcp_config_path)
         );
-        match load_mcp_config(&mcp_config_path) {
-            Ok(cfg) if cfg.servers.is_empty() => {
-                println!("  {} 0 server(s) configured", "·".dimmed());
-            }
-            Ok(cfg) => {
-                println!(
-                    "  {} {} server(s) configured",
-                    "·".dimmed(),
-                    cfg.servers.len()
-                );
-                for (name, server) in &cfg.servers {
-                    let status = doctor_check_mcp_server(server);
-                    let icon = match status {
-                        McpServerDoctorStatus::Ok(ref detail) => {
-                            format!(
-                                "  {} {name}: {}",
-                                "✓".truecolor(aqua_r, aqua_g, aqua_b),
-                                detail
-                            )
-                        }
-                        McpServerDoctorStatus::Warning(ref detail) => {
-                            format!(
-                                "  {} {name}: {}",
-                                "!".truecolor(sky_r, sky_g, sky_b),
-                                detail
-                            )
-                        }
-                        McpServerDoctorStatus::Error(ref detail) => {
-                            format!(
-                                "  {} {name}: {}",
-                                "✗".truecolor(red_r, red_g, red_b),
-                                detail
-                            )
-                        }
-                    };
-                    println!("{icon}");
-                    if !server.enabled {
-                        println!("      (disabled)");
-                    }
-                }
-            }
-            Err(err) => {
-                println!(
-                    "  {} MCP config parse error: {}",
-                    "✗".truecolor(red_r, red_g, red_b),
-                    err
-                );
-            }
-        }
     } else {
         println!(
             "  {} MCP config not found at {}",
             "·".dimmed(),
             crate::utils::display_path(&mcp_config_path)
         );
-        println!("    Run `codewhale mcp init` or `codewhale setup --mcp`.");
+    }
+    if project_mcp_config_path.exists() {
+        println!(
+            "  {} Project MCP config found at {}",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            crate::utils::display_path(&project_mcp_config_path)
+        );
+    } else {
+        println!(
+            "  {} Project MCP config not found at {}",
+            "·".dimmed(),
+            crate::utils::display_path(&project_mcp_config_path)
+        );
+    }
+
+    match crate::mcp::load_config_with_workspace(&mcp_config_path, workspace) {
+        Ok(cfg) if cfg.servers.is_empty() => {
+            println!("  {} 0 merged server(s) configured", "·".dimmed());
+            if !mcp_config_path.exists() && !project_mcp_config_path.exists() {
+                println!("    Run `codewhale mcp init` or add `.codewhale/mcp.json`.");
+            }
+        }
+        Ok(cfg) => {
+            println!(
+                "  {} {} merged server(s) configured",
+                "·".dimmed(),
+                cfg.servers.len()
+            );
+            for (name, server) in &cfg.servers {
+                let status = doctor_check_mcp_server(server);
+                let icon = match status {
+                    McpServerDoctorStatus::Ok(ref detail) => {
+                        format!(
+                            "  {} {name}: {}",
+                            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                            detail
+                        )
+                    }
+                    McpServerDoctorStatus::Warning(ref detail) => {
+                        format!(
+                            "  {} {name}: {}",
+                            "!".truecolor(sky_r, sky_g, sky_b),
+                            detail
+                        )
+                    }
+                    McpServerDoctorStatus::Error(ref detail) => {
+                        format!(
+                            "  {} {name}: {}",
+                            "✗".truecolor(red_r, red_g, red_b),
+                            detail
+                        )
+                    }
+                };
+                println!("{icon}");
+                if !server.enabled {
+                    println!("      (disabled)");
+                }
+            }
+        }
+        Err(err) => {
+            println!(
+                "  {} MCP config parse error: {}",
+                "✗".truecolor(red_r, red_g, red_b),
+                err
+            );
+        }
     }
 
     // Skills configuration
@@ -3137,8 +3163,10 @@ fn run_doctor_json(
     };
 
     let mcp_config_path = config.mcp_config_path();
+    let project_mcp_config_path = crate::mcp::workspace_mcp_config_path(workspace);
     let mcp_present = mcp_config_path.exists();
-    let mcp_summary = match load_mcp_config(&mcp_config_path) {
+    let project_mcp_present = project_mcp_config_path.exists();
+    let mcp_summary = match crate::mcp::load_config_with_workspace(&mcp_config_path, workspace) {
         Ok(cfg) => {
             let servers: Vec<serde_json::Value> = cfg
                 .servers
@@ -3161,12 +3189,16 @@ fn run_doctor_json(
             json!({
                 "config_path": mcp_config_path.display().to_string(),
                 "present": mcp_present,
+                "project_config_path": project_mcp_config_path.display().to_string(),
+                "project_present": project_mcp_present,
                 "servers": servers,
             })
         }
         Err(err) => json!({
             "config_path": mcp_config_path.display().to_string(),
             "present": mcp_present,
+            "project_config_path": project_mcp_config_path.display().to_string(),
+            "project_present": project_mcp_present,
             "servers": [],
             "error": err.to_string(),
         }),
@@ -4429,7 +4461,7 @@ fn read_patch_from_stdin() -> Result<String> {
     Ok(buffer)
 }
 
-async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
+async fn run_mcp_command(config: &Config, workspace: &Path, command: McpCommand) -> Result<()> {
     let config_path = config.mcp_config_path();
     match command {
         McpCommand::Init { force } => {
@@ -4452,9 +4484,13 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::List => {
-            let cfg = load_mcp_config(&config_path)?;
+            let cfg = crate::mcp::load_config_with_workspace(&config_path, workspace)?;
             if cfg.servers.is_empty() {
-                println!("No MCP servers configured in {}", config_path.display());
+                println!(
+                    "No MCP servers configured in {} or {}",
+                    config_path.display(),
+                    crate::mcp::workspace_mcp_config_path(workspace).display()
+                );
                 return Ok(());
             }
             println!("MCP servers ({}):", cfg.servers.len());
@@ -4482,7 +4518,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Connect { server } => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path_with_workspace(&config_path, workspace)?;
             if let Some(name) = server {
                 pool.get_or_connect(&name).await?;
                 println!("Connected to MCP server: {name}");
@@ -4499,7 +4535,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Tools { server } => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path_with_workspace(&config_path, workspace)?;
             if let Some(name) = server {
                 let conn = pool.get_or_connect(&name).await?;
                 if conn.tools().is_empty() {
@@ -4558,6 +4594,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     command,
                     args,
                     env: std::collections::HashMap::new(),
+                    cwd: None,
                     url,
                     transport,
                     connect_timeout: None,
@@ -4609,7 +4646,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Validate => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path_with_workspace(&config_path, workspace)?;
             let errors = pool.connect_all().await;
             if errors.is_empty() {
                 println!("MCP config is valid. All enabled servers connected.");
@@ -4645,6 +4682,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     command: Some(exe_str.clone()),
                     args,
                     env: std::collections::HashMap::new(),
+                    cwd: None,
                     url: None,
                     transport: None,
                     connect_timeout: None,
@@ -7445,6 +7483,7 @@ mod doctor_mcp_tests {
             command: command.map(String::from),
             args: args.iter().map(|s| s.to_string()).collect(),
             env: std::collections::HashMap::new(),
+            cwd: None,
             url: url.map(String::from),
             transport: None,
             connect_timeout: None,

@@ -34,7 +34,7 @@ use crate::automation_manager::{
     CreateAutomationRequest, SharedAutomationManager, UpdateAutomationRequest, spawn_scheduler,
 };
 use crate::config::{Config, DEFAULT_TEXT_MODEL};
-use crate::mcp::{McpConfig, McpPool};
+use crate::mcp::McpPool;
 use crate::runtime_threads::{
     CompactThreadRequest, CreateThreadRequest, ExternalApprovalDecision, RuntimeThreadManager,
     RuntimeThreadManagerConfig, SharedRuntimeThreadManager, StartTurnRequest, SteerTurnRequest,
@@ -1223,7 +1223,8 @@ async fn runtime_info(State(state): State<RuntimeApiState>) -> Json<RuntimeInfoR
 async fn list_mcp_servers(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<McpServersResponse>, ApiError> {
-    let config = load_mcp_config_or_default(&state.mcp_config_path)?;
+    let config = crate::mcp::load_config_with_workspace(&state.mcp_config_path, &state.workspace)
+        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
     let mut pool = McpPool::new(config.clone());
     let _errors = pool.connect_all().await;
     let connected: HashSet<String> = pool
@@ -1254,8 +1255,9 @@ async fn list_mcp_tools(
     State(state): State<RuntimeApiState>,
     Query(query): Query<McpToolsQuery>,
 ) -> Result<Json<McpToolsResponse>, ApiError> {
-    let mut pool = McpPool::from_config_path(&state.mcp_config_path)
-        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
+    let mut pool =
+        McpPool::from_config_path_with_workspace(&state.mcp_config_path, &state.workspace)
+            .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
     let _errors = pool.connect_all().await;
 
     let mut tools = Vec::new();
@@ -1959,11 +1961,6 @@ fn format_skill_search_paths(directories: &[PathBuf]) -> String {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn load_mcp_config_or_default(path: &std::path::Path) -> Result<McpConfig, ApiError> {
-    crate::mcp::load_config(path)
-        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e:#}")))
 }
 
 #[derive(Debug, Deserialize)]
