@@ -137,10 +137,12 @@ work. The chat picker also exposes the latest Omni model `mimo-v2.5`. Xiaomi MiM
 TTS is available through `codewhale --provider xiaomi-mimo speech "text"
 --model tts` (or the `tts` alias) plus model-visible `speech` / `tts` tools in
 Agent/YOLO mode.
+
 Token Plan keys default to the Singapore endpoint
 `https://token-plan-sgp.xiaomimimo.com/v1`. If your MiMo account is provisioned
 for the China region, set `base_url = "https://token-plan-cn.xiaomimimo.com/v1"`
 explicitly in `[providers.xiaomi_mimo]`.
+
 Voice-design and voice-clone shorthands map to `mimo-v2.5-tts-voicedesign` and
 `mimo-v2.5-tts-voiceclone`. Xiaomi's current
 [image-understanding guide](https://platform.xiaomimimo.com/docs/en-US/usage-guide/multimodal-understanding/image-understanding)

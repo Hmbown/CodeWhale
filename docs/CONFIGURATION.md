@@ -247,10 +247,11 @@ base_url = "https://api.xiaomimimo.com/v1"
 ```
 
 The example above uses Xiaomi MiMo's pay-as-you-go OpenAI-compatible endpoint.
-Token Plan keys (`tp-...`) default to
-`https://token-plan-sgp.xiaomimimo.com/v1`; if your MiMo account is provisioned
-for the China region, set
-`base_url = "https://token-plan-cn.xiaomimimo.com/v1"` explicitly.
+If you are using a Token Plan key (`tp-...`) for `[vision_model]`, you must set
+`base_url` explicitly because this generic OpenAI-compatible block does not
+auto-select MiMo endpoints. Use
+`https://token-plan-sgp.xiaomimimo.com/v1` for Singapore accounts or
+`https://token-plan-cn.xiaomimimo.com/v1` for China-region accounts.
 
 To bootstrap MCP and skills directories at their resolved paths, run `codewhale-tui setup`.
 To only scaffold MCP, run `codewhale-tui mcp init`.
