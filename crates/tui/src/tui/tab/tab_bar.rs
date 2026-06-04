@@ -36,16 +36,14 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
         return;
     }
 
-    // Background
     let bg_style = Style::default().bg(ratatui::style::Color::DarkGray);
     for x in area.x..area.x + area.width {
         buf.set_string(x, area.y, " ", bg_style);
     }
 
-    let tabs = app.tab_manager.all_tabs();
     let active_index = app.tab_manager.active_index().unwrap_or(0);
 
-    if tabs.is_empty() {
+    if app.tab_manager.is_empty() {
         let hint = Span::styled(
             " [Ctrl+Shift+N] New tab  Ctrl+`: Switcher ",
             Style::default().fg(ratatui::style::Color::White),
@@ -54,37 +52,37 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
         return;
     }
 
-    // Render each tab
     let mut x = area.x;
-    for (i, tab) in tabs.iter().enumerate() {
+    for (i, tab) in app.tab_manager.iter() {
         if x >= area.x + area.width {
             break;
         }
 
         let is_active = i == active_index;
-        let number = format!("{}", i + 1);
-        let title = if tab.title.chars().count() > 8 {
-            let truncated: String = tab.title.chars().take(7).collect();
+        let title = if tab.metadata.title.chars().count() > 8 {
+            let truncated: String = tab.metadata.title.chars().take(7).collect();
             format!("{truncated}…")
         } else {
-            tab.title.clone()
+            tab.metadata.title.clone()
         };
-        let icon = tab.tab_type.icon();
+        let icon = tab.metadata.tab_type.icon();
 
-        // If the tab is in a group, show a group color tag
-        let group_tag = app
-            .tab_manager
-            .tab_group(tab.id)
+        // Look up the group once and reuse for both the tag and the active style.
+        let group = app.tab_manager.tab_group(tab.metadata.id);
+        let group_tag = group
             .map(|g| format!("⟨{}⟩", g.color.short()))
             .unwrap_or_default();
 
-        // Format: ` [💬 1: title ⟨Bl⟩]` or ` [💬 1: title ⟨Bl⟩*]`
-        let label = format!("[{} {}:{}{}]", icon, number, title, group_tag);
+        // Build the display string only once for the active case, and once
+        // for the inactive case — no unconditional `label` allocation.
+        let display = if is_active {
+            format!("[{} {}:{}{}*]", icon, i + 1, title, group_tag)
+        } else {
+            format!("[{} {}:{}{}]", icon, i + 1, title, group_tag)
+        };
+
         let style = if is_active {
-            // Use group color if present, otherwise default cyan
-            let bg = app
-                .tab_manager
-                .tab_group(tab.id)
+            let bg = group
                 .map(|g| group_color_to_ratatui(g.color))
                 .unwrap_or(ratatui::style::Color::Cyan);
             Style::default()
@@ -94,13 +92,6 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
             Style::default()
                 .fg(ratatui::style::Color::White)
                 .bg(ratatui::style::Color::Reset)
-        };
-
-        // Render the tab with active marker
-        let display = if is_active {
-            format!("[{} {}:{}{}*]", icon, number, title, group_tag)
-        } else {
-            label
         };
 
         let display_len = display.chars().count() as u16;

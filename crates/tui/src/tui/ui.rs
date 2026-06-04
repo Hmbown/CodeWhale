@@ -3528,6 +3528,53 @@ async fn run_event_loop(
                     toggle_live_transcript_overlay(app);
                     continue;
                 }
+                // Tab switching: Ctrl+` opens the switcher overlay
+                KeyCode::Char('`')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !app.tab_manager.is_empty() =>
+                {
+                    app.view_stack
+                        .push(crate::tui::views::tab_switcher::TabSwitcherView::new(app));
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    if app.tab_manager.create_default_chat_tab().is_some() {
+                        app.status_message = Some("Created new tab".to_string());
+                    } else {
+                        app.status_message = Some("Max tabs reached".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::Char('w') | KeyCode::Char('W')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    if let Some(idx) = app.tab_manager.active_index() {
+                        app.tab_manager.close_tab(idx);
+                        app.status_message = Some("Tab closed".to_string());
+                    } else {
+                        app.status_message = Some("No active tab to close".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::Char(c @ '1'..='9')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    let idx = c.to_digit(10).unwrap_or(1) as usize - 1;
+                    if app.tab_manager.switch_to(idx) {
+                        app.status_message =
+                            Some(format!("Switched to tab {}", idx + 1));
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Work);
@@ -3856,6 +3903,18 @@ async fn run_event_loop(
                     let page = app.viewport.last_transcript_visible.max(1);
                     app.scroll_down(page);
                 }
+                // Ctrl+Tab: cycle to next tab (only when no input menus are open)
+                KeyCode::Tab
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_next() {
+                        app.status_message = Some("Switched to next tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::Tab => {
                     if mention_menu_open
                         && crate::tui::file_mention::apply_mention_menu_selection(
@@ -3900,6 +3959,15 @@ async fn run_event_loop(
                             })
                             .await;
                     }
+                }
+                KeyCode::BackTab
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    if app.tab_manager.switch_to_prev() {
+                        app.status_message = Some("Switched to previous tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
                 }
                 KeyCode::BackTab => {
                     app.cycle_effort();
@@ -7094,7 +7162,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // footer. This guarantees the header is never vertically centered
     // regardless of ratatui Flex defaults or terminal size.
     // Fixes #1834 — macOS terminal title centering.
-    let (header_area, body_area) = {
+    let (header_area, mut body_area) = {
         let split = Layout::default()
             .direction(Direction::Vertical)
             .flex(ratatui::layout::Flex::Start)
@@ -7102,6 +7170,23 @@ fn render(f: &mut Frame, app: &mut App) {
             .split(size);
         (split[0], split[1])
     };
+
+    // Optional tab bar — only takes 1 row when tabs are present. Splits
+    // off the top of the body so the tab bar visually sits between the
+    // header and the chat.
+    let mut tab_bar_area: Option<Rect> = None;
+    if !app.tab_manager.is_empty() && body_area.height > crate::tui::tab::TAB_BAR_HEIGHT + 3 {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .flex(ratatui::layout::Flex::Start)
+            .constraints([
+                Constraint::Length(crate::tui::tab::TAB_BAR_HEIGHT),
+                Constraint::Min(1),
+            ])
+            .split(body_area);
+        tab_bar_area = Some(split[0]);
+        body_area = split[1];
+    }
 
     let body_height = body_area.height;
     let composer_max_height = body_height
@@ -7201,6 +7286,10 @@ fn render(f: &mut Frame, app: &mut App) {
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
         header_widget.render(header_area, buf);
+    }
+
+    if let Some(area) = tab_bar_area {
+        crate::tui::tab::render_tab_bar(area, f.buffer_mut(), app);
     }
 
     // Render chat + sidebar + optional file-tree pane
@@ -7919,6 +8008,39 @@ async fn handle_view_events(
                 engine_handle.cancel();
                 mark_active_turn_cancelled_locally(app);
                 app.status_message = Some("Request cancelled".to_string());
+            }
+            ViewEvent::TabSwitch { index } => {
+                if app.tab_manager.switch_to(index) {
+                    app.status_message = Some(format!("Switched to tab {}", index + 1));
+                    app.needs_redraw = true;
+                }
+            }
+            ViewEvent::CollabRequested { kind, to_tab } => {
+                use crate::tui::views::tab_picker::TabPickerAction;
+                let from_tab = app.tab_manager.active_id();
+                let to_tab_id = crate::tui::tab::TabId::new(to_tab);
+                app.status_message = Some(match (kind, from_tab) {
+                    (TabPickerAction::Delegate, Some(from)) => match app
+                        .tab_manager
+                        .delegate_task(from, to_tab_id, "Task from tab".to_string(), Default::default())
+                    {
+                        Some(task_id) => {
+                            format!("Task delegated to tab {} (ID: {})", to_tab, task_id)
+                        }
+                        None => "Failed to delegate task".to_string(),
+                    },
+                    (TabPickerAction::Review, Some(_)) => {
+                        format!("Review requested from tab {}", to_tab)
+                    }
+                    (TabPickerAction::Meeting, Some(_)) => {
+                        format!("Meeting invitation sent to tab {}", to_tab)
+                    }
+                    (TabPickerAction::Share, Some(_)) => {
+                        format!("Context shared with tab {}", to_tab)
+                    }
+                    (_, None) => "No active tab to collaborate from".to_string(),
+                });
+                app.needs_redraw = true;
             }
         }
     }
