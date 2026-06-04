@@ -6422,29 +6422,9 @@ async fn submit_or_steer_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
-    // INTERCEPT: if paused_quarry has a saved command and the user types
-    // "continue"/"resume", consume it so the pause indicator clears and the
-    // command continues. For all other messages, the LLM-evaluation note in
-    // dispatch_user_message/steer_user_message handles it — paused_quarry
-    // stays intact for WorkBench display.
-    if app.paused_quarry.is_some() {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-            || trimmed.contains(" continue ")
-            || trimmed.contains(" resume ")
-            || trimmed.ends_with(" continue")
-            || trimmed.ends_with(" resume")
-        {
-            // "continue"/"resume" — restore quarry so the system prompt
-            // shows the goal and the WorkBench displays the running command.
-            // This is what the user wants: they explicitly asked to continue.
-            if let Some(quarry) = app.paused_quarry.take() {
-                app.hunt.quarry = Some(quarry);
-            }
-        }
-    }
+    // No keyword interception for "continue"/"resume" — the LLM evaluation
+    // note in dispatch_user_message/steer_user_message handles the intent
+    // via the conversation context.
     match app.decide_submit_disposition() {
         SubmitDisposition::Immediate => {
             dispatch_user_message(app, config, engine_handle, message).await
