@@ -294,7 +294,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             strategy_explanation,
             strategy_steps,
             state_updating: false,
-            workflow_paused: app.paused,
+            workflow_paused: app.paused || app.paused_quarry.is_some(),
             workflow_cancelled: app.paused_cancelled,
         })
     })();
@@ -318,7 +318,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
-        summary.workflow_paused = app.paused;
+        summary.workflow_paused = app.paused || app.paused_quarry.is_some();
         summary.workflow_cancelled = app.paused_cancelled;
         summary.pause_indicator = if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading {
@@ -348,7 +348,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
-        workflow_paused: app.paused,
+        workflow_paused: app.paused || app.paused_quarry.is_some(),
         workflow_cancelled: app.paused_cancelled,
         pause_indicator: if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading {
@@ -3872,10 +3872,10 @@ mod tests {
             "FAIL: rendered lines are empty — WorkBench went blank"
         );
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        // LLM-evaluation: pause cleared, paused_quarry preserved for text. Icon is ▶.
+        // LLM-evaluation: paused_quarry preserved → workflow_paused=true → icon ⏸.
         assert!(
-            first.contains('▶'),
-            "FAIL: rendered line missing play icon, got: {first}"
+            first.contains('⏸'),
+            "FAIL: rendered line missing pause icon, got: {first}"
         );
         assert!(
             first.contains("Deploy to staging"),
