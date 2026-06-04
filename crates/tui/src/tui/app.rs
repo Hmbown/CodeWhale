@@ -1320,6 +1320,10 @@ pub struct App {
     pub sidebar_width_dirty: bool,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
+    /// Indices of tool runs currently collapsed (group start positions).
+    pub collapsed_tool_runs: HashSet<usize>,
+    /// Minimum consecutive tool calls to trigger collapse (default 3).
+    pub tool_collapse_threshold: usize,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
     pub file_tree: Option<crate::tui::file_tree::FileTreeState>,
     /// Whether the file-tree pane was actually rendered in the last frame.
@@ -2048,6 +2052,8 @@ impl App {
             sidebar_resize_total_width: 0,
             sidebar_width_dirty: false,
             context_panel: settings.context_panel,
+            collapsed_tool_runs: HashSet::new(),
+            tool_collapse_threshold: 3,
             file_tree: None,
             file_tree_visible: false,
             compact_threshold,

@@ -676,6 +676,41 @@ pub enum ToolCell {
 }
 
 impl ToolCell {
+    /// Whether the tool completed successfully.
+    pub fn is_success(&self) -> bool {
+        self.status() == Some(ToolStatus::Success)
+    }
+
+    /// Whether the tool failed.
+    pub fn is_failed(&self) -> bool {
+        self.status() == Some(ToolStatus::Failed)
+    }
+
+    /// Whether this tool should never be collapsed (errors, approvals, writes).
+    pub fn is_collapsible_guard(&self) -> bool {
+        // Never collapse failed tools, running tools, or destructive actions.
+        self.is_failed()
+            || self.is_running()
+            || matches!(self, ToolCell::PatchSummary(_) | ToolCell::Review(_))
+    }
+
+    fn is_running(&self) -> bool {
+        self.status() == Some(ToolStatus::Running)
+    }
+
+    fn status(&self) -> Option<ToolStatus> {
+        match self {
+            ToolCell::Exec(c) => Some(c.status),
+            ToolCell::Review(c) => Some(c.status),
+            ToolCell::WebSearch(c) => Some(c.status),
+            ToolCell::Generic(c) => Some(c.status),
+            // Variants without a status field naturally resolve to None,
+            // so they will never match is_success/is_failed and will not
+            // be collapsed.
+            _ => None,
+        }
+    }
+
     /// Render the tool cell into lines.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines_with_motion(width, false)
@@ -3421,6 +3456,109 @@ fn looks_like_file_path(s: &str) -> bool {
     } else {
         false
     }
+}
+
+// ── Tool-run grouping for transcript collapse (#2692) ──────────────
+
+/// A contiguous run of tool-call cells in the transcript history.
+#[derive(Debug, Clone)]
+pub struct ToolRun {
+    /// Index of the first tool cell in `app.history`.
+    pub start: usize,
+    /// Number of cells in this run.
+    pub count: usize,
+    /// Dominant tool names (up to 3, deduplicated).
+    pub tool_families: Vec<String>,
+    /// Count of successful tools.
+    pub ok_count: usize,
+    /// Count of failed tools.
+    pub failed_count: usize,
+    /// Whether any tool in the run is still running.
+    #[allow(dead_code)]
+    pub has_running: bool,
+}
+
+/// Detect contiguous runs of tool-call cells exceeding `min_size`.
+/// Never includes running or failed tools — they always render individually.
+pub fn detect_tool_runs(history: &[HistoryCell], min_size: usize) -> Vec<ToolRun> {
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < history.len() {
+        if is_collapsible_tool(&history[i]) {
+            let start = i;
+            let mut tool_names: Vec<String> = Vec::new();
+            let mut ok_count = 0usize;
+            let mut failed_count = 0usize;
+            while i < history.len() && is_collapsible_tool(&history[i]) {
+                if let HistoryCell::Tool(tc) = &history[i] {
+                    let name = tool_display_name(tc);
+                    if !tool_names.contains(&name) {
+                        tool_names.push(name);
+                    }
+                    if tc.is_success() {
+                        ok_count += 1;
+                    } else if tc.is_failed() {
+                        failed_count += 1;
+                    }
+                }
+                i += 1;
+            }
+            let count = i - start;
+            if count >= min_size {
+                let families = if tool_names.len() <= 3 {
+                    tool_names
+                } else {
+                    tool_names.into_iter().take(3).collect()
+                };
+                runs.push(ToolRun {
+                    start,
+                    count,
+                    tool_families: families,
+                    ok_count,
+                    failed_count,
+                    has_running: false, // we never include running tools
+                });
+            }
+        } else {
+            i += 1;
+        }
+    }
+    runs
+}
+
+fn is_collapsible_tool(cell: &HistoryCell) -> bool {
+    matches!(cell, HistoryCell::Tool(tc) if tc.is_success() && !tc.is_collapsible_guard())
+}
+
+fn tool_display_name(tc: &ToolCell) -> String {
+    match tc {
+        ToolCell::Exec(c) => c
+            .command
+            .split_whitespace()
+            .next()
+            .unwrap_or("exec")
+            .to_string(),
+        ToolCell::Generic(c) => c.name.clone(),
+        ToolCell::Exploring(_) => "explore".to_string(),
+        ToolCell::PlanUpdate(_) => "update_plan".to_string(),
+        ToolCell::PatchSummary(_) => "apply_patch".to_string(),
+        ToolCell::Review(_) => "review".to_string(),
+        ToolCell::DiffPreview(_) => "diff".to_string(),
+        ToolCell::Mcp(_) => "mcp".to_string(),
+        ToolCell::ViewImage(_) => "view_image".to_string(),
+        ToolCell::WebSearch(_) => "web_search".to_string(),
+    }
+}
+
+/// Generate a summary text for a collapsed tool run.
+pub fn tool_run_summary(run: &ToolRun) -> String {
+    let tools = run.tool_families.join(", ");
+    let status = if run.failed_count == 0 {
+        format!("all ok")
+    } else {
+        format!("{} ok, {} failed", run.ok_count, run.failed_count)
+    };
+    format!("{} tools ({}) — {}", run.count, tools, status)
 }
 
 #[cfg(test)]
