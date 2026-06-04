@@ -6355,6 +6355,17 @@ async fn steer_user_message(
     mut message: QueuedMessage,
 ) -> Result<()> {
     // Add a note for the Steer path (bypasses dispatch_user_message).
+    // Also clear pause state — the Steer path bypasses dispatch entirely.
+    if app.paused {
+        engine_handle.cancel();
+        app.paused = false;
+        app.paused_at = None;
+        app.paused_cancelled = false;
+        app.pausable = false;
+        app.active_snapshot = None;
+        engine_handle.set_paused(false);
+        app.status_message = None;
+    }
     add_paused_evaluation_note(app, &mut message);
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
