@@ -1722,7 +1722,9 @@ async fn run_event_loop(
                         // Mark goal as completed when turn finishes successfully
                         // so the WorkBench shows a green checkmark instead of
                         // the diamond icon.
-                        if status == crate::core::events::TurnOutcomeStatus::Completed {
+                        if status == crate::core::events::TurnOutcomeStatus::Completed
+                            && app.hunt.quarry.is_some()
+                        {
                             app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
                         }
 
