@@ -3434,6 +3434,10 @@ async fn run_event_loop(
                     app.mention_menu_hidden = true;
                     app.mention_menu_selected = 0;
                 }
+                KeyCode::Esc if app.sidebar_hover_tooltip.is_some() => {
+                    app.sidebar_hover_tooltip = None;
+                    app.needs_redraw = true;
+                }
                 KeyCode::Esc => {
                     match next_escape_action(app, slash_menu_open) {
                         EscapeAction::CloseSlashMenu => {

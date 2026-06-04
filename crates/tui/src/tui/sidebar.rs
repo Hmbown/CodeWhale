@@ -1984,7 +1984,7 @@ mod tests {
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
         SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
+        SidebarHoverRow, SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
         normalize_activity_text, sidebar_work_summary, subagent_panel_lines, task_panel_lines,
         work_panel_empty_hint, work_panel_lines,
     };
@@ -3035,5 +3035,57 @@ mod tests {
 
         // Mouse outside content area (above) — row < content_area.y
         assert!((1u16) < section.content_area.y);
+    }
+
+    // ── Sidebar hover row tests (#2694) ──────────────────────────
+
+    #[test]
+    fn sidebar_hover_section_populates_rows() {
+        use ratatui::layout::Rect;
+        // Simulate what `render_sidebar_section` does.
+        let full_texts = vec!["short".to_string(), "very long line that exceeds width".to_string()];
+        let content_width = 20u16;
+        let content_area = Rect::new(62, 2, content_width, 6);
+        let rows: Vec<SidebarHoverRow> = full_texts
+            .iter()
+            .enumerate()
+            .map(|(idx, text)| {
+                let row_y = content_area.y.saturating_add(idx as u16);
+                let is_truncated =
+                    unicode_width::UnicodeWidthStr::width(text.as_str()) > content_width as usize;
+                SidebarHoverRow {
+                    row_y,
+                    full_text: text.clone(),
+                    detail: None,
+                    is_truncated,
+                }
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].row_y, 2);
+        assert!(!rows[0].is_truncated, "short text should not be truncated");
+        assert!(rows[1].is_truncated, "long text should be truncated");
+        assert_eq!(rows[1].full_text, "very long line that exceeds width");
+    }
+
+    #[test]
+    fn sidebar_hover_row_y_positions_are_sequential() {
+        use ratatui::layout::Rect;
+        let area = Rect::new(0, 5, 30, 10);
+        let texts = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let rows: Vec<SidebarHoverRow> = texts
+            .iter()
+            .enumerate()
+            .map(|(idx, text)| SidebarHoverRow {
+                row_y: area.y.saturating_add(idx as u16),
+                full_text: text.clone(),
+                detail: None,
+                is_truncated: false,
+            })
+            .collect();
+        assert_eq!(rows[0].row_y, 5);
+        assert_eq!(rows[1].row_y, 6);
+        assert_eq!(rows[2].row_y, 7);
     }
 }
