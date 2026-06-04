@@ -180,14 +180,17 @@ impl ChatWidget {
                 Vec::new()
             };
             // Build a quick-lookup set of indices to skip (members of a
-            // collapsed run past the first).
+            // collapsed run past the first). Only allocate when there are
+            // actually runs to collapse.
             let mut collapsed_skip: HashSet<usize> = HashSet::new();
-            for run in &tool_runs {
-                if app.expanded_tool_runs.contains(&run.start) {
-                    continue;
-                }
-                for offset in 1..run.count {
-                    collapsed_skip.insert(run.start + offset);
+            if !tool_runs.is_empty() {
+                for run in &tool_runs {
+                    if app.expanded_tool_runs.contains(&run.start) {
+                        continue;
+                    }
+                    for offset in 1..run.count {
+                        collapsed_skip.insert(run.start + offset);
+                    }
                 }
             }
 

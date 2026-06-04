@@ -2617,7 +2617,6 @@ impl App {
     }
 
     pub fn mark_history_updated(&mut self) {
-        self.expanded_tool_runs.clear();
         self.history_version = self.history_version.wrapping_add(1);
         // Resync per-cell revisions to history.len(). This is the
         // "I-don't-know-which-cell-changed" path: if cells were appended in
@@ -2708,6 +2707,7 @@ impl App {
         self.session_context_references.clear();
         self.session_artifacts.clear();
         self.collapsed_cells.clear();
+        self.expanded_tool_runs.clear();
         self.collapsed_cell_map.clear();
         self.history_version = self.history_version.wrapping_add(1);
         self.needs_redraw = true;
@@ -2757,6 +2757,7 @@ impl App {
         }
         // Drop collapsed cells that reference indices past the new tail.
         self.collapsed_cells.retain(|idx| *idx < new_len);
+        self.expanded_tool_runs.retain(|idx| *idx < new_len);
         self.collapsed_cell_map.clear();
         self.history_version = self.history_version.wrapping_add(1);
         self.needs_redraw = true;
