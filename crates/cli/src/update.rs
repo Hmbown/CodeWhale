@@ -20,6 +20,12 @@ use std::io::Write;
 
 /// Run the self-update workflow.
 pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+        let _ = (beta, check_only, proxy_arg);
+        bail!("self-update is not supported on HarmonyOS/OpenHarmony yet");
+    }
+
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
