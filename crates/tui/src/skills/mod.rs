@@ -632,6 +632,22 @@ pub fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
     render_skills_block(&registry)
 }
 
+/// Union variant: merge skills discovered in the `workspace` (cross-tool skill
+/// folders) **and** an explicitly-configured `skills_dir`. Use this when an
+/// embedder injects a dedicated `skills_dir` that must stay visible even when
+/// the workspace already contains skills of its own — a plain `or_else` between
+/// the workspace view and the dir view shadows the configured `skills_dir`
+/// whenever `discover_in_workspace` returns any skill, so embedder-provided
+/// skills silently disappear.
+#[must_use]
+pub fn render_available_skills_context_for_workspace_and_dir(
+    workspace: &Path,
+    skills_dir: &Path,
+) -> Option<String> {
+    let registry = discover_for_workspace_and_dir(workspace, skills_dir);
+    render_skills_block(&registry)
+}
+
 fn render_skills_block(registry: &SkillRegistry) -> Option<String> {
     if registry.is_empty() {
         return None;

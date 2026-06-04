@@ -1073,8 +1073,16 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // honoured as a fallback for callers that don't supply a
     // workspace-aware view; it falls through to the same merged
     // registry when available.
-    let skills_block = crate::skills::render_available_skills_context_for_workspace(workspace)
-        .or_else(|| skills_dir.and_then(crate::skills::render_available_skills_context));
+    // When an explicit `skills_dir` is configured, union it with the
+    // workspace view rather than treating it as an `or_else` fallback: the
+    // workspace view almost always returns Some (any cross-tool skill folder),
+    // which would otherwise shadow the configured `skills_dir` entirely.
+    let skills_block = match skills_dir {
+        Some(dir) => {
+            crate::skills::render_available_skills_context_for_workspace_and_dir(workspace, dir)
+        }
+        None => crate::skills::render_available_skills_context_for_workspace(workspace),
+    };
     if let Some(block) = skills_block {
         full_prompt = format!("{full_prompt}\n\n{block}");
     }
