@@ -1722,15 +1722,8 @@ async fn run_event_loop(
                         // Mark goal as completed when turn finishes successfully
                         // so the WorkBench shows a green checkmark instead of
                         // the diamond icon.
-                        if status == crate::core::events::TurnOutcomeStatus::Completed
-                            && app.hunt.quarry.is_some()
-                        {
+                        if status == crate::core::events::TurnOutcomeStatus::Completed {
                             app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
-                            // quarry is NOT cleared — the sidebar shows the
-                            // completed goal with a ✓ checkmark. It will be
-                            // implicitly replaced when the user types a new
-                            // message (dispatch_user_message sends whatever
-                            // app.hunt.quarry contains at that point).
                         }
 
                         // Keep pause state visible after the turn ends so the
@@ -4885,7 +4878,9 @@ async fn dispatch_user_message(
             // paused command to the user. But clear hunt.quarry so the system
             // prompt has NO active goal (prevents goal continuation pressure).
             // Add an evaluation note to the message.
-            let name = app.paused_quarry.as_deref()
+            let name = app
+                .paused_quarry
+                .as_deref()
                 .and_then(|q| q.split(['\n', '\r']).next())
                 .unwrap_or("the paused command");
             let note = format!(
@@ -6356,7 +6351,9 @@ async fn steer_user_message(
     // Add a note for the Steer path (bypasses dispatch_user_message).
     // Keep paused_quarry for WorkBench display, clear hunt.quarry for system prompt.
     if app.paused_quarry.is_some() {
-        let name = app.paused_quarry.as_deref()
+        let name = app
+            .paused_quarry
+            .as_deref()
             .and_then(|q| q.split(['\n', '\r']).next())
             .unwrap_or("the paused command");
         let note = format!(

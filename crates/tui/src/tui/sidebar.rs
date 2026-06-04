@@ -181,6 +181,10 @@ pub(crate) struct SidebarWorkSummary {
     state_updating: bool,
     /// Optional pause indicator text ("(Paused)" or "(Cancelled)").
     pause_indicator: Option<String>,
+    /// True while app.paused is true (ESC pressed, tool calls blocked).
+    workflow_paused: bool,
+    /// True when app.paused_cancelled is true (ESC twice cancelling).
+    workflow_cancelled: bool,
 }
 
 impl SidebarWorkSummary {
@@ -290,6 +294,8 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             strategy_explanation,
             strategy_steps,
             state_updating: false,
+            workflow_paused: app.paused,
+            workflow_cancelled: app.paused_cancelled,
         })
     })();
 
@@ -312,6 +318,8 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_completed = app.hunt.verdict == HuntVerdict::Hunted;
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
+        summary.workflow_paused = app.paused;
+        summary.workflow_cancelled = app.paused_cancelled;
         summary.pause_indicator = if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading {
                 "(Pausing)".to_string()
@@ -340,6 +348,8 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
+        workflow_paused: app.paused,
+        workflow_cancelled: app.paused_cancelled,
         pause_indicator: if app.paused || app.paused_quarry.is_some() {
             Some(if app.is_loading {
                 "(Pausing)".to_string()
@@ -403,12 +413,10 @@ fn push_work_goal_lines(
 
     let icon = if summary.goal_completed {
         "✓"
-    } else if let Some(indicator) = &summary.pause_indicator {
-        match indicator.as_str() {
-            "(Cancelled)" => "✘",
-            "(Pausing)" => "⏳",
-            _ => "⏸",
-        }
+    } else if summary.workflow_cancelled {
+        "✘"
+    } else if summary.workflow_paused {
+        "⏸"
     } else {
         "▶"
     };
@@ -416,14 +424,13 @@ fn push_work_goal_lines(
         Style::default()
             .fg(theme.success)
             .add_modifier(ratatui::style::Modifier::BOLD)
-    } else if let Some(indicator) = &summary.pause_indicator {
-        let (fg, _) = match indicator.as_str() {
-            "(Cancelled)" => (theme.error_fg, "✘"),
-            "(Pausing)" => (theme.warning, "⏳"),
-            _ => (theme.accent_primary, "⏸"),
-        };
+    } else if summary.workflow_cancelled {
         Style::default()
-            .fg(fg)
+            .fg(theme.error_fg)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else if summary.workflow_paused {
+        Style::default()
+            .fg(theme.accent_primary)
             .add_modifier(ratatui::style::Modifier::BOLD)
     } else {
         Style::default()
@@ -3137,6 +3144,8 @@ mod tests {
             goal_objective: Some("test".to_string()),
             goal_completed: false,
             pause_indicator: None,
+            workflow_paused: false,
+            workflow_cancelled: false,
             ..SidebarWorkSummary::default()
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
@@ -3153,6 +3162,8 @@ mod tests {
             goal_objective: Some("test".to_string()),
             goal_completed: true,
             pause_indicator: None,
+            workflow_paused: false,
+            workflow_cancelled: false,
             ..SidebarWorkSummary::default()
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
@@ -3169,6 +3180,8 @@ mod tests {
             goal_objective: Some("test".to_string()),
             goal_completed: false,
             pause_indicator: Some("(Paused)".to_string()),
+            workflow_paused: true,
+            workflow_cancelled: false,
             ..SidebarWorkSummary::default()
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
@@ -3185,6 +3198,8 @@ mod tests {
             goal_objective: Some("test".to_string()),
             goal_completed: false,
             pause_indicator: Some("(Cancelled)".to_string()),
+            workflow_paused: false,
+            workflow_cancelled: true,
             ..SidebarWorkSummary::default()
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
@@ -3556,16 +3571,24 @@ mod tests {
         // The LLM sees the paused command in the system prompt and a note
         // in the message, and decides whether to continue or not.
         // quarry stays None — no goal in system prompt (only the note in the message)
-        assert!(app.hunt.quarry.is_none(),
-            "quarry must be None: system prompt has no active goal");
-        assert_eq!(app.paused_quarry.as_deref(), Some("Scan nested git repos"),
-            "paused_quarry preserved for WorkBench display");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry must be None: system prompt has no active goal"
+        );
+        assert_eq!(
+            app.paused_quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "paused_quarry preserved for WorkBench display"
+        );
 
         // ASSERT: LLM-evaluation cleared pause state, restored quarry
         let summary = sidebar_work_summary(&mut app);
         // WorkBench shows ⏸ with the paused goal (via paused_quarry fallback)
-        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
-            "WorkBench must show Paused indicator (paused_quarry preserved)");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "WorkBench must show Paused indicator (paused_quarry preserved)"
+        );
         assert_eq!(
             summary.goal_objective.as_deref(),
             Some("Scan nested git repos"),
@@ -3577,8 +3600,10 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
         // ASSERT: quarry stays None (LLM evaluation, no keyword interception)
-        assert!(app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
         // ASSERT: pause is cleared and paused_quarry preserved for WorkBench
         assert!(!app.paused, "pause cleared after dispatch");
         assert!(app.paused_quarry.is_some(), "paused_quarry preserved");
@@ -3587,14 +3612,17 @@ mod tests {
         assert_eq!(
             summary.pause_indicator.as_deref(),
             Some("(Paused)"),
-            "pause indicator: {:?}", summary.pause_indicator
+            "pause indicator: {:?}",
+            summary.pause_indicator
         );
         // After "continue", paused_quarry is consumed and quarry is None.
         // The goal appears when the system prompt builds in the engine turn.
-        assert!(summary.goal_objective.is_none() ||
-                summary.goal_objective.as_deref() == Some("Scan nested git repos"),
+        assert!(
+            summary.goal_objective.is_none()
+                || summary.goal_objective.as_deref() == Some("Scan nested git repos"),
             "WorkBench: goal={:?} (None=correct after consume, Some=restored)",
-            summary.goal_objective);
+            summary.goal_objective
+        );
     }
 
     #[test]
@@ -3610,10 +3638,14 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "continue");
 
         // quarry stays None — LLM evaluation note handles intent
-        assert!(app.hunt.quarry.is_none(),
-            "quarry stays None (LLM evaluation handles intent)");
-        assert!(app.paused_quarry.is_some(),
-            "paused_quarry preserved (WorkBench shows ⏸)");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None (LLM evaluation handles intent)"
+        );
+        assert!(
+            app.paused_quarry.is_some(),
+            "paused_quarry preserved (WorkBench shows ⏸)"
+        );
         let summary = sidebar_work_summary(&mut app);
         assert_eq!(
             summary.pause_indicator.as_deref(),
@@ -3639,8 +3671,10 @@ mod tests {
         // "resume the paused command" should trigger starts_with("resume ")
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
-        assert!(app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
     }
 
     #[test]
@@ -3709,8 +3743,11 @@ mod tests {
             app.hunt.quarry.is_none(),
             "LLM-evaluation: quarry None, note goes to message not system prompt"
         );
-        assert_eq!(app.paused_quarry.as_deref(), Some("Scan nested git repositories"),
-            "paused_quarry preserved for WorkBench display");
+        assert_eq!(
+            app.paused_quarry.as_deref(),
+            Some("Scan nested git repositories"),
+            "paused_quarry preserved for WorkBench display"
+        );
 
         // WorkBench should show the paused command for user awareness
         let summary = sidebar_work_summary(&mut app);
@@ -3800,8 +3837,8 @@ mod tests {
         // LLM-evaluation: pause cleared, quarry restored.
         // Pause indicator may be None or (Paused) depending on timing.
         assert!(
-            summary.pause_indicator.is_none() ||
-            summary.pause_indicator.as_deref() == Some("(Paused)"),
+            summary.pause_indicator.is_none()
+                || summary.pause_indicator.as_deref() == Some("(Paused)"),
             "WorkBench pause indicator: {:?} (expected None or Paused)",
             summary.pause_indicator
         );
@@ -3835,10 +3872,10 @@ mod tests {
             "FAIL: rendered lines are empty — WorkBench went blank"
         );
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        // LLM-evaluation: paused_quarry preserved, pause indicator shown. Icon is ⏸.
+        // LLM-evaluation: pause cleared, paused_quarry preserved for text. Icon is ▶.
         assert!(
-            first.contains('⏸'),
-            "FAIL: rendered line missing pause icon, got: {first}"
+            first.contains('▶'),
+            "FAIL: rendered line missing play icon, got: {first}"
         );
         assert!(
             first.contains("Deploy to staging"),
@@ -3901,10 +3938,14 @@ mod tests {
 
         // With LLM evaluation: no keyword interception.
         // paused_quarry stays intact, hunt.quarry stays None.
-        assert!(app.paused_quarry.is_some(),
-            "paused_quarry preserved for WorkBench display");
-        assert!(app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent");
+        assert!(
+            app.paused_quarry.is_some(),
+            "paused_quarry preserved for WorkBench display"
+        );
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
 
         // After interception, even if command completes, the sidebar
         // should show the resumed goal, not the pause icon
@@ -3919,8 +3960,10 @@ mod tests {
             "WorkBench should show completed goal"
         );
         // goal_completed takes priority over pause_indicator for the icon
-        assert!(summary.goal_completed,
-            "completed command must show checkmark (✓ overrides ⏸)");
+        assert!(
+            summary.goal_completed,
+            "completed command must show checkmark (✓ overrides ⏸)"
+        );
         assert!(
             summary.pause_indicator.is_some(),
             "paused_quarry still set — indicator preserved (✓ icon)",
@@ -3938,7 +3981,9 @@ mod tests {
             "can you please continue the paused slash command",
         );
 
-        assert!(app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
     }
 }
