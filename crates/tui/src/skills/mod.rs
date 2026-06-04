@@ -619,19 +619,6 @@ pub fn render_available_skills_context_for_workspace(workspace: &Path) -> Option
     render_skills_block(&registry)
 }
 
-/// Codex's progressive-disclosure contract: the model sees skill names,
-/// descriptions, and paths up front, then opens the specific `SKILL.md` only
-/// when a skill is relevant.
-///
-/// Single-directory variant — use
-/// [`render_available_skills_context_for_workspace`] when scanning
-/// a workspace for cross-tool skill folders (#432).
-#[must_use]
-pub fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
-    let registry = SkillRegistry::discover(skills_dir);
-    render_skills_block(&registry)
-}
-
 /// Union variant: merge skills discovered in the `workspace` (cross-tool skill
 /// folders) **and** an explicitly-configured `skills_dir`. Use this when an
 /// embedder injects a dedicated `skills_dir` that must stay visible even when
@@ -648,6 +635,9 @@ pub fn render_available_skills_context_for_workspace_and_dir(
     render_skills_block(&registry)
 }
 
+/// Codex's progressive-disclosure contract: the model sees skill names,
+/// descriptions, and paths up front, then opens the specific `SKILL.md` only
+/// when a skill is relevant.
 fn render_skills_block(registry: &SkillRegistry) -> Option<String> {
     if registry.is_empty() {
         return None;
@@ -776,6 +766,14 @@ mod tests {
         std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
     }
 
+    /// Single-directory render used by the rendering-behaviour tests below.
+    /// Mirrors the retired `render_available_skills_context` entry point —
+    /// prompts.rs now goes through the workspace/union variants, which share
+    /// this same discover + render path.
+    fn render_dir_context(skills_dir: &std::path::Path) -> Option<String> {
+        super::render_skills_block(&super::SkillRegistry::discover(skills_dir))
+    }
+
     #[test]
     fn render_available_skills_context_lists_paths_and_usage() {
         let tmpdir = TempDir::new().unwrap();
@@ -785,9 +783,7 @@ mod tests {
             "---\nname: test-skill\ndescription: A test skill\n---\nDo something special",
         );
 
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
 
         let expected_path = tmpdir
             .path()
@@ -820,9 +816,7 @@ mod tests {
             "---\nname: friendly-name\ndescription: drift case\n---\nbody",
         );
 
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
 
         let real_path = tmpdir
             .path()
@@ -854,10 +848,10 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let empty = tmpdir.path().join("skills");
         std::fs::create_dir_all(&empty).unwrap();
-        assert!(crate::skills::render_available_skills_context(&empty).is_none());
+        assert!(render_dir_context(&empty).is_none());
 
         let missing = tmpdir.path().join("does-not-exist");
-        assert!(crate::skills::render_available_skills_context(&missing).is_none());
+        assert!(render_dir_context(&missing).is_none());
     }
 
     #[test]
@@ -867,9 +861,7 @@ mod tests {
         let body = format!("---\nname: bigdesc\ndescription: {long_desc}\n---\nbody");
         create_skill_dir(&tmpdir, "bigdesc", &body);
 
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
 
         let max = super::MAX_SKILL_DESCRIPTION_CHARS;
         assert!(rendered.contains('…'), "expected truncation marker");
@@ -888,9 +880,7 @@ mod tests {
             "---\nname: spaced-skill\ndescription: alpha  \t  beta   gamma\n---\nbody",
         );
 
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
 
         let line = rendered
             .lines()
@@ -908,9 +898,7 @@ mod tests {
             create_skill_dir(&tmpdir, &format!("skill-{i:03}"), &body);
         }
 
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
 
         assert!(
             rendered.contains("additional skills omitted from this prompt budget"),
@@ -1451,9 +1439,7 @@ mod tests {
             "folded-skill",
             "---\nname: folded-skill\ndescription: >\n  line one chinese\n  line two chinese\n---\nbody",
         );
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
         assert!(
             rendered.contains("line one chinese line two chinese"),
             "folded block scalar should join lines with space, got:\n{rendered}"
@@ -1470,9 +1456,7 @@ mod tests {
             "literal-skill",
             "---\nname: literal-skill\ndescription: |\n  line one\n  line two\n---\nbody",
         );
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
         // `truncate_for_prompt` collapses whitespace, so the newlines
         // become spaces. The key assertion is that the content is
         // captured (not just `|`).
@@ -1492,9 +1476,7 @@ mod tests {
             "strip-skill",
             "---\nname: strip-skill\ndescription: >-\n  alpha\n  beta\n\n---\nbody",
         );
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
         assert!(
             rendered.contains("alpha beta"),
             "strip-chomped folded block should join lines, got:\n{rendered}"
@@ -1511,9 +1493,7 @@ mod tests {
             "plain-skill",
             "---\nname: plain-skill\ndescription: A simple description\n---\nbody",
         );
-        let rendered =
-            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
-                .expect("skill context");
+        let rendered = render_dir_context(&tmpdir.path().join("skills")).expect("skill context");
         assert!(
             rendered.contains("- plain-skill: A simple description"),
             "single-line description should still work, got:\n{rendered}"
