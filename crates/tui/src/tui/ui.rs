@@ -4868,7 +4868,9 @@ fn queued_message_content_for_app(
 /// The LLM reads the note and decides whether to continue the paused command.
 fn add_paused_evaluation_note(app: &mut App, message: &mut QueuedMessage) {
     if app.paused_quarry.is_some() {
-        let name = app.paused_quarry.as_deref()
+        let name = app
+            .paused_quarry
+            .as_deref()
             .and_then(|q| q.split(['\n', '\r']).next())
             .unwrap_or("the paused command");
         let note = format!(
@@ -6414,7 +6416,8 @@ async fn submit_or_steer_message(
     // here because dispatch_user_message won't add one (paused_quarry consumed).
     if app.paused_quarry.is_some() {
         let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
+        if trimmed == "continue"
+            || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
             || trimmed.contains(" continue ")

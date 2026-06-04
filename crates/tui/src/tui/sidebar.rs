@@ -3534,7 +3534,8 @@ mod tests {
         // consume paused_quarry + restore hunt.quarry for "continue"/"resume"
         {
             let trimmed = message.trim().to_lowercase();
-            if trimmed == "continue" || trimmed == "resume"
+            if trimmed == "continue"
+                || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
                 || trimmed.contains(" continue ")
@@ -3623,7 +3624,10 @@ mod tests {
         );
         // ASSERT: pause is cleared and paused_quarry consumed
         assert!(!app.paused, "pause cleared after dispatch");
-        assert!(app.paused_quarry.is_none(), "paused_quarry consumed on resume");
+        assert!(
+            app.paused_quarry.is_none(),
+            "paused_quarry consumed on resume"
+        );
         // ASSERT: WorkBench shows the paused command (via paused_quarry fallback)
         let summary = sidebar_work_summary(&mut app);
         assert!(
