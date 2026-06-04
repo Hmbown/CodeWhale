@@ -1633,6 +1633,12 @@ async fn run_event_loop(
                         app.streaming_state.reset();
                         app.streaming_message_index = None;
                         app.streaming_thinking_active_entry = None;
+                        // Reset pause state for new turn.
+                        // Note: pausable is NOT reset here — it is set by
+                        // try_dispatch_user_command for pausable commands and
+                        // persists until the user presses Esc or the turn ends.
+                        app.paused = false;
+                        app.paused_cancelled = false;
                         let now = Instant::now();
                         app.turn_started_at = Some(now);
                         app.turn_last_activity_at = Some(now);
@@ -1729,6 +1735,21 @@ async fn run_event_loop(
                             }
                             crate::core::events::TurnOutcomeStatus::Failed => "failed".to_string(),
                         });
+                        // Mark goal as completed when turn finishes successfully
+                        // so the WorkBench shows a green checkmark instead of
+                        // the diamond icon.
+                        if status == crate::core::events::TurnOutcomeStatus::Completed
+                            && app.hunt.quarry.is_some()
+                        {
+                            app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+                        }
+
+                        // Keep pause state visible after the turn ends so the
+                        // WorkBench continues to show the pause indicator.
+                        // Clear `pausable` so a fresh user message starts clean,
+                        // but keep `paused`/`paused_cancelled` for the sidebar.
+                        app.pausable = false;
+
                         if matches!(
                             status,
                             crate::core::events::TurnOutcomeStatus::Interrupted
@@ -1965,7 +1986,16 @@ async fn run_event_loop(
                         apply_engine_error_to_app(app, envelope);
                     }
                     EngineEvent::Status { message } => {
-                        app.status_message = Some(message);
+                        // Late engine status events (e.g. "Request was Paused"
+                        // from a stale Op::SetPaused) must not overwrite a
+                        // more recent cancellation status set by the UI.
+                        if app.paused_cancelled
+                            && (message == "Request was Paused" || message == "Request was Resumed")
+                        {
+                            // discard — cancel/resume status takes priority
+                        } else {
+                            app.status_message = Some(message);
+                        }
                     }
                     EngineEvent::SessionUpdated {
                         session_id,
@@ -3461,10 +3491,54 @@ async fn run_event_loop(
                         }
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
-                            engine_handle.cancel();
-                            mark_active_turn_cancelled_locally(app);
-                            current_streaming_text.clear();
-                            app.status_message = Some("Request cancelled".to_string());
+                            if app.paused {
+                                // Cancelling while paused — stop the engine turn.
+                                app.paused_cancelled = true;
+                                app.paused = false;
+                                // Restore the quarry from paused_quarry so the
+                                // WorkBench shows the original goal (with ✘ icon).
+                                // Cleared in dispatch_user_message when user types next.
+                                app.hunt.quarry = app.paused_quarry.take();
+                                app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
+                                app.active_allowed_tools = None;
+                                engine_handle.set_paused(false);
+                                engine_handle.cancel();
+                                mark_active_turn_cancelled_locally(app);
+                                current_streaming_text.clear();
+                                app.status_message = Some("Request was Cancelled".to_string());
+                            } else {
+                                engine_handle.cancel();
+                                mark_active_turn_cancelled_locally(app);
+                                current_streaming_text.clear();
+                                app.status_message = Some("Request cancelled".to_string());
+                            }
+                        }
+                        EscapeAction::PauseCommand => {
+                            if app.paused {
+                                // Already paused — resume
+                                tracing::debug!(target: "pausable", "PauseCommand — resuming");
+                                app.hunt.quarry = app.paused_quarry.take();
+                                engine_handle.set_paused(false);
+                                app.paused = false;
+                                app.paused_at = None;
+                            } else {
+                                // First ESC — pause
+                                tracing::debug!(target: "pausable", "PauseCommand — pausing");
+                                // Save the current goal so we can restore it on resume.
+                                // Set a pause message so the system prompt tells
+                                // the model the command is on hold instead of
+                                // continuing the original request.
+                                app.paused_quarry = app.hunt.quarry.clone();
+                                // Clear the quarry so the goal continuation
+                                // system doesn't prompt the model to resolve
+                                // a "pause" goal. The pause gate + system
+                                // prompt are sufficient to prevent execution.
+                                app.hunt.quarry = None;
+                                engine_handle.set_paused(true);
+                                app.paused = true;
+                                app.paused_at = Some(std::time::Instant::now());
+                                app.paused_cancelled = false;
+                            }
                         }
                         EscapeAction::DiscardQueuedDraft => {
                             app.backtrack.reset();
@@ -4823,12 +4897,71 @@ fn queued_message_content_for_app(
     }
 }
 
+/// Append an evaluation note to the message when there's a paused_quarry.
+/// The LLM reads the note and decides whether to continue the paused command.
+fn add_paused_evaluation_note(app: &mut App, message: &mut QueuedMessage) {
+    if app.paused_quarry.is_some() {
+        let name = app
+            .paused_quarry
+            .as_deref()
+            .and_then(|q| q.split(['\n', '\r']).next())
+            .unwrap_or("the paused command");
+        let note = format!(
+            "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
+             continue or resume it in their message above, do so. Otherwise, \
+             ignore the paused command and respond only to the new message.]"
+        );
+        message.display.push_str(&note);
+        app.hunt.quarry = None;
+    }
+}
+
 async fn dispatch_user_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
+    // When paused or paused_quarry: restore the goal into the system prompt
+    // and append an evaluation note. The LLM decides whether to continue the
+    // paused command based on the user's message — no fragile keyword matching.
+    // The paused_quarry is always consumed here (either restored or discarded).
+    if app.paused || app.paused_quarry.is_some() {
+        if app.paused_quarry.is_some() {
+            add_paused_evaluation_note(app, &mut message);
+        }
+        if app.paused {
+            engine_handle.cancel();
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            app.status_message = None;
+        }
+        // Fall through — message goes to engine as a normal user message.
+    }
+
+    // Safety sync: if the app-level pause was cleared (e.g. by a new slash
+    // command in try_dispatch_user_command), make sure the engine flag is
+    // also cleared so the pause gate doesn't block the new command's tools.
+    // NOTE: check only app.paused — app.pausable may be true because the
+    // new command's frontmatter already set it, but the engine flag from
+    // the OLD paused command may still be hanging.
+    if !app.paused {
+        engine_handle.set_paused(false);
+    }
+
+    // If we're in a cancelled state and the user is sending a new message,
+    // clear the quarry so the system prompt doesn't include the old goal.
+    // The quarry is kept visible in the WorkBench (via pause_indicator="(Cancelled)")
+    // until the user types, at which point it's naturally replaced by the new goal.
+    if app.paused_cancelled {
+        app.hunt.quarry = None;
+        app.paused_cancelled = false;
+    }
+
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
     // user's display text and may replace or block it before file mentions,
     // skill wrapping, history, and model input are resolved.
@@ -6303,8 +6436,21 @@ async fn execute_command_input(
 async fn steer_user_message(
     app: &mut App,
     engine_handle: &EngineHandle,
-    message: QueuedMessage,
+    mut message: QueuedMessage,
 ) -> Result<()> {
+    // Add a note for the Steer path (bypasses dispatch_user_message).
+    // Also clear pause state — the Steer path bypasses dispatch entirely.
+    if app.paused {
+        engine_handle.cancel();
+        app.paused = false;
+        app.paused_at = None;
+        app.paused_cancelled = false;
+        app.pausable = false;
+        app.active_snapshot = None;
+        engine_handle.set_paused(false);
+        app.status_message = None;
+    }
+    add_paused_evaluation_note(app, &mut message);
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
         &message.display,
@@ -6358,8 +6504,36 @@ async fn submit_or_steer_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
-    message: QueuedMessage,
+    mut message: QueuedMessage,
 ) -> Result<()> {
+    // UI-level interception: "continue"/"resume" consumes paused_quarry so
+    // the WorkBench icon changes from ⏸ to ▶. Also adds an evaluation note
+    // here because dispatch_user_message won't add one (paused_quarry consumed).
+    if app.paused_quarry.is_some() {
+        let trimmed = message.display.trim().to_lowercase();
+        if trimmed == "continue"
+            || trimmed == "resume"
+            || trimmed.starts_with("continue ")
+            || trimmed.starts_with("resume ")
+            || trimmed.contains(" continue ")
+            || trimmed.contains(" resume ")
+            || trimmed.ends_with(" continue")
+            || trimmed.ends_with(" resume")
+        {
+            // Consume paused_quarry → workflow_paused becomes false → icon ▶
+            // Restore to hunt.quarry → TurnCompleted can set Hunted → icon ✓
+            if let Some(q) = app.paused_quarry.take() {
+                let name = q.split(['\n', '\r']).next().unwrap_or(&q).to_string();
+                let note = format!(
+                    "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
+                     continue or resume it in their message above, do so. Otherwise, \
+                     ignore the paused command and respond only to the new message.]"
+                );
+                message.display.push_str(&note);
+                app.hunt.quarry = Some(q);
+            }
+        }
+    }
     match app.decide_submit_disposition() {
         SubmitDisposition::Immediate => {
             dispatch_user_message(app, config, engine_handle, message).await

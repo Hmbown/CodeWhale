@@ -269,6 +269,7 @@ impl WindowsJob {
             )
             .map_err(windows_io_error)?;
 
+            #[allow(clippy::unnecessary_cast)]
             let process_handle = HANDLE(child.as_raw_handle() as *mut core::ffi::c_void);
             AssignProcessToJobObject(job.handle, process_handle).map_err(windows_io_error)?;
         }

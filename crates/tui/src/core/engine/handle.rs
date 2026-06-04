@@ -110,4 +110,21 @@ impl EngineHandle {
         self.tx_steer.send(content.into()).await?;
         Ok(())
     }
+
+    /// Pause or resume the current command (for pausable commands).
+    /// Sets a shared flag that the turn loop reads before every tool call.
+    /// Uses the same side-channel pattern as `cancel()` — bypasses the Op
+    /// channel so it takes effect immediately, even during a running turn.
+    pub fn set_paused(&self, paused: bool) {
+        match self.shared_paused.lock() {
+            Ok(mut slot) => {
+                *slot = paused;
+                tracing::debug!(target: "pausable", paused, "EngineHandle::set_paused");
+            }
+            Err(poisoned) => *poisoned.into_inner() = paused,
+        }
+        // Note: Op::SetPaused was removed — the shared flag is the single
+        // source of truth. Sending an Op would make the engine fire a status
+        // event that races with cancel/continue status from the UI.
+    }
 }

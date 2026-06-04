@@ -1357,6 +1357,16 @@ impl Engine {
                     )));
                 }
 
+                // Pause gate: when the command is paused, cancel the turn
+                // instead of returning a tool error. Returning a tool error
+                // causes the model to try alternative approaches; cancelling
+                // the turn cleanly stops all execution.
+                let is_paused = self.shared_paused.lock().is_ok_and(|g| *g);
+                tracing::debug!(target: "pausable", is_paused, tool_name, "pause gate check");
+                if blocked_error.is_none() && is_paused {
+                    self.cancel_token.cancel();
+                }
+
                 if blocked_error.is_none()
                     && let Some(hook_executor) = self.config.hook_executor.as_ref()
                     && hook_executor.has_hooks_for_event(crate::hooks::HookEvent::ToolCallBefore)
