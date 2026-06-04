@@ -2241,10 +2241,30 @@ impl McpPool {
 
     /// Parse a prefixed name into (server_name, tool_name)
     fn parse_prefixed_name<'a>(&self, prefixed_name: &'a str) -> Result<(&'a str, &'a str)> {
-        if !prefixed_name.starts_with("mcp_") {
+        let Some(rest) = prefixed_name.strip_prefix("mcp_") else {
             anyhow::bail!("Invalid MCP tool name: {prefixed_name}");
+        };
+
+        let mut best_match: Option<(&str, &str)> = None;
+        for server in self.connections.keys().chain(self.config.servers.keys()) {
+            let Some(tool) = rest
+                .strip_prefix(server)
+                .and_then(|tail| tail.strip_prefix('_'))
+            else {
+                continue;
+            };
+            if tool.is_empty() {
+                continue;
+            }
+            if best_match.is_none_or(|(matched, _)| server.len() > matched.len()) {
+                best_match = Some((&rest[..server.len()], tool));
+            }
         }
-        let rest = &prefixed_name[4..];
+
+        if let Some((server, tool)) = best_match {
+            return Ok((server, tool));
+        }
+
         let Some((server, tool)) = rest.split_once('_') else {
             anyhow::bail!("Invalid MCP tool name format: {prefixed_name}");
         };
@@ -3635,6 +3655,114 @@ mod tests {
         assert_eq!(
             sent[0]["params"]["arguments"],
             serde_json::json!({"query": "dephy"})
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_pool_call_tool_preserves_server_names_with_underscores() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"ok": true}
+            }))]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+        conn.name = "my_db".to_string();
+        conn.tools = vec![McpTool {
+            name: "execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let mut pool = McpPool::new(McpConfig {
+            timeouts: McpTimeouts::default(),
+            servers: HashMap::new(),
+        });
+        pool.connections.insert("my_db".to_string(), conn);
+
+        let result = pool
+            .call_tool(
+                "mcp_my_db_execute_sql",
+                serde_json::json!({"query": "select 1"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"ok": true}));
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent[0]["method"], "tools/call");
+        assert_eq!(sent[0]["params"]["name"], "execute_sql");
+        assert_eq!(
+            sent[0]["params"]["arguments"],
+            serde_json::json!({"query": "select 1"})
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_pool_call_tool_prefers_longest_matching_server_name() {
+        let sent_short = Arc::new(Mutex::new(Vec::new()));
+        let short_transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent_short),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"short": true}
+            }))]),
+        };
+        let mut short_conn = test_connection(Box::new(short_transport));
+        short_conn.name = "my".to_string();
+        short_conn.tools = vec![McpTool {
+            name: "db_execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let sent_long = Arc::new(Mutex::new(Vec::new()));
+        let long_transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent_long),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"long": true}
+            }))]),
+        };
+        let mut long_conn = test_connection(Box::new(long_transport));
+        long_conn.name = "my_db".to_string();
+        long_conn.tools = vec![McpTool {
+            name: "execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let mut pool = McpPool::new(McpConfig {
+            timeouts: McpTimeouts::default(),
+            servers: HashMap::new(),
+        });
+        pool.connections.insert("my".to_string(), short_conn);
+        pool.connections.insert("my_db".to_string(), long_conn);
+
+        let result = pool
+            .call_tool(
+                "mcp_my_db_execute_sql",
+                serde_json::json!({"query": "select 1"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"long": true}));
+        assert!(
+            sent_short.lock().unwrap().is_empty(),
+            "the shorter server name must not receive the tool call"
+        );
+        let sent_long = sent_long.lock().unwrap();
+        assert_eq!(sent_long[0]["method"], "tools/call");
+        assert_eq!(sent_long[0]["params"]["name"], "execute_sql");
+        assert_eq!(
+            sent_long[0]["params"]["arguments"],
+            serde_json::json!({"query": "select 1"})
         );
     }
 
