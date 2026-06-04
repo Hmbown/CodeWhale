@@ -4862,6 +4862,23 @@ fn queued_message_content_for_app(
     }
 }
 
+/// Append an evaluation note to the message when there's a paused_quarry.
+/// The LLM reads the note and decides whether to continue the paused command.
+fn add_paused_evaluation_note(app: &mut App, message: &mut QueuedMessage) {
+    if app.paused_quarry.is_some() {
+        let name = app.paused_quarry.as_deref()
+            .and_then(|q| q.split(['\n', '\r']).next())
+            .unwrap_or("the paused command");
+        let note = format!(
+            "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
+             continue or resume it in their message above, do so. Otherwise, \
+             ignore the paused command and respond only to the new message.]"
+        );
+        message.display.push_str(&note);
+        app.hunt.quarry = None;
+    }
+}
+
 async fn dispatch_user_message(
     app: &mut App,
     config: &Config,
@@ -4874,22 +4891,7 @@ async fn dispatch_user_message(
     // The paused_quarry is always consumed here (either restored or discarded).
     if app.paused || app.paused_quarry.is_some() {
         if app.paused_quarry.is_some() {
-            // Keep paused_quarry intact — the sidebar uses it to display the
-            // paused command to the user. But clear hunt.quarry so the system
-            // prompt has NO active goal (prevents goal continuation pressure).
-            // Add an evaluation note to the message.
-            let name = app
-                .paused_quarry
-                .as_deref()
-                .and_then(|q| q.split(['\n', '\r']).next())
-                .unwrap_or("the paused command");
-            let note = format!(
-                "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
-                 continue or resume it in their message above, do so. Otherwise, \
-                 ignore the paused command and respond only to the new message.]"
-            );
-            message.display.push_str(&note);
-            app.hunt.quarry = None;
+            add_paused_evaluation_note(app, &mut message);
         }
         if app.paused {
             engine_handle.cancel();
@@ -6349,21 +6351,7 @@ async fn steer_user_message(
     mut message: QueuedMessage,
 ) -> Result<()> {
     // Add a note for the Steer path (bypasses dispatch_user_message).
-    // Keep paused_quarry for WorkBench display, clear hunt.quarry for system prompt.
-    if app.paused_quarry.is_some() {
-        let name = app
-            .paused_quarry
-            .as_deref()
-            .and_then(|q| q.split(['\n', '\r']).next())
-            .unwrap_or("the paused command");
-        let note = format!(
-            "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
-             continue or resume it in their message above, do so. Otherwise, \
-             ignore the paused command and respond only to the new message.]"
-        );
-        message.display.push_str(&note);
-        app.hunt.quarry = None;
-    }
+    add_paused_evaluation_note(app, &mut message);
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
         &message.display,
