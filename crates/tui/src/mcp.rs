@@ -2245,6 +2245,21 @@ impl McpPool {
             anyhow::bail!("Invalid MCP tool name: {prefixed_name}");
         }
         let rest = &prefixed_name[4..];
+        let mut resolved = None;
+        for (idx, _) in rest.match_indices('_') {
+            let server = &rest[..idx];
+            let tool = &rest[idx + 1..];
+            if server.is_empty() || tool.is_empty() {
+                continue;
+            }
+            if self.connections.contains_key(server) || self.config.servers.contains_key(server) {
+                resolved = Some((server, tool));
+            }
+        }
+        if let Some((server, tool)) = resolved {
+            return Ok((server, tool));
+        }
+
         let Some((server, tool)) = rest.split_once('_') else {
             anyhow::bail!("Invalid MCP tool name format: {prefixed_name}");
         };
@@ -3635,6 +3650,49 @@ mod tests {
         assert_eq!(
             sent[0]["params"]["arguments"],
             serde_json::json!({"query": "dephy"})
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_pool_call_tool_preserves_server_names_with_underscores() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"ok": true}
+            }))]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+        conn.name = "my_db".to_string();
+        conn.tools = vec![McpTool {
+            name: "execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let mut pool = McpPool::new(McpConfig {
+            timeouts: McpTimeouts::default(),
+            servers: HashMap::new(),
+        });
+        pool.connections.insert("my_db".to_string(), conn);
+
+        let result = pool
+            .call_tool(
+                "mcp_my_db_execute_sql",
+                serde_json::json!({"query": "select 1"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"ok": true}));
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent[0]["method"], "tools/call");
+        assert_eq!(sent[0]["params"]["name"], "execute_sql");
+        assert_eq!(
+            sent[0]["params"]["arguments"],
+            serde_json::json!({"query": "select 1"})
         );
     }
 
