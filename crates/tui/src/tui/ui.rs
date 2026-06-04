@@ -3482,10 +3482,6 @@ async fn run_event_loop(
                             app.backtrack.reset();
                             if app.paused {
                                 // Cancelling while paused — stop the engine turn.
-                                // Clear the shared flag directly (not via
-                                // set_paused) to avoid sending Op::SetPaused
-                                // which fires a "resumed" event that overwrites
-                                // the cancellation status message.
                                 app.paused_cancelled = true;
                                 app.paused = false;
                                 // Restore the quarry from paused_quarry so the
@@ -3494,9 +3490,7 @@ async fn run_event_loop(
                                 app.hunt.quarry = app.paused_quarry.take();
                                 app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
                                 app.active_allowed_tools = None;
-                                if let Ok(mut slot) = engine_handle.shared_paused.lock() {
-                                    *slot = false;
-                                }
+                                engine_handle.set_paused(false);
                                 engine_handle.cancel();
                                 mark_active_turn_cancelled_locally(app);
                                 current_streaming_text.clear();
@@ -4954,10 +4948,8 @@ async fn dispatch_user_message(
     // NOTE: check only app.paused — app.pausable may be true because the
     // new command's frontmatter already set it, but the engine flag from
     // the OLD paused command may still be hanging.
-    if !app.paused
-        && let Ok(mut slot) = engine_handle.shared_paused.lock()
-    {
-        *slot = false;
+    if !app.paused {
+        engine_handle.set_paused(false);
     }
 
     // If we're in a cancelled state and the user is sending a new message,

@@ -207,11 +207,17 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
             app.hunt.token_budget = None;
             app.active_allowed_tools = None;
             // Clear todos and plan state from the previous command.
-            if let Ok(mut todos) = app.todos.try_lock() {
-                todos.clear();
+            match app.todos.try_lock() {
+                Ok(mut todos) => todos.clear(),
+                Err(_) => {
+                    tracing::warn!(target: "pausable", "todos lock contended or poisoned — state not cleared");
+                }
             }
-            if let Ok(mut plan) = app.plan_state.try_lock() {
-                *plan = crate::tools::plan::PlanState::default();
+            match app.plan_state.try_lock() {
+                Ok(mut plan) => *plan = crate::tools::plan::PlanState::default(),
+                Err(_) => {
+                    tracing::warn!(target: "pausable", "plan_state lock contended or poisoned — state not cleared");
+                }
             }
             // Clear any previous pause state — new command, fresh start.
             app.paused = false;
