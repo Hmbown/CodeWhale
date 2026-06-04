@@ -1982,9 +1982,9 @@ fn render_sidebar_section(
 mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
-        AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
+        AutoSidebarState, SidebarAgentRow, SidebarHoverRow, SidebarHoverSection, SidebarHoverState,
         SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarHoverRow, SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
+        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
         normalize_activity_text, sidebar_work_summary, subagent_panel_lines, task_panel_lines,
         work_panel_empty_hint, work_panel_lines,
     };
@@ -3043,7 +3043,10 @@ mod tests {
     fn sidebar_hover_section_populates_rows() {
         use ratatui::layout::Rect;
         // Simulate what `render_sidebar_section` does.
-        let full_texts = vec!["short".to_string(), "very long line that exceeds width".to_string()];
+        let full_texts = vec![
+            "short".to_string(),
+            "very long line that exceeds width".to_string(),
+        ];
         let content_width = 20u16;
         let content_area = Rect::new(62, 2, content_width, 6);
         let rows: Vec<SidebarHoverRow> = full_texts
