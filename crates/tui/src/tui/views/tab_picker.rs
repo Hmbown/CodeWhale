@@ -123,8 +123,9 @@ impl ModalView for TabPickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        // Calculate dimensions
-        let max_height = (area.height - 4).min(10);
+        // Calculate dimensions. saturating_sub prevents underflow when the
+        // terminal is shrunk below the picker's expected minimum size.
+        let max_height = area.height.saturating_sub(4).min(10);
 
         // Draw border with title
         let title = format!(" {} ", self.action);
@@ -147,7 +148,7 @@ impl ModalView for TabPickerView {
         // Draw tabs
         for (i, tab) in self.tabs.iter().enumerate().take(max_height as usize) {
             let y = area.y + 2 + i as u16;
-            if y >= area.y + area.height - 1 {
+            if y >= area.y + area.height.saturating_sub(1) {
                 break;
             }
 
@@ -186,7 +187,7 @@ impl ModalView for TabPickerView {
             // Draw type indicator on the right
             let type_style = Style::default().fg(ratatui::style::Color::DarkGray);
             buf.set_string(
-                area.x + area.width - 5,
+                area.x + area.width.saturating_sub(5),
                 y,
                 type_str,
                 type_style,
@@ -198,7 +199,7 @@ impl ModalView for TabPickerView {
         let help_style = Style::default().fg(ratatui::style::Color::DarkGray);
         buf.set_string(
             area.x + 2,
-            area.y + area.height - 1,
+            area.y + area.height.saturating_sub(1),
             help_text,
             help_style,
         );

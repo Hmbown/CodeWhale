@@ -48,7 +48,7 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
             " [Ctrl+Shift+N] New tab  Ctrl+`: Switcher ",
             Style::default().fg(ratatui::style::Color::White),
         );
-        buf.set_span(area.x, area.y, &hint, (area.width as usize).try_into().unwrap_or(u16::MAX));
+        buf.set_span(area.x, area.y, &hint, area.width);
         return;
     }
 

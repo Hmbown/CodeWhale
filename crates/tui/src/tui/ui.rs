@@ -8017,18 +8017,26 @@ async fn handle_view_events(
             }
             ViewEvent::CollabRequested { kind, to_tab } => {
                 use crate::tui::views::tab_picker::TabPickerAction;
-                let from_tab = app.tab_manager.active_id();
                 let to_tab_id = crate::tui::tab::TabId::new(to_tab);
+                let from_tab = app.tab_manager.active_id();
                 app.status_message = Some(match (kind, from_tab) {
-                    (TabPickerAction::Delegate, Some(from)) => match app
-                        .tab_manager
-                        .delegate_task(from, to_tab_id, "Task from tab".to_string(), Default::default())
-                    {
-                        Some(task_id) => {
-                            format!("Task delegated to tab {} (ID: {})", to_tab, task_id)
+                    (TabPickerAction::Delegate, Some(from)) => {
+                        // Compose a description that at least identifies the
+                        // action and the target tab. A future UX iteration
+                        // can prompt for a richer message (e.g. the right-
+                        // clicked cell's text) before this delegation fires.
+                        let description =
+                            format!("Task delegated from tab {} to tab {}", from.0, to_tab);
+                        match app
+                            .tab_manager
+                            .delegate_task(from, to_tab_id, description.clone(), Default::default())
+                        {
+                            Some(task_id) => {
+                                format!("{} (ID: {})", description, task_id)
+                            }
+                            None => "Failed to delegate task".to_string(),
                         }
-                        None => "Failed to delegate task".to_string(),
-                    },
+                    }
                     (TabPickerAction::Review, Some(_)) => {
                         format!("Review requested from tab {}", to_tab)
                     }

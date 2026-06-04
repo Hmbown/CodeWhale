@@ -109,7 +109,11 @@ impl TabSwitcherView {
         }
     }
 
-    /// Apply filter to tabs
+    /// Apply filter to tabs. Resets the cursor to the first tab whose
+    /// title matches the filter, scanning from index 0. Without the full
+    /// re-scan a filter that matches a tab *before* the current cursor
+    /// would leave the cursor on a non-matching tab, and pressing Enter
+    /// would then activate the wrong tab.
     fn apply_filter(&mut self) {
         if self.filter.is_empty() {
             return;
@@ -118,10 +122,9 @@ impl TabSwitcherView {
         if let Some(pos) = self
             .tabs
             .iter()
-            .skip(self.cursor + 1)
             .position(|t| t.title.to_lowercase().contains(&filter_lower))
         {
-            self.cursor += pos + 1;
+            self.cursor = pos;
         }
     }
 
@@ -140,9 +143,10 @@ impl TabSwitcherView {
 
     /// Render the tab switcher (internal)
     pub fn render_internal(&self, area: Rect, buf: &mut Buffer) {
-        // Calculate dimensions
-        let max_width = (area.width - 2).min(60);
-        let max_height = (area.height - 4).min(10);
+        // Calculate dimensions. saturating_sub prevents underflow on tiny
+        // terminals (e.g. when the user resizes down to a 1-row area).
+        let max_width = area.width.saturating_sub(2).min(60);
+        let max_height = area.height.saturating_sub(4).min(10);
 
         // Draw border using Block
         let block = Block::default()
@@ -173,7 +177,7 @@ impl TabSwitcherView {
 
         for (i, (tab_idx, tab)) in filtered.iter().enumerate().take(max_height as usize) {
             let y = area.y + 2 + i as u16;
-            if y >= area.y + area.height - 1 {
+            if y >= area.y + area.height.saturating_sub(1) {
                 break;
             }
 
@@ -221,7 +225,7 @@ impl TabSwitcherView {
             // Draw type indicator on the right
             let type_style = Style::default().fg(ratatui::style::Color::DarkGray);
             buf.set_string(
-                area.x + area.width - 5,
+                area.x + area.width.saturating_sub(5),
                 y,
                 type_str,
                 type_style,
@@ -234,7 +238,7 @@ impl TabSwitcherView {
             let filter_style = Style::default().fg(ratatui::style::Color::Yellow);
             buf.set_string(
                 area.x + 2,
-                area.y + area.height - 2,
+                area.y + area.height.saturating_sub(2),
                 &filter_text,
                 filter_style,
             );
@@ -245,7 +249,7 @@ impl TabSwitcherView {
         let help_style = Style::default().fg(ratatui::style::Color::DarkGray);
         buf.set_string(
             area.x + 2,
-            area.y + area.height - 1,
+            area.y + area.height.saturating_sub(1),
             help_text,
             help_style,
         );
