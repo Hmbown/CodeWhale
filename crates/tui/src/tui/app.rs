@@ -5918,6 +5918,7 @@ mod tests {
                     step: "step 1".to_string(),
                     status: StepStatus::InProgress,
                 }],
+                ..Default::default()
             });
             assert!(!plan.is_empty());
         }

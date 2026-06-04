@@ -1171,6 +1171,7 @@ mod tests {
                     step: "keep checklist primary".to_string(),
                     status: StepStatus::InProgress,
                 }],
+                ..Default::default()
             });
         }
 
