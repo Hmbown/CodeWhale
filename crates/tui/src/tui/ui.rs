@@ -4889,7 +4889,8 @@ async fn dispatch_user_message(
     // still resume later by typing "continue"/"resume".
     if app.paused {
         let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
+        if trimmed == "continue"
+            || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
             || trimmed.contains(" continue ")
@@ -4904,9 +4905,14 @@ async fn dispatch_user_message(
             // Prepend a cancellation notice to the message so the model
             // sees it in the conversation and does NOT continue the old
             // paused command unprompted.
-            let paused_name = app.paused_quarry.as_deref()
-                .map(|q| q.split(|c: char| c == '\n' || c == '\r')
-                    .next().unwrap_or(q))
+            let paused_name = app
+                .paused_quarry
+                .as_deref()
+                .map(|q| {
+                    q.split(|c: char| c == '\n' || c == '\r')
+                        .next()
+                        .unwrap_or(q)
+                })
                 .unwrap_or("the previous command");
             let notice = format!(
                 "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"
@@ -4933,7 +4939,8 @@ async fn dispatch_user_message(
     // have the quarry restored.
     if app.paused_quarry.is_some() {
         let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
+        if trimmed == "continue"
+            || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
             || trimmed.contains(" continue ")
@@ -6395,7 +6402,8 @@ async fn steer_user_message(
     // reaches steer_user_message without going through submit_or_steer_message.
     if app.paused_quarry.is_some() {
         let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
+        if trimmed == "continue"
+            || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
             || trimmed.contains(" continue ")
@@ -6474,12 +6482,11 @@ async fn submit_or_steer_message(
     // the Steer path and bypass dispatch_user_message entirely).
     if app.paused_quarry.is_some() {
         let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue" || trimmed == "resume"
+        if trimmed == "continue"
+            || trimmed == "resume"
             || trimmed.starts_with("continue ")
             || trimmed.starts_with("resume ")
         {
-            eprintln!("[pausable debug] submit_or_steer: RESUME DETECTED — consuming paused_quarry");
-            tracing::debug!(target: "pausable", "submit_or_steer: RESUME DETECTED — consuming paused_quarry");
             app.hunt.quarry = app.paused_quarry.take();
             app.paused = false;
             app.paused_at = None;

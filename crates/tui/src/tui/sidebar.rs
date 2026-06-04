@@ -261,17 +261,12 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             )
         };
 
-        // Debug: log the state used for pause indicator
-        tracing::debug!(target: "pausable",
-            paused = app.paused,
-            paused_quarry = ?app.paused_quarry,
-            is_loading = app.is_loading,
-            paused_cancelled = app.paused_cancelled,
-            "sidebar_work_summary pause state"
-        );
         Some(SidebarWorkSummary {
             goal_objective: if app.paused_quarry.is_some() || app.paused_cancelled {
-                app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+                app.hunt
+                    .quarry
+                    .clone()
+                    .or_else(|| app.paused_quarry.clone())
             } else {
                 app.hunt.quarry.clone()
             },
@@ -281,7 +276,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
             tokens_used: app.session.total_conversation_tokens,
             checklist_completion_pct,
             pause_indicator: if app.paused || app.paused_quarry.is_some() {
-                Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
+                Some(if app.is_loading {
+                    "(Pausing)".to_string()
+                } else {
+                    "(Paused)".to_string()
+                })
             } else if app.paused_cancelled {
                 Some("(Cancelled)".to_string())
             } else {
@@ -302,7 +301,10 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     if let Some(cached) = app.cached_work_summary.as_ref() {
         let mut summary = cached.clone();
         summary.goal_objective = if app.paused_quarry.is_some() || app.paused_cancelled {
-            app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+            app.hunt
+                .quarry
+                .clone()
+                .or_else(|| app.paused_quarry.clone())
         } else {
             app.hunt.quarry.clone()
         };
@@ -311,7 +313,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         summary.goal_started_at = app.hunt.started_at;
         summary.tokens_used = app.session.total_conversation_tokens;
         summary.pause_indicator = if app.paused || app.paused_quarry.is_some() {
-            Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
+            Some(if app.is_loading {
+                "(Pausing)".to_string()
+            } else {
+                "(Paused)".to_string()
+            })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
         } else {
@@ -322,7 +328,10 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
 
     SidebarWorkSummary {
         goal_objective: if app.paused_quarry.is_some() || app.paused_cancelled {
-            app.hunt.quarry.clone().or_else(|| app.paused_quarry.clone())
+            app.hunt
+                .quarry
+                .clone()
+                .or_else(|| app.paused_quarry.clone())
         } else {
             app.hunt.quarry.clone()
         },
@@ -332,7 +341,11 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
         tokens_used: app.session.total_conversation_tokens,
         state_updating: true,
         pause_indicator: if app.paused || app.paused_quarry.is_some() {
-            Some(if app.is_loading { "(Pausing)".to_string() } else { "(Paused)".to_string() })
+            Some(if app.is_loading {
+                "(Pausing)".to_string()
+            } else {
+                "(Paused)".to_string()
+            })
         } else if app.paused_cancelled {
             Some("(Cancelled)".to_string())
         } else {
@@ -3087,7 +3100,10 @@ mod tests {
         app.paused = false;
         app.paused_cancelled = false;
         let summary = sidebar_work_summary(&mut app);
-        assert!(summary.pause_indicator.is_none(), "expected no indicator when not paused/cancelled");
+        assert!(
+            summary.pause_indicator.is_none(),
+            "expected no indicator when not paused/cancelled"
+        );
     }
 
     #[test]
@@ -3125,7 +3141,10 @@ mod tests {
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        assert!(first.contains('▶'), "expected play icon for running, got: {first}");
+        assert!(
+            first.contains('▶'),
+            "expected play icon for running, got: {first}"
+        );
     }
 
     #[test]
@@ -3138,7 +3157,10 @@ mod tests {
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        assert!(first.contains('✓'), "expected checkmark for completed, got: {first}");
+        assert!(
+            first.contains('✓'),
+            "expected checkmark for completed, got: {first}"
+        );
     }
 
     #[test]
@@ -3151,7 +3173,10 @@ mod tests {
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        assert!(first.contains('⏸'), "expected pause icon for paused, got: {first}");
+        assert!(
+            first.contains('⏸'),
+            "expected pause icon for paused, got: {first}"
+        );
     }
 
     #[test]
@@ -3164,7 +3189,10 @@ mod tests {
         };
         let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        assert!(first.contains('✘'), "expected cross icon for cancelled, got: {first}");
+        assert!(
+            first.contains('✘'),
+            "expected cross icon for cancelled, got: {first}"
+        );
     }
 
     #[test]
@@ -3197,16 +3225,20 @@ mod tests {
         let mut app = create_test_app();
         app.hunt.quarry = Some("Scan nested git repositories".to_string());
 
-
         // Simulate PauseCommand handler saving + clearing the quarry:
         app.paused_quarry = app.hunt.quarry.clone();
         app.hunt.quarry = None;
         app.paused = true;
 
-        assert_eq!(app.paused_quarry.as_deref(), Some("Scan nested git repositories"),
-            "paused_quarry must save the original goal");
-        assert!(app.hunt.quarry.is_none(),
-            "hunt.quarry must be None so goal system doesn't prompt model to resolve a pause goal");
+        assert_eq!(
+            app.paused_quarry.as_deref(),
+            Some("Scan nested git repositories"),
+            "paused_quarry must save the original goal"
+        );
+        assert!(
+            app.hunt.quarry.is_none(),
+            "hunt.quarry must be None so goal system doesn't prompt model to resolve a pause goal"
+        );
         assert!(app.paused, "app.paused must be true");
     }
 
@@ -3224,13 +3256,19 @@ mod tests {
             // quarry is NOT cleared — sidebar shows completed goal
         }
 
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
-            "quarry must persist after completion so WorkBench shows the goal");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "quarry must persist after completion so WorkBench shows the goal"
+        );
         assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunted);
         let summary = sidebar_work_summary(&mut app);
         assert!(summary.goal_completed, "completed flag must be true");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan repos"),
-            "WorkBench must show the completed goal text");
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan repos"),
+            "WorkBench must show the completed goal text"
+        );
     }
 
     #[test]
@@ -3257,15 +3295,22 @@ mod tests {
         app.active_allowed_tools = None;
 
         // Quarry is kept visible for WorkBench display
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repositories"),
-            "quarry must persist on cancel so WorkBench shows the cancelled goal");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repositories"),
+            "quarry must persist on cancel so WorkBench shows the cancelled goal"
+        );
         // Simulate dispatch_user_message clearing on next user message:
         app.hunt.quarry = None;
-        assert!(app.hunt.quarry.is_none(),
-            "quarry cleared in dispatch_user_message when user sends next message");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry cleared in dispatch_user_message when user sends next message"
+        );
         assert_eq!(app.hunt.verdict, crate::tui::app::HuntVerdict::Hunting);
-        assert!(app.active_allowed_tools.is_none(),
-            "tool restriction must be cleared on cancel");
+        assert!(
+            app.active_allowed_tools.is_none(),
+            "tool restriction must be cleared on cancel"
+        );
     }
 
     #[test]
@@ -3290,7 +3335,11 @@ mod tests {
 
         let summary = sidebar_work_summary(&mut app);
         assert_eq!(summary.goal_objective.as_deref(), Some("new task"));
-        assert!(summary.pause_indicator.is_none(), "new command must have no pause indicator, got: {:?}", summary.pause_indicator);
+        assert!(
+            summary.pause_indicator.is_none(),
+            "new command must have no pause indicator, got: {:?}",
+            summary.pause_indicator
+        );
     }
 
     // ── Full lifecycle workflow tests ───────────────────────────────
@@ -3308,8 +3357,11 @@ mod tests {
         let summary = sidebar_work_summary(&mut app);
         assert!(!summary.goal_completed, "command is still running");
         assert!(summary.pause_indicator.is_none(), "not paused yet");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "goal must show original description");
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "goal must show original description"
+        );
 
         // 2. User presses ESC — pause
         app.paused_quarry = app.hunt.quarry.clone();
@@ -3320,12 +3372,18 @@ mod tests {
 
         // → WorkBench should show "⏸ (Paused)"
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
-            "must show paused after ESC");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "must show paused after ESC"
+        );
         // quarry is cleared for system prompt, but paused_quarry keeps
         // the goal visible in the WorkBench (with ⏸ icon).
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "WorkBench must show the goal even when paused (from paused_quarry)");
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "WorkBench must show the goal even when paused (from paused_quarry)"
+        );
 
         // 3. User types "continue" — restore quarry, unpause
         app.hunt.quarry = app.paused_quarry.take();
@@ -3336,9 +3394,15 @@ mod tests {
         // → WorkBench should show "▶" play icon with original goal
         let summary = sidebar_work_summary(&mut app);
         assert!(!summary.goal_completed, "continue -> still running");
-        assert!(summary.pause_indicator.is_none(), "pause indicator must be gone after resume");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "original goal must be restored on continue");
+        assert!(
+            summary.pause_indicator.is_none(),
+            "pause indicator must be gone after resume"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "original goal must be restored on continue"
+        );
 
         // 4. Command completes successfully
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
@@ -3348,9 +3412,14 @@ mod tests {
         // → WorkBench should show "✓" green checkmark
         let summary = sidebar_work_summary(&mut app);
         assert!(summary.goal_completed, "must be marked completed");
-        assert!(summary.pause_indicator.is_none(), "no pause indicator when completed");
-        assert!(app.hunt.quarry.is_none(),
-            "quarry cleared so model is not prompted to continue");
+        assert!(
+            summary.pause_indicator.is_none(),
+            "no pause indicator when completed"
+        );
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry cleared so model is not prompted to continue"
+        );
     }
 
     #[test]
@@ -3382,11 +3451,20 @@ mod tests {
 
         // → WorkBench should show "✘ (Cancelled)" with the original goal
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.pause_indicator.as_deref(), Some("(Cancelled)"),
-            "must show cancelled indicator");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "workbench must show the original goal even when cancelled");
-        assert!(app.paused_quarry.is_none(), "paused_quarry cleared on cancel");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Cancelled)"),
+            "must show cancelled indicator"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "workbench must show the original goal even when cancelled"
+        );
+        assert!(
+            app.paused_quarry.is_none(),
+            "paused_quarry cleared on cancel"
+        );
 
         // 4. User starts a fresh slash command
         app.paused_cancelled = false;
@@ -3394,9 +3472,15 @@ mod tests {
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
 
         let summary = sidebar_work_summary(&mut app);
-        assert!(summary.pause_indicator.is_none(), "new command must have no pause indicator");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Deploy to staging"),
-            "new command's goal must be shown");
+        assert!(
+            summary.pause_indicator.is_none(),
+            "new command must have no pause indicator"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Deploy to staging"),
+            "new command's goal must be shown"
+        );
     }
 
     #[test]
@@ -3406,7 +3490,7 @@ mod tests {
         // This prevents the model from being prompted to continue the old command.
         // The paused_quarry is preserved for WorkBench display.
         let mut app = create_test_app();
-        app.hunt.quarry = None;          // set by PauseCommand handler
+        app.hunt.quarry = None; // set by PauseCommand handler
         app.paused_quarry = Some("Scan repos".to_string());
         app.paused = true;
 
@@ -3416,8 +3500,15 @@ mod tests {
         app.pausable = false;
         // app.hunt.quarry stays None — NOT restored
 
-        assert!(app.hunt.quarry.is_none(), "quarry must stay None for non-continue: system prompt has no goal");
-        assert_eq!(app.paused_quarry.as_deref(), Some("Scan repos"), "paused_quarry preserved for WorkBench");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry must stay None for non-continue: system prompt has no goal"
+        );
+        assert_eq!(
+            app.paused_quarry.as_deref(),
+            Some("Scan repos"),
+            "paused_quarry preserved for WorkBench"
+        );
     }
 
     /// Simulate what dispatch_user_message does when processing a message
@@ -3428,7 +3519,8 @@ mod tests {
         // pause logic only runs when the app is actually paused.
         if app.paused {
             let trimmed = message.trim().to_lowercase();
-            if trimmed == "continue" || trimmed == "resume"
+            if trimmed == "continue"
+                || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
                 || trimmed.contains(" continue ")
@@ -3455,7 +3547,8 @@ mod tests {
         // paused, as long as paused_quarry is still set.
         if app.paused_quarry.is_some() {
             let trimmed = message.trim().to_lowercase();
-            if trimmed == "continue" || trimmed == "resume"
+            if trimmed == "continue"
+                || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
                 || trimmed.contains(" continue ")
@@ -3488,27 +3581,44 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "how are you?");
 
         // ASSERT: system prompt has NO goal (hunt.quarry is None)
-        assert!(app.hunt.quarry.is_none(),
-            "FAIL: system prompt will include the paused goal -> model continues it");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "FAIL: system prompt will include the paused goal -> model continues it"
+        );
 
         // ASSERT: WorkBench still shows the paused command (paused_quarry preserved)
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
-            "FAIL: WorkBench went blank -> user forgot they have a paused command");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "FAIL: WorkBench lost the paused command");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "FAIL: WorkBench went blank -> user forgot they have a paused command"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "FAIL: WorkBench lost the paused command"
+        );
 
         // 4. Type "resume the paused command" -- through real dispatch simulation
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
         // ASSERT: quarry restored, WorkBench shows running command
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repos"),
-            "FAIL: resume did not restore the quarry");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "FAIL: resume did not restore the quarry"
+        );
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.pause_indicator.as_deref(), None,
-            "FAIL: pause indicator still visible after resume");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "FAIL: WorkBench did not recover after resume");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            None,
+            "FAIL: pause indicator still visible after resume"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "FAIL: WorkBench did not recover after resume"
+        );
     }
 
     #[test]
@@ -3523,13 +3633,22 @@ mod tests {
         // Type "continue" -- through real dispatch simulation
         simulate_dispatch_non_continue(&mut app, "continue");
 
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repos"),
-            "FAIL: continue did not restore quarry");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "FAIL: continue did not restore quarry"
+        );
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.pause_indicator.as_deref(), None,
-            "FAIL: pause indicator still visible after continue");
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "FAIL: WorkBench did not show running goal after continue");
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            None,
+            "FAIL: pause indicator still visible after continue"
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "FAIL: WorkBench did not show running goal after continue"
+        );
     }
 
     #[test]
@@ -3544,8 +3663,11 @@ mod tests {
         // "resume the paused command" should trigger starts_with("resume ")
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Build deploy"),
-            "FAIL: 'resume the paused command' did not trigger restore");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Build deploy"),
+            "FAIL: 'resume the paused command' did not trigger restore"
+        );
     }
 
     #[test]
@@ -3559,8 +3681,11 @@ mod tests {
 
         // "resume"
         simulate_dispatch_non_continue(&mut app, "resume");
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
-            "resume should restore quarry");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "resume should restore quarry"
+        );
 
         // Now paused_quarry is consumed, paused is false.
         // TurnStarted clears paused_cancelled and pausable.
@@ -3571,8 +3696,11 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "wait no");
 
         // Quarry should still be "Scan repos" (no longer paused to unpause)
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
-            "FAIL: normal message after resume should not clear the active goal");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "FAIL: normal message after resume should not clear the active goal"
+        );
     }
 
     #[test]
@@ -3605,13 +3733,18 @@ mod tests {
 
         // SYSTEM PROMPT must NOT contain the old goal
         // (verified by hunt.quarry being None)
-        assert!(app.hunt.quarry.is_none(),
-            "FAIL: system prompt has the old goal -> model sees it and continues");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "FAIL: system prompt has the old goal -> model sees it and continues"
+        );
 
         // WorkBench should show the paused command for user awareness
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repositories"),
-            "WorkBench must remind user of the paused command");
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repositories"),
+            "WorkBench must remind user of the paused command"
+        );
 
         // 4. Now simulate what happens AFTER the model responds to "how are you?":
         //    The engine has finished processing and the turn completes.
@@ -3620,10 +3753,15 @@ mod tests {
         //
         //    We verify by checking: hunt.quarry is still None,
         //    paused_quarry is still set, and no active goal exists.
-        assert!(app.hunt.quarry.is_none(),
-            "FAIL after model response: goal re-appeared -> model will continue paused command");
-        assert_eq!(app.paused_quarry.as_deref(), Some("Scan nested git repositories"),
-            "paused_quarry must be preserved for later manual resume");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "FAIL after model response: goal re-appeared -> model will continue paused command"
+        );
+        assert_eq!(
+            app.paused_quarry.as_deref(),
+            Some("Scan nested git repositories"),
+            "paused_quarry must be preserved for later manual resume"
+        );
 
         // If this test fails, it means a code change RE-ACTIVATED the
         // paused command's goal, causing the model to resume it unprompted.
@@ -3642,9 +3780,14 @@ mod tests {
         app.paused = true;
 
         // Simulate the exact non-continue branch from dispatch_user_message:
-        let paused_name = app.paused_quarry.as_deref()
-            .map(|q| q.split(|c: char| c == '\n' || c == '\r')
-                .next().unwrap_or(q))
+        let paused_name = app
+            .paused_quarry
+            .as_deref()
+            .map(|q| {
+                q.split(|c: char| c == '\n' || c == '\r')
+                    .next()
+                    .unwrap_or(q)
+            })
             .unwrap_or("the previous command");
         msg.push_str(&format!(
             "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"
@@ -3652,10 +3795,14 @@ mod tests {
         app.paused = false;
         app.hunt.quarry = None;
 
-        assert!(msg.contains("user paused"),
-            "FAIL: message must contain cancellation notice so model does not continue paused command");
-        assert!(msg.contains("Scan nested git repositories"),
-            "FAIL: notice must name the paused command so model knows what to avoid");
+        assert!(
+            msg.contains("user paused"),
+            "FAIL: message must contain cancellation notice so model does not continue paused command"
+        );
+        assert!(
+            msg.contains("Scan nested git repositories"),
+            "FAIL: notice must name the paused command so model knows what to avoid"
+        );
     }
 
     #[test]
@@ -3673,12 +3820,20 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "how are you?");
 
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.goal_objective.as_deref(), Some("Deploy to staging"),
-            "FAIL: WorkBench must show the paused command via paused_quarry fallback");
-        assert_eq!(summary.pause_indicator.as_deref(), Some("(Paused)"),
-            "FAIL: WorkBench must show (Paused) indicator");
-        assert!(app.hunt.quarry.is_none(),
-            "FAIL: system prompt must have no goal (hunt.quarry must be None)");
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Deploy to staging"),
+            "FAIL: WorkBench must show the paused command via paused_quarry fallback"
+        );
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "FAIL: WorkBench must show (Paused) indicator"
+        );
+        assert!(
+            app.hunt.quarry.is_none(),
+            "FAIL: system prompt must have no goal (hunt.quarry must be None)"
+        );
     }
 
     #[test]
@@ -3695,24 +3850,24 @@ mod tests {
         simulate_dispatch_non_continue(&mut app, "how are you?");
 
         let summary = sidebar_work_summary(&mut app);
-        let lines = work_panel_lines(
-            &summary,
-            80,
-            10,
-            PaletteMode::Dark,
-            &palette::UI_THEME,
-        );
+        let lines = work_panel_lines(&summary, 80, 10, PaletteMode::Dark, &palette::UI_THEME);
 
         // If the goal_objective or pause_indicator is somehow lost in the
         // render pipeline, lines will be empty or not contain the expected
         // text. This catches the "WorkBench went blank" bug directly.
-        assert!(!lines.is_empty(),
-            "FAIL: rendered lines are empty — WorkBench went blank");
+        assert!(
+            !lines.is_empty(),
+            "FAIL: rendered lines are empty — WorkBench went blank"
+        );
         let first = lines.first().map(|l| l.to_string()).unwrap_or_default();
-        assert!(first.contains('⏸'),
-            "FAIL: rendered line missing pause icon, got: {first}");
-        assert!(first.contains("Deploy to staging"),
-            "FAIL: rendered line missing goal text, got: {first}");
+        assert!(
+            first.contains('⏸'),
+            "FAIL: rendered line missing pause icon, got: {first}"
+        );
+        assert!(
+            first.contains("Deploy to staging"),
+            "FAIL: rendered line missing goal text, got: {first}"
+        );
     }
 
     #[test]
@@ -3743,10 +3898,16 @@ mod tests {
 
         // The icon should now be ▶ (play), NOT ⏳/⏸
         let summary = sidebar_work_summary(&mut app);
-        assert!(summary.pause_indicator.is_none(),
-            "FAIL: resume left pause_indicator={:?} — icon stuck on pause", summary.pause_indicator);
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan repos"),
-            "goal must be restored on resume");
+        assert!(
+            summary.pause_indicator.is_none(),
+            "FAIL: resume left pause_indicator={:?} — icon stuck on pause",
+            summary.pause_indicator
+        );
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan repos"),
+            "goal must be restored on resume"
+        );
     }
 
     #[test]
@@ -3758,14 +3919,15 @@ mod tests {
         // path to take (Immediate vs Steer vs Queue).
         let mut app = create_test_app();
         app.paused_quarry = Some("Scan nested git repos".to_string());
-        app.paused = false;             // unpaused state after "how are you?"
-        app.is_loading = true;          // model still processing — would go Steer
+        app.paused = false; // unpaused state after "how are you?"
+        app.is_loading = true; // model still processing — would go Steer
         app.hunt.quarry = None;
 
         // This runs the same interception as submit_or_steer_message:
         if app.paused_quarry.is_some() {
             let trimmed = "resume the paused command".trim().to_lowercase();
-            if trimmed == "continue" || trimmed == "resume"
+            if trimmed == "continue"
+                || trimmed == "resume"
                 || trimmed.starts_with("continue ")
                 || trimmed.starts_with("resume ")
                 || trimmed.contains(" continue ")
@@ -3777,10 +3939,15 @@ mod tests {
             }
         }
 
-        assert_eq!(app.paused_quarry, None,
-            "paused_quarry must be consumed regardless of dispatch path");
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan nested git repos"),
-            "quarry must be restored on resume");
+        assert_eq!(
+            app.paused_quarry, None,
+            "paused_quarry must be consumed regardless of dispatch path"
+        );
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "quarry must be restored on resume"
+        );
 
         // After interception, even if command completes, the sidebar
         // should show the resumed goal, not the pause icon
@@ -3789,13 +3956,20 @@ mod tests {
         app.is_loading = false;
 
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(summary.goal_objective.as_deref(), Some("Scan nested git repos"),
-            "WorkBench should show completed goal");
-        assert!(summary.pause_indicator.is_none(),
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "WorkBench should show completed goal"
+        );
+        assert!(
+            summary.pause_indicator.is_none(),
             "pause_indicator must not show after quarry consumed — was {:?}",
-            summary.pause_indicator);
-        assert!(summary.goal_completed,
-            "completed command must show checkmark");
+            summary.pause_indicator
+        );
+        assert!(
+            summary.goal_completed,
+            "completed command must show checkmark"
+        );
     }
 
     #[test]
@@ -3804,9 +3978,15 @@ mod tests {
         app.paused_quarry = Some("Scan repos".to_string());
         app.hunt.quarry = None;
 
-        simulate_dispatch_non_continue(&mut app, "can you please continue the paused slash command");
+        simulate_dispatch_non_continue(
+            &mut app,
+            "can you please continue the paused slash command",
+        );
 
-        assert_eq!(app.hunt.quarry.as_deref(), Some("Scan repos"),
-            "FAIL: 'can you please continue...' did not trigger resume (contains ' continue ')");
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "FAIL: 'can you please continue...' did not trigger resume (contains ' continue ')"
+        );
     }
 }
