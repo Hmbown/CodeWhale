@@ -13,13 +13,14 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
-# `--provider siliconflow`, `--provider siliconflow-CN`, `/provider arcee`, `/provider moonshot`, `/provider sglang`,
-# `/provider vllm`, `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `--provider volcengine`, `--provider openrouter`, `--provider xiaomi-mimo`,
+# `--provider fireworks`, `--provider siliconflow`, `--provider siliconflow-CN`,
+# `/provider arcee`, `/provider moonshot`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`, `/provider huggingface`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -238,6 +239,7 @@ max_subagents = 10 # optional (1-20)
 #   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL, VOLCENGINE_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
 #   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
+#                Token Plan keys (`tp-...`) default to https://token-plan-sgp.xiaomimimo.com/v1.
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
@@ -246,12 +248,21 @@ max_subagents = 10 # optional (1-20)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL, HUGGINGFACE_MODEL
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
 # set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
 # For generic OpenAI-compatible gateways, use `provider = "openai"` and the
 # [providers.openai] table below. Keep provider/api_key/base_url in user config
 # or environment variables; project overlays are not allowed to set them.
+#
+# Provider is the route/account/endpoint; model is the ID on that route.
+# Common DeepSeek routes:
+#   provider = "deepseek"     model = "deepseek-v4-pro"
+#   provider = "nvidia-nim"   model = "deepseek-ai/deepseek-v4-pro"
+#   provider = "openrouter"   model = "deepseek/deepseek-v4-pro"
+#   provider = "fireworks"    model = "accounts/fireworks/models/deepseek-v4-pro"
+#   provider = "siliconflow"  model = "deepseek-ai/DeepSeek-V4-Pro"
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
@@ -262,6 +273,7 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://your-provider.example/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
+# path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
 [providers.nvidia_nim]
@@ -313,7 +325,8 @@ max_subagents = 10 # optional (1-20)
 # Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
 [providers.xiaomi_mimo]
 # api_key = "YOUR_XIAOMI_KEY"
-# base_url = "https://api.xiaomimimo.com/v1"
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
+# # base_url = "https://api.xiaomimimo.com/v1"           # Pay-as-you-go / sk- keys
 # model = "mimo-v2.5-pro"              # chat/reasoning
 # Chat model IDs: mimo-v2.5-pro, mimo-v2.5
 # TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
@@ -370,6 +383,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+
+# Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
+[providers.huggingface]
+# api_key = "YOUR_HF_TOKEN"
+# base_url = "https://router.huggingface.co/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
@@ -496,7 +515,7 @@ exec_policy = true
 # Xiaomi MiMo image understanding can be configured through the same tool:
 # model = "mimo-v2.5"
 # api_key = "YOUR_XIAOMI_KEY"
-# base_url = "https://api.xiaomimimo.com/v1"
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration

@@ -681,7 +681,7 @@ impl Secrets {
 /// | `novita` | `NOVITA_API_KEY` |
 /// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
 /// | `fireworks` | `FIREWORKS_API_KEY` |
-/// | `siliconflow` | `SILICONFLOW_API_KEY` |
+/// | `siliconflow` / `siliconflow-cn` | `SILICONFLOW_API_KEY` |
 /// | `arcee` / `arcee-ai` | `ARCEE_API_KEY` |
 /// | `moonshot` / `kimi` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
 /// | `sglang` | `SGLANG_API_KEY` |
@@ -710,7 +710,8 @@ pub fn env_for(name: &str) -> Option<String> {
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
         }
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
-        "siliconflow" | "silicon-flow" | "silicon_flow" => &["SILICONFLOW_API_KEY"],
+        "siliconflow" | "silicon-flow" | "silicon_flow" | "siliconflow-cn" | "siliconflow_cn"
+        | "silicon-flow-cn" | "silicon_flow_cn" | "siliconflow-china" => &["SILICONFLOW_API_KEY"],
         "arcee" | "arcee-ai" | "arcee_ai" => &["ARCEE_API_KEY"],
         "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
@@ -1144,6 +1145,8 @@ mod tests {
         assert_eq!(env_for("siliconflow").as_deref(), Some("sf-key"));
         assert_eq!(env_for("silicon-flow").as_deref(), Some("sf-key"));
         assert_eq!(env_for("silicon_flow").as_deref(), Some("sf-key"));
+        assert_eq!(env_for("siliconflow-cn").as_deref(), Some("sf-key"));
+        assert_eq!(env_for("silicon_flow_cn").as_deref(), Some("sf-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("SILICONFLOW_API_KEY") };
     }

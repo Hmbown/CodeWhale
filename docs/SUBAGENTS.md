@@ -86,10 +86,11 @@ The model can spell each role multiple ways:
 |---------------|------------------------------------------------------------------|
 | `general`     | `worker`, `default`, `general-purpose`                           |
 | `explore`     | `explorer`, `exploration`                                        |
-| `plan`        | `planning`, `awaiter`                                            |
-| `review`      | `reviewer`, `code-review`                                        |
+| `plan`        | `planning`, `planner`, `awaiter`                                 |
+| `review`      | `reviewer`, `code-review`, `code_review`                         |
 | `implementer` | `implement`, `implementation`, `builder`                         |
 | `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
+| `tool_agent`  | `tool-agent`, `toolagent`, `executor`, `execution`, `fin`        |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
 All matching is case-insensitive. Unknown values produce a typed
@@ -126,6 +127,22 @@ api_timeout_secs = 900  # 15 minutes; clamped to 1..=1800
 
 Values are clamped to `1..=1800`. `0` and `unset` keep the legacy
 `120` second default, so existing installs see no behavior change.
+
+## Stale-agent heartbeat (#2614)
+
+Running agents also track manager-visible progress. If a child stops emitting
+progress for the heartbeat window, the manager auto-cancels it, releases its
+sub-agent slot, and keeps the cancelled record inspectable via `agent_eval` /
+`agent_list`. The default is 5 minutes:
+
+```toml
+[subagents]
+heartbeat_timeout_secs = 300  # clamped to 30..=3600
+```
+
+The effective heartbeat is kept at least 30 seconds above
+`api_timeout_secs`, so a configured long model request is not cancelled before
+its own request timeout can fire.
 
 ## Lifecycle
 

@@ -470,8 +470,9 @@ fn core_native_tools_stay_loaded_in_yolo_mode() {
         AppMode::Yolo,
         &always_load
     ));
+    // git_blame remains deferred (read-only git history beyond log/show/diff).
     assert!(should_default_defer_tool(
-        "git_show",
+        "git_blame",
         AppMode::Yolo,
         &always_load
     ));
@@ -505,6 +506,17 @@ fn non_yolo_mode_retains_default_defer_policy() {
         AppMode::Agent,
         &always_load
     ));
+    // #2654: read-only git history joins the active set.
+    assert!(!should_default_defer_tool(
+        "git_log",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "git_show",
+        AppMode::Agent,
+        &always_load
+    ));
     assert!(!should_default_defer_tool(
         "git_status",
         AppMode::Agent,
@@ -517,6 +529,19 @@ fn non_yolo_mode_retains_default_defer_policy() {
     ));
     assert!(!should_default_defer_tool(
         "agent_open",
+        AppMode::Agent,
+        &always_load
+    ));
+    // #2605: the fetch/close side of the sub-agent surface must also stay
+    // active so a first `agent_eval`/`agent_close` executes instead of
+    // hydrating its schema and forcing a double-invoke.
+    assert!(!should_default_defer_tool(
+        "agent_eval",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "agent_close",
         AppMode::Agent,
         &always_load
     ));
@@ -546,7 +571,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
         &always_load
     ));
     assert!(should_default_defer_tool(
-        "git_show",
+        "git_blame",
         AppMode::Agent,
         &always_load
     ));
@@ -749,9 +774,9 @@ fn agent_catalog_keeps_edit_file_loaded_when_fuzz_is_omitted() {
 
 #[test]
 fn tools_always_load_overrides_default_native_deferral() {
-    let always_load = HashSet::from(["git_show".to_string()]);
+    let always_load = HashSet::from(["git_blame".to_string()]);
     assert!(!should_default_defer_tool(
-        "git_show",
+        "git_blame",
         AppMode::Agent,
         &always_load
     ));
@@ -1022,6 +1047,68 @@ fn deferred_tool_preflight_loads_edit_schema_without_executing_bad_aliases() {
     assert!(result.content.contains("replace: string required"));
     assert!(result.content.contains("old_string -> search"));
     assert!(result.content.contains("new_string -> replace"));
+    assert_eq!(
+        result.metadata.as_ref().unwrap()["deferred_tool_loaded"],
+        json!(true)
+    );
+}
+
+#[test]
+fn deferred_tool_preflight_guides_rlm_open_misnamed_source_fields() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let always_load = HashSet::new();
+    let mut catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+        &always_load,
+    );
+    catalog
+        .iter_mut()
+        .find(|tool| tool.name == "rlm_open")
+        .expect("rlm_open registered")
+        .defer_loading = Some(true);
+    let mut active = initial_active_tools(&catalog);
+    assert!(!active.contains("rlm_open"));
+
+    let result = preflight_requested_deferred_tool(
+        "rlm_open",
+        &json!({
+            "name": "active_prompt",
+            "prompt": "inspect this",
+            "path": "src/lib.rs"
+        }),
+        &catalog,
+        &mut active,
+    )
+    .expect("deferred rlm_open should preflight");
+
+    assert!(active.contains("rlm_open"));
+    assert!(result.success);
+    assert!(result.content.contains("Tool `rlm_open` was deferred"));
+    assert!(result.content.contains("The tool was not executed"));
+    assert!(result.content.contains("session_object: string"));
+    assert!(
+        result.content.contains(
+            "prompt -> file_path (local file), content (inline text), url, or session_object"
+        ),
+        "prompt correction includes session_object: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains(
+            "path -> file_path (local file), content (inline text), url, or session_object"
+        ),
+        "path correction includes session_object: {}",
+        result.content
+    );
     assert_eq!(
         result.metadata.as_ref().unwrap()["deferred_tool_loaded"],
         json!(true)
@@ -3159,9 +3246,17 @@ fn missing_shell_tool_error_message_names_allow_shell_gate() {
         assert!(message.contains("not available in the current tool catalog"));
         assert!(message.contains("allow_shell"), "{tool_name}: {message}");
         assert!(
-            message.contains("trusted workspaces"),
+            message.contains("/config allow_shell true"),
             "{tool_name}: {message}"
         );
+        assert!(message.contains("--save"), "{tool_name}: {message}");
+        assert!(message.contains("Agent mode"), "{tool_name}: {message}");
+        assert!(
+            message.contains("approval gating"),
+            "{tool_name}: {message}"
+        );
+        assert!(!message.contains("YOLO"), "{tool_name}: {message}");
+        assert!(!message.contains("auto-approve"), "{tool_name}: {message}");
         assert!(
             message.contains(TOOL_SEARCH_BM25_NAME),
             "{tool_name}: {message}"
@@ -3178,7 +3273,11 @@ fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
     assert!(message.contains("Did you mean:"));
     assert!(message.contains("exec"));
     assert!(message.contains("allow_shell"));
-    assert!(message.contains("trusted workspaces"));
+    assert!(message.contains("/config allow_shell true"));
+    assert!(message.contains("--save"));
+    assert!(message.contains("Agent mode"));
+    assert!(!message.contains("YOLO"));
+    assert!(!message.contains("auto-approve"));
     assert!(message.contains(TOOL_SEARCH_BM25_NAME));
 }
 

@@ -8,6 +8,9 @@ It complements the local install path. If you only want to use `codewhale` on a
 laptop, start with the README quickstart. If you want "CodeWhale as a remote
 workbench I can control from my phone", start here.
 
+For US-based users who do not need Tencent/CNB/Feishu, start with
+`docs/REMOTE_VM_US.md` instead.
+
 ## Default Stack
 
 ```text
@@ -18,8 +21,8 @@ GitHub main/tags
        /opt/whalebro/codewhale
        /opt/whalebro/worktrees
        codewhale-runtime.service on 127.0.0.1:7878
-       codewhale-feishu-bridge.service
-  -> Feishu/Lark phone DM
+       codewhale-feishu-bridge.service or codewhale-telegram-bridge.service
+  -> Feishu/Lark or Telegram phone DM
 
 EdgeOne is optional:
   public HTTPS domain -> EdgeOne -> Caddy/Nginx on Lighthouse
@@ -33,8 +36,10 @@ EdgeOne is optional:
   `deploy/tencent-lighthouse/cnb/`.
 - **Lighthouse** is the private always-on host. It owns `/opt/whalebro`,
   systemd, Rust/Node installs, and the `codewhale serve --http` runtime.
-- **Feishu/Lark** is the first phone UI. The bridge uses long-connection mode,
-  so the first setup does not need a public webhook URL.
+- **Telegram** is the simplest phone MVP. The bridge uses long polling, so the
+  first setup does not need a public webhook URL.
+- **Feishu/Lark** is the Tencent-native enterprise phone UI. The bridge uses
+  long-connection mode, so the first setup does not need a public webhook URL.
 - **EdgeOne** is the public edge only when you intentionally expose a web
   surface such as docs, a status page, or a future webhook endpoint. Do not put
   the runtime API behind EdgeOne.
@@ -45,8 +50,8 @@ EdgeOne is optional:
 2. Clone from CNB by default when the branch or tag exists there:
 
    ```bash
-   export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
-   git ls-remote "$DEEPSEEK_REPO_URL" refs/heads/main
+   export CODEWHALE_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
+   git ls-remote "$CODEWHALE_REPO_URL" refs/heads/main
    ```
 
    Tencent setup branches matching `work/v*-feishu-*` or
@@ -56,19 +61,20 @@ EdgeOne is optional:
 3. Bootstrap `/opt/whalebro` on the server:
 
    ```bash
-   export DEEPSEEK_BRANCH=main
-   git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/codewhale
+   export CODEWHALE_BRANCH=main
+   git clone --branch "$CODEWHALE_BRANCH" "$CODEWHALE_REPO_URL" /tmp/codewhale
    cd /tmp/codewhale
-   sudo DEEPSEEK_REPO_URL="$DEEPSEEK_REPO_URL" \
-     DEEPSEEK_REPO_BRANCH="$DEEPSEEK_BRANCH" \
+   sudo CODEWHALE_REPO_URL="$CODEWHALE_REPO_URL" \
+     CODEWHALE_REPO_BRANCH="$CODEWHALE_BRANCH" \
      bash scripts/tencent-lighthouse/bootstrap-ubuntu.sh
    ```
 
 4. Install Rust for the `codewhale` user, build both binaries, and install the
    systemd units using `docs/TENCENT_LIGHTHOUSE_HK.md`.
-5. Configure a Feishu/Lark self-built app, fill
-   `/etc/deepseek/feishu-bridge.env`, run the validator, then run the VPS
-   doctor.
+5. Configure either a Telegram bot (`CODEWHALE_BRIDGE=telegram` and
+   `/etc/codewhale/telegram-bridge.env`) or a Feishu/Lark self-built app
+   (`CODEWHALE_BRIDGE=feishu` and `/etc/codewhale/feishu-bridge.env`), run the
+   validator, then run the VPS doctor.
 6. From your phone DM, validate `/status`, a harmless prompt, `/interrupt`,
    `/threads`, `/resume`, approval allow/deny, service restart, and reboot
    persistence.
@@ -107,8 +113,8 @@ Keep these rules:
 
 - `codewhale serve --http` stays bound to `127.0.0.1`.
 - `/v1/*` runtime endpoints are never public.
-- `DEEPSEEK_RUNTIME_TOKEN` never leaves the server env files.
-- Feishu/Lark group control stays off until a specific group allowlist is set.
+- `CODEWHALE_RUNTIME_TOKEN` never leaves the server env files.
+- Phone-bridge group control stays off until a specific group allowlist is set.
 - Auto-approval stays off for the phone bridge unless a maintainer explicitly
   accepts the risk.
 
@@ -122,8 +128,8 @@ Use this sequence when explaining codewhale to a new remote-first user:
    sandboxing.
 3. **Remote runtime:** `codewhale serve --http` is a localhost runtime API, not
    a public web app.
-4. **Phone bridge:** Feishu/Lark messages become runtime requests through an
-   allowlisted bridge.
+4. **Phone bridge:** Telegram or Feishu/Lark messages become runtime requests
+   through an allowlisted bridge.
 5. **CNB automation:** once manual setup is proven, CNB turns the setup into a
    repeatable deploy button.
 6. **EdgeOne edge:** add the public edge after you know exactly what public
@@ -133,5 +139,6 @@ Use this sequence when explaining codewhale to a new remote-first user:
 
 - CNB mirror details: `docs/CNB_MIRROR.md`
 - Lighthouse implementation runbook: `docs/TENCENT_LIGHTHOUSE_HK.md`
+- Telegram bridge: `integrations/telegram-bridge/README.md`
 - Feishu/Lark bridge: `integrations/feishu-bridge/README.md`
 - CNB templates: `deploy/tencent-lighthouse/cnb/`

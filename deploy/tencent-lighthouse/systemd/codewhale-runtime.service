@@ -8,14 +8,16 @@ Type=simple
 User=codewhale
 Group=codewhale
 WorkingDirectory=/opt/whalebro
-EnvironmentFile=/etc/deepseek/runtime.env
-ExecStart=/home/codewhale/.cargo/bin/codewhale serve --http --host 127.0.0.1 --port ${DEEPSEEK_RUNTIME_PORT} --workers ${DEEPSEEK_RUNTIME_WORKERS} --auth-token ${DEEPSEEK_RUNTIME_TOKEN}
+# Legacy /etc/deepseek is loaded first for old installs; /etc/codewhale wins.
+EnvironmentFile=-/etc/deepseek/runtime.env
+EnvironmentFile=-/etc/codewhale/runtime.env
+ExecStart=/bin/sh -lc 'exec /home/codewhale/.cargo/bin/codewhale serve --http --host 127.0.0.1 --port "${CODEWHALE_RUNTIME_PORT:-${DEEPSEEK_RUNTIME_PORT:-7878}}" --workers "${CODEWHALE_RUNTIME_WORKERS:-${DEEPSEEK_RUNTIME_WORKERS:-2}}" --auth-token "${CODEWHALE_RUNTIME_TOKEN:-${DEEPSEEK_RUNTIME_TOKEN}}"'
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/home/codewhale/.deepseek /opt/whalebro
+ReadWritePaths=/home/codewhale/.codewhale /home/codewhale/.deepseek /opt/whalebro
 
 [Install]
 WantedBy=multi-user.target

@@ -3,7 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
-use crate::config::Config;
+use crate::config::{ApiProvider, Config};
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
@@ -529,6 +529,7 @@ struct ConfigRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConfigSection {
+    Provider,
     Model,
     Permissions,
     Display,
@@ -541,6 +542,7 @@ enum ConfigSection {
 impl ConfigSection {
     fn label(self) -> &'static str {
         match self {
+            ConfigSection::Provider => "Provider",
             ConfigSection::Model => "Model",
             ConfigSection::Permissions => "Permissions",
             ConfigSection::Display => "Display",
@@ -593,6 +595,20 @@ impl ConfigView {
         let settings = Settings::load().unwrap_or_else(|_| Settings::default());
         let rows = vec![
             ConfigRow {
+                section: ConfigSection::Provider,
+                key: "provider".to_string(),
+                value: app.api_provider.as_str().to_string(),
+                editable: true,
+                scope: ConfigScope::Session,
+            },
+            ConfigRow {
+                section: ConfigSection::Provider,
+                key: config_base_url_row_key(app.api_provider).to_string(),
+                value: config_base_url_row_value(app),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
                 section: ConfigSection::Model,
                 key: "model".to_string(),
                 value: app.model.clone(),
@@ -622,15 +638,6 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             },
             ConfigRow {
-                section: ConfigSection::Model,
-                key: "base_url".to_string(),
-                value: Config::load(app.config_path.clone(), app.config_profile.as_deref())
-                    .map(|config| config.deepseek_base_url())
-                    .unwrap_or_else(|_| "(unavailable)".to_string()),
-                editable: true,
-                scope: ConfigScope::Saved,
-            },
-            ConfigRow {
                 section: ConfigSection::Permissions,
                 key: "approval_mode".to_string(),
                 value: app.approval_mode.label().to_string(),
@@ -641,6 +648,13 @@ impl ConfigView {
                 section: ConfigSection::Permissions,
                 key: "default_mode".to_string(),
                 value: settings.default_mode.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Permissions,
+                key: "allow_shell".to_string(),
+                value: app.allow_shell.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -1191,6 +1205,23 @@ impl ConfigView {
     }
 }
 
+fn config_base_url_row_key(provider: ApiProvider) -> &'static str {
+    if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+        "base_url"
+    } else {
+        "provider_url"
+    }
+}
+
+fn config_base_url_row_value(app: &App) -> String {
+    Config::load(app.config_path.clone(), app.config_profile.as_deref())
+        .map(|mut config| {
+            config.provider = Some(app.api_provider.as_str().to_string());
+            config.deepseek_base_url()
+        })
+        .unwrap_or_else(|_| "(unavailable)".to_string())
+}
+
 fn cost_currency_config_value(app: &App) -> String {
     match app.cost_currency {
         crate::pricing::CostCurrency::Usd => "usd",
@@ -1202,7 +1233,9 @@ fn cost_currency_config_value(app: &App) -> String {
 fn config_hint_for_key(key: &str) -> &'static str {
     match key {
         "model" => "deepseek-v4-pro | deepseek-v4-flash | deepseek-*",
+        "provider" => "deepseek | openrouter | xiaomi-mimo | fireworks | siliconflow | ...",
         "approval_mode" => "auto | suggest | never",
+        "allow_shell" => "true enables shell in Agent mode with approvals on the next turn",
         "auto_compact"
         | "calm_mode"
         | "low_motion"
@@ -1214,7 +1247,10 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
         "background_color" => "#RRGGBB | default",
-        "base_url" => "save user config; e.g. https://api.deepseek.com/beta or https://gateway/v1",
+        "base_url" => "global DeepSeek/root fallback; e.g. https://api.deepseek.com/beta",
+        "provider_url" => {
+            "current provider endpoint; Xiaomi: token-plan | pay-as-you-go | custom URL"
+        }
         "cost_currency" => "usd | cny",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
@@ -2184,7 +2220,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app
     }
 
     fn cost_currency_row_for_settings(
@@ -2320,6 +2358,7 @@ mod tests {
         assert_eq!(
             visible_section_labels(&view),
             vec![
+                ConfigSection::Provider.label(),
                 ConfigSection::Model.label(),
                 ConfigSection::Permissions.label(),
                 ConfigSection::Display.label(),
@@ -2340,10 +2379,12 @@ mod tests {
             .iter()
             .map(|row| row.key.as_str())
             .collect::<Vec<_>>();
+        assert!(keys.contains(&"provider"));
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"reasoning_effort"));
         assert!(keys.contains(&"base_url"));
         assert!(keys.contains(&"approval_mode"));
+        assert!(keys.contains(&"allow_shell"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
         assert!(keys.contains(&"background_color"));
@@ -2385,6 +2426,40 @@ mod tests {
             .find(|row| row.key == "base_url")
             .expect("base_url row missing");
         assert_eq!(row.value, "https://ui-config-view.local/v1");
+    }
+
+    #[test]
+    fn config_view_uses_provider_url_for_non_deepseek_provider() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "codewhale-provider-url-view-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let config_path = temp_root.join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+provider = "xiaomi-mimo"
+
+[providers.xiaomi_mimo]
+api_key = "tp-test-token-plan-key"
+base_url = "https://api.xiaomimimo.com/v1"
+"#,
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.config_path = Some(config_path.clone());
+        let view = ConfigView::new_for_app(&app);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "provider_url")
+            .expect("provider_url row missing");
+        assert_eq!(row.value, crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL);
+        assert!(!view.rows.iter().any(|row| row.key == "base_url"));
     }
 
     #[test]
@@ -2482,7 +2557,7 @@ mod tests {
         view.clear_filter();
         view.rows[0].value = "CAFÉ".to_string();
         type_filter(&mut view, "café");
-        assert_eq!(visible_row_keys(&view), vec!["model"]);
+        assert_eq!(visible_row_keys(&view), vec!["provider"]);
     }
 
     #[test]
@@ -2590,6 +2665,12 @@ mod tests {
     fn config_view_enter_and_ctrl_u_emit_config_updated() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
+
+        // Navigate to the "model" row (index 2, after provider and base_url)
+        for _ in 0..2 {
+            view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert_eq!(view.rows[view.selected].key, "model");
 
         let start = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(start, ViewAction::None));

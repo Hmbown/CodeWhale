@@ -35,9 +35,12 @@ pub fn init(app: &mut App) -> CommandResult {
     }
 }
 
-/// If `workspace` is inside a git repository, ensure `.codewhale/` and
-/// `.deepseek/` are listed in the nearest `.gitignore` so that snapshots,
-/// instructions, and other workspace-local state are not accidentally committed.
+/// If `workspace` is inside a git repository, ensure workspace-local CodeWhale
+/// state is listed in the nearest `.gitignore` so snapshots, auto-generated
+/// instructions, and other runtime state are not accidentally committed — while
+/// keeping the authored `.codewhale/constitution.json` repo authority policy
+/// committable (a directory exclude cannot be overridden, so `.codewhale/*` plus
+/// a negation is required).
 fn ensure_deepseek_gitignored(workspace: &Path) {
     // Only act if this workspace is a git repo.
     if !workspace.join(".git").exists() {
@@ -45,7 +48,11 @@ fn ensure_deepseek_gitignored(workspace: &Path) {
     }
 
     let gitignore = workspace.join(".gitignore");
-    let entries = [".codewhale/", ".deepseek/"];
+    let entries = [
+        "**/.codewhale/*",
+        "!**/.codewhale/constitution.json",
+        ".deepseek/",
+    ];
 
     // Read existing contents once.
     let existing = std::fs::read_to_string(&gitignore).unwrap_or_default();
@@ -109,7 +116,7 @@ fn generate_project_doc(workspace: &Path) -> String {
     doc.push_str("<!-- file patterns to avoid, and anything that helps a model navigate -->\n");
     doc.push_str("<!-- the codebase without reading every file. -->\n");
     doc.push('\n');
-    doc.push_str("- **CodeWhale reads this file as:** <!-- WHALE.md (CodeWhale-native) or AGENTS.md (compatible with other agents) -->\n");
+    doc.push_str("- **CodeWhale reads this file as:** AGENTS.md (canonical cross-agent project instructions). <!-- WHALE.md is deprecated; put CodeWhale-specific authority policy in .codewhale/constitution.json -->\n");
     doc.push_str(
         "- **Read-only surface:** <!-- Which directories can the agent read but not write? -->\n",
     );
@@ -394,6 +401,10 @@ version = "1.0.0"
 
         let content = std::fs::read_to_string(tmpdir.path().join(".gitignore")).unwrap();
         assert!(content.contains(".deepseek/"));
+        // .codewhale/ is ignored at any depth, but the committed
+        // constitution.json is kept.
+        assert!(content.contains("**/.codewhale/*"));
+        assert!(content.contains("!**/.codewhale/constitution.json"));
     }
 
     #[test]

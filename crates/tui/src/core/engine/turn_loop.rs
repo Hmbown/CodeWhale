@@ -79,7 +79,7 @@ impl Engine {
         const MAX_STREAM_RETRIES: u32 = 3;
         let mut stream_retry_attempts: u32 = 0;
 
-        loop {
+        'turn_loop: loop {
             if self.cancel_token.is_cancelled() {
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                 return (TurnOutcomeStatus::Interrupted, None);
@@ -1005,11 +1005,14 @@ impl Engine {
                     completions.push(c);
                 }
                 if completions.is_empty() {
-                    let running = {
-                        let mgr = self.subagent_manager.read().await;
-                        mgr.running_count()
-                    };
-                    if should_hold_turn_for_subagents(completions.len(), running) {
+                    loop {
+                        let running = {
+                            let mgr = self.subagent_manager.read().await;
+                            mgr.running_count()
+                        };
+                        if !should_hold_turn_for_subagents(completions.len(), running) {
+                            break;
+                        }
                         let _ = self
                             .tx_event
                             .send(Event::status(format!(
@@ -1032,6 +1035,7 @@ impl Engine {
                                 while let Ok(extra) = self.rx_subagent_completion.try_recv() {
                                     completions.push(extra);
                                 }
+                                break;
                             }
                             Some(steer) = self.rx_steer.recv() => {
                                 let trimmed = steer.trim().to_string();
@@ -1052,7 +1056,21 @@ impl Engine {
                                         .await;
                                 }
                                 turn.next_step();
-                                continue;
+                                continue 'turn_loop;
+                            }
+                            () = tokio::time::sleep(self.config.subagent_heartbeat_timeout) => {
+                                let auto_cancelled = {
+                                    let mut mgr = self.subagent_manager.write().await;
+                                    mgr.cleanup(std::time::Duration::from_secs(60 * 60))
+                                };
+                                if auto_cancelled > 0 {
+                                    let _ = self
+                                        .tx_event
+                                        .send(Event::status(format!(
+                                            "Auto-cancelled {auto_cancelled} stale sub-agent(s) after no progress"
+                                        )))
+                                        .await;
+                                }
                             }
                         }
                     }

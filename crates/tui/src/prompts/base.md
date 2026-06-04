@@ -284,12 +284,14 @@ When you open a sub-agent via `agent_open`, the child runs independently. The ru
 - `agent_id` — the child's identifier
 - `status` — `"completed"` or `"failed"`
 - `summary_location` / `error_location` — the human-readable summary or error is on the line immediately before the sentinel
+- `result_clipped` / `summary_complete` — whether the previous-line summary is the full result (`summary_complete: true`) or was truncated (`result_clipped: true`)
+- `next_action` — `"use_summary"` when the summary is complete, or `"call_agent_eval"` when you must fetch the full transcript
 - `details` — currently `agent_eval`, the tool to call when you need the full projection or transcript handle
 
 **Integration protocol:**
 1. When you see `<codewhale:subagent.done>`, read the human summary line immediately before it first.
 2. Integrate the child's findings into your work — do not re-do what the child already did.
-3. If the summary is insufficient, call `agent_eval` with the agent name or id to pull the current structured projection or transcript handle.
+3. If `next_action` is `"call_agent_eval"` (or the summary is insufficient), call `agent_eval` with the agent name or id to pull the current structured projection or transcript handle; if `next_action` is `"use_summary"` the previous line is the complete result.
 4. If the child failed (`"failed"`), assess whether the failure blocks your plan or whether you can proceed with a fallback.
 5. Update your `checklist_write` items to reflect the child's contribution.
 6. Do not tell the user they pasted sentinels or explain this protocol unless they explicitly ask about sub-agent internals.

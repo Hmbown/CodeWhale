@@ -39,6 +39,7 @@ enum ProviderArg {
     Sglang,
     Vllm,
     Ollama,
+    Huggingface,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -60,6 +61,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
+            ProviderArg::Huggingface => ProviderKind::Huggingface,
         }
     }
 }
@@ -133,7 +135,7 @@ enum Commands {
     Run(RunArgs),
     /// Run CodeWhale diagnostics.
     Doctor(TuiPassthroughArgs),
-    /// List live DeepSeek API models via the TUI binary.
+    /// List live provider API models via the TUI binary.
     Models(TuiPassthroughArgs),
     /// Generate speech audio with Xiaomi MiMo TTS models via the TUI binary.
     #[command(visible_alias = "tts")]
@@ -298,7 +300,13 @@ struct AuthArgs {
 #[derive(Debug, Subcommand)]
 enum AuthCommand {
     /// Show current provider and credential source state.
-    Status,
+    /// Without `--provider`, shows all known providers.
+    /// With `--provider`, shows detailed status for that provider.
+    Status {
+        /// Show status for a specific provider only.
+        #[arg(long, value_enum)]
+        provider: Option<ProviderArg>,
+    },
     /// Save an API key to the shared user config file. Reads from
     /// `--api-key`, `--api-key-stdin`, or prompts on stdin when
     /// neither is given. Does not echo the key.
@@ -744,17 +752,18 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
         ProviderKind::Siliconflow => "siliconflow",
-        ProviderKind::SiliconflowCN => "siliconflow-CN",
+        ProviderKind::SiliconflowCN => "siliconflow",
         ProviderKind::Arcee => "arcee",
         ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
+        ProviderKind::Huggingface => "huggingface",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 17] = [
+const PROVIDER_LIST: [ProviderKind; 18] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -772,6 +781,7 @@ const PROVIDER_LIST: [ProviderKind; 17] = [
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
+    ProviderKind::Huggingface,
 ];
 
 #[cfg(test)]
@@ -830,6 +840,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
+        ProviderKind::Huggingface => &["HUGGINGFACE_API_KEY", "HF_TOKEN"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
         ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
         ProviderKind::Volcengine => &[
@@ -895,8 +906,67 @@ fn clear_provider_api_key_from_keyring(secrets: &Secrets, provider: ProviderKind
     let _ = secrets.delete(provider_slot(provider));
 }
 
-fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
-    let provider = store.config.provider;
+fn auth_status_all_providers(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
+    let active_provider = store.config.provider;
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "active provider: {} (set via config or CODEWHALE_PROVIDER)",
+        active_provider.as_str()
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "{:<14} {:<8} {:<10} {:<8} {}",
+        "provider", "config", "keyring", "env", "status"
+    ));
+    lines.push("-".repeat(70));
+
+    for provider in PROVIDER_LIST {
+        let config_key = provider_config_api_key(store, provider);
+        let keyring_key = provider_keyring_api_key(secrets, provider);
+        let env_key = provider_env_value(provider);
+
+        let config_status = config_key.map(|_| "set").unwrap_or("-");
+        let keyring_status = keyring_key.as_ref().map(|_| "set").unwrap_or("-");
+        let env_status = env_key.as_ref().map(|_| "set").unwrap_or("-");
+
+        let source = if config_key.is_some() {
+            "config"
+        } else if keyring_key.is_some() {
+            "keyring"
+        } else if env_key.is_some() {
+            "env"
+        } else {
+            "unset"
+        };
+
+        let active_marker = if provider == active_provider {
+            " *"
+        } else {
+            ""
+        };
+
+        lines.push(format!(
+            "{:<14} {:<8} {:<10} {:<8} {}{}",
+            provider.as_str(),
+            config_status,
+            keyring_status,
+            env_status,
+            source,
+            active_marker
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push("* = active provider (from config or CODEWHALE_PROVIDER)".to_string());
+    lines.push("Run `codewhale auth status --provider <id>` for detailed info.".to_string());
+    lines
+}
+
+fn auth_status_lines_for_provider(
+    store: &ConfigStore,
+    secrets: &Secrets,
+    provider: ProviderKind,
+) -> Vec<String> {
     let config_key = provider_config_api_key(store, provider);
     let keyring_key = provider_keyring_api_key(secrets, provider);
     let env_key = provider_env_value(provider);
@@ -927,8 +997,17 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
         .map(|(_, value)| format!("set, last4: {}", last4_label(value)))
         .unwrap_or_else(|| "unset".to_string());
 
+    let is_active = provider == store.config.provider;
+    let active_marker = if is_active { " (active provider)" } else { "" };
+
+    let provider_cfg = store.config.providers.for_provider(provider);
+    let base_url = provider_cfg.base_url.as_deref().unwrap_or("(default)");
+    let model = provider_cfg.model.as_deref().unwrap_or("(default)");
+
     vec![
-        format!("provider: {}", provider.as_str()),
+        format!("provider: {}{}", provider.as_str(), active_marker),
+        format!("route: {}", base_url),
+        format!("model: {}", model),
         format!(
             "auth mode: {}",
             store.config.auth_mode.as_deref().unwrap_or("api_key")
@@ -975,9 +1054,19 @@ fn run_auth_command_with_secrets(
     secrets: &Secrets,
 ) -> Result<()> {
     match command {
-        AuthCommand::Status => {
-            for line in auth_status_lines(store, secrets) {
-                println!("{line}");
+        AuthCommand::Status { provider } => {
+            match provider {
+                Some(p) => {
+                    let provider: ProviderKind = p.into();
+                    for line in auth_status_lines_for_provider(store, secrets, provider) {
+                        println!("{line}");
+                    }
+                }
+                None => {
+                    for line in auth_status_all_providers(store, secrets) {
+                        println!("{line}");
+                    }
+                }
             }
             Ok(())
         }
@@ -1053,12 +1142,10 @@ fn run_auth_command_with_secrets(
         }
         AuthCommand::List => {
             println!("provider     config store env  active");
-            let active_provider = store.config.provider;
             for provider in PROVIDER_LIST {
                 let slot = provider_slot(provider);
                 let file = provider_config_set(store, provider);
-                let keyring = (provider == active_provider && !file)
-                    .then(|| provider_keyring_set(secrets, provider));
+                let keyring = (!file).then(|| provider_keyring_set(secrets, provider));
                 let env = provider_env_set(provider);
                 let active = if file {
                     "config"
@@ -2476,7 +2563,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_status_and_list_only_probe_active_provider_keyring() {
+    fn auth_status_scoped_probe_and_list_all_provider_keyrings() {
         use codewhale_secrets::{KeyringStore, SecretsError};
         use std::sync::{Arc, Mutex};
 
@@ -2514,14 +2601,29 @@ mod tests {
         let inner = Arc::new(RecordingStore::default());
         let secrets = Secrets::new(inner.clone());
 
-        run_auth_command_with_secrets(&mut store, AuthCommand::Status, &secrets)
-            .expect("status should succeed");
+        run_auth_command_with_secrets(
+            &mut store,
+            AuthCommand::Status {
+                provider: Some(ProviderArg::Deepseek),
+            },
+            &secrets,
+        )
+        .expect("status should succeed");
         run_auth_command_with_secrets(&mut store, AuthCommand::List, &secrets)
             .expect("list should succeed");
 
-        assert_eq!(
-            inner.gets.lock().unwrap().as_slice(),
-            ["deepseek", "deepseek"]
+        let probed = inner.gets.lock().unwrap();
+        // Scoped status probes only the requested provider.
+        assert_eq!(probed[0], "deepseek");
+        // List now probes all providers (not just active) to fix the
+        // stale keyring-only-for-active-provider bug.
+        assert!(probed.len() > 1, "list should probe all providers");
+        assert!(
+            PROVIDER_LIST
+                .iter()
+                .all(|p| probed.contains(&provider_slot(*p).to_string())),
+            "every known provider should be probed by auth list: {:?}",
+            *probed
         );
 
         let _ = std::fs::remove_file(path);
@@ -2549,7 +2651,8 @@ mod tests {
         inner.set("deepseek", "sk-keyring-2222").unwrap();
         let secrets = Secrets::new(inner);
 
-        let output = auth_status_lines(&store, &secrets).join("\n");
+        let output =
+            auth_status_lines_for_provider(&store, &secrets, ProviderKind::Deepseek).join("\n");
 
         assert!(output.contains("provider: deepseek"));
         assert!(output.contains("active source: config (last4: ...3333)"));
@@ -2561,6 +2664,74 @@ mod tests {
         assert!(!output.contains("sk-config-3333"));
         assert!(!output.contains("sk-keyring-2222"));
         assert!(!output.contains("sk-env-1111"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn auth_status_all_providers_lists_every_known_provider() {
+        use codewhale_secrets::{InMemoryKeyringStore, KeyringStore};
+        use std::sync::Arc;
+
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "deepseek-cli-auth-all-status-test-{}-{nanos}.toml",
+            std::process::id()
+        ));
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Deepseek;
+        store.config.providers.arcee.api_key = Some("sk-arcee-test1234".to_string());
+
+        let inner = Arc::new(InMemoryKeyringStore::new());
+        inner.set("openrouter", "sk-or-test5678").unwrap();
+        let secrets = Secrets::new(inner);
+
+        let output = auth_status_all_providers(&store, &secrets).join("\n");
+
+        // Should list all known providers
+        assert!(output.contains("deepseek"));
+        assert!(output.contains("arcee"));
+        assert!(output.contains("openrouter"));
+        assert!(output.contains("huggingface"));
+        assert!(output.contains("ollama"));
+
+        // Active provider should be marked
+        assert!(output.contains("deepseek") && output.contains("*"));
+
+        // Arcee should show config source
+        assert!(output.contains("config"));
+
+        // Should NOT leak raw keys
+        assert!(!output.contains("sk-arcee-test1234"));
+        assert!(!output.contains("sk-or-test5678"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn auth_status_scoped_provider_shows_detailed_info() {
+        use codewhale_secrets::InMemoryKeyringStore;
+        use std::sync::Arc;
+
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "deepseek-cli-auth-scoped-test-{}-{nanos}.toml",
+            std::process::id()
+        ));
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Deepseek;
+        store.config.providers.arcee.api_key = Some("sk-arcee-9999".to_string());
+
+        let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
+
+        let output =
+            auth_status_lines_for_provider(&store, &secrets, ProviderKind::Arcee).join("\n");
+
+        assert!(output.contains("provider: arcee"));
+        assert!(output.contains("active source: config (last4: ...9999)"));
+        assert!(output.contains("route:"));
+        assert!(output.contains("model:"));
+        assert!(!output.contains("sk-arcee-9999"));
 
         let _ = std::fs::remove_file(path);
     }

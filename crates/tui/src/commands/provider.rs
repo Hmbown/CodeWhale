@@ -30,7 +30,8 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, xiaomi-mimo, novita, fireworks, siliconflow, moonshot, sglang, vllm, or ollama."
+            "Unknown provider '{name}'. Expected: {}.",
+            ApiProvider::names_hint()
         ));
     };
 
@@ -273,6 +274,19 @@ mod tests {
         match result.action {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Siliconflow);
+                assert_eq!(model.as_deref(), Some("deepseek-v4-flash"));
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_siliconflow_cn_emits_action() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("siliconflow-CN flash"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::SiliconflowCn);
                 assert_eq!(model.as_deref(), Some("deepseek-v4-flash"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),

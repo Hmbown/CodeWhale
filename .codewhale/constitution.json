@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "authority": [
+    "current user request",
+    "live code and tests",
+    "GitHub issue/PR details",
+    "AGENTS.md and project CLAUDE.md",
+    "memory",
+    "previous-session handoffs"
+  ],
+  "protected_invariants": [
+    "Keep the active first-turn tool-catalog head byte-stable (DeepSeek KV prefix-cache invariant); changes to it must be one-time and deterministic.",
+    "Preserve old-session transcript replay: never remove a tool's registration just because it is deprecated/hidden.",
+    "Stable Rust only (edition 2024); no nightly features.",
+    "Keep the codewhale CLI dispatcher and the codewhale-tui binary in sync when crates/tui changes."
+  ],
+  "branch_policy": "v0.8.53 work targets the codex/v0.8.53 integration branch, not main. One PR per logical workstream; do not mix unrelated fixes.",
+  "verification_policy": {
+    "before_claiming_done": [
+      "run the focused tests for the changed crate (cargo test -p <crate>), then cargo check/clippy as appropriate",
+      "read changed files back to confirm the edit landed as intended",
+      "never claim verification you did not perform"
+    ]
+  },
+  "escalate_when": [
+    "an action is destructive or hard to reverse and was not explicitly authorized",
+    "changing provider/auth/config or anything that sends data to an external service",
+    "deleting or overwriting files you did not create, or that contradict how they were described"
+  ]
+}

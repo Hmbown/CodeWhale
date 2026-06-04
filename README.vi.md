@@ -283,6 +283,10 @@ DEEPSEEK_ALLOW_INSECURE_HTTP=1 VLLM_BASE_URL="http://192.168.0.110:8000/v1" code
 # Tự host bằng Ollama
 ollama pull codewhale-coder:1.3b
 codewhale --provider ollama --model codewhale-coder:1.3b
+
+# Hugging Face Inference Providers
+codewhale auth set --provider huggingface --api-key "YOUR_HF_TOKEN"
+codewhale --provider huggingface --model deepseek-ai/DeepSeek-V4-Pro
 ```
 
 Bên trong giao diện TUI, lệnh `/provider` mở bảng chọn nhà cung cấp và `/model` mở bảng chọn mô hình/cấp độ suy nghĩ cục bộ. Lệnh `/provider openrouter` và `/model <id>` chuyển đổi trực tiếp, trong khi lệnh `/models` sẽ truy vấn trực tiếp và hiển thị danh sách các mô hình API trực tuyến từ nhà cung cấp (nếu nhà cung cấp hỗ trợ tính năng liệt kê mô hình).
@@ -408,7 +412,7 @@ Các biến môi trường chính:
 | `DEEPSEEK_HTTP_HEADERS` | Các header tùy chỉnh gửi kèm yêu cầu API, ví dụ `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Mô hình mặc định |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Thời gian chờ tối đa khi stream bị rảnh (giây), mặc định là `300`, giới hạn trong khoảng `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | Các nhà cung cấp: `deepseek` (mặc định), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | Các nhà cung cấp: `deepseek` (mặc định), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface` |
 | `DEEPSEEK_PROFILE` | Tên cấu hình profile sử dụng |
 | `DEEPSEEK_MEMORY` | Thiết lập là `on` để kích hoạt tính năng tự ghi nhớ thông tin người dùng |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Cho phép sử dụng các đường dẫn API dạng `http://` không mã hóa trong các mạng LAN tin cậy |
@@ -429,6 +433,8 @@ Các biến môi trường chính:
 | `VLLM_MODEL` | Mã mô hình cho máy chủ vLLM tự host |
 | `OLLAMA_BASE_URL` | Endpoint cho máy chủ Ollama tự host |
 | `OLLAMA_MODEL` | Thẻ mô hình (model tag) cho máy chủ Ollama tự host |
+| `HUGGINGFACE_API_KEY` / `HF_TOKEN` | Xác thực Hugging Face |
+| `HUGGINGFACE_BASE_URL` / `HUGGINGFACE_MODEL` | Ghi đè endpoint và mô hình Hugging Face |
 | `NO_ANIMATIONS=1` | Bắt buộc chạy ở chế độ hỗ trợ khả năng tiếp cận (Accessibility mode), tắt hiệu ứng khi khởi động |
 | `SSL_CERT_FILE` | Đường dẫn file CA bundle tùy chỉnh khi sử dụng proxy nội bộ doanh nghiệp |
 

@@ -10,15 +10,15 @@ description = "Codex-style app-server transport for DeepSeek workspace architect
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.51" }
-codewhale-config = { path = "../config", version = "0.8.51" }
-codewhale-core = { path = "../core", version = "0.8.51" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.51" }
-codewhale-hooks = { path = "../hooks", version = "0.8.51" }
-codewhale-mcp = { path = "../mcp", version = "0.8.51" }
-codewhale-protocol = { path = "../protocol", version = "0.8.51" }
-codewhale-state = { path = "../state", version = "0.8.51" }
-codewhale-tools = { path = "../tools", version = "0.8.51" }
+codewhale-agent = { path = "../agent", version = "0.8.53" }
+codewhale-config = { path = "../config", version = "0.8.53" }
+codewhale-core = { path = "../core", version = "0.8.53" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.53" }
+codewhale-hooks = { path = "../hooks", version = "0.8.53" }
+codewhale-mcp = { path = "../mcp", version = "0.8.53" }
+codewhale-protocol = { path = "../protocol", version = "0.8.53" }
+codewhale-state = { path = "../state", version = "0.8.53" }
+codewhale-tools = { path = "../tools", version = "0.8.53" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
