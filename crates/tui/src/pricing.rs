@@ -117,39 +117,52 @@ fn pricing_for_model_at(model: &str, _now: DateTime<Utc>) -> Option<ModelPricing
         // DeepSeek Platform pricing. Avoid showing misleading DeepSeek costs.
         return None;
     }
-    if !lower.contains("deepseek") {
-        return None;
+    match lower.as_str() {
+        "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => return Some(deepseek_v4_pro_pricing()),
+        "xiaomi/mimo-v2.5" | "mimo-v2.5" => return Some(deepseek_v4_flash_pricing()),
+        _ => {}
     }
-    if lower.contains("v4-pro") || lower.contains("v4pro") {
-        // DeepSeek's pricing page says the V4-Pro promotional 75% discount
-        // becomes the official one-quarter base price after 2026-05-31 15:59
-        // UTC. Keep using the adjusted rate after that cutoff (#2489).
-        Some(ModelPricing {
-            usd: CurrencyPricing {
-                input_cache_hit_per_million: 0.003625,
-                input_cache_miss_per_million: 0.435,
-                output_per_million: 0.87,
-            },
-            cny: CurrencyPricing {
-                input_cache_hit_per_million: 0.025,
-                input_cache_miss_per_million: 3.0,
-                output_per_million: 6.0,
-            },
-        })
+    if lower.contains("deepseek") {
+        if lower.contains("v4-pro") || lower.contains("v4pro") {
+            // DeepSeek's pricing page says the V4-Pro promotional 75% discount
+            // becomes the official one-quarter base price after 2026-05-31 15:59
+            // UTC. Keep using the adjusted rate after that cutoff (#2489).
+            Some(deepseek_v4_pro_pricing())
+        } else {
+            Some(deepseek_v4_flash_pricing())
+        }
     } else {
-        // deepseek-v4-flash pricing.
-        Some(ModelPricing {
-            usd: CurrencyPricing {
-                input_cache_hit_per_million: 0.0028,
-                input_cache_miss_per_million: 0.14,
-                output_per_million: 0.28,
-            },
-            cny: CurrencyPricing {
-                input_cache_hit_per_million: 0.02,
-                input_cache_miss_per_million: 1.0,
-                output_per_million: 2.0,
-            },
-        })
+        None
+    }
+}
+
+fn deepseek_v4_pro_pricing() -> ModelPricing {
+    ModelPricing {
+        usd: CurrencyPricing {
+            input_cache_hit_per_million: 0.003625,
+            input_cache_miss_per_million: 0.435,
+            output_per_million: 0.87,
+        },
+        cny: CurrencyPricing {
+            input_cache_hit_per_million: 0.025,
+            input_cache_miss_per_million: 3.0,
+            output_per_million: 6.0,
+        },
+    }
+}
+
+fn deepseek_v4_flash_pricing() -> ModelPricing {
+    ModelPricing {
+        usd: CurrencyPricing {
+            input_cache_hit_per_million: 0.0028,
+            input_cache_miss_per_million: 0.14,
+            output_per_million: 0.28,
+        },
+        cny: CurrencyPricing {
+            input_cache_hit_per_million: 0.02,
+            input_cache_miss_per_million: 1.0,
+            output_per_million: 2.0,
+        },
     }
 }
 
@@ -338,6 +351,27 @@ mod tests {
         assert_eq!(pricing.cny.input_cache_hit_per_million, 0.02);
         assert_eq!(pricing.cny.input_cache_miss_per_million, 1.0);
         assert_eq!(pricing.cny.output_per_million, 2.0);
+    }
+
+    #[test]
+    fn xiaomi_mimo_primary_models_use_matching_deepseek_v4_rates() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 4, 0, 0, 0).single().unwrap();
+
+        let pro_pricing = pricing_for_model_at("mimo-v2.5-pro", now).unwrap();
+        assert_eq!(pro_pricing.usd.input_cache_hit_per_million, 0.003625);
+        assert_eq!(pro_pricing.usd.input_cache_miss_per_million, 0.435);
+        assert_eq!(pro_pricing.usd.output_per_million, 0.87);
+        assert_eq!(pro_pricing.cny.input_cache_hit_per_million, 0.025);
+        assert_eq!(pro_pricing.cny.input_cache_miss_per_million, 3.0);
+        assert_eq!(pro_pricing.cny.output_per_million, 6.0);
+
+        let flash_pricing = pricing_for_model_at("xiaomi/mimo-v2.5", now).unwrap();
+        assert_eq!(flash_pricing.usd.input_cache_hit_per_million, 0.0028);
+        assert_eq!(flash_pricing.usd.input_cache_miss_per_million, 0.14);
+        assert_eq!(flash_pricing.usd.output_per_million, 0.28);
+        assert_eq!(flash_pricing.cny.input_cache_hit_per_million, 0.02);
+        assert_eq!(flash_pricing.cny.input_cache_miss_per_million, 1.0);
+        assert_eq!(flash_pricing.cny.output_per_million, 2.0);
     }
 
     #[test]
