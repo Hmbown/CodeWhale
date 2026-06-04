@@ -3783,11 +3783,7 @@ mod tests {
         let paused_name = app
             .paused_quarry
             .as_deref()
-            .map(|q| {
-                q.split(|c: char| c == '\n' || c == '\r')
-                    .next()
-                    .unwrap_or(q)
-            })
+            .map(|q| q.split(['\n', '\r']).next().unwrap_or(q))
             .unwrap_or("the previous command");
         msg.push_str(&format!(
             "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"

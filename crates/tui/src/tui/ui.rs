@@ -4908,11 +4908,7 @@ async fn dispatch_user_message(
             let paused_name = app
                 .paused_quarry
                 .as_deref()
-                .map(|q| {
-                    q.split(|c: char| c == '\n' || c == '\r')
-                        .next()
-                        .unwrap_or(q)
-                })
+                .map(|q| q.split(['\n', '\r']).next().unwrap_or(q))
                 .unwrap_or("the previous command");
             let notice = format!(
                 "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"
@@ -4958,10 +4954,10 @@ async fn dispatch_user_message(
     // NOTE: check only app.paused — app.pausable may be true because the
     // new command's frontmatter already set it, but the engine flag from
     // the OLD paused command may still be hanging.
-    if !app.paused {
-        if let Ok(mut slot) = engine_handle.shared_paused.lock() {
-            *slot = false;
-        }
+    if !app.paused
+        && let Ok(mut slot) = engine_handle.shared_paused.lock()
+    {
+        *slot = false;
     }
 
     // If we're in a cancelled state and the user is sending a new message,

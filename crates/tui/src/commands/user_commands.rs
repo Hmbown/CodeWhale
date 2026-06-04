@@ -230,12 +230,11 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
                     }
                     "pausable" if value.trim().eq_ignore_ascii_case("true") => {
                         // Snapshot workspace for potential rollback via git stash
-                        if let Some(snap_id) = app.active_snapshot.take() {
-                            if let Ok(repo) =
+                        if let Some(snap_id) = app.active_snapshot.take()
+                            && let Ok(repo) =
                                 crate::snapshot::repo::SnapshotRepo::open_or_init(&app.workspace)
-                            {
-                                let _ = repo.restore(&crate::snapshot::repo::SnapshotId(snap_id));
-                            }
+                        {
+                            let _ = repo.restore(&crate::snapshot::repo::SnapshotId(snap_id));
                         }
                         let git_stash_cmd = std::process::Command::new("git")
                             .args([
