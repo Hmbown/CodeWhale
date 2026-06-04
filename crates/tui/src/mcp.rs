@@ -2604,24 +2604,73 @@ pub fn load_config(path: &Path) -> Result<McpConfig> {
 }
 
 pub fn workspace_mcp_config_path(workspace: &Path) -> PathBuf {
-    workspace.join(".codewhale").join("mcp.json")
+    normalize_workspace_path(workspace)
+        .join(".codewhale")
+        .join("mcp.json")
 }
 
 pub fn load_config_with_workspace(global_path: &Path, workspace: &Path) -> Result<McpConfig> {
     let mut merged = load_config(global_path)?;
-    let project_path = workspace_mcp_config_path(workspace);
-    if !project_path.exists() {
+    let workspace = normalize_workspace_path(workspace);
+    let project_path = workspace_mcp_config_path(&workspace);
+    if !project_path.exists() || paths_refer_to_same_config(global_path, &project_path) {
         return Ok(merged);
     }
 
     let mut project = load_config(&project_path)?;
     for server in project.servers.values_mut() {
-        if server.cwd.is_none() && server.command.is_some() && server.url.is_none() {
-            server.cwd = Some(workspace.to_path_buf());
+        if server.command.is_some() && server.url.is_none() {
+            server.cwd = Some(match server.cwd.as_deref() {
+                Some(cwd) if cwd.is_relative() => normalize_path_components(&workspace.join(cwd)),
+                Some(cwd) => cwd.to_path_buf(),
+                None => workspace.to_path_buf(),
+            });
         }
     }
     merged.servers.extend(project.servers);
     Ok(merged)
+}
+
+fn normalize_workspace_path(workspace: &Path) -> PathBuf {
+    if let Ok(canonical) = workspace.canonicalize() {
+        return canonical;
+    }
+    let absolute = if workspace.is_absolute() {
+        workspace.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(workspace)
+    };
+    normalize_path_components(&absolute)
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+fn paths_refer_to_same_config(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => normalize_workspace_path(left) == normalize_workspace_path(right),
+    }
 }
 
 /// 64-bit content hash of an [`McpConfig`]. Used by [`McpPool`] to decide
@@ -3204,6 +3253,7 @@ mod tests {
         .unwrap();
 
         let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
 
         assert!(cfg.servers.contains_key("global"));
         let project = cfg.servers.get("project").unwrap();
@@ -3212,6 +3262,53 @@ mod tests {
         let shared = cfg.servers.get("shared").unwrap();
         assert_eq!(shared.args, vec!["artisan", "shared:mcp"]);
         assert_eq!(shared.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn workspace_mcp_config_normalizes_parent_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "node", "args": ["server.js"]}}}"#,
+        )
+        .unwrap();
+
+        let workspace_with_parent = workspace.join("..").join("workspace");
+        let cfg = load_config_with_workspace(&global_path, &workspace_with_parent).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+
+        assert!(cfg.servers.contains_key("project"));
+        let project = cfg.servers.get("project").unwrap();
+        assert_eq!(project.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn workspace_mcp_config_resolves_relative_cwd_from_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "node", "args": ["server.js"], "cwd": "tools/mcp"}}}"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+
+        let project = cfg.servers.get("project").unwrap();
+        assert_eq!(
+            project.cwd.as_deref(),
+            Some(workspace.join("tools/mcp").as_path())
+        );
     }
 
     #[tokio::test]
