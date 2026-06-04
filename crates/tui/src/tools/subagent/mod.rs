@@ -4697,7 +4697,7 @@ pub(crate) async fn resolve_subagent_assignment_route(
     agent_type: &SubAgentType,
 ) -> SubAgentResolvedRoute {
     if matches!(agent_type, SubAgentType::ToolAgent) {
-        return tool_agent_route();
+        return tool_agent_route(runtime);
     }
 
     let explicit_model = configured_model.is_some();
@@ -4720,9 +4720,14 @@ pub(crate) async fn resolve_subagent_assignment_route(
     route
 }
 
-fn tool_agent_route() -> SubAgentResolvedRoute {
+fn tool_agent_route(runtime: &SubAgentRuntime) -> SubAgentResolvedRoute {
     SubAgentResolvedRoute {
-        model: "deepseek-v4-flash".to_string(),
+        // Inherit the parent session's model instead of hardcoding a DeepSeek
+        // model id: the tool-agent "fast lane" semantics come from
+        // `reasoning_effort = off`, not from a specific model. Hardcoding
+        // `deepseek-v4-flash` makes tool-agent routing fail with a 404 on any
+        // backend or provider that doesn't serve that exact model id.
+        model: runtime.model.clone(),
         reasoning_effort: Some("off".to_string()),
     }
 }
