@@ -262,18 +262,38 @@ pub fn render_meeting_summary(
     app: &App,
     meeting_id: &str,
 ) {
-    if let Some(meeting) = app.tab_manager.active_meeting(crate::tui::tab::TabId::new(0))
-        // In a real impl, pass the actual meeting id
-    {
-        let _ = meeting; // suppress unused
-    }
-
-    let _ = meeting_id; // suppress unused
+    let title = if let Some(meeting) = app.tab_manager.meeting(meeting_id) {
+        format!(" Meeting Summary: {} ", meeting.topic)
+    } else {
+        format!(" Meeting Summary: {} ", meeting_id)
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Meeting Summary ");
+        .title(title);
     block.render(area, buf);
+
+    if let Some(meeting) = app.tab_manager.meeting(meeting_id) {
+        if area.height < 4 {
+            return;
+        }
+        let inner = Rect::new(
+            area.x + 1,
+            area.y + 1,
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
+        );
+        let line = Line::from(vec![Span::styled(
+            format!(
+                "{} participants, {} messages, {} decisions",
+                meeting.participants.len(),
+                meeting.message_count(),
+                meeting.decision_count()
+            ),
+            Style::default().fg(ratatui::style::Color::White),
+        )]);
+        buf.set_line(inner.x, inner.y, &line, inner.width);
+    }
 }
 
 #[cfg(test)]
