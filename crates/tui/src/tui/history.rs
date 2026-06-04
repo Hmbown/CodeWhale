@@ -3564,12 +3564,11 @@ pub fn tool_run_summary(run: &ToolRun) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep, ToolRun,
-        detect_tool_runs, tool_run_summary,
+        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
         PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
-        TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
-        assistant_label_style_for, extract_reasoning_summary, render_thinking,
-        running_status_label_with_elapsed,
+        TOOL_STATUS_SYMBOL_MS, ToolCell, ToolRun, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
+        assistant_label_style_for, detect_tool_runs, extract_reasoning_summary, render_thinking,
+        running_status_label_with_elapsed, tool_run_summary,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
@@ -5476,7 +5475,11 @@ mod tests {
         ];
         // Failed tool should split the run.
         let runs = detect_tool_runs(&history, 2);
-        assert_eq!(runs.len(), 1, "only one run should be detected (the first 2)");
+        assert_eq!(
+            runs.len(),
+            1,
+            "only one run should be detected (the first 2)"
+        );
         assert_eq!(runs[0].count, 2);
     }
 
