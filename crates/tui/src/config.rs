@@ -788,9 +788,8 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
         ApiProvider::Volcengine => vec![DEFAULT_VOLCENGINE_MODEL, DEFAULT_VOLCENGINE_FLASH_MODEL],
-        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
-            OFFICIAL_DEEPSEEK_MODELS.to_vec()
-        }
+        ApiProvider::Ollama => vec![DEFAULT_OLLAMA_MODEL],
+        ApiProvider::Openai | ApiProvider::Atlascloud => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
     }
 }
 
@@ -7420,6 +7419,14 @@ api_key = "old-openrouter-key"
         assert_eq!(
             model_completion_names_for_provider(ApiProvider::Moonshot),
             vec![DEFAULT_MOONSHOT_MODEL]
+        );
+    }
+
+    #[test]
+    fn model_completion_names_for_ollama_include_default_local_model() {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Ollama),
+            vec![DEFAULT_OLLAMA_MODEL]
         );
     }
 
