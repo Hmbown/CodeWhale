@@ -3529,8 +3529,24 @@ mod tests {
     /// Simulate what dispatch_user_message does when processing a message
     /// while the app is paused. Mirrors the real flow in ui.rs so tests
     /// catch regressions that state-only tests miss.
-    fn simulate_dispatch_non_continue(app: &mut App, _message: &str) {
-        // No keyword interception — LLM evaluation note handles intent.
+    fn simulate_dispatch_non_continue(app: &mut App, message: &str) {
+        // Mirror submit_or_steer_message keyword detection:
+        // consume paused_quarry + restore hunt.quarry for "continue"/"resume"
+        {
+            let trimmed = message.trim().to_lowercase();
+            if trimmed == "continue" || trimmed == "resume"
+                || trimmed.starts_with("continue ")
+                || trimmed.starts_with("resume ")
+                || trimmed.contains(" continue ")
+                || trimmed.contains(" resume ")
+                || trimmed.ends_with(" continue")
+                || trimmed.ends_with(" resume")
+            {
+                if let Some(q) = app.paused_quarry.take() {
+                    app.hunt.quarry = Some(q);
+                }
+            }
+        }
         if app.paused || app.paused_quarry.is_some() {
             // Only clear quarry if keyword interception didn't already
             // restore it (e.g. for "continue"/"resume" messages).
@@ -3599,23 +3615,23 @@ mod tests {
         //    quarry restored for LLM evaluation. Pause indicator cleared.
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
-        // ASSERT: quarry stays None (LLM evaluation, no keyword interception)
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent"
+        // ASSERT: keyword interception restored quarry
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "'resume the paused command' restores quarry"
         );
-        // ASSERT: pause is cleared and paused_quarry preserved for WorkBench
+        // ASSERT: pause is cleared and paused_quarry consumed
         assert!(!app.paused, "pause cleared after dispatch");
-        assert!(app.paused_quarry.is_some(), "paused_quarry preserved");
+        assert!(app.paused_quarry.is_none(), "paused_quarry consumed on resume");
         // ASSERT: WorkBench shows the paused command (via paused_quarry fallback)
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(
-            summary.pause_indicator.as_deref(),
-            Some("(Paused)"),
-            "pause indicator: {:?}",
+        assert!(
+            summary.pause_indicator.is_none(),
+            "pause indicator cleared after resume: {:?}",
             summary.pause_indicator
         );
-        // After "continue", paused_quarry is consumed and quarry is None.
+        // After "continue", paused_quarry is consumed and quarry is restored.
         // The goal appears when the system prompt builds in the engine turn.
         assert!(
             summary.goal_objective.is_none()
@@ -3637,25 +3653,26 @@ mod tests {
         // Type "continue" -- through real dispatch simulation
         simulate_dispatch_non_continue(&mut app, "continue");
 
-        // quarry stays None — LLM evaluation note handles intent
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None (LLM evaluation handles intent)"
+        // keyword detection restores quarry on "continue"
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan nested git repos"),
+            "'continue' restores quarry"
         );
         assert!(
-            app.paused_quarry.is_some(),
-            "paused_quarry preserved (WorkBench shows ⏸)"
+            app.paused_quarry.is_none(),
+            "paused_quarry consumed on continue"
         );
         let summary = sidebar_work_summary(&mut app);
-        assert_eq!(
-            summary.pause_indicator.as_deref(),
-            Some("(Paused)"),
-            "pause indicator shows ⏸ (paused_quarry preserved for LLM eval)"
+        assert!(
+            summary.pause_indicator.is_none(),
+            "pause indicator cleared after continue: {:?}",
+            summary.pause_indicator
         );
         assert_eq!(
             summary.goal_objective.as_deref(),
             Some("Scan nested git repos"),
-            "WorkBench shows paused goal via paused_quarry fallback"
+            "WorkBench shows goal via restored quarry"
         );
     }
 
@@ -3671,9 +3688,10 @@ mod tests {
         // "resume the paused command" should trigger starts_with("resume ")
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent"
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Build deploy"),
+            "'resume the paused command' restores quarry"
         );
     }
 
@@ -3688,12 +3706,13 @@ mod tests {
 
         // "resume"
         simulate_dispatch_non_continue(&mut app, "resume");
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation handles intent"
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "'resume' restores quarry"
         );
 
-        // Now paused_quarry still set (preserved), paused is false.
+        // Now paused_quarry consumed (by keyword detection), paused is false.
         // TurnStarted clears paused_cancelled and pausable.
         app.paused_cancelled = false;
         app.pausable = false;
@@ -3701,10 +3720,11 @@ mod tests {
         // User types "wait no" -- should be normal message, no pause interference
         simulate_dispatch_non_continue(&mut app, "wait no");
 
-        // Quarry stays None (the LLM evaluation note guides the model)
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation handles all messages"
+        // Quarry stays restored (unchanged by non-resume messages)
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "quarry stays restored after non-resume message"
         );
     }
 
@@ -3981,9 +4001,10 @@ mod tests {
             "can you please continue the paused slash command",
         );
 
-        assert!(
-            app.hunt.quarry.is_none(),
-            "quarry stays None — LLM evaluation note handles intent"
+        assert_eq!(
+            app.hunt.quarry.as_deref(),
+            Some("Scan repos"),
+            "'can you please continue...' restores quarry"
         );
     }
 }
