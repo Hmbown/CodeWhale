@@ -4875,71 +4875,32 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused, let all messages through.
-    // If the message starts with "continue" or "resume", the paused goal
-    // is restored so the model sees it and continues naturally.
-    // Otherwise the old turn is cancelled and the message goes through
-    // with no active goal. The paused_quarry is KEPT so the user can
-    // still resume later by typing "continue"/"resume".
-    if app.paused {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue"
-            || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-            || trimmed.contains(" continue ")
-            || trimmed.contains(" resume ")
-            || trimmed.ends_with(" continue")
-            || trimmed.ends_with(" resume")
-        {
-            app.hunt.quarry = app.paused_quarry.take();
-        } else {
-            // Non-continue message: cancel old turn, clear quarry, but
-            // keep paused_quarry so the user can still resume later.
-            // Prepend a cancellation notice to the message so the model
-            // sees it in the conversation and does NOT continue the old
-            // paused command unprompted.
-            let paused_name = app
-                .paused_quarry
-                .as_deref()
-                .map(|q| q.split(['\n', '\r']).next().unwrap_or(q))
-                .unwrap_or("the previous command");
-            let notice = format!(
-                "\n\n---\n[The user paused: {paused_name}. Respond only to the new message above. Do NOT execute the paused command.]"
+    // When paused or paused_quarry: restore the goal into the system prompt
+    // and append an evaluation note. The LLM decides whether to continue the
+    // paused command based on the user's message — no fragile keyword matching.
+    // The paused_quarry is always consumed here (either restored or discarded).
+    if app.paused || app.paused_quarry.is_some() {
+        if let Some(saved) = app.paused_quarry.take() {
+            app.hunt.quarry = Some(saved.clone());
+            let name = saved.split(['\n', '\r']).next().unwrap_or(&saved);
+            let note = format!(
+                "\n\n---\n[Note: The user previously paused: {name}. Evaluate their message above. \
+                 If they are asking to continue or resume it, do so naturally. \
+                 Otherwise, ignore the paused command and respond to the new message.]"
             );
-            message.display.push_str(&notice);
+            message.display.push_str(&note);
+        }
+        if app.paused {
             engine_handle.cancel();
-            app.hunt.quarry = None;
-            // paused_quarry is preserved here for later "continue"/"resume"
+            app.paused = false;
+            app.paused_at = None;
+            app.paused_cancelled = false;
+            app.pausable = false;
+            app.active_snapshot = None;
+            engine_handle.set_paused(false);
+            app.status_message = None;
         }
-        app.paused = false;
-        app.paused_at = None;
-        app.paused_cancelled = false;
-        app.pausable = false;
-        app.active_snapshot = None;
-        engine_handle.set_paused(false);
-        app.status_message = None;
         // Fall through — message goes to engine as a normal user message.
-    }
-
-    // Even when not paused: if there's a paused_quarry (from a previous
-    // pause that was interrupted by a non-continue message), detect
-    // "continue"/"resume" and restore the saved goal. This lets the user
-    // type "how are you?" then later "resume the paused command" and still
-    // have the quarry restored.
-    if app.paused_quarry.is_some() {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue"
-            || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-            || trimmed.contains(" continue ")
-            || trimmed.contains(" resume ")
-            || trimmed.ends_with(" continue")
-            || trimmed.ends_with(" resume")
-        {
-            app.hunt.quarry = app.paused_quarry.take();
-        }
     }
 
     // Safety sync: if the app-level pause was cleared (e.g. by a new slash
@@ -6384,30 +6345,20 @@ async fn execute_command_input(
 async fn steer_user_message(
     app: &mut App,
     engine_handle: &EngineHandle,
-    message: QueuedMessage,
+    mut message: QueuedMessage,
 ) -> Result<()> {
-    // Belt-and-suspenders: intercept resume here too, in case the message
-    // reaches steer_user_message without going through submit_or_steer_message.
-    if app.paused_quarry.is_some() {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue"
-            || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-            || trimmed.contains(" continue ")
-            || trimmed.contains(" resume ")
-            || trimmed.ends_with(" continue")
-            || trimmed.ends_with(" resume")
-        {
-            app.hunt.quarry = app.paused_quarry.take();
-            app.paused = false;
-            app.paused_at = None;
-            app.paused_cancelled = false;
-            app.pausable = false;
-            app.active_snapshot = None;
-            engine_handle.set_paused(false);
-            app.status_message = None;
-        }
+    // Restore paused_quarry into the goal for the Steer path (bypasses
+    // dispatch_user_message). Same approach as dispatch_user_message:
+    // restore the goal and add an evaluation note for the LLM.
+    if let Some(saved) = app.paused_quarry.take() {
+        app.hunt.quarry = Some(saved.clone());
+        let name = saved.split(['\n', '\r']).next().unwrap_or(&saved);
+        let note = format!(
+            "\n\n---\n[Note: The user previously paused: {name}. Evaluate their message above. \
+             If they are asking to continue or resume it, do so naturally. \
+             Otherwise, ignore the paused command and respond to the new message.]"
+        );
+        message.display.push_str(&note);
     }
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
@@ -6464,27 +6415,8 @@ async fn submit_or_steer_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
-    // INTERCEPT: if paused_quarry has a saved command and the user types
-    // "continue" or "resume", restore the goal BEFORE deciding disposition.
-    // This catches messages sent while is_loading=true (which go through
-    // the Steer path and bypass dispatch_user_message entirely).
-    if app.paused_quarry.is_some() {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue"
-            || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-        {
-            app.hunt.quarry = app.paused_quarry.take();
-            app.paused = false;
-            app.paused_at = None;
-            app.paused_cancelled = false;
-            app.pausable = false;
-            app.active_snapshot = None;
-            engine_handle.set_paused(false);
-            app.status_message = None;
-        }
-    }
+    // No interception for paused_quarry here — dispatch_user_message handles
+    // the Immediate path, steer_user_message handles the Steer path.
     match app.decide_submit_disposition() {
         SubmitDisposition::Immediate => {
             dispatch_user_message(app, config, engine_handle, message).await
