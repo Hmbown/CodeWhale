@@ -4547,9 +4547,7 @@ pub(crate) fn apply_engine_error_to_app(
 }
 
 fn rollback_provider_after_auth_failure(app: &mut App, config: &mut Config) -> Option<String> {
-    let Some(pending) = app.pending_provider_switch.take() else {
-        return None;
-    };
+    let pending = app.pending_provider_switch.take()?;
     let PendingProviderSwitch {
         previous_provider,
         previous_model,
