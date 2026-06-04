@@ -454,8 +454,9 @@ fn gather_git_info(workspace: &Path) -> Option<String> {
 fn detect_ci_systems(workspace: &Path) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
 
-    if workspace.join(".github").join("workflows").is_dir() {
-        if let Ok(entries) = std::fs::read_dir(workspace.join(".github").join("workflows")) {
+    if workspace.join(".github").join("workflows").is_dir()
+        && let Ok(entries) = std::fs::read_dir(workspace.join(".github").join("workflows"))
+    {
             let files: Vec<String> = entries
                 .filter_map(|e| e.ok())
                 .filter_map(|e| {
@@ -472,7 +473,6 @@ fn detect_ci_systems(workspace: &Path) -> Vec<String> {
             } else {
                 found.push(format!("GitHub Actions ({})", files.join(", ")));
             }
-        }
     }
     if workspace.join(".gitlab-ci.yml").exists() {
         found.push("GitLab CI".to_string());
@@ -512,8 +512,9 @@ fn detect_build_systems(workspace: &Path) -> Vec<String> {
     if workspace.join("BUILD.bazel").exists() || workspace.join("BUILD").exists() {
         found.push("Bazel".to_string());
     }
-    if workspace.join("scripts").is_dir() {
-        if let Ok(entries) = std::fs::read_dir(workspace.join("scripts")) {
+    if workspace.join("scripts").is_dir()
+        && let Ok(entries) = std::fs::read_dir(workspace.join("scripts"))
+    {
             let scripts: Vec<String> = entries
                 .filter_map(|e| e.ok())
                 .filter_map(|e| {
@@ -531,7 +532,6 @@ fn detect_build_systems(workspace: &Path) -> Vec<String> {
             if !scripts.is_empty() {
                 found.push(format!("scripts/ ({})", scripts.join(", ")));
             }
-        }
     }
 
     found
@@ -542,9 +542,10 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
 
     // Rust: check Cargo.toml dev-dependencies (both crate and workspace level).
-    if let Ok(raw) = std::fs::read_to_string(workspace.join("Cargo.toml")) {
-        if let Ok(doc) = toml::from_str::<toml::Value>(&raw) {
-            let mut dep_keys: Vec<&str> = Vec::new();
+    if let Ok(raw) = std::fs::read_to_string(workspace.join("Cargo.toml"))
+        && let Ok(doc) = toml::from_str::<toml::Value>(&raw)
+    {
+        let mut dep_keys: Vec<&str> = Vec::new();
             if let Some(dev_deps) = doc.get("dev-dependencies").and_then(|v| v.as_table()) {
                 dep_keys.extend(dev_deps.keys().map(|k| k.as_str()));
             }
@@ -570,14 +571,14 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
                     found.push((*label).to_string());
                 }
             }
-        }
     }
 
     // Node.js: check package.json devDependencies.
-    if let Ok(raw) = std::fs::read_to_string(workspace.join("package.json")) {
-        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(dev_deps) = doc.get("devDependencies").and_then(|v| v.as_object()) {
-                let dev_keys: Vec<&str> = dev_deps.keys().map(|k| k.as_str()).collect();
+    if let Ok(raw) = std::fs::read_to_string(workspace.join("package.json"))
+        && let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Some(dev_deps) = doc.get("devDependencies").and_then(|v| v.as_object())
+    {
+        let dev_keys: Vec<&str> = dev_deps.keys().map(|k| k.as_str()).collect();
 
                 let js_test_frameworks: &[(&str, &str)] = &[
                     ("jest", "Jest"),
@@ -594,24 +595,16 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
                         found.push((*label).to_string());
                     }
                 }
-            }
-        }
     }
 
     // Python: check common test config files.
     if workspace.join("pytest.ini").exists()
         || workspace.join("tox.ini").exists()
         || workspace.join("conftest.py").exists()
-        || workspace
-            .join("pyproject.toml")
-            .exists()
-            .then(|| {
-                std::fs::read_to_string(workspace.join("pyproject.toml"))
-                    .ok()
-                    .map(|raw| raw.contains("[tool.pytest"))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false)
+        || (workspace.join("pyproject.toml").exists()
+            && std::fs::read_to_string(workspace.join("pyproject.toml"))
+                .ok()
+                .is_some_and(|raw| raw.contains("[tool.pytest")))
     {
         found.push("pytest".to_string());
     }
