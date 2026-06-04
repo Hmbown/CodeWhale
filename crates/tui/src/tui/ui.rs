@@ -115,8 +115,8 @@ use crate::tui::workspace_context;
 use super::key_actions;
 
 use super::app::{
-    App, AppAction, AppMode, OnboardingState, QueuedMessage, ReasoningEffort, SidebarFocus,
-    StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
+    App, AppAction, AppMode, OnboardingState, PendingProviderSwitch, QueuedMessage,
+    ReasoningEffort, SidebarFocus, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
     looks_like_slash_command_input, shell_command_from_bang_input,
 };
 use super::approval::{
@@ -1269,6 +1269,7 @@ async fn run_event_loop(
         let mut received_engine_event = false;
         let mut transcript_batch_updated = false;
         let mut queued_to_send: Option<QueuedMessage> = None;
+        let mut respawn_after_provider_rollback: Option<String> = None;
         {
             let mut rx = engine_handle.rx_event.write().await;
             loop {
@@ -1682,6 +1683,7 @@ async fn run_event_loop(
                         }
                         app.is_loading = false;
                         app.dispatch_started_at = None;
+                        app.pending_provider_switch = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
                         if was_locally_cancelled {
@@ -1946,7 +1948,18 @@ async fn run_event_loop(
                         envelope,
                         recoverable: _,
                     } => {
+                        let rollback_after_auth_failure =
+                            matches!(
+                                envelope.category,
+                                crate::error_taxonomy::ErrorCategory::Authentication
+                            ) && app.pending_provider_switch.is_some();
                         apply_engine_error_to_app(app, envelope);
+                        if rollback_after_auth_failure
+                            && let Some(rollback_warning) =
+                                rollback_provider_after_auth_failure(app, config)
+                        {
+                            respawn_after_provider_rollback = Some(rollback_warning);
+                        }
                     }
                     EngineEvent::Status { message } => {
                         app.status_message = Some(message);
@@ -2365,6 +2378,29 @@ async fn run_event_loop(
                     }
                 }
             }
+        }
+        if let Some(rollback_warning) = respawn_after_provider_rollback {
+            let _ = engine_handle.send(Op::Shutdown).await;
+            let engine_config = build_engine_config(app, config);
+            engine_handle = spawn_engine(engine_config, config);
+            if !app.api_messages.is_empty() {
+                let _ = engine_handle
+                    .send(Op::SyncSession {
+                        session_id: app.current_session_id.clone(),
+                        messages: app.api_messages.clone(),
+                        system_prompt: app.system_prompt.clone(),
+                        system_prompt_override: false,
+                        model: app.model.clone(),
+                        workspace: app.workspace.clone(),
+                    })
+                    .await;
+            }
+            let _ = engine_handle
+                .send(Op::SetCompaction {
+                    config: app.compaction_config(),
+                })
+                .await;
+            app.status_message = Some(rollback_warning);
         }
         if let Some(index) = app.streaming_message_index {
             let committed = app.streaming_state.commit_text(0);
@@ -4510,6 +4546,64 @@ pub(crate) fn apply_engine_error_to_app(
     // toast in the footer — that duplicates the transcript entry.
 }
 
+fn rollback_provider_after_auth_failure(app: &mut App, config: &mut Config) -> Option<String> {
+    let Some(pending) = app.pending_provider_switch.take() else {
+        return None;
+    };
+    let PendingProviderSwitch {
+        previous_provider,
+        previous_model,
+        previous_model_ids_passthrough,
+        previous_config,
+    } = pending;
+
+    *config = previous_config;
+    app.api_provider = previous_provider;
+    app.set_model_selection(previous_model.clone());
+    app.provider_models
+        .insert(previous_provider.as_str().to_string(), previous_model);
+    app.model_ids_passthrough = previous_model_ids_passthrough;
+    app.update_model_compaction_budget();
+    app.clear_model_scoped_telemetry();
+    app.offline_mode = false;
+
+    let persistence_error = (|| -> anyhow::Result<()> {
+        commands::persist_root_string_key(
+            app.config_path.as_deref(),
+            "provider",
+            previous_provider.as_str(),
+        )?;
+        let mut settings = crate::settings::Settings::load()?;
+        settings.default_provider = Some(previous_provider.as_str().to_string());
+        settings.set_model_for_provider(
+            previous_provider.as_str(),
+            &app.model_selection_for_persistence(),
+        );
+        if matches!(
+            previous_provider,
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN
+        ) {
+            settings.set("default_model", &app.model_selection_for_persistence())?;
+        }
+        settings.save()?;
+        Ok(())
+    })()
+    .err()
+    .map(|err| format!("provider rollback not fully persisted: {err}"));
+
+    Some(match persistence_error {
+        Some(warning) => format!(
+            "Provider switch failed and has been rolled back to {}. {}",
+            previous_provider.as_str(),
+            warning
+        ),
+        None => format!(
+            "Provider switch failed and has been rolled back to {}.",
+            previous_provider.as_str()
+        ),
+    })
+}
+
 fn persist_offline_queue_state(app: &App) {
     if app.queued_messages.is_empty() && app.queued_draft.is_none() {
         persistence_actor::persist(PersistRequest::ClearOfflineQueue);
@@ -5280,10 +5374,14 @@ async fn switch_provider(
 ) {
     let previous_provider = app.api_provider;
     let previous_model = app.model.clone();
-    let previous_provider_str = config.provider.clone();
-    let previous_base_url = config.base_url.clone();
-    let previous_default_text_model = config.default_text_model.clone();
-    let previous_providers = config.providers.clone();
+    let previous_model_ids_passthrough = app.model_ids_passthrough;
+    let previous_config = config.clone();
+    app.pending_provider_switch = Some(PendingProviderSwitch {
+        previous_provider,
+        previous_model: previous_model.clone(),
+        previous_model_ids_passthrough,
+        previous_config: previous_config.clone(),
+    });
 
     config.provider = Some(target.as_str().to_string());
     if matches!(target, ApiProvider::NvidiaNim)
@@ -5309,10 +5407,8 @@ async fn switch_provider(
     }
 
     if let Err(err) = DeepSeekClient::new(config) {
-        config.provider = previous_provider_str;
-        config.base_url = previous_base_url;
-        config.default_text_model = previous_default_text_model;
-        config.providers = previous_providers;
+        app.pending_provider_switch = None;
+        *config = previous_config;
         app.add_message(HistoryCell::System {
             content: format!(
                 "Failed to switch provider to {}: {err}\nProvider unchanged ({}).",

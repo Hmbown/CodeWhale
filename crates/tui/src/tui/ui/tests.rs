@@ -6902,6 +6902,72 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
     let _ = ErrorEnvelope::transient("");
 }
 
+#[tokio::test]
+async fn provider_switch_auth_error_restores_previous_provider_and_model() {
+    use crate::error_taxonomy::ErrorEnvelope;
+
+    let _home = SettingsHomeGuard::new();
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Deepseek;
+    app.model = "deepseek-v4-pro".to_string();
+    app.model_ids_passthrough = false;
+    let mut engine = mock_engine_handle();
+    let mut config = Config {
+        provider: Some("deepseek".to_string()),
+        api_key: Some("deepseek-key".to_string()),
+        default_text_model: Some("deepseek-v4-pro".to_string()),
+        providers: Some(ProvidersConfig {
+            deepseek: ProviderConfig {
+                api_key: Some("deepseek-key".to_string()),
+                ..Default::default()
+            },
+            moonshot: ProviderConfig {
+                api_key: Some("kimi-key".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    switch_provider(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApiProvider::Moonshot,
+        Some("kimi-k2.6".to_string()),
+    )
+    .await;
+    assert_eq!(app.api_provider, ApiProvider::Moonshot);
+    assert_eq!(config.provider.as_deref(), Some("moonshot"));
+    assert!(app.pending_provider_switch.is_some());
+
+    apply_engine_error_to_app(
+        &mut app,
+        ErrorEnvelope::fatal_auth("Authentication failed: invalid API key"),
+    );
+    let rollback_status = rollback_provider_after_auth_failure(&mut app, &mut config)
+        .expect("auth failure after provider switch should roll back");
+
+    assert_eq!(app.api_provider, ApiProvider::Deepseek);
+    assert_eq!(app.model, "deepseek-v4-pro");
+    assert!(!app.model_ids_passthrough);
+    assert!(!app.offline_mode);
+    assert_eq!(config.provider.as_deref(), Some("deepseek"));
+    assert_eq!(
+        config.default_text_model.as_deref(),
+        Some("deepseek-v4-pro")
+    );
+    assert!(app.pending_provider_switch.is_none());
+    assert!(rollback_status.contains("Provider switch failed"));
+    assert!(
+        app.status_message
+            .as_deref()
+            .map_or(true, |status| !status.contains("Provider switch failed")),
+        "status message is set by the async event loop after engine respawn"
+    );
+}
+
 #[test]
 fn stream_error_marks_active_turn_failed_without_waiting_for_turn_complete() {
     use crate::error_taxonomy::ErrorEnvelope;
@@ -6965,6 +7031,7 @@ fn non_recoverable_engine_error_enters_offline_mode() {
         app.status_message.is_none(),
         "non-recoverable error should NOT set status_message — already in transcript as HistoryCell::Error"
     );
+    assert!(app.pending_provider_switch.is_none());
 }
 
 #[test]
