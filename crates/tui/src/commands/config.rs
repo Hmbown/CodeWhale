@@ -204,6 +204,9 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "max_history" | "history" => Some(app.max_input_history.to_string()),
         "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
         "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
+        "tool_collapse" | "collapse" => {
+            Some(format!("{:?}", app.tool_collapse_mode).to_lowercase())
+        }
         "context_panel" | "context" | "session_panel" => {
             Some(if app.context_panel { "true" } else { "false" }.to_string())
         }
@@ -882,6 +885,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "sidebar_width" | "sidebar" => {
             app.sidebar_width_percent = settings.sidebar_width_percent;
+            app.mark_history_updated();
+        }
+        "tool_collapse" | "collapse" => {
+            app.tool_collapse_mode =
+                crate::tui::app::ToolCollapseMode::from_setting(&settings.tool_collapse_mode);
             app.mark_history_updated();
         }
         "sidebar_focus" | "focus" => {

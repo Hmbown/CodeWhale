@@ -327,6 +327,28 @@ impl SidebarFocus {
     }
 }
 
+/// Controls how contiguous tool-call runs are collapsed in the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCollapseMode {
+    /// Never collapse; all tool cells rendered individually.
+    Expanded,
+    /// Collapse runs exceeding the threshold into a single summary row.
+    Compact,
+    /// Collapse only when calm_mode is active.
+    Calm,
+}
+
+impl ToolCollapseMode {
+    #[must_use]
+    pub fn from_setting(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "compact" => Self::Compact,
+            "calm" => Self::Calm,
+            _ => Self::Expanded,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusToastLevel {
     Info,
@@ -1320,10 +1342,12 @@ pub struct App {
     pub sidebar_width_dirty: bool,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
-    /// Indices of tool runs currently collapsed (group start positions).
-    pub collapsed_tool_runs: HashSet<usize>,
     /// Minimum consecutive tool calls to trigger collapse (default 3).
     pub tool_collapse_threshold: usize,
+    /// Which tool runs are currently expanded (clicked open by user).
+    pub expanded_tool_runs: HashSet<usize>,
+    /// Current tool collapse mode.
+    pub tool_collapse_mode: ToolCollapseMode,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
     pub file_tree: Option<crate::tui::file_tree::FileTreeState>,
     /// Whether the file-tree pane was actually rendered in the last frame.
@@ -2052,8 +2076,9 @@ impl App {
             sidebar_resize_total_width: 0,
             sidebar_width_dirty: false,
             context_panel: settings.context_panel,
-            collapsed_tool_runs: HashSet::new(),
             tool_collapse_threshold: 3,
+            expanded_tool_runs: HashSet::new(),
+            tool_collapse_mode: ToolCollapseMode::from_setting(&settings.tool_collapse_mode),
             file_tree: None,
             file_tree_visible: false,
             compact_threshold,

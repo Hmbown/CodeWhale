@@ -203,6 +203,8 @@ pub struct Settings {
     pub auto_compact_threshold_percent: f64,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
+    /// Tool run collapse mode: expanded, compact, or calm.
+    pub tool_collapse_mode: String,
     /// Streaming pacing mode. `true` pins the chunker to one-character-per-
     /// commit-tick (typewriter); `false` drains the upstream cadence (each
     /// commit flushes everything queued, which matches V4-pro's burst pattern
@@ -330,6 +332,7 @@ impl Default for Settings {
             auto_compact: false,
             auto_compact_threshold_percent: 80.0,
             calm_mode: false,
+            tool_collapse_mode: "expanded".to_string(),
             low_motion: false,
             fancy_animations: true,
             bracketed_paste: true,

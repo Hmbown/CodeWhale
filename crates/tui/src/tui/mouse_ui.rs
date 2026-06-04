@@ -42,6 +42,47 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     }
 }
 
+/// Toggle a collapsed tool-run summary on click. Returns true if handled.
+fn toggle_tool_run_expand(app: &mut App, mouse: MouseEvent) -> bool {
+    let Some(area) = app.viewport.last_transcript_area else {
+        return false;
+    };
+    if mouse.column < area.x
+        || mouse.column >= area.x.saturating_add(area.width)
+        || mouse.row < area.y
+        || mouse.row >= area.y.saturating_add(area.height)
+    {
+        return false;
+    }
+    // Walk the collapsed_cell_map to find the original history index that
+    // the click maps to, then check if it's a collapsed tool run start.
+    let Some(filtered_idx) = transcript_cell_index_from_mouse(app, mouse) else {
+        return false;
+    };
+    let Some(original_idx) = app.collapsed_cell_map.get(filtered_idx).copied() else {
+        return false;
+    };
+    // If this index is a collapsed tool run start, toggle its expansion.
+    if app.expanded_tool_runs.contains(&original_idx) {
+        app.expanded_tool_runs.remove(&original_idx);
+        app.mark_history_updated();
+        return true;
+    }
+    // Check tool runs: if the original_idx is a detected run start and
+    // not expanded, expand it (this means it was collapsed).
+    let tool_runs = if app.tool_collapse_threshold > 0 {
+        crate::tui::history::detect_tool_runs(&app.history, app.tool_collapse_threshold)
+    } else {
+        return false;
+    };
+    if tool_runs.iter().any(|r| r.start == original_idx) {
+        app.expanded_tool_runs.insert(original_idx);
+        app.mark_history_updated();
+        return true;
+    }
+    false
+}
+
 /// Handle mouse events on the sidebar resize handle (the 1-col vertical bar
 /// between the chat area and the sidebar). Returns true when the event was
 /// consumed so other handlers skip it.
@@ -364,6 +405,11 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
 
             if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
                 app.scroll_to_bottom();
+                return Vec::new();
+            }
+
+            // Check for click on collapsed tool run summary to expand.
+            if toggle_tool_run_expand(app, mouse) {
                 return Vec::new();
             }
 

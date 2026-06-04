@@ -171,10 +171,15 @@ impl ChatWidget {
             let mut filtered_to_original: Vec<usize> =
                 Vec::with_capacity(history_len + active_entries.len());
 
-            // Detect contiguous tool runs for collapse (#2692). Runs that
-            // exceed `tool_collapse_threshold` are replaced by a single
-            // summary cell when collapsed.
-            let tool_runs = if app.tool_collapse_threshold > 0 {
+            // Detect contiguous tool runs for collapse (#2692).
+            let collapse_active = match app.tool_collapse_mode {
+                crate::tui::app::ToolCollapseMode::Compact => true,
+                crate::tui::app::ToolCollapseMode::Calm => {
+                    app.transcript_render_options().calm_mode
+                }
+                crate::tui::app::ToolCollapseMode::Expanded => false,
+            };
+            let tool_runs = if collapse_active && app.tool_collapse_threshold > 0 {
                 crate::tui::history::detect_tool_runs(&app.history, app.tool_collapse_threshold)
             } else {
                 Vec::new()
@@ -182,7 +187,7 @@ impl ChatWidget {
             // Build a quick-lookup set of indices to skip.
             let mut collapsed_skip: HashSet<usize> = HashSet::new();
             for run in &tool_runs {
-                if !app.collapsed_tool_runs.contains(&run.start) {
+                if app.expanded_tool_runs.contains(&run.start) {
                     continue;
                 }
                 for offset in 1..run.count {
@@ -201,7 +206,7 @@ impl ChatWidget {
                 // a compact summary cell.
                 if let Some(run) = tool_runs
                     .iter()
-                    .find(|r| r.start == idx && app.collapsed_tool_runs.contains(&r.start))
+                    .find(|r| r.start == idx && !app.expanded_tool_runs.contains(&r.start))
                 {
                     let summary = crate::tui::history::tool_run_summary(run);
                     let summary_cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {

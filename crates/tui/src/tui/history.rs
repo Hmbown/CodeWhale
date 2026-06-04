@@ -3564,7 +3564,8 @@ pub fn tool_run_summary(run: &ToolRun) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
+        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep, ToolRun,
+        detect_tool_runs, tool_run_summary,
         PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
         TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
@@ -5404,5 +5405,124 @@ mod tests {
         let label_span = &lines[0].spans[0];
         assert_eq!(label_span.content.as_ref(), "Info");
         assert_eq!(label_span.style.fg, Some(palette::TEXT_DIM));
+    }
+
+    // ── Tool run detection tests (#2692) ──────────────────────────
+
+    fn make_success_tool(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some(format!("args for {name}")),
+            output: Some(format!("output for {name}")),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    fn make_failed_tool(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Failed,
+            input_summary: None,
+            output: Some("error output".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    #[test]
+    fn detect_tool_runs_finds_contiguous_success_run() {
+        let history = vec![
+            HistoryCell::User {
+                content: "hi".into(),
+            },
+            make_success_tool("read_file"),
+            make_success_tool("grep_files"),
+            make_success_tool("file_search"),
+            HistoryCell::User {
+                content: "ok".into(),
+            },
+        ];
+        let runs = detect_tool_runs(&history, 2);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].start, 1);
+        assert_eq!(runs[0].count, 3);
+        assert!(runs[0].tool_families.contains(&"read_file".to_string()));
+    }
+
+    #[test]
+    fn detect_tool_runs_skips_short_runs() {
+        let history = vec![
+            make_success_tool("read_file"),
+            make_success_tool("grep_files"),
+        ];
+        // With threshold 3, a run of 2 should not be detected.
+        let runs = detect_tool_runs(&history, 3);
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn detect_tool_runs_splits_on_failed_tool() {
+        let history = vec![
+            make_success_tool("read_file"),
+            make_success_tool("grep_files"),
+            make_failed_tool("exec_shell"),
+            make_success_tool("file_search"),
+        ];
+        // Failed tool should split the run.
+        let runs = detect_tool_runs(&history, 2);
+        assert_eq!(runs.len(), 1, "only one run should be detected (the first 2)");
+        assert_eq!(runs[0].count, 2);
+    }
+
+    #[test]
+    fn detect_tool_runs_skips_non_tool_cells() {
+        let history = vec![
+            make_success_tool("read_file"),
+            HistoryCell::Assistant {
+                content: "thinking...".into(),
+                streaming: false,
+            },
+            make_success_tool("grep_files"),
+        ];
+        let runs = detect_tool_runs(&history, 2);
+        assert!(runs.is_empty(), "assistant cell should break the run");
+    }
+
+    #[test]
+    fn tool_run_summary_format() {
+        let run = ToolRun {
+            start: 0,
+            count: 5,
+            tool_families: vec!["read_file".into(), "grep_files".into()],
+            ok_count: 5,
+            failed_count: 0,
+            has_running: false,
+        };
+        let summary = tool_run_summary(&run);
+        assert!(summary.contains("5 tools"));
+        assert!(summary.contains("read_file"));
+        assert!(summary.contains("grep_files"));
+        assert!(summary.contains("all ok"));
+    }
+
+    #[test]
+    fn tool_run_summary_shows_failures() {
+        let run = ToolRun {
+            start: 0,
+            count: 4,
+            tool_families: vec!["exec_shell".into()],
+            ok_count: 3,
+            failed_count: 1,
+            has_running: false,
+        };
+        let summary = tool_run_summary(&run);
+        assert!(summary.contains("3 ok"));
+        assert!(summary.contains("1 failed"));
     }
 }
