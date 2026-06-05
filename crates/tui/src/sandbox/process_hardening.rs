@@ -51,6 +51,9 @@ pub fn apply_process_hardening() {
     }
     #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
     {
+        #[cfg(all(target_os = "linux", target_env = "ohos"))]
+        tracing::debug!("Process hardening skipped: not supported on HarmonyOS");
+        #[cfg(not(target_os = "linux"))]
         tracing::debug!("Process hardening skipped: not on Linux");
     }
 }
