@@ -12,6 +12,7 @@ mod core;
 mod debug;
 mod feedback;
 mod goal;
+mod hf;
 mod hooks;
 mod init;
 mod jobs;
@@ -579,6 +580,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "task" | "tasks" => task::task(app, arg),
         "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
+        "hf" | "huggingface" => hf::hf(app, arg),
         "network" => network::network(app, arg),
 
         // Session commands
