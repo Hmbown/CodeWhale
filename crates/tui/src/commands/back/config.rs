@@ -525,7 +525,7 @@ fn parse_config_bool(value: &str) -> Result<bool, String> {
 /// Resolve the path to `~/.codewhale/config.toml` (or
 /// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
-pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
+pub(crate) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     if let Some(path) = config_path {
         return Ok(expand_path(path.to_string_lossy().as_ref()));
