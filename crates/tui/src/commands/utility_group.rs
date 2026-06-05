@@ -89,7 +89,7 @@ impl Command for Slop {
 
 pub struct UtilityCommands;
 impl CommandGroup for UtilityCommands {
-    fn group_name(&self) -> &'static str { "Utility" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Queue),

@@ -85,7 +85,7 @@ impl Command for Logout {
 
 pub struct ConfigCommands;
 impl CommandGroup for ConfigCommands {
-    fn group_name(&self) -> &'static str { "Config" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Config),

@@ -40,7 +40,7 @@ impl Command for Restore {
 
 pub struct SkillsCommands;
 impl CommandGroup for SkillsCommands {
-    fn group_name(&self) -> &'static str { "Skills" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Skills),

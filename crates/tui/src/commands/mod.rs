@@ -113,11 +113,6 @@ pub fn all_commands() -> Vec<&'static CommandInfo> {
     registry().infos()
 }
 
-/// Number of registered commands.
-#[allow(dead_code)]
-pub fn command_count() -> usize {
-    registry().len()
-}
 
 /// Execute a slash command.
 ///

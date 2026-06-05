@@ -32,7 +32,7 @@ impl Command for Attach {
 
 pub struct MemoryCommands;
 impl CommandGroup for MemoryCommands {
-    fn group_name(&self) -> &'static str { "Memory" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Note),

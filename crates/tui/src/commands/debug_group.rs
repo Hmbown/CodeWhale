@@ -109,7 +109,7 @@ impl Command for Retry {
 
 pub struct DebugCommands;
 impl CommandGroup for DebugCommands {
-    fn group_name(&self) -> &'static str { "Debug" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Translate),

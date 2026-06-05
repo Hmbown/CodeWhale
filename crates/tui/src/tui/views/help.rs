@@ -515,7 +515,7 @@ mod tests {
     fn empty_filter_lists_all_entries() {
         let view = HelpView::new();
         // Total = registered slash commands + catalogued keybindings.
-        let expected = commands::command_count() + KEYBINDINGS.len();
+        let expected = commands::all_commands().len() + KEYBINDINGS.len();
         assert_eq!(view.filtered.len(), expected);
         assert_eq!(view.entries.len(), expected);
     }

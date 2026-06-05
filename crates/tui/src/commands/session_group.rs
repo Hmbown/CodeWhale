@@ -81,7 +81,7 @@ impl Command for Export {
 
 pub struct SessionCommands;
 impl CommandGroup for SessionCommands {
-    fn group_name(&self) -> &'static str { "Session" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Rename),

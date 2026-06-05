@@ -279,9 +279,7 @@ impl Command for Relay {
 
 pub struct CoreCommands;
 impl CommandGroup for CoreCommands {
-    fn group_name(&self) -> &'static str {
-        "Core"
-    }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Help),

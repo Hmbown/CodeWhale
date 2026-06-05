@@ -77,10 +77,6 @@ pub trait Command: Send + Sync {
 /// collects commands from all registered groups.
 pub trait CommandGroup: Send + Sync {
     fn commands(&self) -> Vec<Box<dyn Command>>;
-    /// Human-readable group name (e.g. "Core", "Session", "Config").
-    /// Currently used for documentation purposes.
-    #[allow(dead_code)]
-    fn group_name(&self) -> &'static str;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,30 +131,9 @@ impl CommandRegistry {
         self.get(name).map(|cmd| cmd.info())
     }
 
-    /// Execute a slash command by name.
-    ///
-    /// Returns `None` if the command is not found.
-    #[allow(dead_code)]
-    pub fn execute(&self, cmd: &str, app: &mut App) -> Option<CommandResult> {
-        let parts: Vec<&str> = cmd.trim().splitn(2, ' ').collect();
-        let name = parts[0].to_lowercase();
-        let arg = parts.get(1).map(|s| s.trim());
-        self.get(&name).map(|command| command.execute(app, arg))
-    }
-
     /// Iterate over all registered commands.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Command> {
         self.commands.iter().map(Box::as_ref)
-    }
-
-    /// Number of registered commands.
-    pub fn len(&self) -> usize {
-        self.commands.len()
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
     }
 
     /// All registered command infos.

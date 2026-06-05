@@ -48,7 +48,7 @@ impl Command for Goal {
 
 pub struct ProjectCommands;
 impl CommandGroup for ProjectCommands {
-    fn group_name(&self) -> &'static str { "Project" }
+
     fn commands(&self) -> Vec<Box<dyn Command>> {
         vec![
             Box::new(Change),
