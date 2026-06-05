@@ -8600,6 +8600,7 @@ fn activity_cell_rank(cell: &HistoryCell) -> Option<u8> {
         HistoryCell::Tool(tool) => match tool_status_for_activity(tool) {
             Some(ToolStatus::Running) => Some(0),
             Some(ToolStatus::Failed) => Some(1),
+            Some(ToolStatus::Hydrated) => Some(2),
             Some(ToolStatus::Success) => Some(2),
             None => Some(2),
         },
@@ -8831,6 +8832,12 @@ fn tool_status_for_activity(tool: &ToolCell) -> Option<ToolStatus> {
                 .any(|entry| entry.status == ToolStatus::Failed)
             {
                 Some(ToolStatus::Failed)
+            } else if cell
+                .entries
+                .iter()
+                .any(|entry| entry.status == ToolStatus::Hydrated)
+            {
+                Some(ToolStatus::Hydrated)
             } else {
                 Some(ToolStatus::Success)
             }
@@ -8866,6 +8873,7 @@ fn activity_status_label(status: ToolStatus) -> &'static str {
     match status {
         ToolStatus::Running => "running",
         ToolStatus::Success => "done",
+        ToolStatus::Hydrated => "tool loaded - retry required",
         ToolStatus::Failed => "failed",
     }
 }

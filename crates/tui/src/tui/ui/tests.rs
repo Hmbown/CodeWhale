@@ -5462,6 +5462,174 @@ fn ok_result(
     Ok(crate::tools::spec::ToolResult::success(content))
 }
 
+fn hydrated_result(
+    content: &str,
+) -> Result<crate::tools::spec::ToolResult, crate::tools::spec::ToolError> {
+    Ok(
+        crate::tools::spec::ToolResult::success(content).with_metadata(serde_json::json!({
+            "event": "tool.schema_hydrated",
+            "tool": "exec_shell",
+            "executed": false,
+            "retry_required": true,
+            "deferred_tool_loaded": true,
+            "tool_name": "exec_shell",
+        })),
+    )
+}
+
+fn rendered_text(lines: &[ratatui::text::Line<'_>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn completed_exec_tool_result_still_renders_run_done() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "shell-ok",
+        "exec_shell",
+        &serde_json::json!({"command": "echo hi"}),
+    );
+    handle_tool_call_complete(&mut app, "shell-ok", "exec_shell", &ok_result("hi"));
+
+    let exec = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Exec(exec)) => Some(exec),
+            _ => None,
+        })
+        .expect("exec cell");
+
+    assert_eq!(exec.status, ToolStatus::Success);
+    let text = rendered_text(&exec.lines_with_motion(100, true));
+    assert!(text.contains("run done"), "{text}");
+    assert!(!text.contains("tool loaded - retry required"), "{text}");
+}
+
+#[test]
+fn hydrated_exec_tool_result_renders_retry_required_not_run_done() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "shell-hydrated",
+        "exec_shell",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    handle_tool_call_complete(
+        &mut app,
+        "shell-hydrated",
+        "exec_shell",
+        &hydrated_result(
+            "Tool exec_shell was deferred and has now been loaded.\n\
+             The tool was not executed. Retry with the loaded schema.",
+        ),
+    );
+
+    let exec = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Exec(exec)) => Some(exec),
+            _ => None,
+        })
+        .expect("exec cell");
+
+    assert_eq!(exec.status, ToolStatus::Hydrated);
+    let text = rendered_text(&exec.lines_with_motion(120, true));
+    assert!(text.contains("run tool loaded - retry required"), "{text}");
+    assert!(!text.contains("run done"), "{text}");
+}
+
+#[test]
+fn hydrated_tool_with_validation_body_still_uses_hydrated_status() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "generic-hydrated",
+        "deferred_tool",
+        &serde_json::json!({"unexpected": true}),
+    );
+    handle_tool_call_complete(
+        &mut app,
+        "generic-hydrated",
+        "deferred_tool",
+        &hydrated_result(
+            "Tool deferred_tool was deferred and has now been loaded.\n\n\
+             Missing required fields:\n  command\n\n\
+             Unexpected fields:\n  unexpected",
+        ),
+    );
+
+    let generic = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Generic(generic)) => Some(generic),
+            _ => None,
+        })
+        .expect("generic cell");
+
+    assert_eq!(generic.status, ToolStatus::Hydrated);
+    let text = rendered_text(&HistoryCell::Tool(ToolCell::Generic(generic.clone())).lines(120));
+    assert!(text.contains("tool loaded - retry required"), "{text}");
+    assert!(!text.contains("tool done"), "{text}");
+}
+
+#[test]
+fn failed_tool_result_with_hydration_metadata_stays_failed() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "generic-failed",
+        "deferred_tool",
+        &serde_json::json!({}),
+    );
+    let result = Ok(crate::tools::spec::ToolResult::error("boom").with_metadata(
+        serde_json::json!({
+            "event": "tool.schema_hydrated",
+            "executed": false,
+            "retry_required": true,
+        }),
+    ));
+    handle_tool_call_complete(&mut app, "generic-failed", "deferred_tool", &result);
+
+    let generic = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Generic(generic)) => Some(generic),
+            _ => None,
+        })
+        .expect("generic cell");
+
+    assert_eq!(generic.status, ToolStatus::Failed);
+    let text = rendered_text(&HistoryCell::Tool(ToolCell::Generic(generic.clone())).lines(120));
+    assert!(text.contains("tool issue"), "{text}");
+    assert!(!text.contains("tool loaded - retry required"), "{text}");
+}
+
 #[test]
 fn shell_wait_without_command_uses_task_id_until_command_metadata_arrives() {
     let mut app = create_test_app();

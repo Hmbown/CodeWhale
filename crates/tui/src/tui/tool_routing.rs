@@ -469,10 +469,7 @@ pub(super) fn handle_tool_call_complete(
             app.cell_at_virtual_index_mut(cell_index)
             && let Some(entry) = cell.entries.get_mut(entry_index)
         {
-            entry.status = match result.as_ref() {
-                Ok(tool_result) if tool_result.success => ToolStatus::Success,
-                Ok(_) | Err(_) => ToolStatus::Failed,
-            };
+            entry.status = tool_status_from_result(result);
             app.mark_history_updated();
             // Mutating the in-flight exploring cell needs an active-cell
             // revision bump so the transcript cache invalidates the synthetic
@@ -501,26 +498,7 @@ pub(super) fn handle_tool_call_complete(
     store_tool_detail_output(app, id, cell_index, result);
     let in_active = cell_index >= app.history.len();
 
-    let status = match result.as_ref() {
-        Ok(tool_result) => match tool_result.metadata.as_ref() {
-            Some(meta)
-                if meta
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| s == "Running") =>
-            {
-                ToolStatus::Running
-            }
-            _ => {
-                if tool_result.success {
-                    ToolStatus::Success
-                } else {
-                    ToolStatus::Failed
-                }
-            }
-        },
-        Err(_) => ToolStatus::Failed,
-    };
+    let status = tool_status_from_result(result);
 
     if let Some(cell) = app.cell_at_virtual_index_mut(cell_index) {
         match cell {
@@ -610,7 +588,9 @@ pub(super) fn handle_tool_call_complete(
                 match result.as_ref() {
                     Ok(tool_result) => {
                         let summary = summarize_mcp_output(&tool_result.content);
-                        if summary.is_error == Some(true) {
+                        if status == ToolStatus::Hydrated {
+                            mcp.status = status;
+                        } else if summary.is_error == Some(true) {
                             mcp.status = ToolStatus::Failed;
                         } else {
                             mcp.status = status;
@@ -764,16 +744,7 @@ fn push_orphan_tool_completion(
     name: &str,
     result: &Result<ToolResult, ToolError>,
 ) {
-    let status = match result.as_ref() {
-        Ok(tool_result) => {
-            if tool_result.success {
-                ToolStatus::Success
-            } else {
-                ToolStatus::Failed
-            }
-        }
-        Err(_) => ToolStatus::Failed,
-    };
+    let status = tool_status_from_result(result);
     let output = match result.as_ref() {
         Ok(tool_result) => Some(summarize_tool_output(&tool_result.content)),
         Err(err) => Some(err.to_string()),
@@ -834,6 +805,47 @@ fn push_orphan_tool_completion(
             *idx = idx.wrapping_add(1);
         }
     }
+}
+
+fn tool_status_from_result(result: &Result<ToolResult, ToolError>) -> ToolStatus {
+    match result.as_ref() {
+        Ok(tool_result) if is_deferred_schema_hydration(tool_result) => ToolStatus::Hydrated,
+        Ok(tool_result) => match tool_result.metadata.as_ref() {
+            Some(meta)
+                if meta
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == "Running") =>
+            {
+                ToolStatus::Running
+            }
+            _ => {
+                if tool_result.success {
+                    ToolStatus::Success
+                } else {
+                    ToolStatus::Failed
+                }
+            }
+        },
+        Err(_) => ToolStatus::Failed,
+    }
+}
+
+fn is_deferred_schema_hydration(tool_result: &ToolResult) -> bool {
+    if !tool_result.success {
+        return false;
+    }
+    let Some(metadata) = tool_result.metadata.as_ref() else {
+        return false;
+    };
+    metadata
+        .get("event")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|event| event == "tool.schema_hydrated")
+        && metadata
+            .get("executed")
+            .and_then(serde_json::Value::as_bool)
+            .is_some_and(|executed| !executed)
 }
 
 fn is_exploring_tool(name: &str) -> bool {
