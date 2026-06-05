@@ -353,6 +353,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdConfigDescription,
     },
     CommandInfo {
+        name: "sidebar",
+        aliases: &[],
+        usage: "/sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+        description_id: MessageId::CmdConfigDescription,
+    },
+    CommandInfo {
         name: "mode",
         aliases: &["jihua", "zidong"],
         usage: "/mode [agent|plan|yolo|1|2|3]",
@@ -595,6 +601,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 
         // Config commands
         "config" => config::config_command(app, arg),
+        "sidebar" => config::sidebar(app, arg),
         "settings" => config::show_settings(app),
         "status" => status::status(app),
         "statusline" => config::status_line(app),
@@ -1078,7 +1085,7 @@ mod tests {
     use crate::config::{ApiProvider, Config};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
-    use crate::tui::app::{App, AppAction, TuiOptions};
+    use crate::tui::app::{App, AppAction, SidebarFocus, TuiOptions};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::MutexGuard;
@@ -1112,6 +1119,7 @@ mod tests {
     #[test]
     fn command_registry_contains_config_and_links_but_not_set_or_deepseek() {
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "config"));
+        assert!(COMMANDS.iter().any(|cmd| cmd.name == "sidebar"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "links"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "memory"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "set"));
@@ -1301,6 +1309,58 @@ mod tests {
         assert!(!result.is_error);
         assert!(!app.verbose_transcript);
         assert!(result.message.unwrap().contains("off"));
+    }
+
+    #[test]
+    fn execute_sidebar_toggles_visibility() {
+        let mut app = create_test_app();
+        app.set_sidebar_focus(SidebarFocus::Auto);
+
+        let result = execute("/sidebar", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+        assert_eq!(result.message.as_deref(), Some("Sidebar is hidden"));
+
+        let result = execute("/sidebar", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert!(app.status_message.is_none());
+        assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
+    }
+
+    #[test]
+    fn execute_sidebar_accepts_explicit_focus_targets() {
+        let mut app = create_test_app();
+
+        let result = execute("/sidebar tasks", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Tasks);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar off", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar on", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn execute_sidebar_rejects_invalid_args() {
+        let mut app = create_test_app();
+        let result = execute("/sidebar maybe", &mut app);
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Usage: /sidebar")
+        );
     }
 
     #[test]

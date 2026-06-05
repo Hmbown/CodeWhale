@@ -304,6 +304,70 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     })
 }
 
+/// Toggle or focus the right sidebar.
+///
+/// Bare `/sidebar` toggles between hidden and auto. Explicit values mirror
+/// `sidebar_focus` so users have a discoverable copy-friendly path that does
+/// not depend on terminal-specific key translations.
+pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let raw = arg.map(str::trim).unwrap_or("");
+    let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
+    let persist = matches!(tokens.last(), Some(&"--save" | &"-s"));
+    if persist {
+        tokens.pop();
+    }
+
+    let target = match tokens.as_slice() {
+        [] | ["toggle"] => {
+            if app.sidebar_focus == SidebarFocus::Hidden {
+                SidebarFocus::Auto
+            } else {
+                SidebarFocus::Hidden
+            }
+        }
+        [value] => match value.to_ascii_lowercase().as_str() {
+            "on" | "show" | "visible" => SidebarFocus::Auto,
+            "off" | "hide" | "hidden" => SidebarFocus::Hidden,
+            "auto" => SidebarFocus::Auto,
+            "work" | "plan" | "todos" => SidebarFocus::Work,
+            "tasks" => SidebarFocus::Tasks,
+            "agents" | "subagents" | "sub-agents" => SidebarFocus::Agents,
+            "context" | "session" => SidebarFocus::Context,
+            _ => {
+                return CommandResult::error(
+                    "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+                );
+            }
+        },
+        _ => {
+            return CommandResult::error(
+                "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+            );
+        }
+    };
+
+    if persist {
+        let result = set_config_value(app, "sidebar_focus", target.as_setting(), true);
+        if result.is_error {
+            return result;
+        }
+    } else {
+        app.set_sidebar_focus(target);
+    }
+
+    app.needs_redraw = true;
+    let message = sidebar_status_message(target).to_string();
+    CommandResult::message(message)
+}
+
+fn sidebar_status_message(focus: SidebarFocus) -> &'static str {
+    if focus == SidebarFocus::Hidden {
+        "Sidebar is hidden"
+    } else {
+        "Sidebar is visible"
+    }
+}
+
 /// Persist `tui.status_items` to `~/.codewhale/config.toml` without disturbing
 /// the rest of the file. We round-trip through `toml::Value` so any keys we
 /// don't know about (provider blocks, MCP, etc.) survive the write
