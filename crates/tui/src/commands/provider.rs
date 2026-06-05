@@ -28,6 +28,11 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     let name = parts.next().unwrap_or("");
     let model_arg = parts.next();
 
+    // `/provider fallback` — show or reset the fallback chain.
+    if name == "fallback" {
+        return provider_fallback(app, model_arg);
+    }
+
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
             "Unknown provider '{name}'. Expected: {}.",
@@ -68,6 +73,40 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
         provider: target,
         model,
     })
+}
+
+/// `/provider fallback` — shows the current fallback chain and status,
+/// or resets it with `/provider fallback reset`.
+fn provider_fallback(app: &mut App, sub: Option<&str>) -> CommandResult {
+    match sub {
+        Some("reset") => {
+            app.reset_fallback();
+            CommandResult::message("Fallback chain reset to primary provider.")
+        }
+        _ => {
+            if app.fallback_providers.is_empty() {
+                return CommandResult::message(
+                    "No fallback providers configured. Add `fallback_providers` to your config.",
+                );
+            }
+            let active = app.api_provider.as_str().to_string();
+            let current_fallback = app.fallback_depth;
+            let mut lines = vec![format!("Active: {active}")];
+            for (i, name) in app.fallback_providers.iter().enumerate() {
+                let marker = if current_fallback == Some(i) {
+                    " ◀ current"
+                } else {
+                    ""
+                };
+                lines.push(format!("  [{i}] {name}{marker}"));
+            }
+            if let Some(ref reason) = app.last_fallback_reason {
+                lines.push(format!("Last fallback: {reason}"));
+            }
+            lines.push("Use `/provider fallback reset` to return to the primary provider.".into());
+            CommandResult::message(lines.join("\n"))
+        }
+    }
 }
 
 fn expand_model_alias_for_provider(provider: ApiProvider, name: &str) -> String {

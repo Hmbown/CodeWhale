@@ -1212,6 +1212,14 @@ pub struct App {
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
     pub api_provider: ApiProvider,
+    /// Provider fallback providers in route-name form (#2574).
+    /// e.g. `["deepseek", "openrouter"]`. Empty when no fallbacks configured.
+    pub fallback_providers: Vec<String>,
+    /// Current position in the fallback chain. 0 = active provider,
+    /// 1+ = fallback provider. `None` when fallback is not active.
+    pub fallback_depth: Option<usize>,
+    /// Human-readable description of the last fallback event (for UI display).
+    pub last_fallback_reason: Option<String>,
     /// True when the active provider/base URL accepts arbitrary model IDs
     /// verbatim rather than DeepSeek-only aliases.
     pub model_ids_passthrough: bool,
@@ -2002,6 +2010,9 @@ impl App {
             auto_model,
             last_effective_model: None,
             api_provider: provider,
+            fallback_providers: Vec::new(),
+            fallback_depth: None,
+            last_fallback_reason: None,
             model_ids_passthrough,
             reasoning_effort,
             last_effective_reasoning_effort: None,
@@ -4936,6 +4947,65 @@ pub enum AppAction {
         model: String,
         mode: String,
     },
+}
+
+// ── Provider Fallback helpers (#2574) ────────────────────────────
+
+impl App {
+    /// Advance to the next provider in the fallback chain. Call this when
+    /// a retryable error (429, 5xx, timeout) exhausts per-request retries.
+    /// Returns `true` if fallback executed.
+    #[allow(dead_code)] // Called by runtime integration (follow-up PR)
+    pub fn advance_fallback(&mut self, reason: impl Into<String>) -> bool {
+        if self.fallback_providers.is_empty() {
+            return false;
+        }
+        // When fallback_depth is None, the primary provider is active.
+        // The first fallback goes to index 0, not index 1.
+        let next_depth = match self.fallback_depth {
+            None => 0,
+            Some(d) => d + 1,
+        };
+        if next_depth >= self.fallback_providers.len() {
+            self.last_fallback_reason = Some(format!(
+                "Fallback chain exhausted after {}: {}",
+                self.fallback_providers.len(),
+                reason.into()
+            ));
+            return false;
+        }
+        let next_name = &self.fallback_providers[next_depth];
+        if let Some(next_provider) = ApiProvider::parse(next_name) {
+            self.fallback_depth = Some(next_depth);
+            self.last_fallback_reason =
+                Some(format!("Fell back to {}: {}", next_name, reason.into()));
+            self.api_provider = next_provider;
+            true
+        } else {
+            self.last_fallback_reason = Some(format!("Unknown fallback provider: {next_name}"));
+            false
+        }
+    }
+
+    /// Reset the fallback chain to the primary provider.
+    pub fn reset_fallback(&mut self) {
+        self.fallback_depth = None;
+        self.last_fallback_reason = None;
+    }
+
+    /// Whether a fallback provider is currently active.
+    pub fn is_fallback_active(&self) -> bool {
+        self.fallback_depth.unwrap_or(0) > 0
+    }
+
+    /// Initialize fallback providers from the on-disk ConfigToml.
+    #[allow(dead_code)] // Called at startup (follow-up PR)
+    pub fn load_fallback_from_toml(&mut self, raw_providers: &[codewhale_config::ProviderKind]) {
+        self.fallback_providers = raw_providers
+            .iter()
+            .map(|k| k.as_str().to_string())
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

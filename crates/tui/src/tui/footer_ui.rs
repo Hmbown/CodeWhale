@@ -858,6 +858,9 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
 }
 
 pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Color) {
+    if app.is_fallback_active() {
+        return ("fallback \u{2192}", app.ui_theme.status_warning);
+    }
     if app.is_compacting {
         return ("compacting \u{238B}", app.ui_theme.status_warning);
     }
