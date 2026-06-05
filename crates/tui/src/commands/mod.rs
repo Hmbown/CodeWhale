@@ -57,14 +57,9 @@ static REGISTRY: OnceLock<traits::CommandRegistry> = OnceLock::new();
 
 fn build_registry() -> traits::CommandRegistry {
     let mut reg = traits::CommandRegistry::empty();
-    reg.register_group(&groups::core_group::CoreCommands);
-    reg.register_group(&groups::session_group::SessionCommands);
-    reg.register_group(&groups::config_group::ConfigCommands);
-    reg.register_group(&groups::debug_group::DebugCommands);
-    reg.register_group(&groups::project_group::ProjectCommands);
-    reg.register_group(&groups::skills_group::SkillsCommands);
-    reg.register_group(&groups::memory_group::MemoryCommands);
-    reg.register_group(&groups::utility_group::UtilityCommands);
+    for group in groups::all_command_groups() {
+        reg.register_group(group);
+    }
     reg
 }
 
