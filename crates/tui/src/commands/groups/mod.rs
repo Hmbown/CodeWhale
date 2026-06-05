@@ -5,18 +5,18 @@
 //! — it never names individual groups.
 //!
 //! Adding a new group:
-//!   1. Create `groups/my_group.rs` with a struct implementing `CommandGroup`
+//!   1. Create `groups/my_group/` directory with `mod.rs` barrel + command files
 //!   2. Add `mod my_group;` below
 //!   3. Add `&my_group::MyGroupCommands` to the `all_command_groups()` vec
 
 mod core;
-mod session_group;
-mod config_group;
-mod debug_group;
-mod project_group;
-mod skills_group;
-mod memory_group;
-mod utility_group;
+mod session;
+mod config;
+mod debug;
+mod project;
+mod skills;
+mod memory;
+mod utility;
 
 use crate::commands::traits::CommandGroup;
 
@@ -27,12 +27,12 @@ use crate::commands::traits::CommandGroup;
 pub fn all_command_groups() -> Vec<&'static dyn CommandGroup> {
     vec![
         &core::CoreCommands,
-        &session_group::SessionCommands,
-        &config_group::ConfigCommands,
-        &debug_group::DebugCommands,
-        &project_group::ProjectCommands,
-        &skills_group::SkillsCommands,
-        &memory_group::MemoryCommands,
-        &utility_group::UtilityCommands,
+        &session::SessionCommands,
+        &config::ConfigCommands,
+        &debug::DebugCommands,
+        &project::ProjectCommands,
+        &skills::SkillsCommands,
+        &memory::MemoryCommands,
+        &utility::UtilityCommands,
     ]
 }
