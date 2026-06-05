@@ -2270,7 +2270,7 @@ pub(crate) fn slash_completion_hints(
         if command_key.eq_ignore_ascii_case(&prefix_lower) {
             return 0;
         }
-        if let Some(info) = commands::get_command_info(command_key)
+        if let Some(info) = commands::registry().get_info(command_key)
             && info
                 .aliases
                 .iter()
@@ -2323,7 +2323,7 @@ fn push_command_entry(
     locale: crate::localization::Locale,
     user_commands: &[(String, String)],
 ) {
-    let (description, alias_hint) = if let Some(info) = commands::get_command_info(command_key) {
+    let (description, alias_hint) = if let Some(info) = commands::registry().get_info(command_key) {
         let hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
             info.aliases
                 .iter()

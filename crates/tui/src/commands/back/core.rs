@@ -17,7 +17,7 @@ use crate::commands::CommandResult;
 pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
     if let Some(topic) = topic {
         // Show help for specific command
-        if let Some(cmd) = crate::commands::get_command_info(topic) {
+        if let Some(cmd) = crate::commands::registry().get_info(topic) {
             let mut help = format!(
                 "{}\n\n  {}\n\n  {} {}",
                 cmd.name,

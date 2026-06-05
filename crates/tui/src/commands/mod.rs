@@ -157,10 +157,6 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     }
 }
 
-/// Get command info by name or alias.
-pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
-    registry().get_info(name)
-}
 
 /// Update a configuration value programmatically (used by interactive UI views).
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
@@ -538,7 +534,7 @@ mod tests {
 
     #[test]
     fn links_command_has_dashboard_and_api_aliases() {
-        let links = get_command_info("links").expect("links command should exist");
+        let links = registry().get_info("links").expect("links command should exist");
         assert_eq!(links.aliases, &["dashboard", "api", "lianjie"]);
     }
 
@@ -618,7 +614,7 @@ mod tests {
 
     #[test]
     fn relay_command_has_bilingual_aliases() {
-        let relay = get_command_info("relay").expect("relay command should exist");
+        let relay = registry().get_info("relay").expect("relay command should exist");
         assert_eq!(relay.aliases, &["batonpass", "接力"]);
         assert!(relay.description_for(Locale::ZhHans).contains("接力"));
         assert!(relay.description_for(Locale::ZhHant).contains("接力"));
@@ -658,7 +654,7 @@ mod tests {
 
     #[test]
     fn context_command_opens_inspector_and_keeps_ctx_alias() {
-        let context = get_command_info("context").expect("context command should exist");
+        let context = registry().get_info("context").expect("context command should exist");
         assert_eq!(context.aliases, &["ctx"]);
         assert!(context.description_for(Locale::En).contains("inspector"));
 
