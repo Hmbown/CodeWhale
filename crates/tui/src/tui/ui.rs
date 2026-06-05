@@ -4922,10 +4922,9 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<()> {
-    // When paused or paused_quarry: restore the goal into the system prompt
-    // and append an evaluation note. The LLM decides whether to continue the
-    // paused command based on the user's message — no fragile keyword matching.
-    // The paused_quarry is always consumed here (either restored or discarded).
+    // When paused or paused_quarry: keep the paused goal out of the system
+    // prompt and append an evaluation note. The LLM decides whether to
+    // continue the paused command based on the user's message.
     if app.paused || app.paused_quarry.is_some() {
         if app.paused_quarry.is_some() {
             add_paused_evaluation_note(app, &mut message);
@@ -6504,36 +6503,11 @@ async fn submit_or_steer_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
-    mut message: QueuedMessage,
+    message: QueuedMessage,
 ) -> Result<()> {
-    // UI-level interception: "continue"/"resume" consumes paused_quarry so
-    // the WorkBench icon changes from ⏸ to ▶. Also adds an evaluation note
-    // here because dispatch_user_message won't add one (paused_quarry consumed).
-    if app.paused_quarry.is_some() {
-        let trimmed = message.display.trim().to_lowercase();
-        if trimmed == "continue"
-            || trimmed == "resume"
-            || trimmed.starts_with("continue ")
-            || trimmed.starts_with("resume ")
-            || trimmed.contains(" continue ")
-            || trimmed.contains(" resume ")
-            || trimmed.ends_with(" continue")
-            || trimmed.ends_with(" resume")
-        {
-            // Consume paused_quarry → workflow_paused becomes false → icon ▶
-            // Restore to hunt.quarry → TurnCompleted can set Hunted → icon ✓
-            if let Some(q) = app.paused_quarry.take() {
-                let name = q.split(['\n', '\r']).next().unwrap_or(&q).to_string();
-                let note = format!(
-                    "\n\n---\n[Note: The user previously paused: {name}. If they ask to \
-                     continue or resume it in their message above, do so. Otherwise, \
-                     ignore the paused command and respond only to the new message.]"
-                );
-                message.display.push_str(&note);
-                app.hunt.quarry = Some(q);
-            }
-        }
-    }
+    // No keyword interception for "continue"/"resume". Immediate dispatch and
+    // steer both append the paused-command evaluation note before reaching the
+    // model, and the model decides intent from the full message.
     match app.decide_submit_disposition() {
         SubmitDisposition::Immediate => {
             dispatch_user_message(app, config, engine_handle, message).await

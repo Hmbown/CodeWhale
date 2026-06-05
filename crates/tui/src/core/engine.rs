@@ -1078,6 +1078,14 @@ impl Engine {
                         hook_executor,
                     )
                     .await;
+                    tracing::debug!(
+                        target: "turn_dispatch",
+                        content_bytes,
+                        mode = %mode_label,
+                        model = %model_label,
+                        elapsed_ms = op_started.elapsed().as_millis(),
+                        "engine finished SendMessage op"
+                    );
                 }
                 Op::RunShellCommand {
                     command,
@@ -1094,14 +1102,6 @@ impl Engine {
                         approval_mode,
                     )
                     .await;
-                    tracing::debug!(
-                        target: "turn_dispatch",
-                        content_bytes,
-                        mode = %mode_label,
-                        model = %model_label,
-                        elapsed_ms = op_started.elapsed().as_millis(),
-                        "engine finished SendMessage op"
-                    );
                 }
                 Op::CancelRequest => {
                     self.cancel_token.cancel();

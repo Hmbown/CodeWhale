@@ -3529,28 +3529,9 @@ mod tests {
     /// Simulate what dispatch_user_message does when processing a message
     /// while the app is paused. Mirrors the real flow in ui.rs so tests
     /// catch regressions that state-only tests miss.
-    fn simulate_dispatch_non_continue(app: &mut App, message: &str) {
-        // Mirror submit_or_steer_message keyword detection:
-        // consume paused_quarry + restore hunt.quarry for "continue"/"resume"
-        {
-            let trimmed = message.trim().to_lowercase();
-            if trimmed == "continue"
-                || trimmed == "resume"
-                || trimmed.starts_with("continue ")
-                || trimmed.starts_with("resume ")
-                || trimmed.contains(" continue ")
-                || trimmed.contains(" resume ")
-                || trimmed.ends_with(" continue")
-                || trimmed.ends_with(" resume")
-            {
-                if let Some(q) = app.paused_quarry.take() {
-                    app.hunt.quarry = Some(q);
-                }
-            }
-        }
+    fn simulate_dispatch_non_continue(app: &mut App, _message: &str) {
+        // No keyword interception: the LLM evaluation note handles intent.
         if app.paused || app.paused_quarry.is_some() {
-            // Only clear quarry if keyword interception didn't already
-            // restore it (e.g. for "continue"/"resume" messages).
             if app.paused_quarry.is_some() {
                 app.hunt.quarry = None;
             }
@@ -3584,10 +3565,8 @@ mod tests {
         // 3. Type "how are you?" -- through real dispatch simulation
         simulate_dispatch_non_continue(&mut app, "how are you?");
 
-        // ASSERT: LLM-evaluation restores quarry into hunt.quarry.
-        // The LLM sees the paused command in the system prompt and a note
-        // in the message, and decides whether to continue or not.
-        // quarry stays None — no goal in system prompt (only the note in the message)
+        // ASSERT: quarry stays None: no goal in the system prompt, only the
+        // paused-command evaluation note in the message.
         assert!(
             app.hunt.quarry.is_none(),
             "quarry must be None: system prompt has no active goal"
@@ -3598,7 +3577,7 @@ mod tests {
             "paused_quarry preserved for WorkBench display"
         );
 
-        // ASSERT: LLM-evaluation cleared pause state, restored quarry
+        // ASSERT: LLM-evaluation cleared pause state and preserved paused_quarry.
         let summary = sidebar_work_summary(&mut app);
         // WorkBench shows ⏸ with the paused goal (via paused_quarry fallback)
         assert_eq!(
@@ -3612,41 +3591,37 @@ mod tests {
             "WorkBench must show the goal (restored from paused_quarry)"
         );
 
-        // 4. Type "resume the paused command" -- same as any message now:
-        //    quarry restored for LLM evaluation. Pause indicator cleared.
+        // 4. Type "resume the paused command" -- same as any message now.
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
-        // ASSERT: keyword interception restored quarry
-        assert_eq!(
-            app.hunt.quarry.as_deref(),
-            Some("Scan nested git repos"),
-            "'resume the paused command' restores quarry"
+        // ASSERT: LLM evaluation note handles intent, no local keyword restore.
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
         );
-        // ASSERT: pause is cleared and paused_quarry consumed
+        // ASSERT: pause is cleared and paused_quarry preserved for WorkBench.
         assert!(!app.paused, "pause cleared after dispatch");
         assert!(
-            app.paused_quarry.is_none(),
-            "paused_quarry consumed on resume"
+            app.paused_quarry.is_some(),
+            "paused_quarry preserved for WorkBench display"
         );
-        // ASSERT: WorkBench shows the paused command (via paused_quarry fallback)
+        // ASSERT: WorkBench still shows the paused command.
         let summary = sidebar_work_summary(&mut app);
-        assert!(
-            summary.pause_indicator.is_none(),
-            "pause indicator cleared after resume: {:?}",
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "pause indicator: {:?}",
             summary.pause_indicator
         );
-        // After "continue", paused_quarry is consumed and quarry is restored.
-        // The goal appears when the system prompt builds in the engine turn.
-        assert!(
-            summary.goal_objective.is_none()
-                || summary.goal_objective.as_deref() == Some("Scan nested git repos"),
-            "WorkBench: goal={:?} (None=correct after consume, Some=restored)",
-            summary.goal_objective
+        assert_eq!(
+            summary.goal_objective.as_deref(),
+            Some("Scan nested git repos"),
+            "WorkBench shows paused goal via paused_quarry fallback"
         );
     }
 
     #[test]
-    fn dispatch_continue_restores_quarry_and_workbench() {
+    fn dispatch_continue_uses_llm_evaluation_note_and_keeps_paused_context() {
         let mut app = create_test_app();
         app.hunt.quarry = Some("Scan nested git repos".to_string());
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
@@ -3657,31 +3632,30 @@ mod tests {
         // Type "continue" -- through real dispatch simulation
         simulate_dispatch_non_continue(&mut app, "continue");
 
-        // keyword detection restores quarry on "continue"
-        assert_eq!(
-            app.hunt.quarry.as_deref(),
-            Some("Scan nested git repos"),
-            "'continue' restores quarry"
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
         );
         assert!(
-            app.paused_quarry.is_none(),
-            "paused_quarry consumed on continue"
+            app.paused_quarry.is_some(),
+            "paused_quarry preserved for WorkBench display"
         );
         let summary = sidebar_work_summary(&mut app);
-        assert!(
-            summary.pause_indicator.is_none(),
-            "pause indicator cleared after continue: {:?}",
+        assert_eq!(
+            summary.pause_indicator.as_deref(),
+            Some("(Paused)"),
+            "pause indicator: {:?}",
             summary.pause_indicator
         );
         assert_eq!(
             summary.goal_objective.as_deref(),
             Some("Scan nested git repos"),
-            "WorkBench shows goal via restored quarry"
+            "WorkBench shows paused goal via paused_quarry fallback"
         );
     }
 
     #[test]
-    fn dispatch_resume_starts_with_restores_quarry() {
+    fn dispatch_resume_starts_with_uses_llm_evaluation_note() {
         let mut app = create_test_app();
         app.hunt.quarry = Some("Build deploy".to_string());
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
@@ -3689,18 +3663,21 @@ mod tests {
         app.hunt.quarry = None;
         app.paused = true;
 
-        // "resume the paused command" should trigger starts_with("resume ")
         simulate_dispatch_non_continue(&mut app, "resume the paused command");
 
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
         assert_eq!(
-            app.hunt.quarry.as_deref(),
+            app.paused_quarry.as_deref(),
             Some("Build deploy"),
-            "'resume the paused command' restores quarry"
+            "paused_quarry preserved for WorkBench display"
         );
     }
 
     #[test]
-    fn dispatch_non_continue_after_resume_preserves_new_state() {
+    fn dispatch_after_resume_word_keeps_llm_evaluation_state() {
         let mut app = create_test_app();
         app.hunt.quarry = Some("Scan repos".to_string());
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunting;
@@ -3710,13 +3687,17 @@ mod tests {
 
         // "resume"
         simulate_dispatch_non_continue(&mut app, "resume");
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation handles intent"
+        );
         assert_eq!(
-            app.hunt.quarry.as_deref(),
+            app.paused_quarry.as_deref(),
             Some("Scan repos"),
-            "'resume' restores quarry"
+            "paused_quarry preserved after resume wording"
         );
 
-        // Now paused_quarry consumed (by keyword detection), paused is false.
+        // Now paused_quarry is preserved, paused is false.
         // TurnStarted clears paused_cancelled and pausable.
         app.paused_cancelled = false;
         app.pausable = false;
@@ -3724,11 +3705,14 @@ mod tests {
         // User types "wait no" -- should be normal message, no pause interference
         simulate_dispatch_non_continue(&mut app, "wait no");
 
-        // Quarry stays restored (unchanged by non-resume messages)
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation handles all messages"
+        );
         assert_eq!(
-            app.hunt.quarry.as_deref(),
+            app.paused_quarry.as_deref(),
             Some("Scan repos"),
-            "quarry stays restored after non-resume message"
+            "paused_quarry remains available for WorkBench display"
         );
     }
 
@@ -3948,12 +3932,10 @@ mod tests {
     }
 
     #[test]
-    fn resume_interception_consumes_paused_quarry_from_any_path() {
-        // Verifies the interception logic now at the top of
-        // submit_or_steer_message (and in the simulation helper):
-        // when paused_quarry is set and the user types "resume the paused
-        // command", the quarry is consumed BEFORE deciding which dispatch
-        // path to take (Immediate vs Steer vs Queue).
+    fn llm_evaluation_preserves_paused_quarry_from_any_path() {
+        // Verifies that submit/steer routing does not locally intercept
+        // "resume" wording. The paused command stays available to WorkBench,
+        // and the LLM evaluation note handles intent.
         let mut app = create_test_app();
         app.paused_quarry = Some("Scan nested git repos".to_string());
         app.paused = false; // unpaused state after "how are you?"
@@ -3971,9 +3953,8 @@ mod tests {
             "quarry stays None — LLM evaluation note handles intent"
         );
 
-        // After interception, even if command completes, the sidebar
-        // should show the resumed goal, not the pause icon
-        // (quarry is NOT cleared on completion — sidebar keeps the goal)
+        // Even if a later turn completes, WorkBench can still show the paused
+        // goal from paused_quarry without locally reactivating it.
         app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
         app.is_loading = false;
 
@@ -3995,7 +3976,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_detected_in_middle_of_sentence() {
+    fn resume_phrase_in_middle_uses_llm_evaluation_note() {
         let mut app = create_test_app();
         app.paused_quarry = Some("Scan repos".to_string());
         app.hunt.quarry = None;
@@ -4005,10 +3986,14 @@ mod tests {
             "can you please continue the paused slash command",
         );
 
+        assert!(
+            app.hunt.quarry.is_none(),
+            "quarry stays None — LLM evaluation note handles intent"
+        );
         assert_eq!(
-            app.hunt.quarry.as_deref(),
+            app.paused_quarry.as_deref(),
             Some("Scan repos"),
-            "'can you please continue...' restores quarry"
+            "paused_quarry preserved for WorkBench display"
         );
     }
 }

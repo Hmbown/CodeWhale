@@ -53,17 +53,14 @@ impl ShellInvocation {
 
         if shell_program_stem(&self.program)
             .is_some_and(|stem| matches!(stem.as_str(), "pwsh" | "powershell"))
-        {
-            if let Some((idx, _)) = self
+            && let Some((idx, _)) = self
                 .args
                 .iter()
                 .enumerate()
                 .find(|(_, arg)| arg.eq_ignore_ascii_case("-Command"))
-            {
-                if let Some(command) = self.args.get(idx + 1) {
-                    return Some(command.clone());
-                }
-            }
+            && let Some(command) = self.args.get(idx + 1)
+        {
+            return Some(command.clone());
         }
 
         None
