@@ -300,7 +300,7 @@ fn parse_package_json(workspace: &Path) -> Option<String> {
     if let Some(deps) = doc.get("dependencies").and_then(|v| v.as_object()) {
         let dep_keys: Vec<&str> = deps.keys().map(|k| k.as_str()).collect();
         if !dep_keys.is_empty() {
-            // Detect frameworks from deps.
+            // Detect frameworks from runtime deps.
             let frameworks = detect_js_frameworks(&dep_keys);
             if !frameworks.is_empty() {
                 lines.push(format!("- Frameworks detected: {}", frameworks.join(", ")));
@@ -313,6 +313,15 @@ fn parse_package_json(workspace: &Path) -> Option<String> {
     if let Some(dev_deps) = doc.get("devDependencies").and_then(|v| v.as_object()) {
         let dev_keys: Vec<&str> = dev_deps.keys().map(|k| k.as_str()).collect();
         if !dev_keys.is_empty() {
+            // Also detect build-tool/framework entries from devDependencies
+            // (Vite, webpack, esbuild, Turbopack, etc.).
+            let dev_frameworks = detect_js_frameworks(&dev_keys);
+            if !dev_frameworks.is_empty() {
+                lines.push(format!(
+                    "- Dev frameworks/tools: {}",
+                    dev_frameworks.join(", ")
+                ));
+            }
             lines.push(format!("- Dev dependencies: {}", dev_keys.join(", ")));
         }
     }
@@ -355,6 +364,26 @@ fn detect_js_frameworks(deps: &[&str]) -> Vec<String> {
     found
 }
 
+/// Strip userinfo (username:password or username) from a URL to avoid leaking
+/// embedded credentials into the LLM prompt.
+fn strip_url_credentials(url: &str) -> String {
+    // Handle SSH-style URLs: git@host:org/repo.git — no embedded password.
+    if url.contains('@') && !url.contains("://") {
+        return url.to_string();
+    }
+    // HTTP(S) URLs: strip the authority userinfo.
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(at_pos) = after_scheme.find('@') {
+            // Rebuild: scheme + host@path (skip "user:pass@" or "user@").
+            let host_and_path = &after_scheme[at_pos + 1..];
+            let scheme = &url[..scheme_end + 3];
+            return format!("{scheme}{host_and_path}");
+        }
+    }
+    url.to_string()
+}
+
 /// Gather git repository information via subprocess calls.
 fn gather_git_info(workspace: &Path) -> Option<String> {
     // Check if we're in a git repo.
@@ -382,9 +411,10 @@ fn gather_git_info(workspace: &Path) -> Option<String> {
 
     let mut lines: Vec<String> = Vec::new();
 
-    // Remote URL.
+    // Remote URL (strip embedded credentials to avoid leaking tokens to the LLM).
     if let Some(url) = run(&["remote", "get-url", "origin"]) {
-        lines.push(format!("- Remote: {url}"));
+        let sanitized = strip_url_credentials(&url);
+        lines.push(format!("- Remote: {sanitized}"));
     }
 
     // Current branch.
@@ -416,17 +446,13 @@ fn gather_git_info(workspace: &Path) -> Option<String> {
                 b.len() >= 2 && b[1] != b' ' && b[1] != b'?'
             })
             .count();
-        let untracked = status_str.lines().filter(|l| l.starts_with("??")).count();
-        if staged > 0 || unstaged > 0 || untracked > 0 {
+        if staged > 0 || unstaged > 0 {
             let mut parts = Vec::new();
             if staged > 0 {
                 parts.push(format!("{staged} staged"));
             }
             if unstaged > 0 {
                 parts.push(format!("{unstaged} modified"));
-            }
-            if untracked > 0 {
-                parts.push(format!("{untracked} untracked"));
             }
             lines.push(format!("- Working tree: {}", parts.join(", ")));
         }
@@ -457,22 +483,22 @@ fn detect_ci_systems(workspace: &Path) -> Vec<String> {
     if workspace.join(".github").join("workflows").is_dir()
         && let Ok(entries) = std::fs::read_dir(workspace.join(".github").join("workflows"))
     {
-            let files: Vec<String> = entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if name.ends_with(".yml") || name.ends_with(".yaml") {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if files.is_empty() {
-                found.push("GitHub Actions".to_string());
-            } else {
-                found.push(format!("GitHub Actions ({})", files.join(", ")));
-            }
+        let files: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".yml") || name.ends_with(".yaml") {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if files.is_empty() {
+            found.push("GitHub Actions".to_string());
+        } else {
+            found.push(format!("GitHub Actions ({})", files.join(", ")));
+        }
     }
     if workspace.join(".gitlab-ci.yml").exists() {
         found.push("GitLab CI".to_string());
@@ -515,23 +541,23 @@ fn detect_build_systems(workspace: &Path) -> Vec<String> {
     if workspace.join("scripts").is_dir()
         && let Ok(entries) = std::fs::read_dir(workspace.join("scripts"))
     {
-            let scripts: Vec<String> = entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    let path = e.path();
-                    if (name.ends_with(".sh") || name.ends_with(".py") || name.ends_with(".js"))
-                        && path.is_file()
-                    {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if !scripts.is_empty() {
-                found.push(format!("scripts/ ({})", scripts.join(", ")));
-            }
+        let scripts: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let path = e.path();
+                if (name.ends_with(".sh") || name.ends_with(".py") || name.ends_with(".js"))
+                    && path.is_file()
+                {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !scripts.is_empty() {
+            found.push(format!("scripts/ ({})", scripts.join(", ")));
+        }
     }
 
     found
@@ -546,31 +572,31 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
         && let Ok(doc) = toml::from_str::<toml::Value>(&raw)
     {
         let mut dep_keys: Vec<&str> = Vec::new();
-            if let Some(dev_deps) = doc.get("dev-dependencies").and_then(|v| v.as_table()) {
-                dep_keys.extend(dev_deps.keys().map(|k| k.as_str()));
-            }
-            if let Some(ws_dev_deps) = doc
-                .get("workspace")
-                .and_then(|w| w.get("dev-dependencies"))
-                .and_then(|v| v.as_table())
-            {
-                dep_keys.extend(ws_dev_deps.keys().map(|k| k.as_str()));
-            }
+        if let Some(dev_deps) = doc.get("dev-dependencies").and_then(|v| v.as_table()) {
+            dep_keys.extend(dev_deps.keys().map(|k| k.as_str()));
+        }
+        if let Some(ws_dev_deps) = doc
+            .get("workspace")
+            .and_then(|w| w.get("dev-dependencies"))
+            .and_then(|v| v.as_table())
+        {
+            dep_keys.extend(ws_dev_deps.keys().map(|k| k.as_str()));
+        }
 
-            let rust_test_frameworks: &[(&str, &str)] = &[
-                ("tokio-test", "tokio-test"),
-                ("proptest", "proptest"),
-                ("quickcheck", "quickcheck"),
-                ("rstest", "rstest"),
-                ("criterion", "criterion (benchmark)"),
-                ("mockall", "mockall"),
-                ("pretty_assertions", "pretty_assertions"),
-            ];
-            for (dep_key, label) in rust_test_frameworks {
-                if dep_keys.contains(dep_key) {
-                    found.push((*label).to_string());
-                }
+        let rust_test_frameworks: &[(&str, &str)] = &[
+            ("tokio-test", "tokio-test"),
+            ("proptest", "proptest"),
+            ("quickcheck", "quickcheck"),
+            ("rstest", "rstest"),
+            ("criterion", "criterion (benchmark)"),
+            ("mockall", "mockall"),
+            ("pretty_assertions", "pretty_assertions"),
+        ];
+        for (dep_key, label) in rust_test_frameworks {
+            if dep_keys.contains(dep_key) {
+                found.push((*label).to_string());
             }
+        }
     }
 
     // Node.js: check package.json devDependencies.
@@ -580,21 +606,21 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
     {
         let dev_keys: Vec<&str> = dev_deps.keys().map(|k| k.as_str()).collect();
 
-                let js_test_frameworks: &[(&str, &str)] = &[
-                    ("jest", "Jest"),
-                    ("vitest", "Vitest"),
-                    ("mocha", "Mocha"),
-                    ("jasmine", "Jasmine"),
-                    ("ava", "AVA"),
-                    ("playwright", "Playwright"),
-                    ("cypress", "Cypress"),
-                    ("@testing-library/react", "Testing Library"),
-                ];
-                for (dep_key, label) in js_test_frameworks {
-                    if dev_keys.contains(dep_key) {
-                        found.push((*label).to_string());
-                    }
-                }
+        let js_test_frameworks: &[(&str, &str)] = &[
+            ("jest", "Jest"),
+            ("vitest", "Vitest"),
+            ("mocha", "Mocha"),
+            ("jasmine", "Jasmine"),
+            ("ava", "AVA"),
+            ("playwright", "Playwright"),
+            ("cypress", "Cypress"),
+            ("@testing-library/react", "Testing Library"),
+        ];
+        for (dep_key, label) in js_test_frameworks {
+            if dev_keys.contains(dep_key) {
+                found.push((*label).to_string());
+            }
+        }
     }
 
     // Python: check common test config files.
