@@ -6,6 +6,7 @@
 //! `super::back::core::help()` etc.
 
 pub(crate) mod config;
+pub(crate) mod config_handlers;
 pub(crate) mod core;
 pub(crate) mod debug;
 pub(crate) mod session;
