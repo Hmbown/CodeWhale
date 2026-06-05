@@ -6,8 +6,6 @@ use crate::commands::traits::CommandInfo;
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 
-use super::parse_depth_prefixed_arg;
-
 pub struct Agent;
 impl Command for Agent {
     fn info(&self) -> &'static CommandInfo {
@@ -27,7 +25,8 @@ impl Command for Agent {
             Some(task) if !task.trim().is_empty() => task.trim().to_string(),
             _ => {
                 return CommandResult::error(
-                    "Usage: /agent [N] <task>\n\n                     Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
+                    "Usage: /agent [N] <task>\n\n\
+                     Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
                 );
             }
         };
@@ -38,5 +37,30 @@ impl Command for Agent {
             format!("Opening persistent sub-agent at depth {max_depth}..."),
             AppAction::SendMessage(message),
         )
+    }
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+/// Parse a depth-prefixed argument like "2 some text" -> (2, "some text").
+fn parse_depth_prefixed_arg(
+    arg: Option<&str>,
+    default_depth: u32,
+) -> Result<(u32, Option<&str>), String> {
+    let Some(raw) = arg.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok((default_depth, None));
+    };
+    let mut parts = raw.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or_default();
+    if first.chars().all(|ch| ch.is_ascii_digit()) {
+        let depth: u32 = first
+            .parse()
+            .map_err(|_| "Depth must be an integer from 0 to 3".to_string())?;
+        if depth > 3 {
+            return Err("Depth must be between 0 and 3".to_string());
+        }
+        Ok((depth, parts.next().map(str::trim)))
+    } else {
+        Ok((default_depth, Some(raw)))
     }
 }
