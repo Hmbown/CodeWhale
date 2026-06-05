@@ -397,7 +397,7 @@ Remaining variables:
 - `NOVITA_BASE_URL`
 - `FIREWORKS_API_KEY`
 - `FIREWORKS_BASE_URL`
-- `HUGGINGFACE_API_KEY` or `HF_TOKEN` (preferred when provider is `huggingface`)
+- `HUGGINGFACE_API_KEY` or `HF_TOKEN` (`HF_TOKEN` is a fallback alias accepted when provider is `huggingface`)
 - `HUGGINGFACE_BASE_URL` or `HF_BASE_URL`
 - `HUGGINGFACE_MODEL` or `HF_MODEL`
 - `SILICONFLOW_API_KEY`
