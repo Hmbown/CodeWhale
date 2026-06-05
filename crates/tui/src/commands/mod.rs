@@ -139,6 +139,87 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b_chars.len()]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::tui::app::{App, TuiOptions};
+    use std::path::PathBuf;
+
+    fn test_app() -> App {
+        App::new(
+            TuiOptions {
+                model: "deepseek-v4-pro".to_string(),
+                workspace: PathBuf::from("."),
+                config_path: None,
+                config_profile: None,
+                allow_shell: false,
+                use_alt_screen: true,
+                use_mouse_capture: false,
+                use_bracketed_paste: true,
+                max_subagents: 1,
+                skills_dir: PathBuf::from("."),
+                memory_path: PathBuf::from("memory.md"),
+                notes_path: PathBuf::from("notes.txt"),
+                mcp_config_path: PathBuf::from("mcp.json"),
+                use_memory: false,
+                start_in_agent_mode: false,
+                skip_onboarding: true,
+                yolo: false,
+                resume_session_id: None,
+                initial_input: None,
+            },
+            &Config::default(),
+        )
+    }
+
+    #[test]
+    fn registry_contains_commands() {
+        let cmds = registry().infos();
+        assert!(!cmds.is_empty(), "registry should contain commands");
+        assert!(cmds.iter().any(|c| c.name == "help"));
+        assert!(cmds.iter().any(|c| c.name == "clear"));
+        assert!(cmds.iter().any(|c| c.name == "config"));
+    }
+
+    #[test]
+    fn execute_help_command_succeeds() {
+        let mut app = test_app();
+        let result = execute("/help", &mut app);
+        assert!(!result.is_error, "help should succeed: {:?}", result.message);
+    }
+
+    #[test]
+    fn execute_unknown_command_returns_error() {
+        let mut app = test_app();
+        let result = execute("/nonexistent", &mut app);
+        assert!(result.is_error);
+        assert!(result.message.as_deref().unwrap_or("").contains("Unknown command"));
+    }
+
+    #[test]
+    fn execute_without_slash_still_works() {
+        let mut app = test_app();
+        let result = execute("help", &mut app);
+        assert!(!result.is_error);
+    }
+
+    #[test]
+    fn execute_dispatches_by_alias() {
+        let mut app = test_app();
+        let result = execute("/qingping", &mut app);
+        assert!(!result.is_error, "alias /qingping should dispatch to clear");
+    }
+
+    #[test]
+    fn unknown_command_suggests_similar() {
+        let mut app = test_app();
+        let result = execute("/hel", &mut app);
+        let msg = result.message.as_deref().unwrap_or("");
+        assert!(msg.contains("Did you mean"));
+    }
+}
+
 fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
     let query = input.trim().to_ascii_lowercase();
     if query.is_empty() || limit == 0 {
