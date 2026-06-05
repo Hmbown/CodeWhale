@@ -4995,6 +4995,7 @@ impl App {
     }
 
     /// Initialize fallback providers from the on-disk ConfigToml.
+    #[allow(dead_code)] // Called at startup (follow-up PR)
     pub fn load_fallback_from_toml(&mut self, raw_providers: &[codewhale_config::ProviderKind]) {
         self.fallback_providers = raw_providers
             .iter()

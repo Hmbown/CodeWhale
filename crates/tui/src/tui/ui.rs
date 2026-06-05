@@ -4502,6 +4502,30 @@ pub(crate) fn apply_engine_error_to_app(
         );
         return;
     }
+    // Provider fallback: when the error is recoverable (429, 5xx, timeout,
+    // network) and fallback providers are configured, advance the chain
+    // instead of going offline. The user can re-submit manually or via
+    // undo (Ctrl+Z).
+    if recoverable
+        && matches!(
+            envelope.category,
+            crate::error_taxonomy::ErrorCategory::Network
+                | crate::error_taxonomy::ErrorCategory::RateLimit
+                | crate::error_taxonomy::ErrorCategory::Timeout
+        )
+        && !app.fallback_providers.is_empty()
+    {
+        let advanced = app.advance_fallback(&message);
+        if advanced {
+            app.status_message = Some(format!(
+                "Switched to {} (fallback {}/{}): {message}",
+                app.api_provider.as_str(),
+                app.fallback_depth.unwrap_or(0),
+                app.fallback_providers.len()
+            ));
+            return;
+        }
+    }
     if !recoverable {
         app.offline_mode = true;
     }
