@@ -3874,7 +3874,7 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     println!();
     println!(
         "Resume with: {} {}",
-        "codewhale --resume".truecolor(blue_r, blue_g, blue_b),
+        "codewhale resume".truecolor(blue_r, blue_g, blue_b),
         "<session-id>".dimmed()
     );
     println!(
