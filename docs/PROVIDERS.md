@@ -130,6 +130,44 @@ endpoint.
 | `ollama` | `[providers.ollama]` | Optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Self-hosted Ollama OpenAI-compatible route. Localhost deployments commonly omit auth. `OLLAMA_MODEL` is accepted. |
 | `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`; default `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI-compatible route. Org-prefixed model IDs pass through. |
 
+### Hugging Face MCP (Model Context Protocol)
+
+Hugging Face provides an MCP server for Hub search, model-card lookups,
+dataset discovery, and community tools — separate from the inference provider
+route above. CodeWhale can detect whether it is configured and print a safe
+config skeleton via the `/hf` command:
+
+- `/hf mcp status` — check whether the HF MCP server is configured
+- `/hf mcp setup` — print a config skeleton with placeholder tokens
+- `/hf concepts` — explain HF provider vs MCP vs Hub
+
+Add the following to your MCP config (`mcp.json` or the CodeWhale MCP config
+file) to enable HF MCP:
+
+```jsonc
+{
+  "servers": {
+    "huggingface": {
+      "url": "https://huggingface.co/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HF_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+`${HF_TOKEN}` is a placeholder — replace it with your Hugging Face token.
+Never commit your real token.
+
+Once configured, the HF MCP server provides tools for:
+
+- Searching the Hub for models, datasets, and Spaces
+- Inspecting model cards and documentation
+- Accessing community tools and resources
+
+For more details, see https://huggingface.co/docs/hub/hf-mcp-server.
+
 ### Xiaomi MiMo Notes
 
 `xiaomi-mimo` defaults to `mimo-v2.5-pro` for long-context reasoning and coding

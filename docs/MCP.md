@@ -218,6 +218,34 @@ MCP tools now flow through the same tool-approval framework as built-in tools. R
 
 You should still only configure MCP servers you trust, and treat MCP server configuration as equivalent to running code on your machine.
 
+## Hugging Face MCP Server
+
+Hugging Face provides an MCP server for Hub search, model-card lookups,
+dataset discovery, and community tools. Configure it by adding a `"huggingface"`
+entry to your MCP config:
+
+```jsonc
+{
+  "servers": {
+    "huggingface": {
+      "url": "https://huggingface.co/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HF_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+- Replace `${HF_TOKEN}` with a [Hugging Face access token](https://huggingface.co/settings/tokens) that has read access.
+- Never commit or share your real token.
+- The TUI `/hf` command can detect whether this server is configured:
+  - `/hf mcp status` — check configuration status
+  - `/hf mcp setup` — print this skeleton
+  - `/hf concepts` — explain HF provider vs MCP vs Hub
+
+For more details: https://huggingface.co/docs/hub/hf-mcp-server
+
 ## Troubleshooting
 
 - Run `codewhale-tui doctor` to confirm the MCP config path it resolved and whether it exists.
