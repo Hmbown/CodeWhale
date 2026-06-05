@@ -1212,6 +1212,14 @@ pub struct App {
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
     pub api_provider: ApiProvider,
+    /// Provider fallback providers in route-name form (#2574).
+    /// e.g. `["deepseek", "openrouter"]`. Empty when no fallbacks configured.
+    pub fallback_providers: Vec<String>,
+    /// Current position in the fallback chain. 0 = active provider,
+    /// 1+ = fallback provider. `None` when fallback is not active.
+    pub fallback_depth: Option<usize>,
+    /// Human-readable description of the last fallback event (for UI display).
+    pub last_fallback_reason: Option<String>,
     /// True when the active provider/base URL accepts arbitrary model IDs
     /// verbatim rather than DeepSeek-only aliases.
     pub model_ids_passthrough: bool,
@@ -2002,6 +2010,9 @@ impl App {
             auto_model,
             last_effective_model: None,
             api_provider: provider,
+            fallback_providers: Vec::new(),
+            fallback_depth: None,
+            last_fallback_reason: None,
             model_ids_passthrough,
             reasoning_effort,
             last_effective_reasoning_effort: None,

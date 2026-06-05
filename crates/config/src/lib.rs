@@ -332,6 +332,11 @@ pub struct ConfigToml {
     pub tools: Option<ToolsToml>,
     #[serde(default)]
     pub providers: ProvidersToml,
+    /// Provider fallback chain (#2574). When the active provider returns a
+    /// retryable error (429, 5xx, timeout), CodeWhale tries the next provider
+    /// in this list without user intervention.
+    #[serde(default)]
+    pub fallback_providers: Vec<ProviderKind>,
     /// Per-domain network policy (#135). When absent, network tools fall back
     /// to a permissive default that mirrors pre-v0.7.0 behavior.
     #[serde(default)]
@@ -355,6 +360,60 @@ pub struct ConfigToml {
     pub hook_sinks: Option<HookSinksToml>,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
+}
+
+// ── Provider Fallback Chain (#2574) ─────────────────────────────────
+
+/// Represents a position within the fallback chain during a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChain {
+    /// The full fallback chain: [active, fallback_1, fallback_2, ...].
+    pub providers: Vec<ProviderKind>,
+    /// Current position in the chain (0 = active provider).
+    pub position: usize,
+}
+
+impl ProviderChain {
+    /// Build a chain from the active provider and optional fallbacks.
+    /// The active provider is always at position 0. Duplicates are removed.
+    #[must_use]
+    pub fn new(active: ProviderKind, fallbacks: &[ProviderKind]) -> Self {
+        let mut providers = vec![active];
+        for fb in fallbacks {
+            if *fb != active && !providers.contains(fb) {
+                providers.push(*fb);
+            }
+        }
+        Self {
+            providers,
+            position: 0,
+        }
+    }
+
+    pub fn current(&self) -> ProviderKind {
+        self.providers[self.position]
+    }
+
+    pub fn has_next(&self) -> bool {
+        self.position + 1 < self.providers.len()
+    }
+
+    pub fn advance(&mut self) -> Option<ProviderKind> {
+        if self.has_next() {
+            self.position += 1;
+            Some(self.current())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_fallback_active(&self) -> bool {
+        self.position > 0
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.providers.len().saturating_sub(self.position)
+    }
 }
 
 /// On-disk schema for the `[hook_sinks]` table.
@@ -5086,5 +5145,78 @@ model = "mimo-v2.5-pro"
         let resolved = ConfigToml::default().resolve_runtime_options_with_secrets(&cli, &secrets);
         assert_eq!(resolved.api_key.as_deref(), Some("cli-key"));
         assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Cli));
+    }
+
+    // ── ProviderChain tests (#2574) ─────────────────────────────
+
+    #[test]
+    fn provider_chain_initial_current_is_active() {
+        let chain = ProviderChain::new(
+            ProviderKind::NvidiaNim,
+            &[ProviderKind::Deepseek, ProviderKind::Openrouter],
+        );
+        assert_eq!(chain.current(), ProviderKind::NvidiaNim);
+        assert_eq!(chain.position, 0);
+        assert!(!chain.is_fallback_active());
+    }
+
+    #[test]
+    fn provider_chain_advance_switches_to_fallback() {
+        let mut chain = ProviderChain::new(
+            ProviderKind::NvidiaNim,
+            &[ProviderKind::Deepseek, ProviderKind::Openrouter],
+        );
+        assert!(chain.has_next());
+        let next = chain.advance();
+        assert_eq!(next, Some(ProviderKind::Deepseek));
+        assert_eq!(chain.current(), ProviderKind::Deepseek);
+        assert!(chain.is_fallback_active());
+    }
+
+    #[test]
+    fn provider_chain_exhausts_returns_none() {
+        let mut chain = ProviderChain::new(ProviderKind::Deepseek, &[ProviderKind::Openrouter]);
+        assert!(chain.advance().is_some()); // -> Openrouter
+        assert!(!chain.has_next());
+        assert_eq!(chain.advance(), None);
+    }
+
+    #[test]
+    fn provider_chain_skips_duplicates() {
+        let chain = ProviderChain::new(
+            ProviderKind::Deepseek,
+            &[
+                ProviderKind::Deepseek,
+                ProviderKind::NvidiaNim,
+                ProviderKind::Deepseek,
+            ],
+        );
+        assert_eq!(chain.providers.len(), 2);
+        assert_eq!(
+            chain.providers,
+            vec![ProviderKind::Deepseek, ProviderKind::NvidiaNim]
+        );
+    }
+
+    #[test]
+    fn provider_chain_remaining_counts_correctly() {
+        let chain = ProviderChain::new(
+            ProviderKind::Deepseek,
+            &[ProviderKind::NvidiaNim, ProviderKind::Openrouter],
+        );
+        assert_eq!(chain.remaining(), 3);
+    }
+
+    #[test]
+    fn config_toml_parses_fallback_providers() {
+        let toml_str = r#"
+provider = "nvidia-nim"
+fallback_providers = ["deepseek", "openrouter"]
+"#;
+        let config: ConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.provider, ProviderKind::NvidiaNim);
+        assert_eq!(config.fallback_providers.len(), 2);
+        assert_eq!(config.fallback_providers[0], ProviderKind::Deepseek);
+        assert_eq!(config.fallback_providers[1], ProviderKind::Openrouter);
     }
 }
