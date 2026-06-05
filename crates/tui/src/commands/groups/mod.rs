@@ -9,7 +9,7 @@
 //!   2. Add `mod my_group;` below
 //!   3. Add `&my_group::MyGroupCommands` to the `all_command_groups()` vec
 
-mod core_group;
+mod core;
 mod session_group;
 mod config_group;
 mod debug_group;
@@ -26,7 +26,7 @@ use crate::commands::traits::CommandGroup;
 /// iterate this list without knowing which groups are present.
 pub fn all_command_groups() -> Vec<&'static dyn CommandGroup> {
     vec![
-        &core_group::CoreCommands,
+        &core::CoreCommands,
         &session_group::SessionCommands,
         &config_group::ConfigCommands,
         &debug_group::DebugCommands,
