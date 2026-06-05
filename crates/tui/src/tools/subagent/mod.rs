@@ -4739,7 +4739,7 @@ fn fallback_subagent_assignment_route(
     let model = if let Some(model) = configured_model {
         model
     } else if runtime.auto_model {
-        crate::commands::auto_model_heuristic(prompt, &runtime.model)
+        crate::commands::back::config::auto_model_heuristic(prompt, &runtime.model)
     } else {
         runtime.model.clone()
     };
@@ -4765,7 +4765,7 @@ fn fallback_subagent_assignment_route(
 async fn subagent_flash_router(
     runtime: &SubAgentRuntime,
     prompt: &str,
-) -> Result<Option<crate::commands::AutoRouteRecommendation>> {
+) -> Result<Option<crate::commands::back::config::AutoRouteRecommendation>> {
     if cfg!(test) {
         return Ok(None);
     }
@@ -4798,7 +4798,7 @@ async fn subagent_flash_router(
         runtime.client.create_message(request),
     )
     .await??;
-    Ok(crate::commands::parse_auto_route_recommendation(
+    Ok(crate::commands::back::config::parse_auto_route_recommendation(
         &message_response_text(&response.content),
     ))
 }

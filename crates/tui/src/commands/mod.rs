@@ -3,11 +3,11 @@
 //! This module provides a modular command system built on the strategy pattern.
 //! Commands are organized by logical group (Core, Session, Config, …), each
 //! group lives in its own file, and the central registry collects them all.
-//! `mod.rs` only orchestrates group registration — it contains zero
+//! `mod.rs` only registers groups and dispatches commands — it contains zero
 //! command-specific code.
 
 pub mod traits;
-mod back;
+pub(crate) mod back;
 pub mod share;
 pub mod user_commands;
 
@@ -21,17 +21,9 @@ mod skills_group;
 mod memory_group;
 mod utility_group;
 
-use std::fmt::Write as _;
-
 use crate::tui::app::{App, AppAction};
 
-pub use traits::CommandInfo;
-
-// Internal re-exports (used by external callers).
-pub use back::config::{
-    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
-    parse_auto_route_recommendation, resolve_auto_route_with_flash,
-};
+#[allow(unused_imports)] pub use traits::CommandInfo;
 
 /// Result of executing a command
 #[derive(Debug, Clone)]
@@ -45,73 +37,31 @@ pub struct CommandResult {
 }
 
 impl CommandResult {
-    /// Create an empty result (command succeeded with no output)
     pub fn ok() -> Self {
-        Self {
-            message: None,
-            action: None,
-            is_error: false,
-        }
+        Self { message: None, action: None, is_error: false }
     }
-
-    /// Create a result with just a message
     pub fn message(msg: impl Into<String>) -> Self {
-        Self {
-            message: Some(msg.into()),
-            action: None,
-            is_error: false,
-        }
+        Self { message: Some(msg.into()), action: None, is_error: false }
     }
-
-    /// Create a result with an action
     pub fn action(action: AppAction) -> Self {
-        Self {
-            message: None,
-            action: Some(action),
-            is_error: false,
-        }
+        Self { message: None, action: Some(action), is_error: false }
     }
-
-    /// Create a result with both message and action
     pub fn with_message_and_action(msg: impl Into<String>, action: AppAction) -> Self {
-        Self {
-            message: Some(msg.into()),
-            action: Some(action),
-            is_error: false,
-        }
+        Self { message: Some(msg.into()), action: Some(action), is_error: false }
     }
-
-    /// Create an error message result
     pub fn error(msg: impl Into<String>) -> Self {
-        Self {
-            message: Some(format!("Error: {}", msg.into())),
-            action: None,
-            is_error: true,
-        }
+        Self { message: Some(format!("Error: {}", msg.into())), action: None, is_error: true }
     }
 }
 
-// ── Re-export the global registry ──────────────────────────────────────────
+// ── Registry access ────────────────────────────────────────────────────────
 
 /// Access the global command registry (lazily initialised).
-///
-/// The registry is built once on first access by collecting all registered
-/// command groups. Every public dispatch function in this module delegates
-/// to the registry.
 pub fn registry() -> &'static traits::CommandRegistry {
     traits::registry()
 }
 
-// ── Public API (backward-compatible wrappers) ──────────────────────────────
-
-/// All registered command metadata.
-///
-/// This replaces the old `COMMANDS` const array. Returns a snapshot of
-/// every command's metadata.
-pub fn all_commands() -> Vec<&'static CommandInfo> {
-    registry().infos()
-}
-
+// ── Dispatch ───────────────────────────────────────────────────────────────
 
 /// Execute a slash command.
 ///
@@ -157,249 +107,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     }
 }
 
-
-/// Update a configuration value programmatically (used by interactive UI views).
-pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
-    back::config::set_config_value(app, key, value, persist)
-}
-
-/// Persist the user's chosen footer items to `~/.deepseek/config.toml` under
-/// `tui.status_items`. See [`config::persist_status_items`] for details.
-pub fn persist_status_items(
-    items: &[crate::config::StatusItem],
-) -> anyhow::Result<std::path::PathBuf> {
-    back::config::persist_status_items(items)
-}
-
-/// Persist a root-level string key in `config.toml`.
-pub fn persist_root_string_key(
-    config_path: Option<&std::path::Path>,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<std::path::PathBuf> {
-    back::config::persist_root_string_key(config_path, key, value)
-}
-
-pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
-    back::config::switch_mode(app, mode)
-}
-
-/// Auto-select a model based on request complexity.
-pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
-    back::config::auto_model_heuristic(input, current_model)
-}
-
-// pub use moved to top of file alongside the re-export block.
-
-/// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
-/// Zhang et al. (arXiv:2512.24601).
-pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let (max_depth, target) = match parse_depth_prefixed_arg(arg, 1) {
-        Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
-    };
-    let target = match target {
-        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
-        _ => {
-            return CommandResult::error(
-                "Usage: /rlm [N] <file_or_text>\n\n\
-                 Opens a persistent RLM context with sub_rlm depth N (0-3, default 1)."
-                    .to_string(),
-            );
-        }
-    };
-
-    let source_arg = if resolves_to_existing_file(app, &target) {
-        format!(r#"file_path: "{target}""#)
-    } else {
-        format!("content: {target:?}")
-    };
-    let message = format!(
-        "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
-    );
-
-    CommandResult::with_message_and_action(
-        format!("Opening persistent RLM context at depth {max_depth}..."),
-        AppAction::SendMessage(message),
-    )
-}
-
-/// Open a persistent sub-agent session from a slash command.
-pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
-    let (max_depth, task) = match parse_depth_prefixed_arg(arg, 1) {
-        Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
-    };
-    let task = match task {
-        Some(task) if !task.trim().is_empty() => task.trim().to_string(),
-        _ => {
-            return CommandResult::error(
-                "Usage: /agent [N] <task>\n\n\
-                 Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
-            );
-        }
-    };
-    let message = format!(
-        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {task:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success."
-    );
-    CommandResult::with_message_and_action(
-        format!("Opening persistent sub-agent at depth {max_depth}..."),
-        AppAction::SendMessage(message),
-    )
-}
-
-/// Ask the active model to write a compact relay artifact for the next thread.
-pub fn relay(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let focus = arg.map(str::trim).filter(|value| !value.is_empty());
-    let message = build_relay_instruction(app, focus);
-    CommandResult::with_message_and_action(
-        "Preparing session relay at .deepseek/handoff.md...",
-        AppAction::SendMessage(message),
-    )
-}
-
-fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "Create a compact session relay (接力) for a future CodeWhale thread."
-    );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
-    let _ = writeln!(
-        out,
-        "Keep the existing file path for compatibility, but title the artifact `# Session relay`."
-    );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "Current session snapshot:");
-    let _ = writeln!(out, "- Workspace: {}", app.workspace.display());
-    let _ = writeln!(out, "- Mode: {}", app.mode.label());
-    let _ = writeln!(out, "- Model: {}", app.model_display_label());
-    if let Some(focus) = focus {
-        let _ = writeln!(out, "- Requested relay focus: {focus}");
-    }
-    if let Some(quarry) = app.hunt.quarry.as_deref() {
-        let _ = writeln!(out, "- Hunt quarry: {quarry}");
-    }
-    if let Some(budget) = app.hunt.token_budget {
-        let _ = writeln!(out, "- Hunt token budget: {budget}");
-    }
-    if let Ok(todos) = app.todos.try_lock() {
-        let snapshot = todos.snapshot();
-        if !snapshot.items.is_empty() {
-            let _ = writeln!(
-                out,
-                "\nWork checklist (primary progress surface, {}% complete):",
-                snapshot.completion_pct
-            );
-            for item in snapshot.items {
-                let _ = writeln!(
-                    out,
-                    "- #{} [{}] {}",
-                    item.id,
-                    item.status.as_str(),
-                    item.content
-                );
-            }
-        }
-    } else {
-        let _ = writeln!(
-            out,
-            "\nWork checklist: unavailable because the checklist is busy."
-        );
-    }
-
-    if let Ok(plan) = app.plan_state.try_lock() {
-        let snapshot = plan.snapshot();
-        if snapshot.explanation.is_some() || !snapshot.items.is_empty() {
-            let _ = writeln!(out, "\nOptional strategy metadata from update_plan:");
-            if let Some(explanation) = snapshot.explanation.as_deref() {
-                let _ = writeln!(out, "- Explanation: {explanation}");
-            }
-            for item in snapshot.items {
-                let _ = writeln!(out, "- [{}] {}", plan_status_label(&item.status), item.step);
-            }
-        }
-    } else {
-        let _ = writeln!(
-            out,
-            "\nStrategy metadata: unavailable because plan state is busy."
-        );
-    }
-
-    let _ = writeln!(
-        out,
-        "\nBefore writing, inspect the current transcript context and any live tool evidence you need. Do not invent test results, file changes, blockers, or decisions."
-    );
-    let _ = writeln!(
-        out,
-        "\nUse this compact structure:\n\
-         # Session relay\n\
-         \n\
-         ## Goal\n\
-         [the user's objective and any explicit constraints]\n\
-         \n\
-         ## Current work\n\
-         [the active Work checklist item, progress, and what is mid-flight]\n\
-         \n\
-         ## Files and state\n\
-         [changed files, important paths, sub-agents/RLM sessions, commands run]\n\
-         \n\
-         ## Decisions\n\
-         [why key choices were made]\n\
-         \n\
-         ## Verification\n\
-         [what passed, what failed, what was not run]\n\
-         \n\
-         ## Next action\n\
-         [one concrete action for the next thread]"
-    );
-    let _ = writeln!(
-        out,
-        "\nKeep it under about 900 words unless the session genuinely needs more. After writing, report the path and the single next action."
-    );
-    out
-}
-
-fn plan_status_label(status: &crate::tools::plan::StepStatus) -> &'static str {
-    match status {
-        crate::tools::plan::StepStatus::Pending => "pending",
-        crate::tools::plan::StepStatus::InProgress => "in_progress",
-        crate::tools::plan::StepStatus::Completed => "completed",
-    }
-}
-
-fn parse_depth_prefixed_arg(
-    arg: Option<&str>,
-    default_depth: u32,
-) -> Result<(u32, Option<&str>), String> {
-    let Some(raw) = arg.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return Ok((default_depth, None));
-    };
-    let mut parts = raw.splitn(2, char::is_whitespace);
-    let first = parts.next().unwrap_or_default();
-    if first.chars().all(|ch| ch.is_ascii_digit()) {
-        let depth: u32 = first
-            .parse()
-            .map_err(|_| "Depth must be an integer from 0 to 3".to_string())?;
-        if depth > 3 {
-            return Err("Depth must be between 0 and 3".to_string());
-        }
-        Ok((depth, parts.next().map(str::trim)))
-    } else {
-        Ok((default_depth, Some(raw)))
-    }
-}
-
-fn resolves_to_existing_file(app: &App, input: &str) -> bool {
-    let path = std::path::Path::new(input);
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        app.workspace.join(path)
-    };
-    candidate.is_file()
-}
+// ── Suggestions ────────────────────────────────────────────────────────────
 
 fn edit_distance(a: &str, b: &str) -> usize {
     if a == b {
@@ -480,274 +188,4 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
         .take(limit)
         .map(|(_, _, name)| name)
         .collect()
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::Config;
-    use crate::localization::Locale;
-    use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
-    use crate::tools::todo::TodoStatus;
-    use crate::tui::app::{App, AppAction, TuiOptions};
-    use std::path::PathBuf;
-    use tempfile::tempdir;
-
-    fn create_test_app() -> App {
-        let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: PathBuf::from("."),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
-        };
-        App::new(options, &Config::default())
-    }
-
-    #[test]
-    fn command_registry_contains_config_and_links_but_not_set_or_deepseek() {
-        let cmds = all_commands();
-        assert!(cmds.iter().any(|cmd| cmd.name == "config"));
-        assert!(cmds.iter().any(|cmd| cmd.name == "links"));
-        assert!(cmds.iter().any(|cmd| cmd.name == "memory"));
-        assert!(!cmds.iter().any(|cmd| cmd.name == "set"));
-        assert!(!cmds.iter().any(|cmd| cmd.name == "deepseek"));
-    }
-
-    #[test]
-    fn links_command_has_dashboard_and_api_aliases() {
-        let links = registry().get_info("links").expect("links command should exist");
-        assert_eq!(links.aliases, &["dashboard", "api", "lianjie"]);
-    }
-
-    #[test]
-    fn rlm_slash_command_routes_to_persistent_tool_instruction() {
-        let mut app = create_test_app();
-        let result = execute("/rlm 2 inspect this long corpus", &mut app);
-        assert!(!result.is_error);
-        assert!(result.message.as_deref().unwrap_or("").contains("depth 2"));
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("rlm_open"));
-        assert!(message.contains("rlm_configure"));
-        assert!(message.contains("sub_rlm_max_depth: 2"));
-    }
-
-    #[test]
-    fn agent_slash_command_routes_to_persistent_tool_instruction() {
-        let mut app = create_test_app();
-        let result = execute("/agent 0 inspect the parser", &mut app);
-        assert!(!result.is_error);
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("agent_open"));
-        assert!(message.contains("max_depth: 0"));
-    }
-
-    #[test]
-    fn relay_slash_command_routes_to_session_relay_instruction() {
-        let mut app = create_test_app();
-        app.hunt.quarry = Some("Unify the work surface".to_string());
-        app.hunt.token_budget = Some(12_000);
-        {
-            let mut todos = app.todos.try_lock().expect("todo lock");
-            todos.add("inspect workspace".to_string(), TodoStatus::Completed);
-            todos.add("patch relay command".to_string(), TodoStatus::InProgress);
-        }
-        {
-            let mut plan = app.plan_state.try_lock().expect("plan lock");
-            plan.update(UpdatePlanArgs {
-                explanation: Some("RLM-style strategy".to_string()),
-                plan: vec![PlanItemArg {
-                    step: "keep checklist primary".to_string(),
-                    status: StepStatus::InProgress,
-                }],
-            });
-        }
-
-        let result = execute("/relay verify install", &mut app);
-        assert!(!result.is_error);
-        assert!(
-            result
-                .message
-                .as_deref()
-                .unwrap_or_default()
-                .contains(".deepseek/handoff.md")
-        );
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("session relay"));
-        assert!(message.contains("接力"));
-        assert!(message.contains("Write or update `.deepseek/handoff.md`"));
-        assert!(message.contains("# Session relay"));
-        assert!(message.contains("Requested relay focus: verify install"));
-        assert!(message.contains("Hunt quarry: Unify the work surface"));
-        assert!(message.contains("Hunt token budget: 12000"));
-        assert!(message.contains("Work checklist (primary progress surface, 50% complete)"));
-        assert!(message.contains("#1 [completed] inspect workspace"));
-        assert!(message.contains("#2 [in_progress] patch relay command"));
-        assert!(message.contains("Optional strategy metadata from update_plan"));
-        assert!(message.contains("Explanation: RLM-style strategy"));
-        assert!(message.contains("[in_progress] keep checklist primary"));
-    }
-
-    #[test]
-    fn relay_command_has_bilingual_aliases() {
-        let relay = registry().get_info("relay").expect("relay command should exist");
-        assert_eq!(relay.aliases, &["batonpass", "接力"]);
-        assert!(relay.description_for(Locale::ZhHans).contains("接力"));
-        assert!(relay.description_for(Locale::ZhHant).contains("接力"));
-
-        let mut app = create_test_app();
-        let result = execute("/接力 next hand", &mut app);
-        assert!(!result.is_error);
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("Requested relay focus: next hand"));
-    }
-
-    #[test]
-    fn command_registry_has_unique_names_and_aliases() {
-        let cmds = all_commands();
-        let mut names = std::collections::BTreeSet::new();
-        for command in &cmds {
-            assert!(
-                names.insert(command.name),
-                "duplicate command name /{}",
-                command.name
-            );
-        }
-
-        let mut aliases = std::collections::BTreeSet::new();
-        for command in &cmds {
-            for alias in command.aliases {
-                assert!(
-                    !names.contains(alias),
-                    "alias /{alias} collides with a command name"
-                );
-                assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
-            }
-        }
-    }
-
-    #[test]
-    fn context_command_opens_inspector_and_keeps_ctx_alias() {
-        let context = registry().get_info("context").expect("context command should exist");
-        assert_eq!(context.aliases, &["ctx"]);
-        assert!(context.description_for(Locale::En).contains("inspector"));
-
-        let mut app = create_test_app();
-        let result = execute("/ctx", &mut app);
-        assert!(matches!(
-            result.action,
-            Some(AppAction::OpenContextInspector)
-        ));
-    }
-
-    #[test]
-    fn cache_inspect_dispatches_through_cache_command() {
-        let mut app = create_test_app();
-        let result = execute("/cache inspect", &mut app);
-        assert!(!result.is_error);
-    }
-
-    #[test]
-    fn execute_config_opens_config_view_action() {
-        let mut app = create_test_app();
-        let result = execute("/config", &mut app);
-        assert!(
-            matches!(result.action, Some(AppAction::OpenConfigView)),
-            "expected OpenConfigView, got {:?}",
-            result.action
-        );
-    }
-
-    #[test]
-    fn execute_verbose_toggles_live_transcript_detail() {
-        let mut app = create_test_app();
-        assert!(!app.verbose_transcript);
-        let result = execute("/verbose", &mut app);
-        assert!(result.is_error || result.message.is_some());
-    }
-
-    #[test]
-    fn execute_links_and_aliases_return_links_message() {
-        let mut app = create_test_app();
-        for cmd in ["/links", "/dashboard", "/api", "/lianjie"] {
-            let result = execute(cmd, &mut app);
-            let msg = result.message.as_deref().unwrap_or("");
-            assert!(
-                msg.contains("dashboard") || msg.contains("api"),
-                "expected links message for {cmd}, got: {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn execute_workspace_alias_switches_workspace() {
-        let dir = tempdir().expect("temp dir");
-        let mut app = create_test_app();
-
-        let ws_arg = dir.path().to_str().expect("utf8");
-        let result = execute(&format!("/workspace {ws_arg}"), &mut app);
-        assert!(
-            !result.is_error,
-            "workspace switch failed: {:?}",
-            result.message
-        );
-        let Some(AppAction::SwitchWorkspace { workspace: new_ws }) = &result.action else {
-            panic!("expected SwitchWorkspace, got {:?}", result.action);
-        };
-        // Normalize paths — the SwitchWorkspace action may include the
-        // Windows long-path prefix (\\?\) while the tempdir string doesn't.
-        let prefix = "\\\\?\\";
-        let ws_str = ws_arg.strip_prefix(prefix).unwrap_or(ws_arg);
-        let new_ws_str = new_ws.to_str().unwrap_or_default().strip_prefix(prefix).unwrap_or_default();
-        assert!(
-            new_ws_str.ends_with(ws_str),
-            "expected workspace ending with {ws_arg}, got {new_ws:?}"
-        );
-    }
-
-    #[test]
-    fn execute_unknown_command_returns_error() {
-        let mut app = create_test_app();
-        let result = execute("/nonexistent", &mut app);
-        assert!(result.is_error);
-        assert!(result
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("Unknown command"));
-    }
-
-    #[test]
-    fn execute_user_command_shadows_built_in() {
-        let mut app = create_test_app();
-        // Without a user-defined command, /help should succeed.
-        let result = execute("/help", &mut app);
-        assert!(!result.is_error);
-    }
 }

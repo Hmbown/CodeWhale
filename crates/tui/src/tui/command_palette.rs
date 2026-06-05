@@ -55,7 +55,7 @@ pub fn build_entries(
 ) -> Vec<CommandPaletteEntry> {
     let mut entries = Vec::new();
 
-    for command in commands::all_commands() {
+    for command in commands::registry().infos() {
         let mut description = command.palette_description_for(locale);
         if command.requires_argument() {
             description.push_str("  ");

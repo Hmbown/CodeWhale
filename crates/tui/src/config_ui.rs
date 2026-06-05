@@ -554,7 +554,7 @@ pub fn apply_document(
         ),
         ("mcp_config_path", doc.config.mcp_config_path.as_str()),
     ] {
-        let result = commands::set_config_value(app, key, value, persist);
+        let result = commands::back::config::set_config_value(app, key, value, persist);
         if result.is_error {
             bail!(
                 "{}",
@@ -573,7 +573,7 @@ pub fn apply_document(
     // the runtime model the user just chose when persist=false (#346-fix).
     if persist {
         let default_model_val = doc.settings.default_model.as_deref().unwrap_or("default");
-        let result = commands::set_config_value(app, "default_model", default_model_val, true);
+        let result = commands::back::config::set_config_value(app, "default_model", default_model_val, true);
         if result.is_error {
             bail!(
                 "{}",
@@ -596,7 +596,7 @@ pub fn apply_document(
         app.status_items = new_status_items.clone();
         app.needs_redraw = true;
         if persist {
-            let path = commands::persist_status_items(&new_status_items)?;
+            let path = commands::back::config::persist_status_items(&new_status_items)?;
             notes.push(format!("status_items saved to {}", path.display()));
         } else {
             notes.push("status_items updated for this session".to_string());
@@ -685,7 +685,7 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key(
+        commands::back::config::persist_root_string_key(
             app.config_path.as_deref(),
             "reasoning_effort",
             effort.as_setting(),
