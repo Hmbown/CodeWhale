@@ -351,6 +351,57 @@ pub fn set_authority_recap_override(s: String) -> Result<(), String> {
     set_prompt_override(&AUTHORITY_RECAP_OVERRIDE, s)
 }
 
+// ── Static-layer composer override ──
+// Per-constant overrides above let an embedder swap individual blocks, but
+// any block upstream adds later still leaks into the embedder's prompt.
+// The composer override is the sealing variant: when set, the embedder
+// takes over ALL compile-time static doctrine — tool taxonomy, base
+// prompt, personality, mode delta, approval policy, `## Context
+// Management`, and the compaction relay template — and upstream additions
+// to those layers only affect the default composition. Dynamic structural
+// blocks (project context, skills, environment, instructions, memory,
+// goal, handoff relay, locale bookends, authority recap) keep their
+// existing rendering and hooks.
+
+/// Inputs handed to a [`set_static_prompt_composer_override`] composer.
+///
+/// `#[non_exhaustive]` so upstream can add fields without breaking
+/// embedders; construct only via the composition pipeline.
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct StaticPromptCtx<'a> {
+    /// Active app mode (Agent / Plan / Yolo).
+    pub mode: crate::tui::app::AppMode,
+    /// Effective approval mode for this session.
+    pub approval_mode: crate::tui::approval::ApprovalMode,
+    /// Active model identifier (replaces `{model_id}` in base prompts).
+    pub model_id: &'a str,
+    /// Whether shell tools are exposed to the model this session.
+    pub allow_shell: bool,
+    /// The static layers the default composition would have produced —
+    /// for reference or partial reuse by the composer.
+    pub default_layers: &'a str,
+}
+
+/// A composer that replaces the compile-time static prompt layers.
+pub type StaticPromptComposer = dyn Fn(&StaticPromptCtx<'_>) -> String + Send + Sync;
+
+static STATIC_PROMPT_COMPOSER: std::sync::OnceLock<Box<StaticPromptComposer>> =
+    std::sync::OnceLock::new();
+
+/// Install a composer that replaces ALL compile-time static prompt layers
+/// (taxonomy, base, personality, mode, approval, context management,
+/// compaction relay template). First call wins; later calls return
+/// `Err(())`. Set before spawning any engine. When set, the per-constant
+/// overrides for those layers are bypassed entirely.
+pub fn set_static_prompt_composer_override(f: Box<StaticPromptComposer>) -> Result<(), ()> {
+    STATIC_PROMPT_COMPOSER.set(f).map_err(|_| ())
+}
+
+fn static_prompt_composer() -> Option<&'static StaticPromptComposer> {
+    STATIC_PROMPT_COMPOSER.get().map(Box::as_ref)
+}
+
 fn set_prompt_override(cell: &std::sync::OnceLock<String>, s: String) -> Result<(), String> {
     cell.set(s)
 }
@@ -791,6 +842,48 @@ fn compose_prompt_with_approval_model_and_shell(
     model_id: &str,
     allow_shell: bool,
 ) -> String {
+    let default_layers =
+        compose_default_static_layers(mode, personality, approval_mode, model_id, allow_shell);
+    apply_static_prompt_composer(
+        static_prompt_composer(),
+        mode,
+        approval_mode,
+        model_id,
+        allow_shell,
+        default_layers,
+    )
+}
+
+/// Apply a static-layer composer over the default composition. Split out
+/// from the global-`OnceLock` lookup so tests can inject a composer
+/// without poisoning process-global state.
+fn apply_static_prompt_composer(
+    composer: Option<&StaticPromptComposer>,
+    mode: AppMode,
+    approval_mode: ApprovalMode,
+    model_id: &str,
+    allow_shell: bool,
+    default_layers: String,
+) -> String {
+    match composer {
+        Some(compose) => compose(&StaticPromptCtx {
+            mode,
+            approval_mode,
+            model_id,
+            allow_shell,
+            default_layers: &default_layers,
+        }),
+        None => default_layers,
+    }
+}
+
+fn compose_default_static_layers(
+    mode: AppMode,
+    personality: Personality,
+    approval_mode: ApprovalMode,
+    model_id: &str,
+    allow_shell: bool,
+) -> String {
     let tool_taxonomy = render_core_tool_taxonomy_block(mode);
     let shell_tools_available = allow_shell && mode != AppMode::Plan;
     let base_prompt = render_base_prompt_for_tool_availability(
@@ -1079,8 +1172,11 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!("{full_prompt}\n\n{block}");
     }
 
-    // 4. Context Management (Agent / Yolo only).
-    if matches!(mode, AppMode::Agent | AppMode::Yolo) {
+    // 4. Context Management (Agent / Yolo only). Suppressed when a
+    // static-prompt composer is installed — the composer owns ALL
+    // compile-time static doctrine (see
+    // `set_static_prompt_composer_override`).
+    if static_prompt_composer().is_none() && matches!(mode, AppMode::Agent | AppMode::Yolo) {
         full_prompt.push_str(
             "\n\n## Context Management\n\n\
              When the conversation gets long (you'll see a context usage indicator), you can:\n\
@@ -1101,8 +1197,13 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
 
     // 5. Compaction relay template — so the model knows the format to use
     //    when writing `.codewhale/handoff.md` on exit / `/compact`.
-    full_prompt.push_str("\n\n");
-    full_prompt.push_str(COMPACT_TEMPLATE);
+    //    Also composer-owned static doctrine: a static-prompt composer
+    //    that wants the template (or a trimmed variant) includes it in
+    //    its own output.
+    if static_prompt_composer().is_none() {
+        full_prompt.push_str("\n\n");
+        full_prompt.push_str(COMPACT_TEMPLATE);
+    }
 
     // ── Volatile-content boundary ─────────────────────────────────────────
     // Everything below drifts mid-session and busts the prefix cache for
@@ -1233,6 +1334,60 @@ mod tests {
             Err("second".to_string())
         );
         assert_eq!(effective_prompt_override(&cell, "fallback"), "first");
+    }
+
+    // NOTE: these tests inject the composer as a parameter instead of
+    // calling `set_static_prompt_composer_override` — the global is a
+    // process-wide OnceLock and setting it here would poison every other
+    // prompt test in this binary.
+    #[test]
+    fn static_prompt_composer_replaces_default_layers() {
+        let default_layers = compose_default_static_layers(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "test-model",
+            true,
+        );
+        assert!(default_layers.contains("Personality: Calm"));
+
+        let composer = |ctx: &StaticPromptCtx<'_>| -> String {
+            assert_eq!(ctx.mode, AppMode::Agent);
+            assert_eq!(ctx.approval_mode, ApprovalMode::Suggest);
+            assert_eq!(ctx.model_id, "test-model");
+            assert!(ctx.allow_shell);
+            assert!(ctx.default_layers.contains("Personality: Calm"));
+            "EMBEDDER STATIC LAYERS".to_string()
+        };
+        let composed = apply_static_prompt_composer(
+            Some(&composer),
+            AppMode::Agent,
+            ApprovalMode::Suggest,
+            "test-model",
+            true,
+            default_layers,
+        );
+        assert_eq!(composed, "EMBEDDER STATIC LAYERS");
+    }
+
+    #[test]
+    fn static_prompt_composer_unset_keeps_default_layers_byte_identical() {
+        let default_layers = compose_default_static_layers(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "test-model",
+            true,
+        );
+        let composed = apply_static_prompt_composer(
+            None,
+            AppMode::Agent,
+            ApprovalMode::Suggest,
+            "test-model",
+            true,
+            default_layers.clone(),
+        );
+        assert_eq!(composed, default_layers);
     }
 
     fn contains_cjk(text: &str) -> bool {
