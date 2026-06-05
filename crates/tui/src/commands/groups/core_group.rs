@@ -3,8 +3,8 @@
 
 use crate::tui::app::{App, AppAction};
 
-use super::traits::{Command, CommandGroup, CommandInfo};
-use super::CommandResult;
+use crate::commands::traits::{Command, CommandGroup, CommandInfo};
+use crate::commands::CommandResult;
 use crate::localization::MessageId;
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ impl Command for Help {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::core::help(app, args)
+        crate::commands::back::core::help(app, args)
     }
 }
 
@@ -41,7 +41,7 @@ impl Command for Clear {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::clear(app)
+        crate::commands::back::core::clear(app)
     }
 }
 
@@ -60,7 +60,7 @@ impl Command for Exit {
         }
     }
     fn execute(&self, _app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::exit()
+        crate::commands::back::core::exit()
     }
 }
 
@@ -79,7 +79,7 @@ impl Command for Model {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::core::model(app, args)
+        crate::commands::back::core::model(app, args)
     }
 }
 
@@ -98,7 +98,7 @@ impl Command for Models {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::models(app)
+        crate::commands::back::core::models(app)
     }
 }
 
@@ -117,7 +117,7 @@ impl Command for Provider {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::provider::provider(app, args)
+        crate::commands::back::provider::provider(app, args)
     }
 }
 
@@ -136,7 +136,7 @@ impl Command for Links {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::deepseek_links(app)
+        crate::commands::back::core::deepseek_links(app)
     }
 }
 
@@ -155,7 +155,7 @@ impl Command for Feedback {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::feedback::feedback(app, args)
+        crate::commands::back::feedback::feedback(app, args)
     }
 }
 
@@ -174,7 +174,7 @@ impl Command for Home {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::home_dashboard(app)
+        crate::commands::back::core::home_dashboard(app)
     }
 }
 
@@ -193,7 +193,7 @@ impl Command for Workspace {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::core::workspace_switch(app, args)
+        crate::commands::back::core::workspace_switch(app, args)
     }
 }
 
@@ -212,7 +212,7 @@ impl Command for Subagents {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::back::core::subagents(app)
+        crate::commands::back::core::subagents(app)
     }
 }
 
@@ -250,7 +250,7 @@ impl Command for Profile {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::back::core::profile_switch(app, args)
+        crate::commands::back::core::profile_switch(app, args)
     }
 }
 
