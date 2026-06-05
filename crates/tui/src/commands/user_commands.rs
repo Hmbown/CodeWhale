@@ -291,6 +291,7 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
 ///
 /// `workspace` is used to also scan workspace-local command directories;
 /// pass `None` when no workspace context is available.
+#[allow(dead_code)]
 pub fn user_commands_matching(prefix: &str, workspace: Option<&Path>) -> Vec<String> {
     let prefix = prefix.to_lowercase();
     load_user_commands(workspace)

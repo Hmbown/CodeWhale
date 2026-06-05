@@ -73,7 +73,6 @@ impl CommandResult {
     }
 
     /// Create a result with both message and action
-    #[allow(dead_code)]
     pub fn with_message_and_action(msg: impl Into<String>, action: AppAction) -> Self {
         Self {
             message: Some(msg.into()),
@@ -161,49 +160,6 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 /// Get command info by name or alias.
 pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
     registry().get_info(name)
-}
-
-/// Get all command names matching a prefix, including both built-in
-/// static commands and user-defined commands, formatted as `/name`.
-///
-/// `workspace` is used to also scan workspace-local command directories;
-/// pass `None` when no workspace context is available.
-#[allow(dead_code)]
-pub fn all_command_names_matching(
-    prefix: &str,
-    workspace: Option<&std::path::Path>,
-) -> Vec<String> {
-    let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    let mut result: Vec<String> = registry()
-        .infos()
-        .iter()
-        .filter(|info| {
-            info.name.starts_with(&prefix)
-                || info.aliases.iter().any(|a| a.starts_with(&prefix))
-        })
-        .map(|info| format!("/{}", info.name))
-        .collect();
-
-    // Add user-defined commands
-    result.extend(user_commands::user_commands_matching(&prefix, workspace));
-
-    result.sort();
-    result.dedup();
-    result
-}
-
-/// Get all commands matching a prefix (for autocomplete).
-#[allow(dead_code)]
-pub fn commands_matching(prefix: &str) -> Vec<&'static CommandInfo> {
-    let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    registry()
-        .infos()
-        .into_iter()
-        .filter(|info| {
-            info.name.starts_with(&prefix)
-                || info.aliases.iter().any(|a| a.starts_with(&prefix))
-        })
-        .collect()
 }
 
 /// Update a configuration value programmatically (used by interactive UI views).
