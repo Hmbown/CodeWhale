@@ -16,6 +16,6 @@ impl Command for Retry {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::retry(app)
+        crate::commands::shared::debug::retry(app)
     }
 }

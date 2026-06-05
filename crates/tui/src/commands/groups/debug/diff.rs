@@ -16,6 +16,6 @@ impl Command for Diff {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::diff(app)
+        crate::commands::shared::debug::diff(app)
     }
 }

@@ -17,7 +17,7 @@ impl Command for Links {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::deepseek_links(app)
+        crate::commands::shared::core::deepseek_links(app)
     }
 }
 

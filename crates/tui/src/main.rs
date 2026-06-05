@@ -5421,7 +5421,7 @@ struct CliAutoRoute {
 async fn resolve_cli_auto_route(config: &Config, model: &str, prompt: &str) -> CliAutoRoute {
     if model.trim().eq_ignore_ascii_case("auto") {
         let selection =
-            commands::back::config::resolve_auto_route_with_flash(config, prompt, "", "auto", "auto").await;
+            commands::shared::config::resolve_auto_route_with_flash(config, prompt, "", "auto", "auto").await;
         CliAutoRoute {
             model: selection.model,
             reasoning_effort: selection.reasoning_effort,

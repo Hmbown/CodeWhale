@@ -16,6 +16,6 @@ impl Command for Export {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::export(app, args)
+        crate::commands::shared::session::export(app, args)
     }
 }

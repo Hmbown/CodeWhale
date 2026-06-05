@@ -16,6 +16,6 @@ impl Command for Context {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::context(app)
+        crate::commands::shared::debug::context(app)
     }
 }

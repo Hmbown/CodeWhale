@@ -17,7 +17,7 @@ impl Command for Workspace {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::workspace_switch(app, args)
+        crate::commands::shared::core::workspace_switch(app, args)
     }
 }
 

@@ -17,7 +17,7 @@ impl Command for Model {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::model(app, args)
+        crate::commands::shared::core::model(app, args)
     }
 }
 

@@ -17,7 +17,7 @@ impl Command for Subagents {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::subagents(app)
+        crate::commands::shared::core::subagents(app)
     }
 }
 

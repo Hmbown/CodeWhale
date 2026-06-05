@@ -16,6 +16,6 @@ impl Command for Tokens {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::tokens(app)
+        crate::commands::shared::debug::tokens(app)
     }
 }

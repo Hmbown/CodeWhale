@@ -17,7 +17,7 @@ impl Command for Exit {
         }
     }
     fn execute(&self, _app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::exit()
+        crate::commands::shared::core::exit()
     }
 }
 

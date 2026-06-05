@@ -17,7 +17,7 @@ impl Command for Home {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::home_dashboard(app)
+        crate::commands::shared::core::home_dashboard(app)
     }
 }
 

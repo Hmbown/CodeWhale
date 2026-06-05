@@ -17,7 +17,7 @@ impl Command for Clear {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::clear(app)
+        crate::commands::shared::core::clear(app)
     }
 }
 

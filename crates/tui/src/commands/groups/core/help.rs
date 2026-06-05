@@ -16,7 +16,7 @@ impl Command for Help {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::help(app, args)
+        crate::commands::shared::core::help(app, args)
     }
 }
 

@@ -16,6 +16,6 @@ impl Command for Save {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::save(app, args)
+        crate::commands::shared::session::save(app, args)
     }
 }

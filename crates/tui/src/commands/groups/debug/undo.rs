@@ -16,13 +16,13 @@ impl Command for Undo {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        let result = crate::commands::back::debug::patch_undo(app);
+        let result = crate::commands::shared::debug::patch_undo(app);
         if result.message.as_deref().is_none_or(|m| {
             m.starts_with("No snapshots found")
                 || m.starts_with("No tool or pre-turn")
                 || m.starts_with("Snapshot repo")
         }) {
-            crate::commands::back::debug::undo_conversation(app)
+            crate::commands::shared::debug::undo_conversation(app)
         } else {
             result
         }

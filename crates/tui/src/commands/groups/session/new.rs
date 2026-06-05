@@ -16,6 +16,6 @@ impl Command for New {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::new_session(app, args)
+        crate::commands::shared::session::new_session(app, args)
     }
 }

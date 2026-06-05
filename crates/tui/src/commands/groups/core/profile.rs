@@ -17,7 +17,7 @@ impl Command for Profile {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::profile_switch(app, args)
+        crate::commands::shared::core::profile_switch(app, args)
     }
 }
 

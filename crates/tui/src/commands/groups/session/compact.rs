@@ -16,6 +16,6 @@ impl Command for Compact {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::compact(app)
+        crate::commands::shared::session::compact(app)
     }
 }

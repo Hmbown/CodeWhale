@@ -16,6 +16,6 @@ impl Command for Edit {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::edit(app)
+        crate::commands::shared::debug::edit(app)
     }
 }

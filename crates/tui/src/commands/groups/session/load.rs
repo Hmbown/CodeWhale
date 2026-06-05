@@ -16,6 +16,6 @@ impl Command for Load {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::load(app, args)
+        crate::commands::shared::session::load(app, args)
     }
 }

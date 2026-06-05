@@ -16,6 +16,6 @@ impl Command for Cache {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::debug::cache(app, args)
+        crate::commands::shared::debug::cache(app, args)
     }
 }

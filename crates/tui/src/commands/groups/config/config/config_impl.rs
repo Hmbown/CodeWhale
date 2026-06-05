@@ -1,5 +1,5 @@
 use crate::commands::CommandResult;
-use crate::commands::back::config::{show_config, set_config_value};
+use crate::commands::shared::config::{show_config, set_config_value};
 use crate::settings::Settings;
 use crate::config::Config;
 use crate::tui::app::App;

@@ -16,6 +16,6 @@ impl Command for Skill {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::skills::run_skill(app, args)
+        crate::commands::shared::skills::run_skill(app, args)
     }
 }

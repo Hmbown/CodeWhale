@@ -16,6 +16,6 @@ impl Command for Translate {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::core::translate(app)
+        crate::commands::shared::core::translate(app)
     }
 }

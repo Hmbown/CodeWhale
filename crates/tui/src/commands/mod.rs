@@ -7,7 +7,7 @@
 //! command-specific code.
 
 pub mod traits;
-pub(crate) mod back;
+pub(crate) mod shared;
 pub mod share;
 pub mod user_commands;
 
@@ -92,8 +92,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     }
 
     // Skill fallback (lowest precedence).
-    if back::skills::run_skill_by_name(app, command, arg).is_some() {
-        return back::skills::run_skill_by_name(app, command, arg).unwrap();
+    if shared::skills::run_skill_by_name(app, command, arg).is_some() {
+        return shared::skills::run_skill_by_name(app, command, arg).unwrap();
     }
 
     let suggestions = suggest_command_names(command, 3);

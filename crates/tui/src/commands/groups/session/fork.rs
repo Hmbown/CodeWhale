@@ -16,6 +16,6 @@ impl Command for Fork {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        crate::commands::back::session::fork(app)
+        crate::commands::shared::session::fork(app)
     }
 }

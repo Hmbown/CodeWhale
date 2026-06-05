@@ -5070,7 +5070,7 @@ async fn dispatch_user_message(
         auto_selection
             .as_ref()
             .map(|selection| selection.model.clone())
-            .unwrap_or_else(|| commands::back::config::auto_model_heuristic(&message.display, &app.model))
+            .unwrap_or_else(|| commands::shared::config::auto_model_heuristic(&message.display, &app.model))
     } else {
         app.model.clone()
     };
@@ -5564,7 +5564,7 @@ async fn switch_provider(
         .await;
 
     let persist_warning = (|| -> anyhow::Result<()> {
-        commands::back::config::persist_root_string_key(app.config_path.as_deref(), "provider", target.as_str())?;
+        commands::shared::config::persist_root_string_key(app.config_path.as_deref(), "provider", target.as_str())?;
 
         let mut settings = crate::settings::Settings::load()?;
         settings.default_provider = Some(target.as_str().to_string());
@@ -7402,7 +7402,7 @@ async fn handle_view_events(
                 value,
                 persist,
             } => {
-                let result = commands::back::config::set_config_value(app, &key, &value, persist);
+                let result = commands::shared::config::set_config_value(app, &key, &value, persist);
                 // Theme / background changes require a full terminal repaint
                 // because ratatui's incremental diff may miss color-only
                 // changes in cells that were rendered with theme-resolved
@@ -7447,7 +7447,7 @@ async fn handle_view_events(
                 app.status_items = items.clone();
                 app.needs_redraw = true;
                 if final_save {
-                    match commands::back::config::persist_status_items(&items) {
+                    match commands::shared::config::persist_status_items(&items) {
                         Ok(path) => {
                             app.status_message =
                                 Some(format!("Status line saved to {}", path.display()));
@@ -7523,7 +7523,7 @@ async fn handle_view_events(
             }
             ViewEvent::ModeSelected { mode } => {
                 let prior_mode = app.mode;
-                let msg = commands::back::config::switch_mode(app, mode);
+                let msg = commands::shared::config::switch_mode(app, mode);
                 if app.mode != prior_mode {
                     sync_mode_update(engine_handle, app.mode).await;
                 }
