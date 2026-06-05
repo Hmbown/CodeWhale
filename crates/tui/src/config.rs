@@ -2382,13 +2382,14 @@ impl Config {
         };
         let configured_base_url = provider_base.or(root_base);
         let base = if provider == ApiProvider::XiaomiMimo {
-            let env_api_key = xiaomi_mimo_env_api_key_for_base_url();
             let config_api_key = self
                 .provider_config_for(provider)
                 .and_then(|provider| provider.api_key.as_deref());
             let mode = self
                 .provider_config_for(provider)
                 .and_then(|provider| provider.mode.as_deref());
+            let env_api_key =
+                xiaomi_mimo_env_api_key_for_runtime(mode, configured_base_url.as_deref());
             let api_key = config_api_key.or(env_api_key.as_deref());
             resolve_xiaomi_mimo_base_url(configured_base_url, api_key, mode)
         } else {
@@ -2502,6 +2503,17 @@ impl Config {
 
         // 2. Environment variables. Do not query platform credential stores
         // here; routine startup and doctor checks must stay prompt-free.
+        if provider == ApiProvider::XiaomiMimo {
+            let mode = self
+                .provider_config_for(provider)
+                .and_then(|provider| provider.mode.as_deref());
+            if let Some(value) =
+                xiaomi_mimo_env_api_key_for_runtime(mode, Some(&self.deepseek_base_url()))
+                && !value.trim().is_empty()
+            {
+                return Ok(value);
+            }
+        }
         if let Some(value) = codewhale_secrets::env_for(slot)
             && !value.trim().is_empty()
         {
@@ -4102,6 +4114,51 @@ fn xiaomi_mimo_mode_uses_standard_endpoint(normalized_mode: &str) -> bool {
     )
 }
 
+fn xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
+    let normalized = normalize_base_url(base_url).to_ascii_lowercase();
+    normalized == XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL
+        || normalized == XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL
+        || normalized == XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL
+}
+
+fn xiaomi_mimo_env_var(candidates: &[&str]) -> Option<String> {
+    candidates.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn xiaomi_mimo_env_api_key_for_runtime(
+    mode: Option<&str>,
+    base_url: Option<&str>,
+) -> Option<String> {
+    const TOKEN_PLAN_ENV_VARS: &[&str] =
+        &["XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "MIMO_TOKEN_PLAN_API_KEY"];
+    const STANDARD_ENV_VARS: &[&str] = &["XIAOMI_MIMO_API_KEY", "XIAOMI_API_KEY", "MIMO_API_KEY"];
+
+    let normalized_mode =
+        mode.map(|value| value.trim().to_ascii_lowercase().replace(['_', ' '], "-"));
+    let standard_selected = normalized_mode
+        .as_deref()
+        .is_some_and(xiaomi_mimo_mode_uses_standard_endpoint)
+        || base_url.is_some_and(xiaomi_mimo_base_url_is_pay_as_you_go);
+    if standard_selected {
+        return xiaomi_mimo_env_var(STANDARD_ENV_VARS);
+    }
+
+    let token_plan_selected = normalized_mode
+        .as_deref()
+        .and_then(xiaomi_mimo_base_url_for_mode)
+        .is_some()
+        || base_url.is_some_and(xiaomi_mimo_base_url_uses_token_plan);
+    if token_plan_selected {
+        return xiaomi_mimo_env_var(TOKEN_PLAN_ENV_VARS);
+    }
+
+    xiaomi_mimo_env_var(TOKEN_PLAN_ENV_VARS).or_else(|| xiaomi_mimo_env_var(STANDARD_ENV_VARS))
+}
+
 fn resolve_xiaomi_mimo_base_url(
     configured: Option<String>,
     api_key: Option<&str>,
@@ -4129,16 +4186,6 @@ fn resolve_xiaomi_mimo_base_url(
         None if uses_token_plan || api_key.is_none() => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
         None => XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string(),
     }
-}
-
-fn xiaomi_mimo_env_api_key_for_base_url() -> Option<String> {
-    std::env::var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY")
-        .or_else(|_| std::env::var("MIMO_TOKEN_PLAN_API_KEY"))
-        .or_else(|_| std::env::var("XIAOMI_MIMO_API_KEY"))
-        .or_else(|_| std::env::var("XIAOMI_API_KEY"))
-        .or_else(|_| std::env::var("MIMO_API_KEY"))
-        .ok()
-        .filter(|key| !key.trim().is_empty())
 }
 
 fn xiaomi_mimo_api_key_uses_token_plan(api_key: Option<&str>) -> bool {
@@ -8160,6 +8207,7 @@ mode = "token-plan-usa"
             env::set_var("DEEPSEEK_PROVIDER", "xiaomi-mimo");
             env::set_var("XIAOMI_MIMO_MODE", "token-plan-sgp");
             env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "tp-env-key");
+            env::set_var("XIAOMI_MIMO_API_KEY", "sk-env-key");
             env::set_var("XIAOMI_MIMO_MODEL", "voiceclone");
         }
 
@@ -8171,6 +8219,39 @@ mode = "token-plan-usa"
             XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL
         );
         assert_eq!(config.default_model(), "voiceclone");
+        Ok(())
+    }
+
+    #[test]
+    fn xiaomi_mimo_env_pay_as_you_go_mode_prefers_standard_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-xiaomi-mimo-payg-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "xiaomi-mimo");
+            env::set_var("XIAOMI_MIMO_MODE", "pay-as-you-go");
+            env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "tp-env-key");
+            env::set_var("XIAOMI_MIMO_API_KEY", "sk-env-key");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.deepseek_api_key()?, "sk-env-key");
+        assert_eq!(
+            config.deepseek_base_url(),
+            XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL
+        );
         Ok(())
     }
 

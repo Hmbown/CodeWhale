@@ -677,7 +677,7 @@ impl Secrets {
 /// |---|---|
 /// | `deepseek` | `DEEPSEEK_API_KEY` |
 /// | `openrouter` | `OPENROUTER_API_KEY` |
-/// | `xiaomi-mimo` / `mimo` | `XIAOMI_MIMO_TOKEN_PLAN_API_KEY`, `MIMO_TOKEN_PLAN_API_KEY`, `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` |
+/// | `xiaomi-mimo` / `mimo` | `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` |
 /// | `novita` | `NOVITA_API_KEY` |
 /// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
 /// | `fireworks` | `FIREWORKS_API_KEY` |
@@ -699,13 +699,9 @@ pub fn env_for(name: &str) -> Option<String> {
     let candidates: &[&str] = match name.to_ascii_lowercase().as_str() {
         "deepseek" => &["DEEPSEEK_API_KEY"],
         "openrouter" => &["OPENROUTER_API_KEY"],
-        "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => &[
-            "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
-            "MIMO_TOKEN_PLAN_API_KEY",
-            "XIAOMI_MIMO_API_KEY",
-            "XIAOMI_API_KEY",
-            "MIMO_API_KEY",
-        ],
+        "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => {
+            &["XIAOMI_MIMO_API_KEY", "XIAOMI_API_KEY", "MIMO_API_KEY"]
+        }
         "novita" => &["NOVITA_API_KEY"],
         // NVIDIA NIM falls back to `DEEPSEEK_API_KEY` last because the
         // catalog endpoint accepts the same DeepSeek-issued key when no
@@ -780,8 +776,6 @@ mod tests {
             "WANJIE_ARK_API_KEY",
             "WANJIE_API_KEY",
             "WANJIE_MAAS_API_KEY",
-            "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
-            "MIMO_TOKEN_PLAN_API_KEY",
             "XIAOMI_MIMO_API_KEY",
             "XIAOMI_API_KEY",
             "MIMO_API_KEY",
@@ -1125,13 +1119,6 @@ mod tests {
 
         unsafe { std::env::set_var("XIAOMI_API_KEY", "xiaomi-key") };
         assert_eq!(env_for("xiaomi-mimo").as_deref(), Some("xiaomi-key"));
-        clear_known_envs();
-
-        unsafe {
-            std::env::set_var("XIAOMI_MIMO_API_KEY", "standard-key");
-            std::env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "token-plan-key");
-        }
-        assert_eq!(env_for("xiaomi-mimo").as_deref(), Some("token-plan-key"));
         clear_known_envs();
     }
 
