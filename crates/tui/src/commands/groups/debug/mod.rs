@@ -4,17 +4,17 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod translate;
-mod tokens;
-mod cost;
-mod balance;
-mod cache;
-mod system;
-mod context;
-mod edit;
-mod diff;
-mod undo;
-mod retry;
+pub(crate) mod translate;
+pub(crate) mod tokens;
+pub(crate) mod cost;
+pub(crate) mod balance;
+pub(crate) mod cache;
+pub(crate) mod system;
+pub(crate) mod context;
+pub(crate) mod edit;
+pub(crate) mod diff;
+pub(crate) mod undo;
+pub(crate) mod retry;
 
 use crate::commands::traits::{Command, CommandGroup};
 

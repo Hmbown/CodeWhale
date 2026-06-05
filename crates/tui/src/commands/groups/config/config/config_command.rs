@@ -1,21 +1,22 @@
-//! Trust command.
+//! Config command.
 
 use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 use crate::tui::app::App;
+use super::config_impl::config_command;
 
-pub struct Trust;
-impl Command for Trust {
+pub struct Config;
+impl Command for Config {
     fn info(&self) -> &'static CommandInfo {
         &CommandInfo {
-            name: "trust",
-            aliases: &["xinren"],
-            usage: "/trust [path]",
-            description_id: MessageId::CmdTrustDescription,
+            name: "config",
+            aliases: &[],
+            usage: "/config [key] [value]",
+            description_id: MessageId::CmdConfigDescription,
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::config::trust(app, args)
+        config_command(app, args)
     }
 }

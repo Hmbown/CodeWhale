@@ -4,15 +4,15 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod rename;
-mod save;
-mod fork;
-mod new;
-mod sessions;
-mod load;
-mod compact;
-mod purge;
-mod export;
+pub(crate) mod rename;
+pub(crate) mod save;
+pub(crate) mod fork;
+pub(crate) mod new;
+pub(crate) mod sessions;
+pub(crate) mod load;
+pub(crate) mod compact;
+pub(crate) mod purge;
+pub(crate) mod export;
 
 use crate::commands::traits::{Command, CommandGroup};
 

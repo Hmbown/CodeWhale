@@ -4,10 +4,10 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod skills;
-mod skill;
-mod review;
-mod restore;
+pub(crate) mod skills;
+pub(crate) mod skill;
+pub(crate) mod review;
+pub(crate) mod restore;
 
 use crate::commands::traits::{Command, CommandGroup};
 

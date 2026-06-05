@@ -4,15 +4,15 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod config;
-mod settings;
-mod status;
-mod statusline;
-mod mode;
-mod theme;
-mod verbose;
-mod trust;
-mod logout;
+pub(crate) mod config;
+pub(crate) mod settings;
+pub(crate) mod status;
+pub(crate) mod statusline;
+pub(crate) mod mode;
+pub(crate) mod theme;
+pub(crate) mod verbose;
+pub(crate) mod trust;
+pub(crate) mod logout;
 
 use crate::commands::traits::{Command, CommandGroup};
 

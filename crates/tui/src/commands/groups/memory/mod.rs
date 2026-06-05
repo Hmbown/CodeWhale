@@ -4,9 +4,9 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod note;
-mod memory;
-mod attach;
+pub(crate) mod note;
+pub(crate) mod memory;
+pub(crate) mod attach;
 
 use crate::commands::traits::{Command, CommandGroup};
 

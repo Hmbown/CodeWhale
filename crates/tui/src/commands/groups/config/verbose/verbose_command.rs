@@ -1,21 +1,22 @@
-//! Theme command.
+//! Verbose command.
 
 use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 use crate::tui::app::App;
+use super::verbose_impl::verbose;
 
-pub struct Theme;
-impl Command for Theme {
+pub struct Verbose;
+impl Command for Verbose {
     fn info(&self) -> &'static CommandInfo {
         &CommandInfo {
-            name: "theme",
+            name: "verbose",
             aliases: &[],
-            usage: "/theme [name]",
-            description_id: MessageId::CmdThemeDescription,
+            usage: "/verbose [on|off]",
+            description_id: MessageId::CmdVerboseDescription,
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::config::theme(app, args)
+        verbose(app, args)
     }
 }

@@ -16,7 +16,7 @@ use crate::localization::resolve_locale;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
 use crate::tui::app::{
-    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
+    App, AppAction, AppMode, ReasoningEffort, SidebarFocus, VimMode,
 };
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
@@ -26,6 +26,17 @@ use anyhow::Result;
 /// Bare `/config` opens the legacy Native modal (the `OpenConfigView` action),
 /// preserving the v0.8.4 behaviour. `/config tui` opens the new
 /// schemaui-driven TUI editor; `/config web` launches the web editor (only
+
+pub(crate) fn expand_tilde(raw: &str) -> String {
+    if !raw.starts_with('~') {
+        return raw.to_string();
+    }
+    let trimmed = raw.trim_start_matches('~');
+    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        Some(home) => PathBuf::from(home).join(trimmed).to_string_lossy().to_string(),
+        None => raw.to_string(),
+    }
+}
 /// available in builds compiled with the `web` feature).
 pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let mode = match parse_mode(arg) {
@@ -51,265 +62,6 @@ pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
 ///   editor mode (web requires the `web` build feature).
 /// - `/config <key>` — shows the current value of a setting.
 /// - `/config <key> <value>` — sets a runtime value (session only, add --save to persist).
-pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let raw = arg.map(str::trim).unwrap_or("");
-    if raw.is_empty() {
-        return show_config(app, None);
-    }
-    let parts: Vec<&str> = raw.splitn(2, ' ').collect();
-    if parts.len() == 1 {
-        // Single arg: editor-mode shortcut OR show-value request.
-        let token = parts[0];
-        if matches!(
-            token.to_ascii_lowercase().as_str(),
-            "tui" | "web" | "native"
-        ) {
-            return show_config(app, Some(token));
-        }
-        // `/config <key>` — show current value
-        show_single_setting(app, token)
-    } else {
-        // `/config <key> <value> [--save|-s]` — set value, optionally persist
-        let raw_value = parts[1];
-        let persist = raw_value.ends_with(" --save") || raw_value.ends_with(" -s");
-        let value = if persist {
-            raw_value
-                .strip_suffix(" --save")
-                .or_else(|| raw_value.strip_suffix(" -s"))
-                .unwrap_or(raw_value)
-        } else {
-            raw_value
-        };
-        set_config_value(app, parts[0], value, persist)
-    }
-}
-
-/// Show the current value of a single setting.
-fn show_single_setting(app: &App, key: &str) -> CommandResult {
-    let key = key.to_lowercase();
-    fn locale_display(l: crate::localization::Locale) -> &'static str {
-        match l {
-            crate::localization::Locale::En => "en",
-            crate::localization::Locale::ZhHans => "zh-Hans",
-            crate::localization::Locale::ZhHant => "zh-Hant",
-            crate::localization::Locale::Ja => "ja",
-            crate::localization::Locale::PtBr => "pt-BR",
-            crate::localization::Locale::Es419 => "es-419",
-            crate::localization::Locale::Vi => "vi",
-        }
-    }
-    fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
-        match d {
-            crate::tui::app::ComposerDensity::Compact => "compact",
-            crate::tui::app::ComposerDensity::Comfortable => "comfortable",
-            crate::tui::app::ComposerDensity::Spacious => "spacious",
-        }
-    }
-    fn spacing_display(s: crate::tui::app::TranscriptSpacing) -> &'static str {
-        match s {
-            crate::tui::app::TranscriptSpacing::Compact => "compact",
-            crate::tui::app::TranscriptSpacing::Comfortable => "comfortable",
-            crate::tui::app::TranscriptSpacing::Spacious => "spacious",
-        }
-    }
-    let value = match key.as_str() {
-        "model" => {
-            if app.auto_model {
-                let mut label = "auto (auto-select model per turn)".to_string();
-                if let Some(effective) = app.last_effective_model.as_deref()
-                    && effective != "auto"
-                {
-                    label.push_str(&format!("; last: {effective}"));
-                }
-                Some(label)
-            } else {
-                Some(app.model.clone())
-            }
-        }
-        "provider" => Some(app.api_provider.as_str().to_string()),
-        "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
-        "allow_shell" | "shell" | "exec_shell" => Some(app.allow_shell.to_string()),
-        "base_url" => {
-            let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    return CommandResult::error(format!("Failed to load config: {err}"));
-                }
-            };
-            Some(config.deepseek_base_url())
-        }
-        "provider_url" | "provider_base_url" | "endpoint" => {
-            let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
-            {
-                Ok(mut config) => {
-                    config.provider = Some(app.api_provider.as_str().to_string());
-                    config
-                }
-                Err(err) => {
-                    return CommandResult::error(format!("Failed to load config: {err}"));
-                }
-            };
-            Some(config.deepseek_base_url())
-        }
-        "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
-        "theme" | "ui_theme" => {
-            Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
-        }
-        "background_color" | "background" | "bg" => {
-            crate::palette::hex_rgb_string(app.ui_theme.surface_bg)
-                .or_else(|| Some("(default)".to_string()))
-        }
-        "auto_compact" | "compact" => {
-            Some(if app.auto_compact { "true" } else { "false" }.to_string())
-        }
-        "calm_mode" | "calm" => Some(if app.calm_mode { "true" } else { "false" }.to_string()),
-        "low_motion" | "motion" => Some(if app.low_motion { "true" } else { "false" }.to_string()),
-        "fancy_animations" | "fancy" | "animations" => Some(
-            if app.fancy_animations {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        ),
-        "bracketed_paste" | "paste" => Some(
-            if app.use_bracketed_paste {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        ),
-        "paste_burst_detection" | "paste_burst" => Some(
-            if app.use_paste_burst_detection {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        ),
-        "show_thinking" | "thinking" => {
-            Some(if app.show_thinking { "true" } else { "false" }.to_string())
-        }
-        "show_tool_details" | "tool_details" => Some(
-            if app.show_tool_details {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        ),
-        "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
-        "max_history" | "history" => Some(app.max_input_history.to_string()),
-        "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
-        "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
-        "context_panel" | "context" | "session_panel" => {
-            Some(if app.context_panel { "true" } else { "false" }.to_string())
-        }
-        "composer_density" | "composer" => Some(density_display(app.composer_density).to_string()),
-        "composer_border" | "border" => {
-            Some(if app.composer_border { "true" } else { "false" }.to_string())
-        }
-        "composer_vim_mode" | "vim_mode" | "vim" => Some(
-            if app.composer.vim_enabled {
-                "vim"
-            } else {
-                "normal"
-            }
-            .to_string(),
-        ),
-        "transcript_spacing" | "spacing" => {
-            Some(spacing_display(app.transcript_spacing).to_string())
-        }
-        "status_indicator" | "indicator" => Some(app.status_indicator.clone()),
-        "synchronized_output" | "sync_output" | "sync" => Some(
-            if app.synchronized_output_enabled {
-                "on"
-            } else {
-                "off"
-            }
-            .to_string(),
-        ),
-        "cost_currency" | "currency" => Some(
-            match app.cost_currency {
-                crate::pricing::CostCurrency::Usd => "usd",
-                crate::pricing::CostCurrency::Cny => "cny",
-            }
-            .to_string(),
-        ),
-        "default_model" => Settings::load().ok().map(|settings| {
-            settings
-                .default_model
-                .unwrap_or_else(|| "(default)".to_string())
-        }),
-        "reasoning_effort" | "effort" => Some(app.reasoning_effort.as_setting().to_string()),
-        "prefer_external_pdftotext" | "external_pdftotext" | "pdftotext" => Settings::load()
-            .ok()
-            .map(|settings| settings.prefer_external_pdftotext.to_string()),
-        _ => {
-            let known = Settings::available_settings()
-                .iter()
-                .any(|(k, _)| k == &key);
-            if known {
-                Some("(see /settings for current value)".to_string())
-            } else {
-                None
-            }
-        }
-    };
-    match value {
-        Some(v) => CommandResult::message(format!("{key} = {v}")),
-        None => CommandResult::error(format!(
-            "Unknown setting '{key}'. See `/help config` for available settings."
-        )),
-    }
-}
-
-/// Show persistent settings
-pub fn show_settings(app: &mut App) -> CommandResult {
-    match Settings::load() {
-        Ok(settings) => CommandResult::message(settings.display(app.ui_locale)),
-        Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
-    }
-}
-
-/// Open the `/statusline` multi-select picker for configuring footer items.
-pub fn status_line(_app: &mut App) -> CommandResult {
-    CommandResult::action(AppAction::OpenStatusPicker)
-}
-
-/// Toggle whether the live transcript renders full thinking detail.
-pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let next = match arg.map(str::trim).filter(|s| !s.is_empty()) {
-        None => !app.verbose_transcript,
-        Some(raw) => match raw.to_ascii_lowercase().as_str() {
-            "on" | "true" | "1" | "yes" => true,
-            "off" | "false" | "0" | "no" => false,
-            "toggle" => !app.verbose_transcript,
-            _ => {
-                return CommandResult::error(
-                    "Usage: /verbose [on|off]. Compact thinking remains available when verbose is off.",
-                );
-            }
-        },
-    };
-
-    app.verbose_transcript = next;
-    app.mark_history_updated();
-    CommandResult::message(if next {
-        "Verbose transcript on: live thinking renders in full."
-    } else {
-        "Verbose transcript off: live thinking stays compact."
-    })
-}
-
-/// Persist `tui.status_items` to `~/.codewhale/config.toml` without disturbing
-/// the rest of the file. We round-trip through `toml::Value` so any keys we
-/// don't know about (provider blocks, MCP, etc.) survive the write
-/// untouched.
-///
-/// Returns the path written so the caller can surface it in a status toast.
 pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     use std::fs;
@@ -522,9 +274,6 @@ fn parse_config_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-/// Resolve the path to `~/.codewhale/config.toml` (or
-/// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
-/// never write to a different file than the one we read.
 pub(crate) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     if let Some(path) = config_path {
@@ -962,28 +711,11 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
 }
 
 /// Select the TUI operating mode.
-pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let Some(arg) = arg.filter(|value| !value.trim().is_empty()) else {
-        return CommandResult::action(AppAction::OpenModePicker);
-    };
-    match parse_mode_arg(arg) {
-        Some(mode) => {
-            let (message, changed) = switch_mode_with_status(app, mode);
-            if changed {
-                CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
-            } else {
-                CommandResult::message(message)
-            }
-        }
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
-    }
-}
-
 pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
     switch_mode_with_status(app, mode).0
 }
 
-fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
+pub(crate) fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     if app.set_mode(mode) {
         (
             format!("Switched to {} mode.", mode_display_name(mode)),
@@ -997,7 +729,7 @@ fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     }
 }
 
-fn parse_mode_arg(arg: &str) -> Option<AppMode> {
+pub(crate) fn parse_mode_arg(arg: &str) -> Option<AppMode> {
     match arg.trim().to_ascii_lowercase().as_str() {
         "agent" | "1" => Some(AppMode::Agent),
         "plan" | "2" => Some(AppMode::Plan),
@@ -1018,173 +750,6 @@ fn mode_display_name(mode: AppMode) -> &'static str {
 /// keys, live preview, Enter to persist, Esc to revert). With an argument,
 /// route through `set_config_value("theme", ...)` so the apply + save flow is
 /// shared with `/config`.
-pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
-    match arg.map(str::trim).filter(|s| !s.is_empty()) {
-        None => CommandResult::action(AppAction::OpenThemePicker),
-        Some(name) => set_config_value(app, "theme", name, true),
-    }
-}
-
-/// `/slop [query|export]` — inspect or export the slop ledger (#2127).
-/// With no arguments, prints a summary. `query` shows filtered results;
-/// `export` outputs the full ledger as Markdown.
-pub fn slop(_app: &mut App, arg: Option<&str>) -> CommandResult {
-    let arg = arg.map(str::trim).unwrap_or("");
-    let ledger = match crate::slop_ledger::SlopLedger::load() {
-        Ok(l) => l,
-        Err(e) => return CommandResult::error(format!("Failed to load slop ledger: {e}")),
-    };
-
-    match arg {
-        "" => CommandResult::message(ledger.summary()),
-        "query" | "q" => {
-            if ledger.is_empty() {
-                return CommandResult::message("Slop ledger is empty.");
-            }
-            let mut out = String::new();
-            for entry in &ledger.query(&Default::default()) {
-                use std::fmt::Write;
-                let _ = writeln!(
-                    out,
-                    "[{}] {} ({:?} | {:?}) — {}",
-                    crate::slop_ledger::short_id(&entry.id),
-                    entry.bucket.as_str(),
-                    entry.severity,
-                    entry.status,
-                    entry.title
-                );
-            }
-            CommandResult::message(out)
-        }
-        "export" | "e" => {
-            let md = ledger.export_markdown(None, None);
-            CommandResult::message(md)
-        }
-        _ => CommandResult::error(format!(
-            "Unknown /slop action '{arg}'. Use /slop, /slop query, or /slop export."
-        )),
-    }
-}
-
-/// Manage workspace-level trust and the per-path allowlist.
-///
-/// Subcommands:
-/// - `/trust`            – show current state and trusted external paths
-/// - `/trust on`         – legacy: trust the entire workspace (turn off all path checks)
-/// - `/trust off`        – disable workspace-level trust mode
-/// - `/trust add <path>` – add a directory to the allowlist (#29)
-/// - `/trust remove <path>` (alias `rm`) – remove a path from the allowlist
-/// - `/trust list`       – list trusted external paths for this workspace
-pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let raw = arg.map(str::trim).unwrap_or("");
-    let mut parts = raw.splitn(2, char::is_whitespace);
-    let sub = parts.next().unwrap_or("").to_lowercase();
-    let rest = parts.next().map(str::trim).unwrap_or("");
-    let workspace = app.workspace.clone();
-
-    match sub.as_str() {
-        "" | "status" | "list" => trust_status(&workspace, app, sub == "list"),
-        "on" | "enable" | "yes" | "y" => {
-            app.trust_mode = true;
-            CommandResult::message(
-                "Workspace trust mode enabled — agent file tools can now read/write any path. \
-                 Use `/trust off` to revert; prefer `/trust add <path>` for a narrower opt-in.",
-            )
-        }
-        "off" | "disable" | "no" | "n" => {
-            app.trust_mode = false;
-            CommandResult::message("Workspace trust mode disabled.")
-        }
-        "add" => trust_add(&workspace, rest),
-        "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error(format!(
-            "Unknown /trust action `{other}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
-        )),
-    }
-}
-
-fn trust_status(workspace: &Path, app: &App, force_paths: bool) -> CommandResult {
-    let trust = crate::workspace_trust::WorkspaceTrust::load_for(workspace);
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Workspace trust mode: {}",
-        if app.trust_mode {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    ));
-    if trust.paths().is_empty() {
-        if force_paths {
-            lines.push("No external paths trusted from this workspace.".to_string());
-        } else {
-            lines.push(
-                "No external paths trusted yet. Use `/trust add <path>` to allow a directory."
-                    .to_string(),
-            );
-        }
-    } else {
-        lines.push(format!("Trusted external paths ({}):", trust.paths().len()));
-        for path in trust.paths() {
-            lines.push(format!("  • {}", path.display()));
-        }
-    }
-    CommandResult::message(lines.join("\n"))
-}
-
-fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
-    if raw.is_empty() {
-        return CommandResult::error(
-            "Usage: /trust add <path>. Supply an absolute path or a path relative to the workspace.",
-        );
-    }
-    let path = PathBuf::from(expand_tilde(raw));
-    if !path.exists() {
-        return CommandResult::error(format!(
-            "Path not found: {} — supply an existing directory or file.",
-            path.display()
-        ));
-    }
-    match crate::workspace_trust::add(workspace, &path) {
-        Ok(stored) => CommandResult::message(format!(
-            "Added to trust list for this workspace: {}",
-            stored.display()
-        )),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
-    }
-}
-
-fn trust_remove(workspace: &Path, raw: &str) -> CommandResult {
-    if raw.is_empty() {
-        return CommandResult::error("Usage: /trust remove <path>");
-    }
-    let path = PathBuf::from(expand_tilde(raw));
-    match crate::workspace_trust::remove(workspace, &path) {
-        Ok(true) => CommandResult::message(format!("Removed from trust list: {}", path.display())),
-        Ok(false) => CommandResult::message(format!("Not in trust list: {}", path.display())),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
-    }
-}
-
-fn expand_tilde(raw: &str) -> String {
-    if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest).to_string_lossy().into_owned();
-    } else if raw == "~"
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.to_string_lossy().into_owned();
-    }
-    raw.to_string()
-}
-
-/// Auto-select a model based on request complexity.
-///
-/// Short messages (<100 chars) → Flash (fast & cheap).
-/// Long messages (>500 chars) → Pro (powerful reasoning).
-/// Messages with complex keywords → Pro.
-/// Default → Flash (cost savings).
 pub fn auto_model_heuristic(input: &str, _current_model: &str) -> String {
     auto_model_heuristic_with_bias(input, _current_model, false)
 }
@@ -1264,15 +829,6 @@ fn auto_model_heuristic_selection_with_bias(
     }
 }
 
-/// Keywords that escalate `auto`-mode model selection to
-/// `deepseek-v4-pro`. The Latin entries are lowercase (the caller
-/// lowercases the message); CJK has no case so the literal form
-/// matches as-is.
-///
-/// Without the CJK entries, a Chinese-speaking user typing
-/// "帮我重构这个模块" or "审计安全漏洞" silently fell through to the
-/// short/long-message threshold and usually landed on Flash even
-/// for tasks that obviously need Pro-grade reasoning.
 const COMPLEX_KEYWORDS: &[&str] = &[
     // English (unchanged from the original list).
     "refactor",
@@ -1566,64 +1122,25 @@ fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
     }
 }
 
-/// Toggle LSP diagnostics on/off or show status.
-///
-/// - `/lsp on` — enable inline LSP diagnostics
-/// - `/lsp off` — disable inline LSP diagnostics
-/// - `/lsp status` — show whether diagnostics are currently enabled
-pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let raw = arg.map(str::trim).unwrap_or("");
-    // Access lsp_manager config through the App's engine handle
-    let current_enabled = app.lsp_enabled;
 
-    match raw {
-        "" | "status" => {
-            let status = if current_enabled { "on" } else { "off" };
-            CommandResult::message(format!(
-                "LSP diagnostics are currently **{status}**.\n\n\
-                 Use `/lsp on` to enable or `/lsp off` to disable inline diagnostics after file edits."
-            ))
-        }
-        "on" | "enable" | "1" | "true" => {
-            app.lsp_enabled = true;
-            CommandResult::message(
-                "LSP diagnostics enabled — file edit results will include compiler errors and warnings when available.",
-            )
-        }
-        "off" | "disable" | "0" | "false" => {
-            app.lsp_enabled = false;
-            CommandResult::message("LSP diagnostics disabled.")
-        }
-        other => CommandResult::error(format!(
-            "Unknown /lsp argument `{other}`. Use `/lsp on`, `/lsp off`, or `/lsp status`."
-        )),
-    }
-}
-
-/// Logout - clear all saved API keys and return to onboarding.
-/// This is NOT provider-scoped — it clears keys for every saved provider.
-/// For single-provider key replacement, use
-/// `codewhale auth clear --provider <id>` and
-/// `codewhale auth set --provider <id>`.
-pub fn logout(app: &mut App) -> CommandResult {
-    let provider_name = app.api_provider.as_str();
-    match clear_active_provider_api_key(provider_name) {
-        Ok(()) => {
-            app.onboarding = OnboardingState::ApiKey;
-            app.onboarding_needs_api_key = true;
-            app.api_key_input.clear();
-            app.api_key_cursor = 0;
-            CommandResult::message(format!(
-                "Cleared API key for {provider_name}. \
-                 Use `codewhale auth clear --provider <id>` to clear a different provider."
-            ))
-        }
-        Err(e) => CommandResult::error(format!("Failed to clear API key for {provider_name}: {e}")),
-    }
-}
 
 #[cfg(test)]
 mod tests {
+
+use super::*;
+use crate::tui::app::OnboardingState;
+use crate::commands::groups::{
+    config::config::config_impl::config_command,
+    config::settings::settings_impl::show_settings,
+    config::statusline::statusline_impl::status_line,
+    config::mode::mode_impl::mode,
+    config::theme::theme_impl::theme,
+    config::verbose::verbose_impl::verbose,
+    config::trust::trust_impl::trust,
+    config::logout::logout_impl::logout,
+    project::lsp::lsp_impl::lsp_command,
+    utility::slop::slop_impl::slop,
+};
     use super::*;
     use crate::config::Config;
     use crate::test_support::lock_test_env;

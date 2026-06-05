@@ -1,21 +1,22 @@
-//! Verbose command.
+//! Trust command.
 
 use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 use crate::tui::app::App;
+use super::trust_impl::trust;
 
-pub struct Verbose;
-impl Command for Verbose {
+pub struct Trust;
+impl Command for Trust {
     fn info(&self) -> &'static CommandInfo {
         &CommandInfo {
-            name: "verbose",
-            aliases: &[],
-            usage: "/verbose [on|off]",
-            description_id: MessageId::CmdVerboseDescription,
+            name: "trust",
+            aliases: &["xinren"],
+            usage: "/trust [path]",
+            description_id: MessageId::CmdTrustDescription,
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::config::verbose(app, args)
+        trust(app, args)
     }
 }

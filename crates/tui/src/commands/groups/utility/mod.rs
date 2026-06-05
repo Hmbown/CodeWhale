@@ -4,16 +4,16 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-mod queue;
-mod stash;
-mod hooks;
-mod anchor;
-mod network;
-mod mcp;
-mod rlm;
-mod task;
-mod jobs;
-mod slop;
+pub(crate) mod queue;
+pub(crate) mod stash;
+pub(crate) mod hooks;
+pub(crate) mod anchor;
+pub(crate) mod network;
+pub(crate) mod mcp;
+pub(crate) mod rlm;
+pub(crate) mod task;
+pub(crate) mod jobs;
+pub(crate) mod slop;
 
 use crate::commands::traits::{Command, CommandGroup};
 use crate::tui::app::App;

@@ -1,21 +1,22 @@
-//! Mode command.
+//! Theme command.
 
 use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 use crate::tui::app::App;
+use super::theme_impl::theme;
 
-pub struct Mode;
-impl Command for Mode {
+pub struct Theme;
+impl Command for Theme {
     fn info(&self) -> &'static CommandInfo {
         &CommandInfo {
-            name: "mode",
+            name: "theme",
             aliases: &[],
-            usage: "/mode [plan|yolo|agent]",
-            description_id: MessageId::CmdModeDescription,
+            usage: "/theme [name]",
+            description_id: MessageId::CmdThemeDescription,
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        crate::commands::back::config::mode(app, args)
+        theme(app, args)
     }
 }
