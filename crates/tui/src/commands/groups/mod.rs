@@ -6,17 +6,17 @@
 //!
 //! Adding a new group:
 //!   1. Create `groups/my_group.rs` with a struct implementing `CommandGroup`
-//!   2. Add `pub(crate) mod my_group;` below
+//!   2. Add `mod my_group;` below
 //!   3. Add `&my_group::MyGroupCommands` to the `all_command_groups()` vec
 
-pub(crate) mod core_group;
-pub(crate) mod session_group;
-pub(crate) mod config_group;
-pub(crate) mod debug_group;
-pub(crate) mod project_group;
-pub(crate) mod skills_group;
-pub(crate) mod memory_group;
-pub(crate) mod utility_group;
+mod core_group;
+mod session_group;
+mod config_group;
+mod debug_group;
+mod project_group;
+mod skills_group;
+mod memory_group;
+mod utility_group;
 
 use crate::commands::traits::CommandGroup;
 
