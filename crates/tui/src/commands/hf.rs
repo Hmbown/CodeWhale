@@ -4,8 +4,6 @@ use crate::tui::app::App;
 
 use super::CommandResult;
 
-use serde_json;
-
 /// Explainer shown by `/hf concepts` — distinguishes the three Hugging Face
 /// integration surfaces so users understand which one they're configuring.
 const HF_CONCEPTS: &str = "\
@@ -55,7 +53,7 @@ pub fn hf(app: &mut App, args: Option<&str>) -> CommandResult {
 
     match sub.as_str() {
         "mcp" => hf_mcp(app, parts.next()),
-        "search" | "find" => hf_search(&raw[sub.len()..].trim()),
+        "search" | "find" => hf_search(raw[sub.len()..].trim()),
         "concepts" | "explain" => CommandResult::message(HF_CONCEPTS),
         "docs" => CommandResult::message(
             "Hugging Face MCP server docs: https://huggingface.co/docs/hub/hf-mcp-server\n\
