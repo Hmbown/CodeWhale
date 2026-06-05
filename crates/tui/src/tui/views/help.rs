@@ -202,7 +202,7 @@ impl HelpView {
 fn build_entries(locale: Locale) -> Vec<HelpEntry> {
     let mut entries = Vec::new();
 
-    for command in commands::COMMANDS {
+    for command in commands::all_commands() {
         let label = format!("/{}", command.name);
         let localized = command.description_for(locale);
         let description = if command.aliases.is_empty() {
@@ -515,7 +515,7 @@ mod tests {
     fn empty_filter_lists_all_entries() {
         let view = HelpView::new();
         // Total = registered slash commands + catalogued keybindings.
-        let expected = commands::COMMANDS.len() + KEYBINDINGS.len();
+        let expected = commands::command_count() + KEYBINDINGS.len();
         assert_eq!(view.filtered.len(), expected);
         assert_eq!(view.entries.len(), expected);
     }
