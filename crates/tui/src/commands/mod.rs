@@ -21,6 +21,8 @@ mod skills_group;
 mod memory_group;
 mod utility_group;
 
+use std::sync::OnceLock;
+
 use crate::tui::app::{App, AppAction};
 
 #[allow(unused_imports)] pub use traits::CommandInfo;
@@ -57,8 +59,23 @@ impl CommandResult {
 // ── Registry access ────────────────────────────────────────────────────────
 
 /// Access the global command registry (lazily initialised).
+static REGISTRY: OnceLock<traits::CommandRegistry> = OnceLock::new();
+
+fn build_registry() -> traits::CommandRegistry {
+    let mut reg = traits::CommandRegistry::empty();
+    reg.register_group(&core_group::CoreCommands);
+    reg.register_group(&session_group::SessionCommands);
+    reg.register_group(&config_group::ConfigCommands);
+    reg.register_group(&debug_group::DebugCommands);
+    reg.register_group(&project_group::ProjectCommands);
+    reg.register_group(&skills_group::SkillsCommands);
+    reg.register_group(&memory_group::MemoryCommands);
+    reg.register_group(&utility_group::UtilityCommands);
+    reg
+}
+
 pub fn registry() -> &'static traits::CommandRegistry {
-    traits::registry()
+    REGISTRY.get_or_init(build_registry)
 }
 
 // ── Dispatch ───────────────────────────────────────────────────────────────
