@@ -1,0 +1,23 @@
+[Unit]
+Description=CodeWhale Telegram Phone Bridge
+Wants=network-online.target codewhale-runtime.service
+After=network-online.target codewhale-runtime.service
+
+[Service]
+Type=simple
+User=codewhale
+Group=codewhale
+WorkingDirectory=/opt/codewhale/telegram-bridge
+# Legacy /etc/deepseek is loaded first for old installs; /etc/codewhale wins.
+EnvironmentFile=-/etc/deepseek/telegram-bridge.env
+EnvironmentFile=-/etc/codewhale/telegram-bridge.env
+ExecStart=/usr/bin/node /opt/codewhale/telegram-bridge/src/index.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/codewhale-telegram-bridge
+
+[Install]
+WantedBy=multi-user.target

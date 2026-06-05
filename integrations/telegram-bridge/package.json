@@ -1,0 +1,17 @@
+{
+  "name": "@codewhale/telegram-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram mobile bridge for a local codewhale serve --http runtime.",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs && node --check src/lib.mjs && node --check scripts/validate-config.mjs",
+    "test": "node --test test/*.test.mjs",
+    "validate:config": "node scripts/validate-config.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

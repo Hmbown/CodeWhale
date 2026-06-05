@@ -1,4 +1,4 @@
-//! CLI entry point for the `DeepSeek` client.
+//! CLI entry point for CodeWhale.
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -115,8 +115,8 @@ fn configure_windows_console_utf8() {}
     bin_name = "codewhale-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
-    about = "codewhale/CLI for DeepSeek models",
-    long_about = "Terminal-native TUI and CLI for DeepSeek models.\n\nRun 'codewhale' to start.\n\nNot affiliated with DeepSeek Inc."
+    about = "CodeWhale terminal coding agent",
+    long_about = "Terminal-native TUI and CLI for open-source and open-weight coding models.\n\nRun 'codewhale' to start.\n\nProvider routes include DeepSeek, Arcee, Hugging Face, OpenRouter, Xiaomi MiMo, local vLLM/SGLang/Ollama, and more."
 )]
 struct Cli {
     /// Subcommand to run
@@ -214,7 +214,7 @@ enum Commands {
     },
     /// Create default AGENTS.md in current directory
     Init,
-    /// Save a DeepSeek API key to the shared user config
+    /// Save an API key to the shared user config
     Login {
         /// API key to store (otherwise read from stdin)
         #[arg(long)]
@@ -1116,7 +1116,7 @@ async fn main() -> Result<()> {
     };
 
     // Default: Interactive TUI
-    // --yolo starts in YOLO mode (shell + trust + auto-approve)
+    // --yolo starts in YOLO mode (auto-approve; shell if allow_shell=true)
     run_interactive(&cli, &config, resume_session_id, None).await
 }
 
@@ -2028,6 +2028,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "VOLCENGINE_API_KEY",
                     "codewhale auth set --provider volcengine",
                 ),
+                crate::config::ApiProvider::Huggingface => (
+                    "HUGGINGFACE_API_KEY/HF_TOKEN",
+                    "codewhale auth set --provider huggingface",
+                ),
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
                     ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
@@ -2052,6 +2056,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
                     crate::config::ApiProvider::Ollama => "ollama",
+                    crate::config::ApiProvider::Huggingface => "huggingface",
                     crate::config::ApiProvider::Deepseek
                     | crate::config::ApiProvider::DeepseekCN => "deepseek",
                 }

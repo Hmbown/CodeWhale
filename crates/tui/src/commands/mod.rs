@@ -179,7 +179,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "provider",
         aliases: &[],
-        usage: "/provider [name]",
+        usage: "/provider [name] [model]",
         description_id: MessageId::CmdProviderDescription,
     },
     CommandInfo {

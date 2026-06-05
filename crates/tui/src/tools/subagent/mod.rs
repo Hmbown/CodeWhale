@@ -94,8 +94,26 @@ const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 
-const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, tool_agent, custom, \
-     worker, explorer, awaiter, default, implement, builder, verify, validator, tester, tool-agent, executor, fin";
+const VALID_SUBAGENT_TYPES: &str = "general (aliases: general-purpose, general_purpose, worker, default), \
+     explore (aliases: exploration, explorer), plan (aliases: planning, planner, awaiter), \
+     review (aliases: code-review, code_review, reviewer), implementer (aliases: implement, implementation, builder), \
+     verifier (aliases: verify, verification, validator, tester), tool_agent (aliases: tool-agent, toolagent, executor, execution, fin), custom";
+/// Role aliases accepted by `normalize_role_alias`. Kept in sync with the
+/// match arms below so every input that `SubAgentType::from_str` accepts also
+/// resolves to a canonical role (avoids the dual-validation rejection in #2649).
+const VALID_ROLE_ALIASES: &str = "default; worker (aliases: general, general-purpose, general_purpose); \
+     explorer (aliases: explore, exploration); awaiter (aliases: plan, planning, planner); \
+     reviewer (aliases: review, code-review, code_review); implementer (aliases: implement, implementation, builder); \
+     verifier (aliases: verify, verification, validator, tester); tool_agent (aliases: tool-agent, toolagent, executor, execution, fin); custom";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Sub-agent type. Accepted vocabulary: general (aliases: general-purpose, general_purpose, worker, default), \
+     explore (aliases: exploration, explorer), plan (aliases: planning, planner, awaiter), \
+     review (aliases: code-review, code_review, reviewer), implementer (aliases: implement, implementation, builder), \
+     verifier (aliases: verify, verification, validator, tester), tool_agent (aliases: tool-agent, toolagent, executor, execution, fin), custom.";
+const SUBAGENT_ROLE_DESCRIPTION: &str = "Role alias. Accepted vocabulary: default; worker (aliases: general, general-purpose, general_purpose); \
+     explorer (aliases: explore, exploration); awaiter (aliases: plan, planning, planner); \
+     reviewer (aliases: review, code-review, code_review); implementer (aliases: implement, implementation, builder); \
+     verifier (aliases: verify, verification, validator, tester); tool_agent (aliases: tool-agent, toolagent, executor, execution, fin); custom. \
+     Must match `type` if both are given.";
 /// Whale species used as friendly names for sub-agents in the UI. The full
 /// Cetacea infraorder — baleen whales (Mysticeti), toothed whales
 /// (Odontoceti), plus select dolphin species (family Delphinidae) that
@@ -379,7 +397,7 @@ impl SubAgentType {
                 Some(Self::General)
             }
             "explore" | "exploration" | "explorer" => Some(Self::Explore),
-            "plan" | "planning" | "awaiter" => Some(Self::Plan),
+            "plan" | "planning" | "planner" | "awaiter" => Some(Self::Plan),
             "review" | "code-review" | "code_review" | "reviewer" => Some(Self::Review),
             "implementer" | "implement" | "implementation" | "builder" => Some(Self::Implementer),
             "verifier" | "verify" | "verification" | "validator" | "tester" => Some(Self::Verifier),
@@ -1409,12 +1427,17 @@ impl SubAgentManager {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            if self
+            if let Some(existing) = self
                 .agents
                 .values()
-                .any(|existing| existing.session_name == name)
+                .find(|existing| existing.session_name == name)
             {
-                return Err(anyhow!("Sub-agent session name '{name}' is already in use"));
+                return Err(anyhow!(
+                    "Sub-agent session name '{name}' is already in use by agent_id '{}' (status: {}). \
+                     Reuse that agent_id with agent_eval/agent_close, or open with a different name.",
+                    existing.id,
+                    subagent_status_name(&existing.status)
+                ));
             }
             agent.session_name = name.to_string();
         }
@@ -1675,9 +1698,7 @@ impl SubAgentManager {
             if let Some(role) = role {
                 let normalized = normalize_role_alias(&role)
                     .ok_or_else(|| {
-                        anyhow!(
-                            "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
-                        )
+                        anyhow!("Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}")
                     })?
                     .to_string();
                 if agent.assignment.role.as_deref() != Some(normalized.as_str()) {
@@ -2075,7 +2096,7 @@ impl ToolSpec for AgentOpenTool {
                 },
                 "type": {
                     "type": "string",
-                    "description": "Sub-agent type: general, explore, plan, review, implementer, verifier, custom"
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "agent_type": {
                     "type": "string",
@@ -2083,7 +2104,7 @@ impl ToolSpec for AgentOpenTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -2338,7 +2359,7 @@ impl ToolSpec for AgentSpawnTool {
                 },
                 "type": {
                     "type": "string",
-                    "description": "Sub-agent type: general, explore, plan, review, implementer, verifier, custom. See docs/SUBAGENTS.md for posture per role."
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "agent_type": {
                     "type": "string",
@@ -2350,7 +2371,7 @@ impl ToolSpec for AgentSpawnTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -2599,6 +2620,10 @@ impl ToolSpec for AgentEvalTool {
                     "type": "string",
                     "description": "Session name returned by agent_open"
                 },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Alias for name (session name returned by agent_open)"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Generated agent id returned by agent_open"
@@ -2643,6 +2668,7 @@ impl ToolSpec for AgentEvalTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let agent_ref = input
             .get("name")
+            .or_else(|| input.get("agent_name"))
             .or_else(|| input.get("agent_id"))
             .or_else(|| input.get("id"))
             .and_then(Value::as_str)
@@ -2912,6 +2938,10 @@ impl ToolSpec for AgentCloseTool {
                     "type": "string",
                     "description": "Session name returned by agent_open"
                 },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Alias for name (session name returned by agent_open)"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Alias for id"
@@ -2934,6 +2964,7 @@ impl ToolSpec for AgentCloseTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let agent_id = input
             .get("name")
+            .or_else(|| input.get("agent_name"))
             .or_else(|| input.get("id"))
             .or_else(|| input.get("agent_id"))
             .and_then(|v| v.as_str())
@@ -3215,7 +3246,7 @@ impl ToolSpec for AgentAssignTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Updated role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -3447,7 +3478,7 @@ impl ToolSpec for DelegateToAgentTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "Name/type alias for the agent (general, explore, plan, review, implementer, verifier, worker, explorer, awaiter, builder, validator, tester)"
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "type": {
                     "type": "string",
@@ -3459,7 +3490,7 @@ impl ToolSpec for DelegateToAgentTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -3643,15 +3674,19 @@ async fn run_subagent_task(task: SubAgentTask) {
     // sentinel on the second. The sentinel uses an opaque tag
     // (`codewhale:subagent.done`) to avoid collision with normal user
     // text.
+    let model_id = task.runtime.model.clone();
     let (summary, sentinel) = match &result {
         Ok(res) => (
             summarize_subagent_result(res),
             subagent_done_sentinel(&task.agent_id, res),
         ),
-        Err(err) => (
-            format!("Failed: {err}"),
-            subagent_failed_sentinel(&task.agent_id, &err.to_string()),
-        ),
+        Err(err) => {
+            let annotated = annotate_child_model_error(&err.to_string(), &model_id);
+            (
+                format!("Failed: {annotated}"),
+                subagent_failed_sentinel(&task.agent_id, &annotated),
+            )
+        }
     };
 
     if let Some(mb) = task.runtime.mailbox.as_ref() {
@@ -3662,7 +3697,7 @@ async fn run_subagent_task(task: SubAgentTask) {
             },
             Err(err) => MailboxMessage::Failed {
                 agent_id: task.agent_id.clone(),
-                error: err.to_string(),
+                error: annotate_child_model_error(&err.to_string(), &model_id),
             },
         };
         let _ = mb.send(envelope);
@@ -3681,7 +3716,12 @@ async fn run_subagent_task(task: SubAgentTask) {
     let mut manager = task.manager_handle.write().await;
     match &result {
         Ok(res) => manager.update_from_result(&agent_id, res.clone()),
-        Err(err) => manager.update_failed(&agent_id, err.to_string()),
+        Err(err) => {
+            manager.update_failed(
+                &agent_id,
+                annotate_child_model_error(&err.to_string(), &model_id),
+            );
+        }
     }
 
     if let Some(event_tx) = task.runtime.event_tx {
@@ -3726,22 +3766,33 @@ pub(crate) fn emit_parent_completion(
 /// parent request's cache-miss tail. Wall-clock duration is useful UI
 /// telemetry, but it is volatile and not useful for model coordination.
 fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
+    let clipped = subagent_result_clipped(res);
     let payload = json!({
         "agent_id": agent_id,
         "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
         "summary_location": "previous_line",
+        "result_clipped": clipped,
+        "summary_complete": !clipped,
+        // What the parent should do next: trust the previous-line summary, or
+        // fetch the full transcript with agent_eval when it was clipped.
+        "next_action": if clipped { "call_agent_eval" } else { "use_summary" },
         "details": "agent_eval",
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
 /// Build a `<codewhale:subagent.done>` sentinel for a failed child.
+///
+/// Kept lean: the (annotated) error is on the previous line (`error_location`)
+/// and the full projection is available via `agent_eval`, so the sentinel only
+/// signals the recovery path rather than re-embedding the error text.
 fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     let payload = json!({
         "agent_id": agent_id,
         "status": "failed",
         "error_location": "previous_line",
+        "next_action": "call_agent_eval",
         "details": "agent_eval",
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
@@ -4465,7 +4516,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .map(|role| {
             SubAgentType::from_str(role).ok_or_else(|| {
                 ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+                    "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
                 ))
             })
         })
@@ -4487,7 +4538,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         && normalize_role_alias(role).is_none()
     {
         return Err(ToolError::invalid_input(format!(
-            "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+            "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
         )));
     }
 
@@ -4843,7 +4894,7 @@ fn parse_assign_request(input: &Value) -> Result<AssignRequest, ToolError> {
         .map(|role| {
             normalize_role_alias(role).ok_or_else(|| {
                 ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+                    "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
                 ))
             })
         })
@@ -4868,15 +4919,25 @@ fn parse_assign_request(input: &Value) -> Result<AssignRequest, ToolError> {
     })
 }
 
+/// Resolve a user-supplied role/agent_role value to a canonical role string.
+///
+/// This must accept the full set that [`SubAgentType::from_str`] accepts, plus
+/// role-only aliases (`worker`, `default`, `awaiter`). Before #2649 it covered
+/// only a subset, so `role: "reviewer"` (accepted by `from_str`) was rejected
+/// here by the second validation pass with a misleading four-value hint.
 fn normalize_role_alias(input: &str) -> Option<&'static str> {
     match input.to_ascii_lowercase().as_str() {
         "default" => Some("default"),
-        "worker" | "general" => Some("worker"),
-        "explorer" | "explore" => Some("explorer"),
-        "awaiter" | "plan" | "planner" => Some("awaiter"),
+        "worker" | "general" | "general-purpose" | "general_purpose" => Some("worker"),
+        "explorer" | "explore" | "exploration" => Some("explorer"),
+        "awaiter" | "plan" | "planner" | "planning" => Some("awaiter"),
+        "reviewer" | "review" | "code-review" | "code_review" => Some("reviewer"),
+        "implementer" | "implement" | "implementation" | "builder" => Some("implementer"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("verifier"),
         "tool-agent" | "tool_agent" | "toolagent" | "executor" | "execution" | "fin" => {
             Some("tool_agent")
         }
+        "custom" => Some("custom"),
         _ => None,
     }
 }
@@ -5147,6 +5208,21 @@ fn build_allowed_tools(
     Ok(None)
 }
 
+/// When a child agent fails because its model is unavailable under the current
+/// access profile, a bare provider 403/404 (classified `Authorization` or
+/// `State`) is unactionable. Annotate it so the parent knows the likely cause
+/// and how to recover (#2653) without re-classifying the underlying error.
+fn annotate_child_model_error(err: &str, model: &str) -> String {
+    match crate::error_taxonomy::classify_error_message(err) {
+        crate::error_taxonomy::ErrorCategory::Authorization
+        | crate::error_taxonomy::ErrorCategory::State => format!(
+            "{err}\n(child model `{model}` may be unavailable under the current access profile — \
+             retry agent_open with a different `model`, or remove `model` to inherit the parent's)"
+        ),
+        _ => err.to_string(),
+    }
+}
+
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
     match (&result.status, result.result.as_ref()) {
         (SubAgentStatus::Completed, Some(text)) => truncate_preview(text),
@@ -5168,13 +5244,33 @@ fn subagent_status_name(status: &SubAgentStatus) -> &'static str {
     }
 }
 
+/// Max length of the human-friendly one-line summary emitted alongside the
+/// completion sentinel. Longer results are clipped and the full transcript is
+/// available via `agent_eval` (see `result_clipped` in the sentinel payload).
+const SUBAGENT_SUMMARY_PREVIEW_MAX: usize = 240;
+
 fn truncate_preview(text: &str) -> String {
-    const MAX_LEN: usize = 240;
-    if text.len() <= MAX_LEN {
+    if text.len() <= SUBAGENT_SUMMARY_PREVIEW_MAX {
         text.to_string()
     } else {
-        format!("{}...", text.chars().take(MAX_LEN).collect::<String>())
+        format!(
+            "{}...",
+            text.chars()
+                .take(SUBAGENT_SUMMARY_PREVIEW_MAX)
+                .collect::<String>()
+        )
     }
+}
+
+/// Whether `summarize_subagent_result` clipped the preview, i.e. the parent's
+/// previous-line summary is incomplete and the model should call `agent_eval`
+/// for the full result rather than relying on the summary.
+fn subagent_result_clipped(res: &SubAgentResult) -> bool {
+    matches!(res.status, SubAgentStatus::Completed)
+        && res
+            .result
+            .as_deref()
+            .is_some_and(|text| text.len() > SUBAGENT_SUMMARY_PREVIEW_MAX)
 }
 
 const SUBAGENT_OUTPUT_FORMAT: &str = include_str!("../../prompts/subagent_output_format.md");

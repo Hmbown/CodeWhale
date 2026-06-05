@@ -86,10 +86,11 @@ The model can spell each role multiple ways:
 |---------------|------------------------------------------------------------------|
 | `general`     | `worker`, `default`, `general-purpose`                           |
 | `explore`     | `explorer`, `exploration`                                        |
-| `plan`        | `planning`, `awaiter`                                            |
-| `review`      | `reviewer`, `code-review`                                        |
+| `plan`        | `planning`, `planner`, `awaiter`                                 |
+| `review`      | `reviewer`, `code-review`, `code_review`                         |
 | `implementer` | `implement`, `implementation`, `builder`                         |
 | `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
+| `tool_agent`  | `tool-agent`, `toolagent`, `executor`, `execution`, `fin`        |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
 All matching is case-insensitive. Unknown values produce a typed

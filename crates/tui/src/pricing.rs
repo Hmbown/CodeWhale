@@ -161,6 +161,10 @@ pub fn calculate_turn_cost(model: &str, input_tokens: u32, output_tokens: u32) -
 }
 
 /// Calculate cost for a turn in both official currencies.
+///
+/// This legacy helper has no cache telemetry, so it prices all input tokens as
+/// cache misses. Prefer [`calculate_turn_cost_estimate_from_usage`] when the
+/// provider returned usage details.
 #[must_use]
 pub fn calculate_turn_cost_estimate(
     model: &str,

@@ -1,7 +1,7 @@
 # Tencent Lighthouse Hong Kong Phone Setup
 
 This runbook sets up a Tencent Cloud Lighthouse instance in Hong Kong as an
-always-on codewhale host controlled from Feishu/Lark on a phone.
+always-on codewhale host controlled from Feishu/Lark or Telegram on a phone.
 
 If you are teaching this as the Tencent-native default path, start with
 [docs/TENCENT_CLOUD_REMOTE_FIRST.md](TENCENT_CLOUD_REMOTE_FIRST.md). This file
@@ -13,9 +13,9 @@ is the implementation runbook for the Lighthouse host itself.
 CNB mirror or GitHub branch
   -> /opt/whalebro/codewhale
 
-Feishu/Lark mobile app
-  -> Feishu/Lark long-connection bot
-  -> codewhale-feishu-bridge systemd service
+Phone chat app
+  -> Feishu/Lark long-connection bot, or Telegram long-polling bot
+  -> codewhale-feishu-bridge.service or codewhale-telegram-bridge.service
   -> http://127.0.0.1:7878 codewhale serve --http
   -> /opt/whalebro
        -> codewhale/
@@ -58,6 +58,15 @@ Lighthouse firewall opens SSH/HTTP/HTTPS by default.
 Use 4 GB RAM for compiling Rust and running the bridge comfortably. A 4 vCPU /
 8 GB plan is better for multiple parallel agent workers.
 
+## Phone Bridge Choice
+
+Use Telegram for the simplest MVP: create a bot with `@BotFather`, put the
+token in `/etc/codewhale/telegram-bridge.env`, and install services with
+`CODEWHALE_BRIDGE=telegram`.
+
+Use Feishu/Lark when you specifically want the Tencent-native path, tenant
+controls, or China-enterprise chat integration.
+
 ## Feishu / Lark App
 
 Create an enterprise self-built app in:
@@ -86,12 +95,12 @@ SSH into the Lighthouse instance and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y git
-export DEEPSEEK_BRANCH=main
-export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
-git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/codewhale
+export CODEWHALE_BRANCH=main
+export CODEWHALE_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
+git clone --branch "$CODEWHALE_BRANCH" "$CODEWHALE_REPO_URL" /tmp/codewhale
 cd /tmp/codewhale
-sudo DEEPSEEK_REPO_URL="$DEEPSEEK_REPO_URL" \
-  DEEPSEEK_REPO_BRANCH="$DEEPSEEK_BRANCH" \
+sudo CODEWHALE_REPO_URL="$CODEWHALE_REPO_URL" \
+  CODEWHALE_REPO_BRANCH="$CODEWHALE_BRANCH" \
   bash scripts/tencent-lighthouse/bootstrap-ubuntu.sh
 ```
 
@@ -99,15 +108,15 @@ Use an SSH repo URL instead if you want push access from the VPS. If the CNB
 mirror is unavailable, fall back to:
 
 ```bash
-export DEEPSEEK_REPO_URL=https://github.com/Hmbown/CodeWhale.git
+export CODEWHALE_REPO_URL=https://github.com/Hmbown/CodeWhale.git
 ```
 
 For stable release docs, confirm the CNB mirror has the branch or tag before
 using it:
 
 ```bash
-export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
-git ls-remote "$DEEPSEEK_REPO_URL" \
+export CODEWHALE_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
+git ls-remote "$CODEWHALE_REPO_URL" \
   refs/heads/main \
   refs/tags/v0.8.37
 ```
@@ -142,12 +151,19 @@ cd /opt/whalebro/codewhale
 sudo bash scripts/tencent-lighthouse/install-services.sh
 ```
 
+For Telegram instead of Feishu/Lark:
+
+```bash
+cd /opt/whalebro/codewhale
+sudo CODEWHALE_BRIDGE=telegram bash scripts/tencent-lighthouse/install-services.sh
+```
+
 After editing both env files, validate the bridge/runtime pairing:
 
 ```bash
 sudo -u codewhale node /opt/codewhale/bridge/scripts/validate-config.mjs \
-  --env /etc/deepseek/feishu-bridge.env \
-  --runtime-env /etc/deepseek/runtime.env \
+  --env /etc/codewhale/feishu-bridge.env \
+  --runtime-env /etc/codewhale/runtime.env \
   --workspace-root /opt/whalebro \
   --check-filesystem
 ```
@@ -158,26 +174,27 @@ Generate one runtime token and put the same value in both env files:
 
 ```bash
 openssl rand -hex 32
-sudoedit /etc/deepseek/runtime.env
-sudoedit /etc/deepseek/feishu-bridge.env
+sudoedit /etc/codewhale/runtime.env
+sudoedit /etc/codewhale/feishu-bridge.env
 ```
 
 Required values:
 
-- `/etc/deepseek/runtime.env`
+- `/etc/codewhale/runtime.env`
+  - `CODEWHALE_PROVIDER=deepseek`
+  - `CODEWHALE_RUNTIME_TOKEN`
   - `DEEPSEEK_API_KEY`
-  - `DEEPSEEK_RUNTIME_TOKEN`
-- `/etc/deepseek/feishu-bridge.env`
+- `/etc/codewhale/feishu-bridge.env`
   - `FEISHU_APP_ID`
   - `FEISHU_APP_SECRET`
   - `FEISHU_DOMAIN=feishu` for Feishu, `lark` for Lark
-  - `DEEPSEEK_RUNTIME_TOKEN`
+  - `CODEWHALE_RUNTIME_TOKEN`
   - `FEISHU_ALLOW_GROUPS=false` for the first deployment
 
 For first pairing, either:
 
-1. Temporarily set `DEEPSEEK_ALLOW_UNLISTED=true`, message the bot, copy the
-   returned `chat_id`, then set `DEEPSEEK_CHAT_ALLOWLIST=<chat_id>` and turn
+1. Temporarily set `CODEWHALE_ALLOW_UNLISTED=true`, message the bot, copy the
+   returned `chat_id`, then set `CODEWHALE_CHAT_ALLOWLIST=<chat_id>` and turn
    unlisted access back off.
 2. Or obtain the chat ID from Feishu/Lark event logs and set the allowlist
    before first start.
@@ -193,6 +210,8 @@ sudo systemctl start codewhale-feishu-bridge
 sudo journalctl -u codewhale-feishu-bridge -f
 ```
 
+For Telegram, use `codewhale-telegram-bridge` for the bridge service name.
+
 Run the Lighthouse doctor after both services are configured:
 
 ```bash
@@ -200,11 +219,20 @@ cd /opt/whalebro/codewhale
 sudo bash scripts/tencent-lighthouse/doctor.sh
 ```
 
+For Telegram, run:
+
+```bash
+sudo CODEWHALE_BRIDGE=telegram bash scripts/tencent-lighthouse/doctor.sh
+```
+
 Enable on boot is done by `install-services.sh`; if needed:
 
 ```bash
 sudo systemctl enable codewhale-runtime codewhale-feishu-bridge
 ```
+
+For Telegram, enable `codewhale-telegram-bridge` instead of
+`codewhale-feishu-bridge`.
 
 ## Phone Commands
 
@@ -215,7 +243,7 @@ check git status and summarize what needs attention
 ```
 
 Group chats are disabled by default. If you later set
-`FEISHU_ALLOW_GROUPS=true`, group prompts must start with `/ds`.
+`FEISHU_ALLOW_GROUPS=true`, group prompts must start with `/cw`.
 
 Useful commands:
 
@@ -266,7 +294,7 @@ Do not use EdgeOne to expose:
 
 - `http://127.0.0.1:7878`
 - `/v1/*` runtime endpoints
-- any endpoint that accepts `DEEPSEEK_RUNTIME_TOKEN`
+- any endpoint that accepts `CODEWHALE_RUNTIME_TOKEN`
 
 ## End-to-End Validation
 

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.53] - 2026-06-03
+
+### Added
+
+- **Hugging Face Inference Providers.** Added `huggingface` as a native
+  provider route (`/provider huggingface`). Supports `HUGGINGFACE_API_KEY`
+  or `HF_TOKEN` for auth, `HUGGINGFACE_BASE_URL` and `HUGGINGFACE_MODEL`
+  for overrides, and `deepseek-ai/DeepSeek-V4-Pro` / `deepseek-ai/DeepSeek-V4-Flash`
+  as default models. Org-prefixed model IDs pass through.
+
+### Fixed
+
+- **Agent-mode shell error copy.** The missing-tool error for shell tools
+  now directs users to `allow_shell = true` instead of nudging toward YOLO
+  mode. `/config` surfaces `allow_shell` in the Permissions section.
+- **Provider description.** `/provider` command description is now neutral
+  instead of recommending specific providers.
+
+### Community
+
+Thanks to **@xyuai** for provider persistence, `/logout` scope clarification,
+provider picker key replacement, and MiMo auth cleanup work (#2714, #2715,
+#2717, #2718), and **@RefuseOdd** for configurable `path_suffix` support on
+OpenAI-compatible endpoints (#2558).
+
 ## [0.8.52] - 2026-06-03
 
 ### Added
@@ -47,14 +72,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /messages` requests on stale legacy SSE sessions now trigger the same
   reconnect-and-retry path as closed SSE streams, removing a release-gate flake
   and matching the intended recovery behavior (#2597).
+- **Cache-hit cost accounting uses one telemetry source.** Mixed DeepSeek
+  `prompt_cache_hit_tokens` and OpenAI-style `cached_tokens` usage payloads no
+  longer infer cache misses from the wrong hit count, avoiding inflated TUI cost
+  estimates on cached DeepSeek turns (#2567, #2609).
+- **Cygwin/MSYS2 config paths honor exported `$HOME`.** CodeWhale and legacy
+  DeepSeek config roots now prefer a non-empty `$HOME` before falling back to the
+  platform home resolver, while `CODEWHALE_HOME` remains the strongest explicit
+  override (#2369, #2610).
 
 ### Community
 
 Thanks to **@xyuai** (#2587), **@IcedOranges** (#2584), **@BH8GCJ** (#2588),
 **@shenjackyuanjie** (#2618, #2619), **@idling11** (#2606, #2616),
-**@AresNing** (#2578), **@gordonlu**, **@encyc**, and **@simuusang** (#2603,
-#2620) for reports, patches, retesting, and release-stabilization signals that
-shaped this pass.
+**@AresNing** (#2578), **@caiyilian** (#2567), **@buko** (#2369),
+**@gordonlu**, **@encyc**, and **@simuusang** (#2603, #2620) for reports,
+patches, retesting, and release-stabilization signals that shaped this pass.
 
 ## [0.8.51] - 2026-06-02
 
@@ -5378,7 +5411,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.52...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.53...HEAD
+[0.8.53]: https://github.com/Hmbown/CodeWhale/compare/v0.8.52...v0.8.53
 [0.8.52]: https://github.com/Hmbown/CodeWhale/compare/v0.8.51...v0.8.52
 [0.8.51]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...v0.8.51
 [0.8.50]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...v0.8.50

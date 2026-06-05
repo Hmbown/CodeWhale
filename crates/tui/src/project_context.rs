@@ -3,40 +3,60 @@
 //! This module handles loading project-specific context files that provide
 //! instructions and context to the AI agent. These include:
 //!
-//! - `WHALE.md` - CodeWhale-native project instructions (highest priority)
-//! - `AGENTS.md` - Generic agent instructions (compatible with other agents)
-//! - `.claude/instructions.md` - Claude-style hidden instructions
-//! - `CLAUDE.md` - Claude-style instructions
-//! - `.codewhale/instructions.md` - Hidden instructions file (new)
+//! - `AGENTS.md` - Cross-agent project instructions (canonical, highest priority)
+//! - `WHALE.md` - **Deprecated** legacy CodeWhale-native instructions (read-only fallback)
+//! - `.claude/instructions.md` - Claude-style hidden instructions (compat)
+//! - `CLAUDE.md` - Claude-style instructions (compat)
+//! - `.codewhale/instructions.md` - Hidden instructions file (compat)
 //! - `.deepseek/instructions.md` - Hidden instructions file (legacy)
 //!
-//! The loaded content is injected into the system prompt to give the agent
-//! context about the project's conventions, structure, and requirements.
+//! CodeWhale-specific repo authority/prioritization policy lives separately in
+//! `.codewhale/constitution.json` and is rendered as its own higher-authority
+//! block. The loaded content is injected into the system prompt to give the
+//! agent context about the project's conventions, structure, and requirements.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Names of project context files to look for, in priority order.
-/// WHALE.md is the CodeWhale-native convention; AGENTS.md and CLAUDE.md
-/// provide compatibility with other coding agents. `.codewhale/` is the
-/// new config directory; `.deepseek/` is the legacy fallback.
+///
+/// `AGENTS.md` is the canonical cross-agent project-instructions file.
+/// `WHALE.md` is **deprecated** (kept only as a read-only legacy fallback, now
+/// below `AGENTS.md`) — CodeWhale-specific repo authority now lives in
+/// `.codewhale/constitution.json`, not a bespoke markdown file. `CLAUDE.md` and
+/// the `*/instructions.md` variants are read-only compatibility fallbacks;
+/// CodeWhale never creates or recommends them.
 const PROJECT_CONTEXT_FILES: &[&str] = &[
-    "WHALE.md",
     "AGENTS.md",
+    "WHALE.md", // deprecated: legacy CodeWhale-native, read-only fallback (#WHALE.md deprecation)
     ".claude/instructions.md",
     "CLAUDE.md",
     ".codewhale/instructions.md",
     ".deepseek/instructions.md",
 ];
 
+/// File name of the deprecated CodeWhale-native instructions file.
+const DEPRECATED_WHALE_FILENAME: &str = "WHALE.md";
+
+/// Warning surfaced when a `WHALE.md` is still the active instruction source.
+const WHALE_DEPRECATION_WARNING: &str = "WHALE.md is deprecated; move project instructions to AGENTS.md, or CodeWhale-specific authority policy to .codewhale/constitution.json. WHALE.md is still read for now but will be dropped from default discovery in a future release.";
+
+/// Relative path (within a workspace or one of its parents) to the
+/// CodeWhale-specific repo authority/prioritization policy.
+const REPO_CONSTITUTION_RELATIVE_PATH: &[&str] = &[".codewhale", "constitution.json"];
+
+/// `schema_version` understood by this build of the constitution loader.
+const SUPPORTED_CONSTITUTION_SCHEMA: u32 = 1;
+
 /// User-level project instructions loaded as a fallback when the workspace and
-/// its parents do not define project context. `.codewhale/` takes priority
-/// over vendor-neutral `.agents/`, which takes priority over legacy
-/// `.deepseek/`, for both WHALE.md and AGENTS.md.
+/// its parents do not define project context. Any global AGENTS.md takes
+/// priority over any deprecated global WHALE.md; within each file name,
+/// `.codewhale/` takes priority over vendor-neutral `.agents/`, which takes
+/// priority over legacy `.deepseek/`.
 const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".codewhale", "AGENTS.md"];
 const GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "AGENTS.md"];
 const GLOBAL_AGENTS_LEGACY_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
@@ -107,6 +127,10 @@ pub struct ProjectContext {
     pub source_path: Option<PathBuf>,
     /// Any warnings during loading
     pub warnings: Vec<String>,
+    /// Rendered `.codewhale/constitution.json` authority block, if present.
+    /// CodeWhale-specific repo authority/prioritization policy — distinct from
+    /// the cross-agent prose in `instructions`.
+    pub constitution_block: Option<String>,
     /// Project root directory
     #[allow(dead_code)] // Part of ProjectContext public interface
     pub project_root: PathBuf,
@@ -121,6 +145,7 @@ impl ProjectContext {
             instructions: None,
             source_path: None,
             warnings: Vec::new(),
+            constitution_block: None,
             project_root,
             is_trusted: false,
         }
@@ -131,9 +156,13 @@ impl ProjectContext {
         self.instructions.is_some()
     }
 
-    /// Get the instructions as a formatted block for system prompt
+    /// Get the instructions as a formatted block for system prompt.
+    ///
+    /// The CodeWhale repo constitution (`.codewhale/constitution.json`), when
+    /// present, is emitted first as a higher-authority block, followed by the
+    /// cross-agent `<project_instructions>` prose. Either may be absent.
     pub fn as_system_block(&self) -> Option<String> {
-        self.instructions.as_ref().map(|content| {
+        let instructions_block = self.instructions.as_ref().map(|content| {
             let source = self
                 .source_path
                 .as_ref()
@@ -142,8 +171,170 @@ impl ProjectContext {
             format!(
                 "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
             )
-        })
+        });
+
+        match (self.constitution_block.as_ref(), instructions_block) {
+            (Some(constitution), Some(instructions)) => {
+                Some(format!("{constitution}\n\n{instructions}"))
+            }
+            (Some(constitution), None) => Some(constitution.clone()),
+            (None, Some(instructions)) => Some(instructions),
+            (None, None) => None,
+        }
     }
+}
+
+/// CodeWhale-specific repo authority/prioritization policy, loaded from
+/// `.codewhale/constitution.json`. All fields are optional so a minimal file
+/// (or a future schema) still parses; unknown fields are ignored.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RepoConstitution {
+    #[serde(default)]
+    schema_version: Option<u32>,
+    /// Ordered list of sources to trust when local sources conflict
+    /// (highest authority first).
+    #[serde(default)]
+    authority: Option<Vec<String>>,
+    /// Repo invariants the agent must not break.
+    #[serde(default)]
+    protected_invariants: Option<Vec<String>>,
+    /// Branch / release policy in effect (e.g. "PRs target codex/v0.8.53").
+    #[serde(default)]
+    branch_policy: Option<String>,
+    /// Conditions under which the agent should stop and escalate to the user.
+    #[serde(default)]
+    escalate_when: Option<Vec<String>>,
+    #[serde(default)]
+    verification_policy: Option<VerificationPolicy>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct VerificationPolicy {
+    /// Steps to perform before claiming a task is done.
+    #[serde(default)]
+    before_claiming_done: Option<Vec<String>>,
+}
+
+impl RepoConstitution {
+    /// True when the file carried no usable policy (so we can skip emitting an
+    /// empty block).
+    fn is_empty(&self) -> bool {
+        let list_empty = |l: &Option<Vec<String>>| l.as_ref().is_none_or(Vec::is_empty);
+        list_empty(&self.authority)
+            && list_empty(&self.protected_invariants)
+            && list_empty(&self.escalate_when)
+            && self
+                .branch_policy
+                .as_ref()
+                .is_none_or(|s| s.trim().is_empty())
+            && self
+                .verification_policy
+                .as_ref()
+                .and_then(|p| p.before_claiming_done.as_ref())
+                .is_none_or(Vec::is_empty)
+    }
+
+    /// Render a model-facing authority block (concise prose, per the layered
+    /// model: base myth → global constitution → repo constitution = local law).
+    fn render_block(&self, source: &Path) -> String {
+        let mut body = String::new();
+        if let Some(authority) = self.authority.as_ref().filter(|a| !a.is_empty()) {
+            body.push_str(
+                "When local sources conflict, trust them in this order (highest first):\n",
+            );
+            for (idx, item) in authority.iter().enumerate() {
+                body.push_str(&format!("{}. {item}\n", idx + 1));
+            }
+        }
+        if let Some(invariants) = self.protected_invariants.as_ref().filter(|i| !i.is_empty()) {
+            body.push_str("\nProtected invariants — do not break:\n");
+            for item in invariants {
+                body.push_str(&format!("- {item}\n"));
+            }
+        }
+        if let Some(policy) = self.branch_policy.as_ref().filter(|s| !s.trim().is_empty()) {
+            body.push_str(&format!("\nBranch / release policy: {}\n", policy.trim()));
+        }
+        if let Some(steps) = self
+            .verification_policy
+            .as_ref()
+            .and_then(|p| p.before_claiming_done.as_ref())
+            .filter(|s| !s.is_empty())
+        {
+            body.push_str("\nBefore claiming a task is done:\n");
+            for step in steps {
+                body.push_str(&format!("- {step}\n"));
+            }
+        }
+        if let Some(conditions) = self.escalate_when.as_ref().filter(|c| !c.is_empty()) {
+            body.push_str("\nStop and escalate to the user when:\n");
+            for item in conditions {
+                body.push_str(&format!("- {item}\n"));
+            }
+        }
+        format!(
+            "<codewhale_repo_constitution source=\"{}\">\nCodeWhale-specific repo authority policy (local law: subordinate to the global Constitution and the current user request, but above memory and old handoffs; takes precedence over a legacy WHALE.md).\n\n{}</codewhale_repo_constitution>",
+            source.display(),
+            body.trim_end()
+        )
+    }
+}
+
+/// Discover and render `.codewhale/constitution.json` from `workspace` or, if
+/// absent, its parent directories up to the git root. Returns the rendered
+/// authority block plus any parse warnings.
+fn load_repo_constitution_block(workspace: &Path) -> (Option<String>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let git_root = crate::project_doc::find_git_root(workspace);
+    let mut current = workspace.to_path_buf();
+    loop {
+        let mut path = current.clone();
+        for component in REPO_CONSTITUTION_RELATIVE_PATH {
+            path.push(component);
+        }
+        if path.is_file() {
+            match fs::read_to_string(&path) {
+                Ok(raw) => match serde_json::from_str::<RepoConstitution>(&raw) {
+                    Ok(constitution) if !constitution.is_empty() => {
+                        if let Some(version) = constitution.schema_version
+                            && version != SUPPORTED_CONSTITUTION_SCHEMA
+                        {
+                            warnings.push(format!(
+                                "{} declares schema_version {version}; this build supports {SUPPORTED_CONSTITUTION_SCHEMA}. Reading it on a best-effort basis.",
+                                path.display()
+                            ));
+                        }
+                        return (Some(constitution.render_block(&path)), warnings);
+                    }
+                    Ok(_) => {
+                        warnings.push(format!(
+                            "{} has no authority/verification policy; ignoring.",
+                            path.display()
+                        ));
+                        return (None, warnings);
+                    }
+                    Err(e) => {
+                        warnings.push(format!("Failed to parse {}: {e}", path.display()));
+                        return (None, warnings);
+                    }
+                },
+                Err(e) => {
+                    warnings.push(format!("Failed to read {}: {e}", path.display()));
+                    return (None, warnings);
+                }
+            }
+        }
+        if let Some(ref root) = git_root
+            && current == *root
+        {
+            break;
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    (None, warnings)
 }
 
 #[derive(Debug, Serialize)]
@@ -433,6 +624,10 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
                         file_path.display(),
                         content.len()
                     );
+                    if *filename == DEPRECATED_WHALE_FILENAME {
+                        tracing::warn!("{WHALE_DEPRECATION_WARNING}");
+                        ctx.warnings.push(WHALE_DEPRECATION_WARNING.to_string());
+                    }
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(file_path);
                     break;
@@ -527,6 +722,16 @@ fn load_project_context_with_parents_and_home(
         }
     }
 
+    // Load the CodeWhale-specific repo authority policy
+    // (.codewhale/constitution.json) independently of the prose instructions —
+    // it is a distinct, higher-authority artifact and may exist with or without
+    // an AGENTS.md. When present it takes precedence over a legacy WHALE.md.
+    // Loaded last so the auto-generate fallback above (which rebuilds `ctx`)
+    // cannot clobber it.
+    let (constitution_block, constitution_warnings) = load_repo_constitution_block(workspace);
+    ctx.warnings.extend(constitution_warnings);
+    ctx.constitution_block = constitution_block;
+
     ctx
 }
 
@@ -553,20 +758,20 @@ fn merge_global_and_project_instructions(
 fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
     let home = home_dir?;
 
-    // Priority order:
-    // 1. ~/.codewhale/WHALE.md      (CodeWhale-native)
-    // 2. ~/.codewhale/AGENTS.md     (new config directory)
-    // 3. ~/.agents/WHALE.md         (vendor-neutral fallback)
-    // 4. ~/.agents/AGENTS.md        (vendor-neutral fallback)
-    // 5. ~/.deepseek/WHALE.md       (legacy fallback)
-    // 6. ~/.deepseek/AGENTS.md      (legacy fallback)
+    // Priority order (AGENTS.md preferred over the now-deprecated WHALE.md):
+    // 1. ~/.codewhale/AGENTS.md     (canonical)
+    // 2. ~/.agents/AGENTS.md        (vendor-neutral fallback)
+    // 3. ~/.deepseek/AGENTS.md      (legacy fallback)
+    // 4. ~/.codewhale/WHALE.md      (deprecated, legacy fallback)
+    // 5. ~/.agents/WHALE.md         (deprecated, vendor-neutral legacy)
+    // 6. ~/.deepseek/WHALE.md       (deprecated, legacy)
     let candidates: &[&[&str]] = &[
-        GLOBAL_WHALE_RELATIVE_PATH,
         GLOBAL_AGENTS_RELATIVE_PATH,
-        GLOBAL_WHALE_VENDOR_NEUTRAL_PATH,
         GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH,
-        GLOBAL_WHALE_LEGACY_PATH,
         GLOBAL_AGENTS_LEGACY_PATH,
+        GLOBAL_WHALE_RELATIVE_PATH,
+        GLOBAL_WHALE_VENDOR_NEUTRAL_PATH,
+        GLOBAL_WHALE_LEGACY_PATH,
     ];
 
     let mut warnings = Vec::new();
@@ -580,6 +785,11 @@ fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Opti
         if path.exists() && path.is_file() {
             match load_context_file(&path) {
                 Ok(content) => {
+                    if path.file_name().and_then(|n| n.to_str()) == Some(DEPRECATED_WHALE_FILENAME)
+                    {
+                        tracing::warn!("{WHALE_DEPRECATION_WARNING}");
+                        warnings.push(WHALE_DEPRECATION_WARNING.to_string());
+                    }
                     let mut ctx = ProjectContext::empty(workspace.to_path_buf());
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(path);
@@ -962,6 +1172,106 @@ mod tests {
     }
 
     #[test]
+    fn agents_md_preferred_over_deprecated_whale_md() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "AGENTS canonical").expect("write agents");
+        fs::write(tmp.path().join("WHALE.md"), "WHALE legacy").expect("write whale");
+
+        let ctx = load_project_context(tmp.path());
+        let instructions = ctx.instructions.expect("instructions loaded");
+        assert!(instructions.contains("AGENTS canonical"), "{instructions}");
+        assert!(!instructions.contains("WHALE legacy"), "{instructions}");
+        // No deprecation warning since AGENTS.md won.
+        assert!(
+            !ctx.warnings
+                .iter()
+                .any(|w| w.contains("WHALE.md is deprecated")),
+            "{:?}",
+            ctx.warnings
+        );
+    }
+
+    #[test]
+    fn whale_md_alone_is_still_read_with_deprecation_warning() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("WHALE.md"), "WHALE legacy body").expect("write whale");
+
+        let ctx = load_project_context(tmp.path());
+        assert!(
+            ctx.instructions.as_deref() == Some("WHALE legacy body"),
+            "legacy WHALE.md must still be read"
+        );
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.contains("WHALE.md is deprecated")),
+            "expected deprecation warning, got {:?}",
+            ctx.warnings
+        );
+    }
+
+    #[test]
+    fn constitution_json_renders_authority_block() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("mkdir .git");
+        fs::create_dir(tmp.path().join(".codewhale")).expect("mkdir .codewhale");
+        fs::write(
+            tmp.path().join(".codewhale").join("constitution.json"),
+            r#"{
+                "schema_version": 1,
+                "authority": ["current user request", "live code and tests", "AGENTS.md"],
+                "protected_invariants": ["keep the tool-catalog head byte-stable"],
+                "branch_policy": "PRs target codex/v0.8.53, not main",
+                "verification_policy": { "before_claiming_done": ["run focused tests"] },
+                "escalate_when": ["a destructive action was not authorized"]
+            }"#,
+        )
+        .expect("write constitution");
+
+        let ctx = load_project_context_with_parents(tmp.path());
+        let block = ctx
+            .constitution_block
+            .as_deref()
+            .expect("constitution block rendered");
+        assert!(block.contains("<codewhale_repo_constitution"));
+        assert!(block.contains("current user request"));
+        assert!(block.contains("run focused tests"));
+        assert!(block.contains("keep the tool-catalog head byte-stable"));
+        assert!(block.contains("PRs target codex/v0.8.53"));
+        assert!(block.contains("a destructive action was not authorized"));
+        assert!(block.contains("takes precedence over a legacy WHALE.md"));
+        // It also surfaces through the system block.
+        assert!(
+            ctx.as_system_block()
+                .expect("system block")
+                .contains("codewhale_repo_constitution")
+        );
+    }
+
+    #[test]
+    fn malformed_constitution_warns_without_crashing() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("mkdir .git");
+        fs::create_dir(tmp.path().join(".codewhale")).expect("mkdir .codewhale");
+        fs::write(
+            tmp.path().join(".codewhale").join("constitution.json"),
+            "{ not valid json",
+        )
+        .expect("write bad constitution");
+
+        let ctx = load_project_context_with_parents(tmp.path());
+        assert!(
+            ctx.constitution_block.is_none(),
+            "no block for invalid JSON"
+        );
+        assert!(
+            ctx.warnings.iter().any(|w| w.contains("Failed to parse")),
+            "expected parse warning, got {:?}",
+            ctx.warnings
+        );
+    }
+
+    #[test]
     fn project_context_pack_is_stable_and_sorted() {
         let tmp = tempdir().expect("tempdir");
         fs::write(tmp.path().join("README.md"), "# Demo\n\nReadme body").expect("write");
@@ -1189,6 +1499,71 @@ mod tests {
             "lower-priority .agents file should be skipped:\n{instructions}"
         );
         assert_eq!(ctx.source_path, Some(codewhale_agents));
+    }
+
+    #[test]
+    fn test_global_agents_wins_over_global_whale_across_paths() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+
+        let codewhale_dir = home.path().join(".codewhale");
+        fs::create_dir(&codewhale_dir).expect("mkdir .codewhale");
+        fs::write(codewhale_dir.join("WHALE.md"), "Global WHALE legacy")
+            .expect("write codewhale whale");
+
+        let agents_dir = home.path().join(".agents");
+        fs::create_dir(&agents_dir).expect("mkdir .agents");
+        let global_agents = agents_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Global AGENTS canonical").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("Global AGENTS canonical"),
+            "global AGENTS.md should win:\n{instructions}"
+        );
+        assert!(
+            !instructions.contains("Global WHALE legacy"),
+            "global WHALE.md content should be skipped when any global AGENTS.md exists:\n{instructions}"
+        );
+        assert!(
+            !ctx.warnings
+                .iter()
+                .any(|warning| warning.contains("WHALE.md is deprecated")),
+            "losing WHALE.md should not emit deprecation warning: {:?}",
+            ctx.warnings
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_global_whale_fallback_warns_when_no_global_agents_exists() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+
+        let codewhale_dir = home.path().join(".codewhale");
+        fs::create_dir(&codewhale_dir).expect("mkdir .codewhale");
+        let global_whale = codewhale_dir.join("WHALE.md");
+        fs::write(&global_whale, "Global WHALE legacy").expect("write codewhale whale");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("Global WHALE legacy"),
+            "legacy WHALE.md must still be read when no global AGENTS.md exists:\n{instructions}"
+        );
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|warning| warning.contains("WHALE.md is deprecated")),
+            "expected global WHALE.md deprecation warning, got {:?}",
+            ctx.warnings
+        );
+        assert_eq!(ctx.source_path, Some(global_whale));
     }
 
     #[test]

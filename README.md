@@ -301,6 +301,21 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 For the full shipped provider registry, including model IDs, auth variables,
 base URLs, and capability boundaries, see [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
+Think of provider and model as separate choices: `provider` is the route,
+account, and endpoint; `model` is the model ID on that route. DeepSeek-family
+models can be reached through several routes, so `/config` exposes both
+`provider` and `provider_url`.
+
+| Route | Typical DeepSeek model ID |
+|-------|---------------------------|
+| `deepseek` | `deepseek-v4-pro` |
+| `nvidia-nim` | `deepseek-ai/deepseek-v4-pro` |
+| `openrouter` | `deepseek/deepseek-v4-pro` |
+| `fireworks` | `accounts/fireworks/models/deepseek-v4-pro` |
+| `siliconflow` | `deepseek-ai/DeepSeek-V4-Pro` |
+| `openai` | Your gateway's model ID |
+| `huggingface` | `deepseek-ai/DeepSeek-V4-Pro` |
+
 ```bash
 # NVIDIA NIM
 codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
@@ -358,13 +373,12 @@ codewhale --provider arcee --model trinity-large-preview
 
 # Xiaomi MiMo
 codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_KEY"
+# Token Plan (`tp-...`) keys default to https://token-plan-sgp.xiaomimimo.com/v1.
+# To force a provider endpoint: /config provider_url token-plan --save
+# or /config provider_url pay-as-you-go --save.
 codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
 codewhale --provider xiaomi-mimo --model mimo-v2.5
 codewhale --provider xiaomi-mimo speech "Hello from MiMo" --model tts -o hello.wav
-
-# Xiaomi MiMo Token Plan (tp-* keys use api-key auth)
-XIAOMI_MIMO_TOKEN_PLAN_API_KEY="tp-..." XIAOMI_MIMO_MODE="token-plan-sgp" codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
-# or set in config: [providers.xiaomi_mimo] mode = "token-plan" (cn), "token-plan-sgp", or "token-plan-ams"
 
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
@@ -565,16 +579,17 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `arcee`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `siliconflow-CN`, `arcee`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_TOKEN_PLAN_API_KEY` / `MIMO_TOKEN_PLAN_API_KEY` / `XIAOMI_MIMO_API_KEY` / `XIAOMI_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `ARCEE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_TOKEN_PLAN_API_KEY` / `MIMO_TOKEN_PLAN_API_KEY` / `XIAOMI_MIMO_API_KEY` / `XIAOMI_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `ARCEE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` / `HUGGINGFACE_API_KEY` / `HF_TOKEN` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
 | `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Wanjie Ark endpoint and model override |
+| `VOLCENGINE_BASE_URL` / `VOLCENGINE_ARK_BASE_URL` / `ARK_BASE_URL` / `VOLCENGINE_MODEL` / `VOLCENGINE_ARK_MODEL` | Volcengine Ark endpoint and model override |
 | `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
-| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` / `XIAOMI_MIMO_MODE` / `MIMO_MODE` | Xiaomi MiMo endpoint, model, and Token Plan mode override |
+| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` / `XIAOMI_MIMO_MODE` / `MIMO_MODE` | Xiaomi MiMo endpoint/model override. Token Plan defaults to `https://token-plan-sgp.xiaomimimo.com/v1`; `mode` can select `token-plan-cn`, `token-plan-sgp`, `token-plan-ams`, or `pay-as-you-go`. |
 | `NOVITA_BASE_URL` | Novita endpoint override |
 | `FIREWORKS_BASE_URL` | Fireworks endpoint override |
 | `SILICONFLOW_BASE_URL` / `SILICONFLOW_MODEL` | SiliconFlow endpoint and model override |
@@ -585,6 +600,7 @@ Key environment variables:
 | `VLLM_MODEL` | Self-hosted vLLM model ID |
 | `OLLAMA_BASE_URL` | Self-hosted Ollama endpoint |
 | `OLLAMA_MODEL` | Self-hosted Ollama model tag |
+| `HUGGINGFACE_API_KEY` / `HF_TOKEN` / `HUGGINGFACE_BASE_URL` / `HUGGINGFACE_MODEL` | Hugging Face endpoint and model override |
 | `NO_ANIMATIONS=1` | Force accessibility mode at startup |
 | `SSL_CERT_FILE` | Custom CA bundle for corporate proxies |
 
@@ -766,6 +782,8 @@ This project ships with help from a growing community of contributors:
 - **[cyq1017](https://github.com/cyq1017)** — runtime event envelope, render-diff debug logging, and deterministic composer history flushing (#2252, #2332, #2375)
 - **[hongqitai](https://github.com/hongqitai)** — state schema parent-entry support and clippy/fmt cleanup (#2308, #2432)
 - **[BryonGo](https://github.com/BryonGo)** — effective-model compaction budgeting fix (#2437)
+- **[xyuai](https://github.com/xyuai)** — provider persistence to config, /logout scope clarification, provider picker key replacement shortcut, MiMo auth state cleanup (#2714, #2715, #2717, #2718)
+- **[RefuseOdd](https://github.com/RefuseOdd)** — configurable `path_suffix` for OpenAI-compatible endpoints (#2558)
 
 Reports, repros, and verification that shaped v0.8.48 also deserve visible
 credit: **[@buko](https://github.com/buko)**, **[@yyyCode](https://github.com/yyyCode)**,

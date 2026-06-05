@@ -157,6 +157,7 @@ pub struct DeepSeekClient {
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
+    path_suffix: Option<String>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -323,6 +324,7 @@ impl Clone for DeepSeekClient {
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            path_suffix: self.path_suffix.clone(),
         }
     }
 }
@@ -418,9 +420,20 @@ fn is_version_segment(segment: &str) -> bool {
 }
 
 pub(super) fn api_url(base_url: &str, path: &str) -> String {
+    api_url_with_suffix(base_url, path, None)
+}
+
+pub(super) fn api_url_with_suffix(base_url: &str, path: &str, path_suffix: Option<&str>) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
+    }
+    if let ("chat/completions", Some(suffix)) = (path, path_suffix) {
+        return format!(
+            "{}/{}",
+            unversioned_base_url(base_url),
+            suffix.trim_start_matches('/')
+        );
     }
     let mut versioned = versioned_base_url(base_url);
     // The /beta suffix is not a real API version — it is an
@@ -569,9 +582,15 @@ impl DeepSeekClient {
         let retry = config.retry_policy();
         let default_model = config.default_model();
         let http_headers = config.http_headers();
+        let path_suffix = config
+            .provider_config_for(api_provider)
+            .and_then(|p| p.path_suffix.clone());
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!("API base URL: {base_url}"));
+        if let Some(suffix) = &path_suffix {
+            logging::info(format!("API path suffix override: {suffix}"));
+        }
         if !http_headers.is_empty() {
             logging::info(format!(
                 "{} custom HTTP header(s) configured",
@@ -595,6 +614,7 @@ impl DeepSeekClient {
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
+            path_suffix,
         })
     }
 
@@ -742,7 +762,11 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url_with_suffix(
+            &self.base_url,
+            "chat/completions",
+            self.path_suffix.as_deref(),
+        );
         let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
@@ -1172,6 +1196,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Arcee
+            | ApiProvider::Huggingface
             | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
@@ -1206,7 +1231,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Arcee => {
+            ApiProvider::Arcee | ApiProvider::Huggingface => {
                 let value = match normalized.as_str() {
                     "minimal" => "minimal",
                     "low" => "low",
@@ -1260,7 +1285,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Arcee => {
+            ApiProvider::Arcee | ApiProvider::Huggingface => {
                 body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Fireworks => {
@@ -1330,7 +1355,7 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
     let prompt_cache_miss_tokens = usage
         .and_then(|u| u.get("prompt_cache_miss_tokens"))
         .and_then(Value::as_u64)
-        .or_else(|| cached_tokens.map(|cached| input_tokens.saturating_sub(cached)))
+        .or_else(|| prompt_cache_hit_tokens.map(|hit| input_tokens.saturating_sub(u64::from(hit))))
         .map(|v| v as u32);
     let reasoning_tokens = reasoning_tokens_raw.map(|v| v as u32);
 
@@ -1369,7 +1394,7 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = api_url_with_suffix(&self.base_url, "beta/completions", None);
         let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
@@ -1707,7 +1732,7 @@ mod tests {
             "sk-test",
             &HashMap::new(),
             ApiProvider::XiaomiMimo,
-            crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL,
+            crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
         )
         .expect("headers");
 
@@ -3196,6 +3221,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_usage_infers_cache_miss_from_selected_hit_source() {
+        let usage = parse_usage(Some(&json!({
+            "prompt_tokens": 4000,
+            "completion_tokens": 20,
+            "prompt_cache_hit_tokens": 3000,
+            "prompt_tokens_details": {
+                "cached_tokens": 1000
+            }
+        })));
+
+        assert_eq!(usage.input_tokens, 4000);
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
+    }
+
+    #[test]
     fn sanitize_thinking_mode_counts_reasoning_replay_across_assistant_turns() {
         // Multi-turn body that mimics two prior tool-calling rounds: each
         // assistant message carries its `reasoning_content`. The sanitizer
@@ -3561,8 +3602,72 @@ mod tests {
             unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
             assert!(
                 !force_http1_from_env(),
-                "{value:?} should NOT be parsed as truthy",
+                "{value:?} should NOT be parsed as truthy"
             );
         }
+    }
+
+    #[test]
+    fn api_url_with_suffix_strips_version_before_chat_suffix() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/beta",
+                "chat/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_handles_leading_slash() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_ignores_suffix_for_models() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "models",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_ignores_suffix_for_beta_paths() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "beta/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/beta/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_default_behavior_without_suffix() {
+        assert_eq!(
+            api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
     }
 }

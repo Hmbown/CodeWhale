@@ -1145,9 +1145,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
-        MessageId::CmdProviderDescription => {
-            "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
-        }
+        MessageId::CmdProviderDescription => "Switch the active provider and/or model",
         MessageId::CmdQueueDescription => "View or edit queued messages",
         MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "Editing queued message:",
@@ -3983,12 +3981,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_description_names_deepseek_backend() {
+    fn provider_description_is_present_for_all_locales() {
         for locale in Locale::shipped() {
             let description = tr(*locale, MessageId::CmdProviderDescription);
             assert!(
-                description.contains("deepseek"),
-                "{} provider description should mention deepseek: {description}",
+                !description.is_empty(),
+                "{} provider description should not be empty",
                 locale.tag()
             );
             assert!(

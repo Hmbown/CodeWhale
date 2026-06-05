@@ -2238,6 +2238,57 @@ async fn provider_switch_to_deepseek_drops_stale_xiaomi_root_base_url() {
 }
 
 #[tokio::test]
+async fn provider_switch_persists_provider_to_config_for_restart() {
+    let _home = SettingsHomeGuard::new();
+    let tmp = TempDir::new().expect("config tempdir");
+    let config_path = tmp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"provider = "arcee"
+
+[providers.xiaomi_mimo]
+base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
+model = "mimo-v2.5-pro"
+api_key = "mimo-key"
+
+[providers.arcee]
+api_key = "arcee-key"
+"#,
+    )
+    .expect("write config");
+
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Arcee;
+    app.model = "auto".to_string();
+    app.config_path = Some(config_path.clone());
+
+    let mut engine = mock_engine_handle();
+    let mut config = Config::load(Some(config_path.clone()), None).expect("load config");
+
+    switch_provider(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApiProvider::XiaomiMimo,
+        None,
+    )
+    .await;
+
+    assert_eq!(app.api_provider, ApiProvider::XiaomiMimo);
+    assert_eq!(config.provider.as_deref(), Some("xiaomi-mimo"));
+
+    let reloaded = Config::load(Some(config_path.clone()), None).expect("reload config");
+    assert_eq!(reloaded.api_provider(), ApiProvider::XiaomiMimo);
+    assert_eq!(
+        reloaded.deepseek_base_url(),
+        "https://token-plan-sgp.xiaomimimo.com/v1"
+    );
+
+    let settings = crate::settings::Settings::load().expect("load settings");
+    assert_eq!(settings.default_provider.as_deref(), Some("xiaomi-mimo"));
+}
+
+#[tokio::test]
 async fn provider_switch_model_override_updates_target_provider_model_slot() {
     let _home = SettingsHomeGuard::new();
     let mut app = create_test_app();

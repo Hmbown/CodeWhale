@@ -94,6 +94,11 @@ impl ProviderPickerView {
         self.providers[self.selected_idx].1
     }
 
+    fn enter_key_entry(&mut self) {
+        self.stage = Stage::KeyEntry;
+        self.api_key_input.clear();
+    }
+
     fn env_var_for(provider: ApiProvider) -> &'static str {
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
@@ -112,6 +117,7 @@ impl ProviderPickerView {
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
+            ApiProvider::Huggingface => "HUGGINGFACE_API_KEY / HF_TOKEN",
         }
     }
 
@@ -119,6 +125,10 @@ impl ProviderPickerView {
         match provider {
             ApiProvider::Moonshot if kimi_cli_credentials_present() => {
                 "(Kimi CLI OAuth ready)".to_string()
+            }
+            ApiProvider::XiaomiMimo if has_key => "(configured; token-plan endpoint)".to_string(),
+            ApiProvider::XiaomiMimo => {
+                "(needs API key; token-plan endpoint by default)".to_string()
             }
             ApiProvider::Ollama => "self-hosted; defaults to http://localhost:11434".to_string(),
             ApiProvider::Sglang | ApiProvider::Vllm if has_key => {
@@ -153,6 +163,11 @@ impl ProviderPickerView {
     }
 
     fn render_list(&self, area: Rect, buf: &mut Buffer) {
+        let enter_action = if self.selected_has_key() {
+            "apply"
+        } else {
+            "set key"
+        };
         let outer = Block::default()
             .title(Line::from(Span::styled(
                 " Provider ",
@@ -164,7 +179,9 @@ impl ProviderPickerView {
                 Span::styled(" ↑↓ ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("move "),
                 Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("apply "),
+                Span::raw(format!("{enter_action} ")),
+                Span::styled(" R ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw("edit key "),
                 Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("cancel "),
             ]))
@@ -357,10 +374,13 @@ impl ModalView for ProviderPickerView {
                             provider,
                         })
                     } else {
-                        self.stage = Stage::KeyEntry;
-                        self.api_key_input.clear();
+                        self.enter_key_entry();
                         ViewAction::None
                     }
+                }
+                KeyCode::Char(c) if key.modifiers.is_empty() && c.eq_ignore_ascii_case(&'r') => {
+                    self.enter_key_entry();
+                    ViewAction::None
                 }
                 _ => ViewAction::None,
             },
@@ -487,7 +507,8 @@ mod tests {
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
-                "Ollama"
+                "Ollama",
+                "Hugging Face"
             ]
         );
     }
@@ -522,7 +543,7 @@ mod tests {
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
         picker.handle_key(key(KeyCode::Up));
-        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+        assert_eq!(picker.selected_provider(), ApiProvider::Huggingface);
 
         picker.handle_key(key(KeyCode::Down));
         assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);
@@ -556,6 +577,54 @@ mod tests {
             }
             other => panic!("expected ProviderPickerApplied, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn configured_provider_can_reenter_key_entry_with_r() {
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::XiaomiMimo);
+
+        let action = picker.handle_key(key(KeyCode::Char('r')));
+
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert!(picker.api_key_input.is_empty());
+    }
+
+    #[test]
+    fn ctrl_r_does_not_trigger_key_entry() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+
+        let action = picker.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(picker.stage, Stage::List);
+    }
+
+    #[test]
+    fn configured_provider_footer_mentions_edit_key() {
+        let config = Config {
+            api_key: Some("existing-deepseek-key".to_string()),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+
+        let rendered = render_text(&picker, 80, 12);
+
+        assert!(rendered.contains("Enter"));
+        assert!(rendered.contains("apply"));
+        assert!(rendered.contains("edit key"));
     }
 
     #[test]

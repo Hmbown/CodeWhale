@@ -67,7 +67,10 @@ project_overhaul_prompt.md
 .wrangler/
 
 # Local runtime state
-.codewhale/
+# Ignore everything under any .codewhale/ (snapshots, auto-generated
+# instructions.md, etc.) at any depth EXCEPT the committed repo authority policy.
+**/.codewhale/*
+!**/.codewhale/constitution.json
 .deepseek/
 **/session_*.json
 *.db

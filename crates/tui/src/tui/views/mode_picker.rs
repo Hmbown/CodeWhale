@@ -38,7 +38,7 @@ const MODE_ROWS: &[ModeRow] = &[
         mode: AppMode::Yolo,
         number: '3',
         name: "YOLO",
-        hint: "Shell + trust + auto-approve",
+        hint: "Auto-approve; shell enabled",
     },
 ];
 

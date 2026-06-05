@@ -38,6 +38,10 @@ pub struct PromptSessionContext<'a> {
     /// When false, the prompt should not spend localization pressure on
     /// `reasoning_content` the user will never see.
     pub show_thinking: bool,
+    /// Whether shell tools are available in the runtime tool catalog for
+    /// this session. The prompt must not advertise shell-only workflows
+    /// when runtime gates have removed those tools.
+    pub allow_shell: bool,
 }
 
 impl Default for PromptSessionContext<'_> {
@@ -50,6 +54,7 @@ impl Default for PromptSessionContext<'_> {
             translation_enabled: false,
             model_id: "codewhale",
             show_thinking: true,
+            allow_shell: true,
         }
     }
 }
@@ -776,8 +781,23 @@ pub fn compose_prompt_with_approval_and_model(
     approval_mode: ApprovalMode,
     model_id: &str,
 ) -> String {
+    compose_prompt_with_approval_model_and_shell(mode, personality, approval_mode, model_id, true)
+}
+
+fn compose_prompt_with_approval_model_and_shell(
+    mode: AppMode,
+    personality: Personality,
+    approval_mode: ApprovalMode,
+    model_id: &str,
+    allow_shell: bool,
+) -> String {
     let tool_taxonomy = render_core_tool_taxonomy_block(mode);
-    let base_prompt = apply_model_template(effective_base_prompt().trim(), model_id);
+    let shell_tools_available = allow_shell && mode != AppMode::Plan;
+    let base_prompt = render_base_prompt_for_tool_availability(
+        effective_base_prompt().trim(),
+        model_id,
+        shell_tools_available,
+    );
     let parts: [&str; 5] = [
         tool_taxonomy.as_str(),
         base_prompt.as_str(),
@@ -798,6 +818,66 @@ pub fn compose_prompt_with_approval_and_model(
     out
 }
 
+fn render_base_prompt_for_tool_availability(
+    prompt: &str,
+    model_id: &str,
+    shell_tools_available: bool,
+) -> String {
+    let prompt = if shell_tools_available {
+        prompt.to_string()
+    } else {
+        remove_shell_tool_guidance(prompt)
+    };
+    apply_model_template(&prompt, model_id)
+}
+
+fn remove_shell_tool_guidance(prompt: &str) -> String {
+    let prompt = prompt
+        .lines()
+        .filter(|line| !is_shell_disabled_prompt_line(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = remove_markdown_section(&prompt, "### `exec_shell`");
+    let prompt = prompt.replace(
+        "; for GitHub issue/PR/release triage, prefer the native `gh ... --json` CLI through shell because it is authenticated, structured, and reproducible; `github_issue_context` / `github_pr_context` are read-only fallbacks when the CLI route is unavailable;",
+        "; for GitHub issue/PR/release triage, use `github_issue_context` / `github_pr_context` as read-only routes when shell tools are unavailable;",
+    );
+    prompt.replace(
+        "Use deterministic Python inside RLM for exact counts and structured aggregation; use `grep_files` or `exec_shell` directly when that is the clearest deterministic check.",
+        "Use deterministic Python inside RLM for exact counts and structured aggregation; use `grep_files` directly when that is the clearest deterministic check.",
+    )
+}
+
+fn is_shell_disabled_prompt_line(line: &str) -> bool {
+    line.starts_with("- Arithmetic, math, calculations → `exec_shell`")
+        || line.starts_with("- Hashes, encodings, checksums → `exec_shell`")
+        || line.starts_with("- Current time, date, timezone → `exec_shell`")
+        || line
+            .starts_with("- System state: OS, CPU, memory, disk, ports, processes → `exec_shell`")
+        || line.starts_with("- **Shell**:")
+}
+
+fn remove_markdown_section(prompt: &str, heading: &str) -> String {
+    let Some(start) = prompt.find(heading) else {
+        return prompt.to_string();
+    };
+    let after_heading = start + heading.len();
+    let end = prompt[after_heading..]
+        .find("\n### ")
+        .map(|offset| after_heading + offset)
+        .unwrap_or(prompt.len());
+
+    let before = prompt[..start].trim_end();
+    let after = prompt[end..].trim_start_matches('\n');
+    if before.is_empty() {
+        after.to_string()
+    } else if after.is_empty() {
+        before.to_string()
+    } else {
+        format!("{before}\n\n{after}")
+    }
+}
+
 /// Compose for the default personality (Calm).
 fn compose_mode_prompt(mode: AppMode) -> String {
     compose_prompt(mode, Personality::Calm)
@@ -812,7 +892,13 @@ fn compose_mode_prompt_with_approval_and_model(
     approval_mode: ApprovalMode,
     model_id: &str,
 ) -> String {
-    compose_prompt_with_approval_and_model(mode, Personality::Calm, approval_mode, model_id)
+    compose_prompt_with_approval_model_and_shell(
+        mode,
+        Personality::Calm,
+        approval_mode,
+        model_id,
+        true,
+    )
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -885,6 +971,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             translation_enabled: false,
             model_id: "codewhale",
             show_thinking: true,
+            allow_shell: true,
         },
     )
 }
@@ -917,8 +1004,13 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     session_context: PromptSessionContext<'_>,
     approval_mode: ApprovalMode,
 ) -> SystemPrompt {
-    let mode_prompt =
-        compose_mode_prompt_with_approval_and_model(mode, approval_mode, session_context.model_id);
+    let mode_prompt = compose_prompt_with_approval_model_and_shell(
+        mode,
+        Personality::Calm,
+        approval_mode,
+        session_context.model_id,
+        session_context.allow_shell,
+    );
 
     // Load project context from workspace
     let project_context = load_project_context_with_parents(workspace);
@@ -1254,6 +1346,60 @@ mod tests {
     }
 
     #[test]
+    fn composed_prompt_keeps_shell_guidance_when_shell_tools_are_available() {
+        let prompt = compose_prompt_with_approval_model_and_shell(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "deepseek-v4-pro",
+            true,
+        );
+
+        assert!(prompt.contains("- **Shell**:"));
+        assert!(prompt.contains("### `exec_shell`"));
+        assert!(prompt.contains("`task_shell_start`"));
+        assert!(prompt.contains("Arithmetic, math, calculations → `exec_shell`"));
+    }
+
+    #[test]
+    fn composed_prompt_omits_shell_guidance_when_shell_tools_are_unavailable() {
+        let prompt = compose_prompt_with_approval_model_and_shell(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "deepseek-v4-pro",
+            false,
+        );
+
+        for shell_only in [
+            "- **Shell**:",
+            "### `exec_shell`",
+            "`task_shell_start`",
+            "exec_shell",
+            "task_shell",
+            "Arithmetic, math, calculations → `exec_shell`",
+            "Hashes, encodings, checksums → `exec_shell`",
+            "Current time, date, timezone → `exec_shell`",
+            "System state: OS, CPU, memory, disk, ports, processes → `exec_shell`",
+            "CLI through shell",
+            "or `exec_shell` directly",
+        ] {
+            assert!(
+                !prompt.contains(shell_only),
+                "shell-disabled prompt must not advertise {shell_only:?}"
+            );
+        }
+        assert!(
+            prompt.contains("actual runtime gates still determine what tools can execute"),
+            "shell-disabled prompt should keep the runtime-gates hierarchy clause"
+        );
+        assert!(
+            prompt.contains("`task_gate_run`") && prompt.contains("`github_issue_context`"),
+            "shell-disabled prompt should keep non-shell task evidence tools"
+        );
+    }
+
+    #[test]
     fn composed_prompt_starts_with_core_tool_taxonomy() {
         let prompt = compose_prompt_with_approval_and_model(
             AppMode::Agent,
@@ -1456,6 +1602,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1527,6 +1674,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1571,6 +1719,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: false,
+                allow_shell: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1625,6 +1774,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1730,6 +1880,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1767,6 +1918,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1796,6 +1948,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1854,6 +2007,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1883,6 +2037,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -2079,6 +2234,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -2114,6 +2270,7 @@ mod tests {
                 translation_enabled: false,
                 model_id: "codewhale",
                 show_thinking: true,
+                allow_shell: true,
             },
         ) {
             SystemPrompt::Text(text) => text,

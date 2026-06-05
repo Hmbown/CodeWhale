@@ -1,13 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEEPSEEK_USER="${DEEPSEEK_USER:-codewhale}"
-DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/codewhale}"
+CODEWHALE_USER="${CODEWHALE_USER:-${DEEPSEEK_USER:-codewhale}}"
+CODEWHALE_ROOT="${CODEWHALE_ROOT:-${DEEPSEEK_ROOT:-/opt/codewhale}}"
 WHALEBRO_ROOT="${WHALEBRO_ROOT:-/opt/whalebro}"
-RUNTIME_ENV="${RUNTIME_ENV:-/etc/deepseek/runtime.env}"
-BRIDGE_ENV="${BRIDGE_ENV:-/etc/deepseek/feishu-bridge.env}"
-BRIDGE_DIR="${BRIDGE_DIR:-${DEEPSEEK_ROOT}/bridge}"
+if [[ -z "${RUNTIME_ENV:-}" ]]; then
+  if [[ -f /etc/codewhale/runtime.env || ! -f /etc/deepseek/runtime.env ]]; then
+    RUNTIME_ENV="/etc/codewhale/runtime.env"
+  else
+    RUNTIME_ENV="/etc/deepseek/runtime.env"
+  fi
+fi
 REPO_ROOT="${REPO_ROOT:-${WHALEBRO_ROOT}/codewhale}"
+BRIDGE_KIND="${CODEWHALE_BRIDGE:-${DEEPSEEK_BRIDGE:-feishu}}"
+
+case "${BRIDGE_KIND}" in
+  feishu|lark)
+    if [[ -z "${BRIDGE_ENV:-}" ]]; then
+      if [[ -f /etc/codewhale/feishu-bridge.env || ! -f /etc/deepseek/feishu-bridge.env ]]; then
+        BRIDGE_ENV="/etc/codewhale/feishu-bridge.env"
+      else
+        BRIDGE_ENV="/etc/deepseek/feishu-bridge.env"
+      fi
+    fi
+    BRIDGE_DIR="${BRIDGE_DIR:-${CODEWHALE_ROOT}/bridge}"
+    BRIDGE_UNIT="${BRIDGE_UNIT:-codewhale-feishu-bridge}"
+    BRIDGE_PACKAGE="${BRIDGE_PACKAGE:-integrations/feishu-bridge}"
+    ;;
+  telegram)
+    if [[ -z "${BRIDGE_ENV:-}" ]]; then
+      if [[ -f /etc/codewhale/telegram-bridge.env || ! -f /etc/deepseek/telegram-bridge.env ]]; then
+        BRIDGE_ENV="/etc/codewhale/telegram-bridge.env"
+      else
+        BRIDGE_ENV="/etc/deepseek/telegram-bridge.env"
+      fi
+    fi
+    BRIDGE_DIR="${BRIDGE_DIR:-${CODEWHALE_ROOT}/telegram-bridge}"
+    BRIDGE_UNIT="${BRIDGE_UNIT:-codewhale-telegram-bridge}"
+    BRIDGE_PACKAGE="${BRIDGE_PACKAGE:-integrations/telegram-bridge}"
+    ;;
+  *)
+    echo "Unknown bridge '${BRIDGE_KIND}'. Use CODEWHALE_BRIDGE=feishu or CODEWHALE_BRIDGE=telegram." >&2
+    exit 1
+    ;;
+esac
 
 failures=0
 warnings=0
@@ -44,6 +80,20 @@ env_value() {
     || true
 }
 
+env_value_any() {
+  local file="$1"
+  shift
+  local value
+  for key in "$@"; do
+    value="$(env_value "${file}" "${key}")"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  done
+  return 0
+}
+
 is_placeholder() {
   local value
   value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -72,7 +122,7 @@ check_commands() {
 check_node() {
   section "Node"
   if ! have_command node; then
-    fail "node is required for the Feishu bridge"
+    fail "node is required for the phone bridge"
     return
   fi
   local major
@@ -98,7 +148,7 @@ check_workspace() {
 
 check_binaries() {
   section "CodeWhale binaries"
-  local cargo_bin="/home/${DEEPSEEK_USER}/.cargo/bin"
+  local cargo_bin="/home/${CODEWHALE_USER}/.cargo/bin"
   local codewhale="${cargo_bin}/codewhale"
   local tui="${cargo_bin}/codewhale-tui"
   if [[ -x "${codewhale}" ]]; then
@@ -138,22 +188,28 @@ check_env() {
   check_env_file "${RUNTIME_ENV}" "runtime"
   check_env_file "${BRIDGE_ENV}" "bridge"
 
-  local runtime_token bridge_token api_key workspace domain allow_groups allow_unlisted
-  runtime_token="$(env_value "${RUNTIME_ENV}" DEEPSEEK_RUNTIME_TOKEN)"
-  bridge_token="$(env_value "${BRIDGE_ENV}" DEEPSEEK_RUNTIME_TOKEN)"
-  api_key="$(env_value "${RUNTIME_ENV}" DEEPSEEK_API_KEY)"
-  workspace="$(env_value "${BRIDGE_ENV}" DEEPSEEK_WORKSPACE)"
-  domain="$(env_value "${BRIDGE_ENV}" FEISHU_DOMAIN)"
-  allow_groups="$(env_value "${BRIDGE_ENV}" FEISHU_ALLOW_GROUPS)"
-  allow_unlisted="$(env_value "${BRIDGE_ENV}" DEEPSEEK_ALLOW_UNLISTED)"
+  local runtime_token bridge_token workspace domain allow_groups allow_unlisted provider
+  runtime_token="$(env_value_any "${RUNTIME_ENV}" CODEWHALE_RUNTIME_TOKEN DEEPSEEK_RUNTIME_TOKEN)"
+  bridge_token="$(env_value_any "${BRIDGE_ENV}" CODEWHALE_RUNTIME_TOKEN DEEPSEEK_RUNTIME_TOKEN)"
+  workspace="$(env_value_any "${BRIDGE_ENV}" CODEWHALE_WORKSPACE DEEPSEEK_WORKSPACE)"
+  provider="$(env_value_any "${RUNTIME_ENV}" CODEWHALE_PROVIDER DEEPSEEK_PROVIDER)"
+
+  if [[ "${BRIDGE_KIND}" == "telegram" ]]; then
+    allow_groups="$(env_value "${BRIDGE_ENV}" TELEGRAM_ALLOW_GROUPS)"
+    allow_unlisted="$(env_value_any "${BRIDGE_ENV}" TELEGRAM_ALLOW_UNLISTED CODEWHALE_ALLOW_UNLISTED DEEPSEEK_ALLOW_UNLISTED)"
+  else
+    domain="$(env_value "${BRIDGE_ENV}" FEISHU_DOMAIN)"
+    allow_groups="$(env_value "${BRIDGE_ENV}" FEISHU_ALLOW_GROUPS)"
+    allow_unlisted="$(env_value_any "${BRIDGE_ENV}" CODEWHALE_ALLOW_UNLISTED DEEPSEEK_ALLOW_UNLISTED)"
+  fi
 
   if is_placeholder "${runtime_token}"; then
-    fail "runtime DEEPSEEK_RUNTIME_TOKEN is missing or still a placeholder"
+    fail "runtime token is missing or still a placeholder"
   else
     pass "runtime token is set"
   fi
   if is_placeholder "${bridge_token}"; then
-    fail "bridge DEEPSEEK_RUNTIME_TOKEN is missing or still a placeholder"
+    fail "bridge token is missing or still a placeholder"
   else
     pass "bridge token is set"
   fi
@@ -162,19 +218,21 @@ check_env() {
   elif [[ -n "${runtime_token}" && -n "${bridge_token}" ]]; then
     pass "runtime and bridge tokens match"
   fi
-  if is_placeholder "${api_key}"; then
-    warn "DEEPSEEK_API_KEY is missing or still a placeholder"
+  if is_placeholder "${provider}"; then
+    warn "runtime provider is missing or still a placeholder"
   else
-    pass "DEEPSEEK_API_KEY is set"
+    pass "runtime provider is ${provider}"
   fi
   [[ "${workspace}" == "${WHALEBRO_ROOT}" || "${workspace}" == "${WHALEBRO_ROOT}/"* ]] \
     && pass "bridge workspace is under ${WHALEBRO_ROOT}" \
     || warn "bridge workspace is outside ${WHALEBRO_ROOT}: ${workspace:-unset}"
-  [[ "${domain:-feishu}" == "feishu" || "${domain:-feishu}" == "lark" || "${domain:-feishu}" == https://open.* ]] \
-    && pass "FEISHU_DOMAIN is ${domain:-feishu}" \
-    || fail "FEISHU_DOMAIN must be feishu, lark, or an https://open.* URL"
+  if [[ "${BRIDGE_KIND}" != "telegram" ]]; then
+    [[ "${domain:-feishu}" == "feishu" || "${domain:-feishu}" == "lark" || "${domain:-feishu}" == https://open.* ]] \
+      && pass "FEISHU_DOMAIN is ${domain:-feishu}" \
+      || fail "FEISHU_DOMAIN must be feishu, lark, or an https://open.* URL"
+  fi
   [[ "${allow_groups:-false}" == "true" && "${allow_unlisted:-false}" == "true" ]] \
-    && fail "group control cannot run with DEEPSEEK_ALLOW_UNLISTED=true" \
+    && fail "group control cannot run with allow-unlisted=true" \
     || pass "group/unlisted mode is not openly combined"
 }
 
@@ -182,15 +240,15 @@ check_validator() {
   section "Bridge config validator"
   local validator="${BRIDGE_DIR}/scripts/validate-config.mjs"
   if [[ ! -f "${validator}" ]]; then
-    validator="${REPO_ROOT}/integrations/feishu-bridge/scripts/validate-config.mjs"
+    validator="${REPO_ROOT}/${BRIDGE_PACKAGE}/scripts/validate-config.mjs"
   fi
   if [[ ! -f "${validator}" ]]; then
     warn "bridge config validator is not installed"
     return
   fi
   local runner=(node)
-  if [[ "${EUID}" -eq 0 ]] && id -u "${DEEPSEEK_USER}" >/dev/null 2>&1 && have_command sudo; then
-    runner=(sudo -u "${DEEPSEEK_USER}" node)
+  if [[ "${EUID}" -eq 0 ]] && id -u "${CODEWHALE_USER}" >/dev/null 2>&1 && have_command sudo; then
+    runner=(sudo -u "${CODEWHALE_USER}" node)
   fi
   if "${runner[@]}" "${validator}" --env "${BRIDGE_ENV}" --runtime-env "${RUNTIME_ENV}" --workspace-root "${WHALEBRO_ROOT}" --check-filesystem; then
     pass "bridge config validator passed"
@@ -205,7 +263,7 @@ check_systemd() {
     warn "systemd is not available in this environment"
     return
   fi
-  for unit in codewhale-runtime codewhale-feishu-bridge; do
+  for unit in codewhale-runtime "${BRIDGE_UNIT}"; do
     [[ -f "/etc/systemd/system/${unit}.service" ]] \
       && pass "${unit}.service is installed" \
       || fail "${unit}.service is missing"
@@ -222,7 +280,9 @@ check_bridge_install() {
   section "Bridge install"
   [[ -f "${BRIDGE_DIR}/package.json" ]] && pass "${BRIDGE_DIR}/package.json exists" || fail "bridge package.json is missing"
   [[ -f "${BRIDGE_DIR}/src/index.mjs" ]] && pass "${BRIDGE_DIR}/src/index.mjs exists" || fail "bridge entrypoint is missing"
-  if [[ -d "${BRIDGE_DIR}/node_modules/@larksuiteoapi/node-sdk" ]]; then
+  if [[ "${BRIDGE_KIND}" == "telegram" ]]; then
+    pass "Telegram bridge has no required production npm dependencies"
+  elif [[ -d "${BRIDGE_DIR}/node_modules/@larksuiteoapi/node-sdk" ]]; then
     pass "Lark SDK dependency is installed"
   else
     warn "Lark SDK dependency is not installed under ${BRIDGE_DIR}/node_modules"
@@ -232,9 +292,9 @@ check_bridge_install() {
 check_localhost_health() {
   section "Localhost health"
   local port token
-  port="$(env_value "${RUNTIME_ENV}" DEEPSEEK_RUNTIME_PORT)"
+  port="$(env_value_any "${RUNTIME_ENV}" CODEWHALE_RUNTIME_PORT DEEPSEEK_RUNTIME_PORT)"
   port="${port:-7878}"
-  token="$(env_value "${BRIDGE_ENV}" DEEPSEEK_RUNTIME_TOKEN)"
+  token="$(env_value_any "${BRIDGE_ENV}" CODEWHALE_RUNTIME_TOKEN DEEPSEEK_RUNTIME_TOKEN)"
 
   if have_command ss; then
     local listeners
@@ -287,7 +347,7 @@ check_localhost_health() {
 }
 
 main() {
-  printf 'Tencent Lighthouse DeepSeek doctor\n'
+  printf 'Tencent Lighthouse CodeWhale doctor (%s bridge)\n' "${BRIDGE_KIND}"
   check_commands
   check_node
   check_workspace
