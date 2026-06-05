@@ -90,10 +90,14 @@ fn provider_fallback(app: &mut App, sub: Option<&str>) -> CommandResult {
                 );
             }
             let active = app.api_provider.as_str().to_string();
-            let depth = app.fallback_depth.unwrap_or(0);
+            let current_fallback = app.fallback_depth;
             let mut lines = vec![format!("Active: {active}")];
             for (i, name) in app.fallback_providers.iter().enumerate() {
-                let marker = if i == depth { " ◀ current" } else { "" };
+                let marker = if current_fallback == Some(i) {
+                    " ◀ current"
+                } else {
+                    ""
+                };
                 lines.push(format!("  [{i}] {name}{marker}"));
             }
             if let Some(ref reason) = app.last_fallback_reason {
