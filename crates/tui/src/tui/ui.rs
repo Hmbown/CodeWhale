@@ -4520,7 +4520,7 @@ pub(crate) fn apply_engine_error_to_app(
             app.status_message = Some(format!(
                 "Switched to {} (fallback {}/{}): {message}",
                 app.api_provider.as_str(),
-                app.fallback_depth.unwrap_or(0),
+                app.fallback_depth.map_or(0, |d| d + 1),
                 app.fallback_providers.len()
             ));
             return;
