@@ -22,7 +22,7 @@ impl Command for Help {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::core::help(app, args)
+        super::back::core::help(app, args)
     }
 }
 
@@ -41,7 +41,7 @@ impl Command for Clear {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::clear(app)
+        super::back::core::clear(app)
     }
 }
 
@@ -60,7 +60,7 @@ impl Command for Exit {
         }
     }
     fn execute(&self, _app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::exit()
+        super::back::core::exit()
     }
 }
 
@@ -79,7 +79,7 @@ impl Command for Model {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::core::model(app, args)
+        super::back::core::model(app, args)
     }
 }
 
@@ -98,7 +98,7 @@ impl Command for Models {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::models(app)
+        super::back::core::models(app)
     }
 }
 
@@ -117,7 +117,7 @@ impl Command for Provider {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::provider::provider(app, args)
+        super::back::provider::provider(app, args)
     }
 }
 
@@ -136,7 +136,7 @@ impl Command for Links {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::deepseek_links(app)
+        super::back::core::deepseek_links(app)
     }
 }
 
@@ -155,7 +155,7 @@ impl Command for Feedback {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::feedback::feedback(app, args)
+        super::back::feedback::feedback(app, args)
     }
 }
 
@@ -174,7 +174,7 @@ impl Command for Home {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::home_dashboard(app)
+        super::back::core::home_dashboard(app)
     }
 }
 
@@ -193,7 +193,7 @@ impl Command for Workspace {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::core::workspace_switch(app, args)
+        super::back::core::workspace_switch(app, args)
     }
 }
 
@@ -212,7 +212,7 @@ impl Command for Subagents {
         }
     }
     fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
-        super::core::subagents(app)
+        super::back::core::subagents(app)
     }
 }
 
@@ -250,7 +250,7 @@ impl Command for Profile {
         }
     }
     fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
-        super::core::profile_switch(app, args)
+        super::back::core::profile_switch(app, args)
     }
 }
 

@@ -4,7 +4,7 @@ use crate::skills::{SkillRegistry, default_skills_dir};
 use crate::tui::app::{App, AppAction};
 use crate::tui::history::HistoryCell;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 fn warnings_suffix(registry: &SkillRegistry) -> String {
     if registry.warnings().is_empty() {

@@ -8,7 +8,7 @@
 use crate::composer_stash;
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Top-level dispatch for `/stash`. Subcommands:
 ///

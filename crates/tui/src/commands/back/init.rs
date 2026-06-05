@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Generate an AGENTS.md file for the current project
 pub fn init(app: &mut App) -> CommandResult {

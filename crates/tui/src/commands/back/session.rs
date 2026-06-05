@@ -10,7 +10,7 @@ use crate::tui::app::{App, AppAction};
 use crate::tui::history::{HistoryCell, history_cells_from_message};
 use crate::tui::session_picker::SessionPickerView;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Save session to file.
 ///
@@ -156,7 +156,7 @@ pub fn new_session(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     let new_id = uuid::Uuid::new_v4().to_string();
-    super::core::reset_conversation_state(app);
+    crate::commands::back::core::reset_conversation_state(app);
     app.clear_input();
     app.session_artifacts.clear();
     app.session_context_references.clear();

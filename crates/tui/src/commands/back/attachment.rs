@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::tui::app::App;
 
 pub fn attach(app: &mut App, arg: Option<&str>) -> CommandResult {

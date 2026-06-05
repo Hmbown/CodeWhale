@@ -11,7 +11,7 @@ use crate::skills::install::{
 use crate::tui::app::App;
 use crate::tui::history::HistoryCell;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 fn discover_visible_skills(app: &App) -> SkillRegistry {
     crate::skills::discover_for_workspace_and_dir(&app.workspace, &app.skills_dir)

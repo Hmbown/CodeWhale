@@ -7,7 +7,7 @@
 use crate::config::ApiProvider;
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Query provider account balance / credits.
 pub fn balance(app: &mut App) -> CommandResult {

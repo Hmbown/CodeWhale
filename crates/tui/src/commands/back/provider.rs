@@ -10,7 +10,7 @@ use crate::config::{
 };
 use crate::tui::app::{App, AppAction};
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Switch or view the current LLM backend.
 ///

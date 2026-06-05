@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use toml::Value;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::network_policy::host_from_url;
 use crate::tui::app::App;
 
@@ -70,7 +70,7 @@ enum NetworkEdit {
 }
 
 fn list_policy() -> anyhow::Result<String> {
-    let path = super::config::config_toml_path(None)?;
+    let path = crate::commands::back::config::config_toml_path(None)?;
     let doc = load_config_doc(&path)?;
     let network = doc.get("network").and_then(Value::as_table);
     let default = network
@@ -97,7 +97,7 @@ fn list_policy() -> anyhow::Result<String> {
 }
 
 fn update_host(edit: NetworkEdit, host: &str) -> anyhow::Result<String> {
-    let path = super::config::config_toml_path(None)?;
+    let path = crate::commands::back::config::config_toml_path(None)?;
     let mut doc = load_config_doc(&path)?;
     let network = network_table_mut(&mut doc)?;
 
@@ -136,7 +136,7 @@ fn update_default(value: &str) -> anyhow::Result<String> {
         _ => bail!("Usage: /network default <allow|deny|prompt>"),
     };
 
-    let path = super::config::config_toml_path(None)?;
+    let path = crate::commands::back::config::config_toml_path(None)?;
     let mut doc = load_config_doc(&path)?;
     let network = network_table_mut(&mut doc)?;
     network.insert("default".to_string(), Value::String(normalized.to_string()));

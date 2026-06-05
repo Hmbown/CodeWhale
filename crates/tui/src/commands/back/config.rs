@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
     ApiProvider, COMMON_DEEPSEEK_MODELS, Config, DEFAULT_XIAOMI_MIMO_BASE_URL,

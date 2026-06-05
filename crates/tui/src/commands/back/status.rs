@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::models::{LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS, context_window_for_model};
 use crate::tui::app::App;

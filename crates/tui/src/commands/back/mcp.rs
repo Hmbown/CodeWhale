@@ -2,7 +2,7 @@
 
 use crate::tui::app::{App, AppAction, McpUiAction};
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 pub fn mcp(_app: &mut App, args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();

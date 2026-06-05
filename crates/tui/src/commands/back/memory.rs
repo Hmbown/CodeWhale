@@ -20,7 +20,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::tui::app::App;
 
 const MEMORY_USAGE: &str = "/memory [show|path|clear|edit|help]";

@@ -7,7 +7,7 @@
 //! (`/trust on` or YOLO) — the user can always view the list, just not
 //! one-shot revert without a safety net.
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::snapshot::SnapshotRepo;
 use crate::tui::app::App;
 

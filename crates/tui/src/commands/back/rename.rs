@@ -3,7 +3,7 @@
 use crate::session_manager::{SessionManager, update_session};
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 const MAX_TITLE_LEN: usize = 100;
 

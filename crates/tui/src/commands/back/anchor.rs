@@ -9,7 +9,7 @@ use crate::tui::app::App;
 use std::fs;
 use std::io::Write;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 const USAGE: &str = "/anchor <text> | /anchor list | /anchor remove <n>";
 

@@ -1,4 +1,4 @@
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::tui::app::{App, AppAction};
 
 const SECURITY_POLICY_URL: &str = "https://github.com/Hmbown/CodeWhale/security/policy";

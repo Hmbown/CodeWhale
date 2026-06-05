@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::tui::app::{App, AppAction, HuntVerdict};
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Declare, show, or close a hunt
 pub fn hunt(app: &mut App, arg: Option<&str>) -> CommandResult {

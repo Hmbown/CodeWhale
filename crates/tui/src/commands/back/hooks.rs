@@ -9,7 +9,7 @@
 use crate::hooks::HookEvent;
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 /// Top-level dispatch for `/hooks`. Subcommands:
 ///

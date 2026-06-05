@@ -7,33 +7,8 @@
 //! command-specific code.
 
 pub mod traits;
-mod anchor;
-mod attachment;
-mod balance;
-mod change;
-mod config;
-mod core;
-mod debug;
-mod feedback;
-mod goal;
-mod hooks;
-mod init;
-mod jobs;
-mod mcp;
-mod memory;
-mod network;
-mod note;
-mod provider;
-mod queue;
-mod rename;
-mod restore;
-mod review;
-mod session;
+mod back;
 pub mod share;
-mod skills;
-mod stash;
-mod status;
-mod task;
 pub mod user_commands;
 
 // Group modules — each registers its commands into the registry.
@@ -51,6 +26,12 @@ use std::fmt::Write as _;
 use crate::tui::app::{App, AppAction};
 
 pub use traits::CommandInfo;
+
+// Internal re-exports (used by external callers).
+pub use back::config::{
+    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
+    parse_auto_route_recommendation, resolve_auto_route_with_flash,
+};
 
 /// Result of executing a command
 #[derive(Debug, Clone)]
@@ -161,8 +142,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     }
 
     // Skill fallback (lowest precedence).
-    if skills::run_skill_by_name(app, command, arg).is_some() {
-        return skills::run_skill_by_name(app, command, arg).unwrap();
+    if back::skills::run_skill_by_name(app, command, arg).is_some() {
+        return back::skills::run_skill_by_name(app, command, arg).unwrap();
     }
 
     let suggestions = suggest_command_names(command, 3);
@@ -232,7 +213,7 @@ pub fn commands_matching(prefix: &str) -> Vec<&'static CommandInfo> {
 
 /// Update a configuration value programmatically (used by interactive UI views).
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
-    config::set_config_value(app, key, value, persist)
+    back::config::set_config_value(app, key, value, persist)
 }
 
 /// Persist the user's chosen footer items to `~/.deepseek/config.toml` under
@@ -240,7 +221,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 pub fn persist_status_items(
     items: &[crate::config::StatusItem],
 ) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_status_items(items)
+    back::config::persist_status_items(items)
 }
 
 /// Persist a root-level string key in `config.toml`.
@@ -249,22 +230,19 @@ pub fn persist_root_string_key(
     key: &str,
     value: &str,
 ) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_root_string_key(config_path, key, value)
+    back::config::persist_root_string_key(config_path, key, value)
 }
 
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
-    config::switch_mode(app, mode)
+    back::config::switch_mode(app, mode)
 }
 
 /// Auto-select a model based on request complexity.
 pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
-    config::auto_model_heuristic(input, current_model)
+    back::config::auto_model_heuristic(input, current_model)
 }
 
-pub use config::{
-    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
-    parse_auto_route_recommendation, resolve_auto_route_with_flash,
-};
+// pub use moved to top of file alongside the re-export block.
 
 /// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
 /// Zhang et al. (arXiv:2512.24601).

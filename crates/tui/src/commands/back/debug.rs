@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 use crate::client::{CacheWarmupKey, PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::dependencies::{ExternalTool, Git};

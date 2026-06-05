@@ -3,7 +3,7 @@
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::App;
 
-use super::CommandResult;
+use crate::commands::CommandResult;
 
 const PREVIEW_LIMIT: usize = 120;
 
