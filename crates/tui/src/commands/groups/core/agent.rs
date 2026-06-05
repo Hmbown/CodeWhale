@@ -1,8 +1,8 @@
 //! Agent command.
 
 use crate::tui::app::{App, AppAction};
-use crate::commands::traits::Command;
-use crate::commands::traits::CommandInfo;
+
+use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
 use crate::localization::MessageId;
 
