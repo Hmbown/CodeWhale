@@ -356,7 +356,7 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "sidebar",
         aliases: &[],
         usage: "/sidebar [on|off|auto|work|tasks|agents|context] [--save]",
-        description_id: MessageId::CmdConfigDescription,
+        description_id: MessageId::CmdSidebarDescription,
     },
     CommandInfo {
         name: "mode",
@@ -1119,7 +1119,16 @@ mod tests {
     #[test]
     fn command_registry_contains_config_and_links_but_not_set_or_deepseek() {
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "config"));
-        assert!(COMMANDS.iter().any(|cmd| cmd.name == "sidebar"));
+        let sidebar = COMMANDS
+            .iter()
+            .find(|cmd| cmd.name == "sidebar")
+            .expect("sidebar command should exist");
+        assert_eq!(sidebar.description_id, MessageId::CmdSidebarDescription);
+        assert!(
+            sidebar
+                .description_for(Locale::En)
+                .contains("right sidebar")
+        );
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "links"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "memory"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "set"));
@@ -1339,6 +1348,16 @@ mod tests {
         assert!(app.status_message.is_none());
 
         let result = execute("/sidebar off", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar closed", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar none", &mut app);
         assert!(!result.is_error);
         assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
         assert!(app.status_message.is_none());

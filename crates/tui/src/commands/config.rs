@@ -327,7 +327,7 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
         [value] => match value.to_ascii_lowercase().as_str() {
             "on" | "show" | "visible" => SidebarFocus::Auto,
-            "off" | "hide" | "hidden" => SidebarFocus::Hidden,
+            "off" | "hide" | "hidden" | "closed" | "none" => SidebarFocus::Hidden,
             "auto" => SidebarFocus::Auto,
             "work" | "plan" | "todos" => SidebarFocus::Work,
             "tasks" => SidebarFocus::Tasks,

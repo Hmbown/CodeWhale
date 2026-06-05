@@ -314,6 +314,7 @@ pub enum MessageId {
     CmdNewDescription,
     CmdSessionsDescription,
     CmdSettingsDescription,
+    CmdSidebarDescription,
     CmdSkillDescription,
     CmdSkillsDescription,
     CmdSlopDescription,
@@ -637,6 +638,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdNewDescription,
     MessageId::CmdSessionsDescription,
     MessageId::CmdSettingsDescription,
+    MessageId::CmdSidebarDescription,
     MessageId::CmdSkillDescription,
     MessageId::CmdSkillsDescription,
     MessageId::CmdSlopDescription,
@@ -1181,6 +1183,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNewDescription => "Start a fresh saved session",
         MessageId::CmdSessionsDescription => "Open session history picker",
         MessageId::CmdSettingsDescription => "Show persistent settings",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillDescription => {
             "Activate a skill, or install/update/uninstall/trust a community skill"
         }
@@ -1661,6 +1664,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNewDescription => "Bắt đầu một phiên lưu mới",
         MessageId::CmdSessionsDescription => "Mở bảng chọn lịch sử phiên làm việc",
         MessageId::CmdSettingsDescription => "Hiển thị các cài đặt liên tục",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillDescription => {
             "Kích hoạt một kỹ năng, hoặc cài đặt/cập nhật/gỡ bỏ/tin cậy một kỹ năng cộng đồng"
         }
@@ -2204,6 +2208,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNewDescription => "新しい保存済みセッションを開始",
         MessageId::CmdSessionsDescription => "セッション履歴ピッカーを開く",
         MessageId::CmdSettingsDescription => "永続化された設定を表示",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillDescription => {
             "スキルを有効化、またはコミュニティスキルをインストール／更新／アンインストール／信頼"
         }
@@ -2645,6 +2650,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSessionsDescription => "打开会话历史选择器",
         MessageId::CmdSettingsDescription => "显示持久化设置",
         MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillsDescription => {
             "列出本地技能（用 `/skills <prefix>` 按名称前缀过滤，--remote 浏览精选注册表）"
         }
@@ -3072,6 +3078,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNewDescription => "Iniciar uma nova sessão salva",
         MessageId::CmdSessionsDescription => "Abrir seletor de histórico de sessões",
         MessageId::CmdSettingsDescription => "Exibir as configurações persistidas",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillDescription => {
             "Ativar uma skill, ou instalar/atualizar/desinstalar/confiar em uma skill da comunidade"
         }
@@ -3564,6 +3571,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNewDescription => "Iniciar una nueva sesión guardada",
         MessageId::CmdSessionsDescription => "Abrir el selector de sesiones",
         MessageId::CmdSettingsDescription => "Mostrar las configuraciones persistidas",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
         MessageId::CmdSkillDescription => {
             "Activar una skill, o instalar/actualizar/desinstalar/confiar en una skill de la comunidad"
         }
