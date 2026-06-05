@@ -5925,7 +5925,6 @@ async fn apply_command_result(
 #[cfg(test)]
 use std::process::{Command, Stdio};
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn open_external_url(url: &str) -> Result<()> {
     crate::utils::open_url(url)
 }
