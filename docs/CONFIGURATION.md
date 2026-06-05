@@ -978,8 +978,8 @@ Use `codewhale-tui features list` to inspect known flags and their effective sta
 `web_search` uses DuckDuckGo by default and does not require an API key. The
 DuckDuckGo path keeps a Bing fallback when DDG returns a bot challenge or no
 parseable results. Bing remains selectable for users who explicitly want it,
-and Tavily, Bocha, Metaso, or Baidu can be selected when an API-backed provider
-is preferred.
+and Tavily, Bocha, Metaso, Baidu, Volcengine, or Sofya can be selected when an
+API-backed provider is preferred.
 
 **Metaso** ([metaso.cn](https://metaso.cn)) has a 100 searches/day free quota;
 set `METASO_API_KEY` or `[search] api_key` for a higher quota.
@@ -989,10 +989,15 @@ set `METASO_API_KEY` or `[search] api_key` for a higher quota.
 `BAIDU_SEARCH_API_KEY` or `[search] api_key`. This is a search-tool backend
 only; it does not add a Baidu model provider.
 
+**Sofya** ([sofya.co](https://sofya.co)) returns full extracted page content
+rather than snippets. Set `[search] api_key` to your `ay_live_...` key, or the
+`SOFYA_API_KEY` env var. This is a search-tool backend only; it does not add a
+Sofya model provider.
+
 ```toml
 [search]
-provider = "baidu" # duckduckgo | bing | tavily | bocha | metaso | baidu
-# api_key = "YOUR_KEY" # required for tavily, bocha, and baidu; optional for metaso
+provider = "baidu" # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine | sofya
+# api_key = "YOUR_KEY" # required for tavily, bocha, baidu, and sofya; optional for metaso
 ```
 
 ## Local Media Attachments

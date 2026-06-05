@@ -399,7 +399,7 @@ max_subagents = 10 # optional (1-20)
 # API-backed search.
 #
 # [search]
-# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine | sofya
 #                            # duckduckgo: HTML scrape with Bing fallback
 #                            # bing:       HTML scrape, no API key
 #                            # tavily:     https://tavily.com — AI search, needs api_key
@@ -409,7 +409,10 @@ max_subagents = 10 # optional (1-20)
 #                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
 #                            # volcengine: 火山引擎 Ark web_search (免费 2 万次/月), 需 api_key
 #                            #             也回退到 VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY 环境变量
-# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, and baidu; optional for metaso
+#                            # sofya:      https://sofya.co — AI search returning full page
+#                            #             content (not snippets), needs api_key (ay_live_...);
+#                            #             also falls back to the SOFYA_API_KEY env var
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, baidu, and sofya; optional for metaso
 #                             # WARNING: treat config.toml like a secret file when
 #                             # storing API keys. Prefer env vars for local smoke tests.
 #

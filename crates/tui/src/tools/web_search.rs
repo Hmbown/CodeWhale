@@ -1,12 +1,13 @@
 //! Web search tool backed by multiple providers: Bing HTML scrape, DuckDuckGo
 //! (HTML scrape with Bing fallback), Tavily API, Bocha (博查) API,
-//! Metaso API (<https://metaso.cn>), Baidu AI Search, and Volcengine Ark.
+//! Metaso API (<https://metaso.cn>), Baidu AI Search, Volcengine Ark, and
+//! Sofya (<https://sofya.co>).
 //!
 //! This is the primary web search surface for agents. For browsing workflows
 //! (page open, click, screenshot) use a direct URL approach instead.
 //!
 //! Set `[search]` in config.toml to switch providers:
-//!   provider = "duckduckgo"  # or tavily/bocha/metaso/baidu/volcengine
+//!   provider = "duckduckgo"  # or tavily/bocha/metaso/baidu/volcengine/sofya
 //!   api_key = "tvly-..."
 
 use super::spec::{
@@ -29,6 +30,7 @@ const BOCHA_ENDPOINT: &str = "https://api.bochaai.com/v1/ai/search";
 const METASO_ENDPOINT: &str = "https://metaso.cn/api/v1";
 const BAIDU_ENDPOINT: &str = "https://qianfan.baidubce.com/v2/ai_search/web_search";
 const VOLCENGINE_RESPONSES_ENDPOINT: &str = "https://ark.cn-beijing.volces.com/api/v3/responses";
+const SOFYA_ENDPOINT: &str = "https://sofya.co/v1/search";
 /// Intentionally public default key provided by Metaso for open-source/community use.
 /// Last-resort fallback after config and env var. Rate-limited to ~100 searches/day.
 const METASO_DEFAULT_API_KEY: &str = "mk-E384C1DD5E8501BB7EFE27C949AFDE5B";
@@ -236,6 +238,13 @@ impl ToolSpec for WebSearchTool {
                 check_policy(decider, "ark.cn-beijing.volces.com")?;
                 return self
                     .run_volcengine_search(&query, max_results, timeout_ms, context)
+                    .await;
+            }
+            SearchProvider::Sofya => {
+                let decider = context.network_policy.as_ref();
+                check_policy(decider, "sofya.co")?;
+                return self
+                    .run_sofya_search(&query, max_results, timeout_ms, context)
                     .await;
             }
             SearchProvider::Bing | SearchProvider::DuckDuckGo => {}
@@ -454,6 +463,108 @@ impl WebSearchTool {
         let response = WebSearchResponse {
             query: query.to_string(),
             source: "tavily".to_string(),
+            count: results.len(),
+            message,
+            results,
+        };
+
+        ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+
+    /// Search via Sofya web search API (<https://sofya.co>).
+    ///
+    /// Sofya returns full extracted page content rather than snippets. The API
+    /// key (`ay_live_...`) comes from `[search] api_key`, falling back to the
+    /// `SOFYA_API_KEY` env var, and is sent as a `Bearer` token.
+    async fn run_sofya_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let env_key = std::env::var("SOFYA_API_KEY").ok();
+        let api_key = context
+            .search_api_key
+            .as_deref()
+            .or(env_key.as_deref())
+            .ok_or_else(|| {
+                ToolError::execution_failed(
+                    "Sofya search requires an API key. Set `[search] api_key = \"ay_live_...\"` in config.toml or the SOFYA_API_KEY env var.",
+                )
+            })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+
+        let payload = json!({
+            "query": query,
+            "max_results": max_results,
+        });
+
+        let resp = client
+            .post(SOFYA_ENDPOINT)
+            .header("Content-Type", "application/json")
+            .bearer_auth(api_key)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Sofya search request failed: {e}"))
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Sofya response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            let truncated = truncate_error_body(&body);
+            return Err(ToolError::execution_failed(format!(
+                "Sofya search failed: HTTP {} — {truncated}",
+                status.as_u16()
+            )));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Sofya response: {e}"))
+        })?;
+
+        let results: Vec<WebSearchEntry> = parsed
+            .get("results")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flat_map(|arr| arr.iter())
+            .filter_map(|item| {
+                let title = item.get("title")?.as_str()?.to_string();
+                let url = item.get("url")?.as_str()?.to_string();
+                let snippet = item
+                    .get("content")
+                    .or_else(|| item.get("description"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                Some(WebSearchEntry {
+                    title,
+                    url,
+                    snippet,
+                })
+            })
+            .take(max_results)
+            .collect();
+
+        let message = if results.is_empty() {
+            "No results found".to_string()
+        } else {
+            format!("Found {} result(s)", results.len())
+        };
+
+        let response = WebSearchResponse {
+            query: query.to_string(),
+            source: "sofya".to_string(),
             count: results.len(),
             message,
             results,
@@ -1900,6 +2011,38 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("Baidu") && msg.contains("API key"),
+            "error must name the provider and missing key; got `{msg}`"
+        );
+    }
+
+    #[tokio::test]
+    async fn sofya_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
+        // Same trust-boundary pin as Tavily/Bocha: opting into Sofya without a
+        // key must surface a ToolError naming the provider, not silently fall
+        // through to DuckDuckGo.
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolSpec};
+
+        let prev = std::env::var_os("SOFYA_API_KEY");
+        unsafe { std::env::remove_var("SOFYA_API_KEY") };
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        ctx.search_provider = SearchProvider::Sofya;
+        ctx.search_api_key = None;
+        let err = WebSearchTool
+            .execute(json!({"query": "anything"}), &ctx)
+            .await
+            .expect_err("missing api_key must surface as ToolError");
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("SOFYA_API_KEY", value) },
+            None => unsafe { std::env::remove_var("SOFYA_API_KEY") },
+        }
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Sofya") && msg.contains("API key"),
             "error must name the provider and missing key; got `{msg}`"
         );
     }
