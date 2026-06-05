@@ -10,10 +10,10 @@ CodeWhale uses the same branching primitive at three scales:
 1. Release tracks. Each milestone fans into named tracks. A track must stay
    independently reviewable, mergeable, and slippable. Unfinished work rolls
    forward instead of blocking the release.
-2. Capability worksets. Model Lab capabilities such as Hugging Face,
-   observability, evals, serving, DSPy, GEPA, and training infrastructure ship
-   as opt-in worksets with their own feature flag, install path, license note,
-   and telemetry posture.
+2. Capability worksets. Model Lab capabilities such as Hugging Face
+   (Inference, MCP, Hub), observability, evals, serving, DSPy, GEPA, and
+   training infrastructure ship as opt-in worksets with their own feature
+   flag, install path, license note, and telemetry posture.
 3. Pareto compile branches. Optimizable modules keep candidate
    `(instructions, demos, score)` triples. Branches that violate pinned
    constitution clauses are pruned; branches that win at least one eval remain
