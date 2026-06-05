@@ -7,6 +7,7 @@
 
 pub(crate) mod config;
 pub(crate) mod config_handlers;
+pub(crate) mod model;
 pub(crate) mod core;
 pub(crate) mod debug;
 pub(crate) mod session;

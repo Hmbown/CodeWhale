@@ -4,7 +4,7 @@
 //! The TUI calls `resolve_auto_model_selection` once per user turn when
 //! `app.auto_model` is set. The async function builds a recent-context
 //! summary from `api_messages` (capped to six rows of up to 900 chars
-//! each), passes it through `commands::shared::config::resolve_auto_route_with_flash`,
+//! each), passes it through `commands::shared::model::resolve_auto_route_with_flash`,
 //! and returns the selection (model + reasoning effort). The remaining
 //! helpers are pure transforms used to build that summary.
 
@@ -25,13 +25,13 @@ pub(super) async fn resolve_auto_model_selection(
     config: &Config,
     message: &QueuedMessage,
     latest_content: &str,
-) -> commands::shared::config::AutoRouteSelection {
+) -> commands::shared::model::AutoRouteSelection {
     let latest_request = if latest_content.trim().is_empty() {
         message.display.as_str()
     } else {
         latest_content
     };
-    commands::shared::config::resolve_auto_route_with_flash(
+    commands::shared::model::resolve_auto_route_with_flash(
         config,
         latest_request,
         &recent_auto_router_context(&app.api_messages),
@@ -43,7 +43,7 @@ pub(super) async fn resolve_auto_model_selection(
 
 /// Normalize the heuristic effort to the canonical auto-route effort.
 pub(super) fn normalize_auto_routed_effort(effort: ReasoningEffort) -> ReasoningEffort {
-    commands::shared::config::normalize_auto_route_effort(effort)
+    commands::shared::model::normalize_auto_route_effort(effort)
 }
 
 /// Build a compact recent-context summary for the auto-route prompt.

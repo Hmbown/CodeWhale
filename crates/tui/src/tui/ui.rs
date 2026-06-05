@@ -5070,7 +5070,7 @@ async fn dispatch_user_message(
         auto_selection
             .as_ref()
             .map(|selection| selection.model.clone())
-            .unwrap_or_else(|| commands::shared::config::auto_model_heuristic(&message.display, &app.model))
+            .unwrap_or_else(|| commands::shared::model::auto_model_heuristic(&message.display, &app.model))
     } else {
         app.model.clone()
     };
