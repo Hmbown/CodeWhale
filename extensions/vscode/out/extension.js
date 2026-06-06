@@ -59,6 +59,30 @@ function activate(context) {
         statusView.updateSnapshots(snapshots, "Showing recent restore points.");
         output.appendLine(`Loaded ${snapshots.length} runtime restore points.`);
     };
+    const refreshAgentViewDetails = async (showWarning) => {
+        try {
+            await refreshAgentView();
+        }
+        catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            statusView.updateThreads([], "Runtime thread summaries unavailable.");
+            output.appendLine(`Runtime thread summaries unavailable: ${detail}`);
+            if (showWarning) {
+                void vscode.window.showWarningMessage(detail);
+            }
+        }
+        try {
+            await refreshSnapshots();
+        }
+        catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            statusView.updateSnapshots([], detail);
+            output.appendLine(`Runtime restore points unavailable: ${detail}`);
+            if (showWarning) {
+                void vscode.window.showWarningMessage(detail);
+            }
+        }
+    };
     const updateStatus = (text, tooltip) => {
         status.text = text;
         status.tooltip = tooltip;
@@ -74,16 +98,7 @@ function activate(context) {
         switch (state.kind) {
             case "connected":
                 updateStatus("$(check) CodeWhale", state.detail);
-                try {
-                    await refreshAgentView();
-                    await refreshSnapshots();
-                }
-                catch (error) {
-                    const detail = error instanceof Error ? error.message : String(error);
-                    statusView.updateThreads([], "Runtime thread summaries unavailable.");
-                    statusView.updateSnapshots([], detail);
-                    output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
-                }
+                await refreshAgentViewDetails(false);
                 break;
             case "auth-required":
                 updateStatus("$(lock) CodeWhale", state.detail);
@@ -157,17 +172,7 @@ function activate(context) {
         return await checkAndRefreshRuntime(true, true);
     }));
     context.subscriptions.push(vscode.commands.registerCommand("codewhale.refreshAgentView", async () => {
-        try {
-            await refreshAgentView();
-            await refreshSnapshots();
-        }
-        catch (error) {
-            const detail = error instanceof Error ? error.message : String(error);
-            statusView.updateThreads([], "Runtime thread summaries unavailable.");
-            statusView.updateSnapshots([], detail);
-            output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
-            void vscode.window.showWarningMessage(detail);
-        }
+        await refreshAgentViewDetails(true);
     }));
     context.subscriptions.push(vscode.commands.registerCommand("codewhale.refreshSnapshots", async () => {
         try {
