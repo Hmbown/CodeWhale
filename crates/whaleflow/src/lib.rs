@@ -784,6 +784,12 @@ mod tests {
         assert!(json.contains("\"status\":\"succeeded\""));
         let parsed: BranchResult = serde_json::from_str(&json).expect("parse branch result");
         assert_eq!(parsed, result);
+
+        let minimal: BranchResult =
+            serde_json::from_str(r#"{"branch_id":"discover","task_id":"scan","status":"pending"}"#)
+                .expect("parse minimal branch result");
+        assert!(minimal.artifacts.is_empty());
+        assert_eq!(minimal.notes, None);
     }
 
     #[test]
@@ -801,6 +807,13 @@ mod tests {
         assert!(json.contains("\"status\":\"failed\""));
         let parsed: LeafResult = serde_json::from_str(&json).expect("parse leaf result");
         assert_eq!(parsed, result);
+
+        let minimal: LeafResult = serde_json::from_str(
+            r#"{"leaf_id":"scan-readme","task_id":"scan","status":"pending"}"#,
+        )
+        .expect("parse minimal leaf result");
+        assert_eq!(minimal.output, None);
+        assert!(minimal.artifacts.is_empty());
     }
 
     #[test]
@@ -820,5 +833,12 @@ mod tests {
         let parsed: ControlNodeResult =
             serde_json::from_str(&json).expect("parse control node result");
         assert_eq!(parsed, result);
+
+        let minimal: ControlNodeResult = serde_json::from_str(
+            r#"{"node_id":"select-fix","kind":"branch_set","status":"pending"}"#,
+        )
+        .expect("parse minimal control node result");
+        assert!(minimal.selected_children.is_empty());
+        assert_eq!(minimal.summary, None);
     }
 }
