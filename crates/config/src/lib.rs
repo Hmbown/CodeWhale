@@ -475,6 +475,18 @@ pub struct HarnessProfile {
     pub posture: HarnessPosture,
 }
 
+impl HarnessProfile {
+    /// Return true when this profile applies to the provider/model route.
+    ///
+    /// This is a pure config helper: matching a profile must not mutate runtime
+    /// provider selection, prompts, auth, tools, context, or persisted config.
+    #[must_use]
+    pub fn matches_route(&self, provider_route: &str, model: &str) -> bool {
+        provider_routes_equal(&self.provider_route, provider_route)
+            && wildcard_pattern_matches(&self.model_pattern, model)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigToml {
     /// TUI-compatible DeepSeek API key. Kept at the root so both `deepseek`
@@ -533,6 +545,65 @@ pub struct ConfigToml {
     pub hook_sinks: Option<HookSinksToml>,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
+}
+
+impl ConfigToml {
+    /// Resolve the first configured harness profile for a provider/model route.
+    ///
+    /// This helper is deliberately dormant for v0.9: callers may display or
+    /// test the resolved profile, but runtime provider/model routing and prompt
+    /// shaping remain unchanged until a later, explicit integration slice.
+    #[must_use]
+    pub fn resolve_harness_profile(
+        &self,
+        provider_route: &str,
+        model: &str,
+    ) -> Option<&HarnessProfile> {
+        self.harness_profiles
+            .iter()
+            .find(|profile| profile.matches_route(provider_route, model))
+    }
+}
+
+fn provider_routes_equal(expected: &str, actual: &str) -> bool {
+    match (ProviderKind::parse(expected), ProviderKind::parse(actual)) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => expected.trim().eq_ignore_ascii_case(actual.trim()),
+    }
+}
+
+fn wildcard_pattern_matches(pattern: &str, value: &str) -> bool {
+    wildcard_chars_match(
+        &pattern.chars().collect::<Vec<_>>(),
+        &value.chars().collect::<Vec<_>>(),
+    )
+}
+
+fn wildcard_chars_match(pattern: &[char], value: &[char]) -> bool {
+    let (mut pattern_idx, mut value_idx) = (0, 0);
+    let mut star_idx: Option<usize> = None;
+    let mut star_value_idx = 0;
+
+    while value_idx < value.len() {
+        if pattern_idx < pattern.len()
+            && (pattern[pattern_idx] == '?' || pattern[pattern_idx] == value[value_idx])
+        {
+            pattern_idx += 1;
+            value_idx += 1;
+        } else if pattern_idx < pattern.len() && pattern[pattern_idx] == '*' {
+            star_idx = Some(pattern_idx);
+            pattern_idx += 1;
+            star_value_idx = value_idx;
+        } else if let Some(star) = star_idx {
+            pattern_idx = star + 1;
+            star_value_idx += 1;
+            value_idx = star_value_idx;
+        } else {
+            return false;
+        }
+    }
+
+    pattern[pattern_idx..].iter().all(|ch| *ch == '*')
 }
 
 /// Ordered primary-plus-fallback provider list for future provider routing.
@@ -5907,6 +5978,96 @@ safety_posture = "strict"
                 },
             }]
         );
+    }
+
+    #[test]
+    fn harness_profile_matches_provider_alias_and_model_wildcard() {
+        let profile = HarnessProfile {
+            provider_route: "xiaomi-mimo".to_string(),
+            model_pattern: "mimo-v2.?-pro".to_string(),
+            posture: HarnessPosture::cache_heavy(),
+        };
+
+        assert!(profile.matches_route("mimo", "mimo-v2.5-pro"));
+        assert!(!profile.matches_route("mimo", "mimo-v2.50-pro"));
+        assert!(!profile.matches_route("deepseek", "mimo-v2.5-pro"));
+    }
+
+    #[test]
+    fn resolve_harness_profile_returns_first_matching_profile() {
+        let config = ConfigToml {
+            harness_profiles: vec![
+                HarnessProfile {
+                    provider_route: "deepseek".to_string(),
+                    model_pattern: "deepseek-v4-flash".to_string(),
+                    posture: HarnessPosture::lean(),
+                },
+                HarnessProfile {
+                    provider_route: "deepseek".to_string(),
+                    model_pattern: "deepseek-v4-*".to_string(),
+                    posture: HarnessPosture::cache_heavy(),
+                },
+            ],
+            ..ConfigToml::default()
+        };
+
+        let flash = config
+            .resolve_harness_profile("deepseek-cn", "deepseek-v4-flash")
+            .expect("exact profile should match first");
+        assert_eq!(flash.posture.kind, HarnessPostureKind::Lean);
+
+        let pro = config
+            .resolve_harness_profile("deepseek", "deepseek-v4-pro")
+            .expect("wildcard profile should match pro model");
+        assert_eq!(pro.posture.kind, HarnessPostureKind::CacheHeavy);
+    }
+
+    #[test]
+    fn resolve_harness_profile_returns_none_when_route_or_model_misses() {
+        let config = ConfigToml {
+            harness_profiles: vec![HarnessProfile {
+                provider_route: "huggingface".to_string(),
+                model_pattern: "deepseek-ai/*".to_string(),
+                posture: HarnessPosture::lean(),
+            }],
+            ..ConfigToml::default()
+        };
+
+        assert!(
+            config
+                .resolve_harness_profile("openrouter", "deepseek-ai/DeepSeek-V4-Pro")
+                .is_none()
+        );
+        assert!(
+            config
+                .resolve_harness_profile("hf", "Qwen/Qwen3.6-Coder")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolving_harness_profile_does_not_change_runtime_options() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            model: Some("deepseek-v4-pro".to_string()),
+            harness_profiles: vec![HarnessProfile {
+                provider_route: "deepseek".to_string(),
+                model_pattern: "deepseek-v4-*".to_string(),
+                posture: HarnessPosture::lean(),
+            }],
+            ..ConfigToml::default()
+        };
+
+        let profile = config
+            .resolve_harness_profile("deepseek", "deepseek-v4-pro")
+            .expect("profile should resolve for display/future runtime");
+        assert_eq!(profile.posture.kind, HarnessPostureKind::Lean);
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.provider, ProviderKind::Deepseek);
+        assert_eq!(resolved.model, "deepseek-v4-pro");
     }
 
     #[test]

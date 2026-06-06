@@ -59,10 +59,10 @@ inspiration only after the text distinguishes these stages:
 No v0.9.0 harness profile should be silently promoted, mutated, or written to a
 cached-main overlay by the schema/resolver/display lane.
 
-## Smoke Evidence Needed Before Release
+## Smoke Evidence
 
-Before v0.9.0 ships with HarnessProfile behavior beyond schema parsing, the
-acceptance matrix should record evidence for:
+Before v0.9.0 ships with HarnessProfile runtime behavior beyond schema parsing
+and pure resolver checks, the acceptance matrix should record evidence for:
 
 - DeepSeek V4 resolving to a cache-heavy profile;
 - Xiaomi MiMo resolving to a cache-heavy profile without sharing DeepSeek auth;
@@ -73,5 +73,7 @@ acceptance matrix should record evidence for:
   constitution separately;
 - no automatic profile mutation during normal Agent or WhaleFlow runs.
 
-Until that evidence exists, release notes should call HarnessProfile a typed
-schema/config foundation rather than an automatic harness creator.
+For v0.9.0, pure resolver tests may satisfy the profile-selection evidence, but
+status display and runtime use remain deferred until separate PRs wire those
+surfaces deliberately. Release notes should still call HarnessProfile a typed
+schema/resolver foundation rather than an automatic harness creator.

@@ -305,8 +305,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The config crate now carries the v0.9 HarnessPosture data model:
   `HarnessPosture`, `HarnessProfile`, and typed posture/compaction/tool/safety
   enums. The schema rejects misspelled posture names or unknown profile keys
-  instead of silently falling back to `custom`; runtime provider/model posture
-  selection remains a follow-up (#2693, #2741).
+  instead of silently falling back to `custom`; a pure resolver can match
+  provider/model routes for tests and future status plumbing, while runtime
+  provider/model posture selection remains a follow-up (#2693, #2741, #2728).
 
 ### Fixed
 
