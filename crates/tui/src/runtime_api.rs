@@ -586,6 +586,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
         .route("/v1/usage", get(get_usage))
+        .route("/v1/snapshots", get(list_snapshots))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_runtime_token,
@@ -2178,6 +2179,59 @@ async fn get_usage(
     Ok(Json(json!(aggregation)))
 }
 
+#[derive(Debug, Deserialize)]
+struct SnapshotsQuery {
+    /// Maximum number of snapshots to return. Mirrors `/restore list [N]`.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotEntry {
+    id: String,
+    label: String,
+    timestamp: i64,
+}
+
+async fn list_snapshots(
+    State(state): State<RuntimeApiState>,
+    Query(query): Query<SnapshotsQuery>,
+) -> Result<Json<Vec<SnapshotEntry>>, ApiError> {
+    Ok(Json(snapshot_entries_for_workspace(
+        &state.workspace,
+        query,
+    )?))
+}
+
+fn snapshot_entries_for_workspace(
+    workspace: &FsPath,
+    query: SnapshotsQuery,
+) -> Result<Vec<SnapshotEntry>, ApiError> {
+    const DEFAULT_LIMIT: usize = 20;
+    const MAX_LIMIT: usize = 100;
+
+    let limit = match query.limit.unwrap_or(DEFAULT_LIMIT) {
+        1..=MAX_LIMIT => query.limit.unwrap_or(DEFAULT_LIMIT),
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "limit must be between 1 and {MAX_LIMIT}; got {other}",
+            )));
+        }
+    };
+    let repo = crate::snapshot::SnapshotRepo::open_or_init(workspace)
+        .map_err(|e| ApiError::internal(format!("Snapshot repo unavailable: {e}")))?;
+    let snapshots = repo
+        .list(limit)
+        .map_err(|e| ApiError::internal(format!("Failed to list snapshots: {e}")))?;
+    Ok(snapshots
+        .into_iter()
+        .map(|snapshot| SnapshotEntry {
+            id: snapshot.id.as_str().to_string(),
+            label: snapshot.label,
+            timestamp: snapshot.timestamp,
+        })
+        .collect())
+}
+
 const MOBILE_HTML: &str = include_str!("runtime_mobile.html");
 
 /// Built-in dev origins always allowed by the runtime API (whalescale#255).
@@ -2307,6 +2361,7 @@ mod tests {
     use crate::core::ops::Op;
     use crate::models::Usage;
     use crate::runtime_threads::RuntimeEventRecord;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use anyhow::{Context, bail};
     use futures_util::StreamExt;
     use std::fs;
@@ -4072,6 +4127,37 @@ mod tests {
         assert_eq!(terminal, "completed");
 
         handle.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn snapshots_endpoint_lists_workspace_snapshots() -> Result<()> {
+        let _lock = lock_test_env();
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        fs::create_dir_all(&home)?;
+        let _home = EnvVarGuard::set("HOME", &home);
+
+        let workspace = root.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let repo = crate::snapshot::SnapshotRepo::open_or_init(&workspace)?;
+        fs::write(workspace.join("a.txt"), "v1")?;
+        repo.snapshot("pre-turn:1")?;
+        fs::write(workspace.join("a.txt"), "v2")?;
+        repo.snapshot("post-turn:1")?;
+
+        let snapshots =
+            snapshot_entries_for_workspace(&workspace, SnapshotsQuery { limit: Some(1) })
+                .expect("snapshot listing should succeed");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].label, "post-turn:1");
+        assert!(snapshots[0].id.len() >= 8);
+        assert!(snapshots[0].timestamp > 0);
+
+        let bad_limit =
+            snapshot_entries_for_workspace(&workspace, SnapshotsQuery { limit: Some(101) })
+                .expect_err("limit above cap should fail");
+        assert_eq!(bad_limit.status, StatusCode::BAD_REQUEST);
         Ok(())
     }
 
