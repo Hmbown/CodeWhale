@@ -8,7 +8,6 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::commands;
 use crate::config::{Config, StatusItem, normalize_model_name};
 use crate::localization::{normalize_configured_locale, resolve_locale};
 use crate::settings::Settings;
@@ -293,7 +292,7 @@ pub enum StatusItemValue {
     Balance,
 }
 
-pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
+pub(crate) fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
     let raw = arg.unwrap_or("").trim();
     // Bare `/config` opens the legacy native modal — it matches the rest
     // of the codewhale-tui navy chrome out of the box. Power users can
@@ -311,7 +310,7 @@ pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
     Err("Usage: /config [native|tui|web]".to_string())
 }
 
-pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
+pub(crate) fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
     let settings = Settings::load().unwrap_or_default();
     let reasoning_effort = config
         .reasoning_effort()
@@ -362,7 +361,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
     })
 }
 
-pub fn build_schema() -> Value {
+fn build_schema() -> Value {
     let mut schema = serde_json::to_value(schema_for!(ConfigUiDocument)).expect("config ui schema");
     schema["title"] = Value::String("codewhale Config".to_string());
     schema["description"] =
@@ -371,7 +370,7 @@ pub fn build_schema() -> Value {
 }
 
 #[cfg(feature = "tui")]
-pub fn run_tui_editor(app: &App, config: &Config) -> Result<ConfigUiDocument> {
+pub(crate) fn run_tui_editor(app: &App, config: &Config) -> Result<ConfigUiDocument> {
     let document = build_document(app, config)?;
     let value = SchemaUI::new(serde_json::to_value(document.clone())?)
         .with_schema(build_schema())
@@ -389,7 +388,7 @@ pub fn run_tui_editor(app: &App, config: &Config) -> Result<ConfigUiDocument> {
 }
 
 #[cfg(feature = "web")]
-pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSession> {
+pub(crate) async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSession> {
     let initial = serde_json::to_value(build_document(app, config)?)?;
     let session = WebSessionBuilder::new(build_schema())
         .with_initial_data(initial)
@@ -472,7 +471,7 @@ pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSes
     })
 }
 
-pub fn apply_document(
+pub(crate) fn apply_document(
     doc: ConfigUiDocument,
     app: &mut App,
     config: &mut Config,
@@ -554,7 +553,7 @@ pub fn apply_document(
         ),
         ("mcp_config_path", doc.config.mcp_config_path.as_str()),
     ] {
-        let result = commands::set_config_value(app, key, value, persist);
+        let result = crate::config_actions::set_config_value(app, key, value, persist);
         if result.is_error {
             bail!(
                 "{}",
@@ -573,7 +572,8 @@ pub fn apply_document(
     // the runtime model the user just chose when persist=false (#346-fix).
     if persist {
         let default_model_val = doc.settings.default_model.as_deref().unwrap_or("default");
-        let result = commands::set_config_value(app, "default_model", default_model_val, true);
+        let result =
+            crate::config_actions::set_config_value(app, "default_model", default_model_val, true);
         if result.is_error {
             bail!(
                 "{}",
@@ -596,7 +596,7 @@ pub fn apply_document(
         app.status_items = new_status_items.clone();
         app.needs_redraw = true;
         if persist {
-            let path = commands::persist_status_items(&new_status_items)?;
+            let path = crate::config_persistence::persist_status_items(&new_status_items)?;
             notes.push(format!("status_items saved to {}", path.display()));
         } else {
             notes.push("status_items updated for this session".to_string());
@@ -624,12 +624,12 @@ pub fn apply_document(
     })
 }
 
-pub fn parse_document(value: Value) -> Result<ConfigUiDocument> {
+fn parse_document(value: Value) -> Result<ConfigUiDocument> {
     serde_json::from_value(value).context("failed to decode config ui document")
 }
 
 #[cfg(feature = "web")]
-pub fn open_browser(url: &str) -> Result<()> {
+pub(crate) fn open_browser(url: &str) -> Result<()> {
     crate::utils::open_url(url)
 }
 
@@ -685,7 +685,7 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key(
+        crate::config_persistence::persist_root_string_key(
             app.config_path.as_deref(),
             "reasoning_effort",
             effort.as_setting(),

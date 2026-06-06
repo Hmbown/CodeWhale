@@ -439,6 +439,9 @@ pub struct EngineHandle {
     tx_user_input: mpsc::Sender<UserInputDecision>,
     /// Send steer input for an in-flight turn.
     tx_steer: mpsc::Sender<String>,
+    /// Shared paused flag — set by the UI, read by the turn loop.
+    /// Uses the same pattern as `cancel_token` to bypass the Op channel.
+    pub shared_paused: Arc<StdMutex<bool>>,
 }
 
 // `impl EngineHandle { ... }` moved to `engine/handle.rs` so the
@@ -505,6 +508,9 @@ pub struct Engine {
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
+    /// Shared paused flag — set by the UI (via EngineHandle::set_paused),
+    /// read by the turn-loop pause gate.
+    shared_paused: Arc<StdMutex<bool>>,
 }
 
 // === Internal tool helpers ===
@@ -592,6 +598,7 @@ impl Engine {
         let cancel_token = CancellationToken::new();
         let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
         let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
+        let shared_paused = Arc::new(StdMutex::new(false));
         let tool_exec_lock = Arc::new(RwLock::new(()));
 
         // Create clients for both providers
@@ -754,6 +761,7 @@ impl Engine {
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
+            shared_paused: shared_paused.clone(),
         };
         engine.rehydrate_latest_canonical_state();
 
@@ -762,6 +770,7 @@ impl Engine {
             rx_event: Arc::new(RwLock::new(rx_event)),
             cancel_token: shared_cancel_token,
             cancel_reason,
+            shared_paused,
             tx_approval,
             tx_user_input,
             tx_steer,
@@ -1034,6 +1043,23 @@ impl Engine {
                     allowed_tools,
                     hook_executor,
                 } => {
+                    let op_started = Instant::now();
+                    let content_bytes = content.len();
+                    let mode_label = mode.label().to_string();
+                    let model_label = model.clone();
+                    let reasoning_effort_label = reasoning_effort.clone();
+                    tracing::debug!(
+                        target: "turn_dispatch",
+                        content_bytes,
+                        mode = %mode_label,
+                        model = %model_label,
+                        reasoning_effort = ?reasoning_effort_label,
+                        auto_model,
+                        allow_shell,
+                        trust_mode,
+                        auto_approve,
+                        "engine received SendMessage op"
+                    );
                     self.handle_send_message(
                         content,
                         mode,
@@ -1052,6 +1078,14 @@ impl Engine {
                         hook_executor,
                     )
                     .await;
+                    tracing::debug!(
+                        target: "turn_dispatch",
+                        content_bytes,
+                        mode = %mode_label,
+                        model = %model_label,
+                        elapsed_ms = op_started.elapsed().as_millis(),
+                        "engine finished SendMessage op"
+                    );
                 }
                 Op::RunShellCommand {
                     command,
@@ -1487,6 +1521,15 @@ In {new} mode: {policy}\n\n\
         // Drain stale steer messages from previous turns.
         while self.rx_steer.try_recv().is_ok() {}
 
+        let content_bytes = content.len();
+        tracing::debug!(
+            target: "turn_dispatch",
+            content_bytes,
+            mode = %mode.label(),
+            model = %model,
+            "engine handling SendMessage"
+        );
+
         // Create turn context first so start event includes a stable turn id.
         let mut turn = TurnContext::new(self.config.max_steps);
         self.turn_counter = self.turn_counter.saturating_add(1);
@@ -1495,12 +1538,27 @@ In {new} mode: {policy}\n\n\
         // Emit turn started event IMMEDIATELY so the UI knows the turn is
         // active. The snapshot below can take 30+ seconds on slow filesystems
         // (e.g. WSL2 /mnt/c) and must not delay the TurnStarted event.
-        let _ = self
+        let turn_started_result = self
             .tx_event
             .send(Event::TurnStarted {
                 turn_id: turn.id.clone(),
             })
             .await;
+        match turn_started_result {
+            Ok(()) => tracing::debug!(
+                target: "turn_dispatch",
+                turn_id = %turn.id,
+                turn_counter = self.turn_counter,
+                "engine emitted TurnStarted"
+            ),
+            Err(err) => tracing::warn!(
+                target: "turn_dispatch",
+                turn_id = %turn.id,
+                turn_counter = self.turn_counter,
+                ?err,
+                "engine failed to emit TurnStarted"
+            ),
+        }
 
         // Snapshot the workspace BEFORE we touch a single tool. Run the git
         // work on the blocking pool so the async runtime stays responsive;
@@ -2609,11 +2667,13 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
     let cancel_token = CancellationToken::new();
     let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
     let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
+    let shared_paused = Arc::new(StdMutex::new(false));
     let handle = EngineHandle {
         tx_op,
         rx_event: Arc::new(RwLock::new(rx_event)),
         cancel_token: shared_cancel_token,
         cancel_reason,
+        shared_paused,
         tx_approval,
         tx_user_input,
         tx_steer,

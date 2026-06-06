@@ -1,0 +1,32 @@
+//! Save command.
+
+use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
+use crate::localization::MessageId;
+use crate::tui::app::App;
+
+pub struct Save;
+impl Command for Save {
+    fn info(&self) -> &'static CommandInfo {
+        &CommandInfo {
+            name: "save",
+            aliases: &[],
+            usage: "/save [path]",
+            description_id: MessageId::CmdSaveDescription,
+        }
+    }
+    fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
+        super::save_impl::save(app, args)
+    }
+}
+#[cfg(test)]
+mod command_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn info_returns_metadata() {
+        let info = Save.info();
+        assert_eq!(info.name, "save");
+        assert!(!info.usage.is_empty());
+    }
+}

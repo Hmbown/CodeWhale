@@ -2,6 +2,9 @@
 
 use std::fs;
 
+#[path = "../src/shell_invocation.rs"]
+mod shell_invocation;
+
 #[path = "../src/eval.rs"]
 mod eval;
 #[path = "../src/shell_dispatcher.rs"]

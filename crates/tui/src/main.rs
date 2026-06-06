@@ -27,7 +27,10 @@ mod compaction;
 mod composer_history;
 mod composer_stash;
 mod config;
+mod config_actions;
+mod config_persistence;
 mod config_ui;
+mod conversation_state;
 mod core;
 mod cost_status;
 mod deepseek_theme;
@@ -45,6 +48,7 @@ mod lsp;
 mod mcp;
 mod mcp_server;
 mod memory;
+mod model_routing;
 mod models;
 mod network_policy;
 mod palette;
@@ -68,7 +72,9 @@ mod seam_manager;
 mod session_failure_classifier;
 mod session_manager;
 mod settings;
+mod share_export;
 mod shell_dispatcher;
+mod shell_invocation;
 mod skill_state;
 mod skills;
 mod slop_ledger;
@@ -5420,7 +5426,7 @@ struct CliAutoRoute {
 async fn resolve_cli_auto_route(config: &Config, model: &str, prompt: &str) -> CliAutoRoute {
     if model.trim().eq_ignore_ascii_case("auto") {
         let selection =
-            commands::resolve_auto_route_with_flash(config, prompt, "", "auto", "auto").await;
+            model_routing::resolve_auto_route_with_flash(config, prompt, "", "auto", "auto").await;
         CliAutoRoute {
             model: selection.model,
             reasoning_effort: selection.reasoning_effort,

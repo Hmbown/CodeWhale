@@ -2149,7 +2149,7 @@ pub(crate) fn slash_completion_hints(
     // ── Phase 2: contains (substring) matches ─────────────────────────
     // Medium priority — broader catching.
     if completing_skill_arg.is_none() {
-        for cmd in commands::COMMANDS {
+        for cmd in commands::registry().infos() {
             let name = format!("/{}", cmd.name);
             if seen.contains(&name) {
                 continue;
@@ -2176,7 +2176,7 @@ pub(crate) fn slash_completion_hints(
     // ── Phase 3: fuzzy subsequence matches ────────────────────────────
     // Lowest priority — characters in order, not necessarily consecutive.
     if completing_skill_arg.is_none() {
-        for cmd in commands::COMMANDS {
+        for cmd in commands::registry().infos() {
             let name = format!("/{}", cmd.name);
             if seen.contains(&name) {
                 continue;
@@ -2270,7 +2270,7 @@ pub(crate) fn slash_completion_hints(
         if command_key.eq_ignore_ascii_case(&prefix_lower) {
             return 0;
         }
-        if let Some(info) = commands::get_command_info(command_key)
+        if let Some(info) = commands::registry().get_info(command_key)
             && info
                 .aliases
                 .iter()
@@ -2293,7 +2293,8 @@ fn all_command_names_matching_loaded(
     user_commands: &[(String, String)],
 ) -> Vec<String> {
     let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    let mut result: Vec<String> = commands::COMMANDS
+    let mut result: Vec<String> = commands::registry()
+        .infos()
         .iter()
         .filter(|cmd| {
             cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
@@ -2323,7 +2324,7 @@ fn push_command_entry(
     locale: crate::localization::Locale,
     user_commands: &[(String, String)],
 ) {
-    let (description, alias_hint) = if let Some(info) = commands::get_command_info(command_key) {
+    let (description, alias_hint) = if let Some(info) = commands::registry().get_info(command_key) {
         let hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
             info.aliases
                 .iter()

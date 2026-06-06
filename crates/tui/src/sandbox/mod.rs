@@ -51,6 +51,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::shell_invocation::{ShellInvocation, shell_invocation};
+
 pub use policy::SandboxPolicy;
 
 /// Specification for a command to be executed, potentially within a sandbox.
@@ -86,32 +88,11 @@ pub struct CommandSpec {
 impl CommandSpec {
     /// Create a `CommandSpec` for running a shell command via the platform shell.
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
-        let dispatcher = crate::shell_dispatcher::global_dispatcher();
-
-        #[cfg(windows)]
-        let (program, args) = {
-            // Force UTF-8 output. cmd.exe uses chcp; PowerShell sets the
-            // console output encoding directly. See issue #982.
-            let kind = dispatcher.kind();
-            let cmd = if matches!(
-                kind,
-                crate::shell_dispatcher::ShellKind::Pwsh
-                    | crate::shell_dispatcher::ShellKind::WindowsPowerShell
-            ) {
-                format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}")
-            } else if matches!(kind, crate::shell_dispatcher::ShellKind::Cmd) {
-                format!("chcp 65001 >NUL & {command}")
-            } else {
-                command.to_string()
-            };
-            dispatcher.build_command_parts(&cmd)
-        };
-        #[cfg(not(windows))]
-        let (program, args) = dispatcher.build_command_parts(command);
+        let invocation = shell_invocation(command);
 
         Self {
-            program,
-            args,
+            program: invocation.program,
+            args: invocation.args,
             cwd,
             env: HashMap::new(),
             timeout,
@@ -159,49 +140,13 @@ impl CommandSpec {
 
     /// Get the original command as a single string (for display).
     pub fn display_command(&self) -> String {
-        if self.args.len() == 2
-            && self.args[0] == "-c"
-            && matches!(
-                self.program.as_str(),
-                "sh" | "bash" | "/bin/sh" | "/bin/bash" | "/usr/bin/sh" | "/usr/bin/bash"
-            )
-        {
-            // For shell commands, show the actual command
-            self.args[1].clone()
-        } else if self.args.len() == 2
-            && self.args[0] == "-c"
-            && !self.program.eq_ignore_ascii_case("cmd")
-            && !self.program.eq_ignore_ascii_case("pwsh")
-            && !self.program.eq_ignore_ascii_case("pwsh.exe")
-            && !self.program.eq_ignore_ascii_case("powershell")
-            && !self.program.eq_ignore_ascii_case("powershell.exe")
-        {
-            self.args[1].clone()
-        } else if self.program.eq_ignore_ascii_case("cmd")
-            && self.args.len() == 2
-            && self.args[0].eq_ignore_ascii_case("/C")
-        {
-            // Strip the `chcp 65001 >NUL & ` prefix we add on Windows for
-            // UTF-8 output (issue #982).
-            let raw = &self.args[1];
-            raw.strip_prefix("chcp 65001 >NUL & ")
-                .unwrap_or(raw)
-                .to_string()
-        } else if {
-            let program = self.program.to_ascii_lowercase();
-            program == "pwsh"
-                || program == "pwsh.exe"
-                || program == "powershell"
-                || program == "powershell.exe"
-        } && self.args.len() >= 3
-            && self.args[0].eq_ignore_ascii_case("-NoProfile")
-            && self.args[1].eq_ignore_ascii_case("-Command")
-        {
-            // Strip the PowerShell encoding prefix.
-            let raw = &self.args[2];
-            raw.strip_prefix("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ")
-                .unwrap_or(raw)
-                .to_string()
+        let invocation = ShellInvocation {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            raw_payload_on_windows: false,
+        };
+        if let Some(command) = invocation.display_command() {
+            command
         } else {
             // For other commands, join program and args
             let mut parts = vec![self.program.clone()];
@@ -622,13 +567,25 @@ impl SandboxManager {
 mod tests {
     use super::*;
 
+    fn expected_shell_command(spec: &CommandSpec) -> Vec<String> {
+        let mut command = vec![spec.program.clone()];
+        command.extend(spec.args.clone());
+        command
+    }
+
     #[test]
     fn test_command_spec_shell() {
         let spec = CommandSpec::shell("echo hello", PathBuf::from("/tmp"), Duration::from_secs(30));
 
-        // Program and args depend on the detected shell.
-        assert!(!spec.program.is_empty(), "program must not be empty");
-        assert!(!spec.args.is_empty(), "args must not be empty");
+        #[cfg(windows)]
+        {
+            assert_windows_shell_spec_displays_command(&spec, "echo hello");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(spec.program, "sh");
+            assert_eq!(spec.args, vec!["-c", "echo hello"]);
+        }
         assert_eq!(spec.display_command(), "echo hello");
     }
 
@@ -657,28 +614,14 @@ mod tests {
         let cmd = r#"git commit -m "feat: complete sub-pages""#;
         let spec = CommandSpec::shell(cmd, PathBuf::from("/tmp"), Duration::from_secs(30));
 
-        let dispatcher = crate::shell_dispatcher::global_dispatcher();
-        assert_eq!(spec.program, dispatcher.kind().binary());
-        if dispatcher.kind().is_powershell() {
-            assert_eq!(
-                spec.args,
-                vec![
-                    dispatcher.kind().command_flag().to_string(),
-                    "-Command".to_string(),
-                    format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {cmd}")
-                ]
-            );
-        } else {
-            let expected = if matches!(dispatcher.kind(), crate::shell_dispatcher::ShellKind::Cmd) {
-                vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
-            } else {
-                vec![
-                    dispatcher.kind().command_flag().to_string(),
-                    cmd.to_string(),
-                ]
-            };
-            assert_eq!(spec.args, expected);
-            // The quoted message is intact in a single argv slot — shell `-c`
+        #[cfg(windows)]
+        {
+            assert_windows_shell_spec_displays_command(&spec, cmd);
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(spec.program, "sh");
+            assert_eq!(spec.args, vec!["-c".to_string(), cmd.to_string()]);
             // performs POSIX tokenization, yielding the correct argv:
             // ["git","commit","-m","feat: complete sub-pages"].
             assert_eq!(spec.args.len(), 2);
@@ -740,40 +683,33 @@ mod tests {
             .with_policy(SandboxPolicy::DangerFullAccess);
 
         let env = manager.prepare(&spec);
-        let dispatcher = crate::shell_dispatcher::global_dispatcher();
-
         assert_eq!(env.sandbox_type, SandboxType::None);
-        if dispatcher.kind().is_powershell() {
+        assert_eq!(env.command, expected_shell_command(&spec));
+        assert!(!env.is_sandboxed());
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_shell_spec_displays_command(spec: &CommandSpec, command: &str) {
+        assert_eq!(spec.display_command(), command);
+
+        let program = spec.program.replace('\\', "/").to_ascii_lowercase();
+        if program.ends_with("/cmd.exe") || program == "cmd" || program == "cmd.exe" {
+            assert_eq!(spec.args[0], "/C");
+            assert!(spec.args[1].ends_with(command));
+        } else if program.ends_with("/pwsh.exe")
+            || program == "pwsh"
+            || program == "pwsh.exe"
+            || program.ends_with("/powershell.exe")
+            || program == "powershell"
+            || program == "powershell.exe"
+        {
             assert_eq!(
-                env.command,
-                vec![
-                    dispatcher.kind().binary().to_string(),
-                    dispatcher.kind().command_flag().to_string(),
-                    "-Command".to_string(),
-                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; echo test"
-                        .to_string(),
-                ]
-            );
-        } else if matches!(dispatcher.kind(), crate::shell_dispatcher::ShellKind::Cmd) {
-            assert_eq!(
-                env.command,
-                vec![
-                    dispatcher.kind().binary().to_string(),
-                    "/C".to_string(),
-                    "chcp 65001 >NUL & echo test".to_string(),
-                ]
+                spec.args,
+                ["-NoProfile", "-NonInteractive", "-Command", command]
             );
         } else {
-            assert_eq!(
-                env.command,
-                vec![
-                    dispatcher.kind().binary().to_string(),
-                    dispatcher.kind().command_flag().to_string(),
-                    "echo test".to_string(),
-                ]
-            );
+            assert_eq!(spec.args, ["-c", command]);
         }
-        assert!(!env.is_sandboxed());
     }
 
     #[test]

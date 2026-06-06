@@ -116,8 +116,10 @@ impl ShellDispatcher {
     ///
     /// 1. `$env:SHELL` — WSL interop or Git Bash often set this.
     /// 2. `pwsh.exe` found on `PATH` — PowerShell 7+.
-    /// 3. `powershell.exe` found on `PATH` — Windows PowerShell 5.1.
-    /// 4. `cmd.exe` — always available, last resort.
+    /// 3. `cmd.exe` — always available, last resort.
+    ///
+    /// Windows PowerShell 5.1 can still be selected explicitly through
+    /// `$env:SHELL`, but is not used as an implicit fallback.
     ///
     /// ## Detection order (Unix)
     ///
@@ -181,6 +183,7 @@ impl ShellDispatcher {
 
         if self.kind.needs_command_flag() {
             cmd.arg(self.kind.command_flag());
+            cmd.arg("-NonInteractive");
             cmd.arg("-Command");
             cmd.arg(shell_command);
         } else if matches!(self.kind, ShellKind::Cmd) {
@@ -208,6 +211,7 @@ impl ShellDispatcher {
         let args = if self.kind.needs_command_flag() {
             vec![
                 self.kind.command_flag().to_string(),
+                "-NonInteractive".to_string(),
                 "-Command".to_string(),
                 shell_command.to_string(),
             ]
@@ -311,9 +315,6 @@ impl ShellDispatcher {
 
             if Self::find_exe("pwsh.exe") {
                 return ShellKind::Pwsh;
-            }
-            if Self::find_exe("powershell.exe") {
-                return ShellKind::WindowsPowerShell;
             }
             ShellKind::Cmd
         }
@@ -429,9 +430,22 @@ mod tests {
         };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert!(args.contains(&"-NoProfile"));
-        assert!(args.contains(&"-Command"));
-        assert!(args.contains(&"echo hello"));
+        assert!(
+            args.contains(&"-NoProfile"),
+            "expected -NoProfile, got {args:?}"
+        );
+        assert!(
+            args.contains(&"-NonInteractive"),
+            "expected -NonInteractive, got {args:?}"
+        );
+        assert!(
+            args.contains(&"-Command"),
+            "expected -Command, got {args:?}"
+        );
+        assert!(
+            args.contains(&"echo hello"),
+            "expected echo hello, got {args:?}"
+        );
     }
 
     #[test]
@@ -441,8 +455,11 @@ mod tests {
         };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert!(args.contains(&"/C"));
-        assert!(args.contains(&"echo hello"));
+        assert!(args.contains(&"/C"), "expected /C, got {args:?}");
+        assert!(
+            args.contains(&"echo hello"),
+            "expected echo hello, got {args:?}"
+        );
     }
 
     #[test]
@@ -452,8 +469,11 @@ mod tests {
         };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert!(args.contains(&"-c"));
-        assert!(args.contains(&"echo hello"));
+        assert!(args.contains(&"-c"), "expected -c, got {args:?}");
+        assert!(
+            args.contains(&"echo hello"),
+            "expected echo hello, got {args:?}"
+        );
     }
 
     #[cfg(test)]
@@ -491,15 +511,33 @@ mod tests {
     #[cfg(test)]
     #[test]
     fn build_command_quotes_spaces_for_cmd() {
+        // Regression: issue #1691: git commit -m "msg with spaces" must
+        // not be split into separate argv entries.
         let dispatcher = ShellDispatcher {
             kind: ShellKind::Cmd,
         };
         let cmd = dispatcher.build_command("git commit -m \"msg with spaces\"");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(args.len(), 2);
+        // cmd.exe /C receives the entire command as a single argument after /C.
+        // The args should be ["/C", "git commit -m \"msg with spaces\""].
+        assert_eq!(
+            args.len(),
+            2,
+            "expected 2 args (/C + command), got {args:?}"
+        );
         assert_eq!(args[0], "/C");
-        assert!(args[1].contains("msg with spaces"));
-        assert!(args[1].starts_with("git "));
+        assert!(
+            args[1].contains("msg with spaces"),
+            "command string should contain the full quoted message, got: {}",
+            args[1]
+        );
+        // The quoted message must not be split — if it were, args[1] would be
+        // just "git" and we'd see "commit", "-m", "\"msg", etc.
+        assert!(
+            args[1].starts_with("git "),
+            "command should start with 'git', got: {}",
+            args[1]
+        );
     }
 
     #[cfg(test)]
@@ -510,10 +548,45 @@ mod tests {
         };
         let cmd = dispatcher.build_command("git commit -m \"msg with spaces\"");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(args.len(), 3);
+        // pwsh.exe -NoProfile -NonInteractive -Command "<entire command>"
+        assert_eq!(
+            args.len(),
+            4,
+            "expected 4 args (-NoProfile, -NonInteractive, -Command, payload), got {args:?}"
+        );
         assert_eq!(args[0], "-NoProfile");
-        assert_eq!(args[1], "-Command");
-        assert!(args[2].contains("msg with spaces"));
+        assert_eq!(args[1], "-NonInteractive");
+        assert_eq!(args[2], "-Command");
+        assert!(
+            args[3].contains("msg with spaces"),
+            "payload should contain the full quoted message, got: {}",
+            args[3]
+        );
+    }
+
+    #[test]
+    fn build_command_quotes_spaces_for_sh() {
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Sh,
+        };
+        let cmd = dispatcher.build_command("git commit -m \"msg with spaces\"");
+        let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            args.len(),
+            2,
+            "expected 2 args (-c + command), got {args:?}"
+        );
+        assert_eq!(args[0], "-c");
+        assert!(args[1].contains("msg with spaces"));
+    }
+
+    #[test]
+    fn global_dispatcher_is_singleton() {
+        let d1 = global_dispatcher();
+        let d2 = global_dispatcher();
+        // Same kind (can't compare pointers across LazyLock, but detect()
+        // is deterministic for a given environment so kind should match).
+        assert_eq!(d1.kind(), d2.kind());
     }
 
     #[cfg(test)]
