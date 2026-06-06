@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`/review` effort tiers.** `/review [--effort low|medium|high|max] <target>`
+  (a bare leading level also works, e.g. `/review high file.rs`) injects a depth
+  directive into the review skill — low/medium report few high-confidence
+  findings, high broadens coverage with flagged uncertainty, max is exhaustive.
+  Mirrors Claude Code's `/code-review` levels. Defaults to medium.
+
 - **Output styles (`concise`, `explanatory`).** The personality overlay
   system is generalized toward Claude Code's output styles: alongside the
   tone-shaping Calm/Playful, two behavior-shaping styles ship — `concise`

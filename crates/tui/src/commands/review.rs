@@ -14,10 +14,67 @@ fn warnings_suffix(registry: &SkillRegistry) -> String {
     format!("\n\nWarnings:\n- {}", registry.warnings().join("\n- "))
 }
 
+/// Review effort tier (Claude Code's `/code-review <level>` analog). Controls
+/// how broadly the review hunts and whether it surfaces uncertain findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewEffort {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+impl ReviewEffort {
+    fn from_token(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" | "med" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "max" | "ultra" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Directive appended to the review instruction, shaping breadth and the
+    /// confidence bar for what gets reported.
+    fn directive(self) -> &'static str {
+        match self {
+            Self::Low => "Review effort: low — report only the few highest-confidence, clearly correct findings. Skip style nits and speculative issues.",
+            Self::Medium => "Review effort: medium — report high-confidence correctness bugs and clear cleanups. Keep findings focused; avoid speculation.",
+            Self::High => "Review effort: high — broaden coverage across the diff and adjacent code paths; you may include lower-confidence findings, clearly flagged as uncertain.",
+            Self::Max => "Review effort: max — be exhaustive. Trace edge cases, error paths, and concurrency; surface even low-confidence findings, each labelled with your confidence.",
+        }
+    }
+}
+
+/// Split `/review` args into an optional leading effort token and the target.
+/// Accepts `--effort high <target>`, `--effort=high <target>`, or a bare
+/// leading `high <target>`. Defaults to Medium when no level is given.
+fn parse_effort_and_target(args: &str) -> (ReviewEffort, &str) {
+    let args = args.trim();
+    // `--effort <level> <target>` or `--effort=<level> <target>`
+    if let Some(rest) = args.strip_prefix("--effort") {
+        let rest = rest.trim_start_matches('=').trim_start();
+        let (level_tok, target) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if let Some(effort) = ReviewEffort::from_token(level_tok) {
+            return (effort, target.trim());
+        }
+    }
+    // Bare leading level: `high <target>`
+    if let Some((first, rest)) = args.split_once(char::is_whitespace)
+        && let Some(effort) = ReviewEffort::from_token(first)
+    {
+        return (effort, rest.trim());
+    }
+    (ReviewEffort::Medium, args)
+}
+
 pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
-    let target = args.unwrap_or("").trim();
+    let (effort, target) = parse_effort_and_target(args.unwrap_or(""));
     if target.is_empty() {
-        return CommandResult::error("Usage: /review <target>");
+        return CommandResult::error(
+            "Usage: /review [--effort low|medium|high|max] <target>",
+        );
     }
 
     let skills_dir = app.skills_dir.clone();
@@ -50,12 +107,17 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
     };
 
     let instruction = format!(
-        "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
-        skill.name, skill.body
+        "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
+        skill.name,
+        skill.body,
+        effort.directive()
     );
 
     app.add_message(HistoryCell::System {
-        content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+        content: format!(
+            "Activated skill: {} ({:?} effort)\n\n{}",
+            skill.name, effort, skill.description
+        ),
     });
     app.active_skill = Some(instruction);
 
@@ -134,5 +196,54 @@ mod tests {
         assert!(matches!(result.action, Some(AppAction::SendMessage(_))));
         assert!(app.active_skill.is_some());
         assert!(!app.history.is_empty());
+    }
+
+    #[test]
+    fn parse_effort_defaults_to_medium_and_keeps_target() {
+        let (effort, target) = parse_effort_and_target("src/lib.rs");
+        assert_eq!(effort, ReviewEffort::Medium);
+        assert_eq!(target, "src/lib.rs");
+    }
+
+    #[test]
+    fn parse_effort_reads_bare_leading_level() {
+        let (effort, target) = parse_effort_and_target("high src/lib.rs");
+        assert_eq!(effort, ReviewEffort::High);
+        assert_eq!(target, "src/lib.rs");
+    }
+
+    #[test]
+    fn parse_effort_reads_flag_forms_and_aliases() {
+        assert_eq!(
+            parse_effort_and_target("--effort max the diff"),
+            (ReviewEffort::Max, "the diff")
+        );
+        assert_eq!(
+            parse_effort_and_target("--effort=low file.rs"),
+            (ReviewEffort::Low, "file.rs")
+        );
+        // "ultra" aliases to Max.
+        assert_eq!(
+            parse_effort_and_target("ultra file.rs"),
+            (ReviewEffort::Max, "file.rs")
+        );
+    }
+
+    #[test]
+    fn parse_effort_treats_unknown_first_token_as_part_of_target() {
+        let (effort, target) = parse_effort_and_target("MyClass.method");
+        assert_eq!(effort, ReviewEffort::Medium);
+        assert_eq!(target, "MyClass.method");
+    }
+
+    #[test]
+    fn review_injects_effort_directive_into_active_skill() {
+        let tmpdir = TempDir::new().unwrap();
+        create_review_skill_dir(&tmpdir);
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let result = review(&mut app, Some("--effort high file.rs"));
+        assert!(matches!(result.action, Some(AppAction::SendMessage(_))));
+        let active = app.active_skill.expect("active skill set");
+        assert!(active.contains("Review effort: high"));
     }
 }

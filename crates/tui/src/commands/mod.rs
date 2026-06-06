@@ -469,7 +469,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "review",
         aliases: &[],
-        usage: "/review <target>",
+        usage: "/review [--effort low|medium|high|max] <target>",
         description_id: MessageId::CmdReviewDescription,
     },
     CommandInfo {
