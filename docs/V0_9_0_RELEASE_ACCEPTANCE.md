@@ -62,7 +62,7 @@ config source, result, and follow-up issue or PR.
 | WhaleFlow typed IR, mock executor, replay, TeacherReview, StudentReplay, and cutline docs are tested | WhaleFlow steward | ship |  |
 | Live `workflow_run`, worktree application, provider calls, and TraceStore writes are included only if cancellation/replay/atomicity semantics pass | WhaleFlow steward | decide |  |
 | Model Lab / Hugging Face MVP is included or deferred with release-note wording | model-lab steward | decide |  |
-| HarnessProfile MVP is included or deferred with release-note wording | harness steward | decide |  |
+| HarnessProfile runtime MVP is deferred; schema/config foundation ships with release-note wording | harness steward | ship foundation / defer runtime | #2844 (`efbcc681a`) documents the cutline; `HarnessPosture` / `HarnessProfile` config schema and strict validation are present; resolver, seed-profile runtime selection, telemetry, and status display remain follow-up work. |
 | `codebase_search` MVP is included or deferred with release-note wording | search steward | decide |  |
 | External memory remains explicit/optional per `WHALEFLOW_EXTERNAL_MEMORY.md` | memory steward | ship |  |
 

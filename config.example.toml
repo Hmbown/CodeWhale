@@ -606,6 +606,26 @@ deepseek_v4_flash_prior = 4.2
 fallback_default_prior = 3.8
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Harness Profiles (preview schema; runtime resolver follows in later v0.9 slices)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Harness profiles let future CodeWhale runtime slices select model-specific prompt,
+# context, tool, and subagent posture. v0.9 currently parses and validates this
+# schema, but normal Agent and WhaleFlow runs do not silently promote or mutate
+# behavior from these profiles yet.
+#
+# [[harness_profiles]]
+# provider_route = "deepseek"
+# model_pattern = "deepseek-v4.*"
+#
+# [harness_profiles.posture]
+# kind = "cache-heavy"          # standard | cache-heavy | lean | custom
+# max_subagents = 10            # 0 means runtime default
+# prefer_codebase_search = false
+# compaction_strategy = "prefix-cache" # default | prefix-cache | aggressive
+# tool_surface = "full"              # full | read-only | auto
+# safety_posture = "standard"        # standard | strict | permissive
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Profile Example (for multiple environments)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Select a profile with `deepseek --profile <name>` or `DEEPSEEK_PROFILE=<name>`.

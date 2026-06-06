@@ -57,8 +57,10 @@ areas:
 | Contributor stewardship | Harvested PRs stay credited, contributor identity mapping is machine-readable, and community gates remain dry-run and human-toned while the branch is reviewed. |
 | WhaleFlow | Typed branch/leaf workflows, deterministic replay, pod-style workflow monitoring, provider/model posture, and evidence-backed profile evolution remain the larger v0.9 workbench goal. |
 
-The current execution map lives in
-[docs/V0_9_0_EXECUTION_MAP.md](docs/V0_9_0_EXECUTION_MAP.md).
+The current release acceptance matrix lives in
+[docs/V0_9_0_RELEASE_ACCEPTANCE.md](docs/V0_9_0_RELEASE_ACCEPTANCE.md), with
+the HarnessProfile runtime boundary documented in
+[docs/HARNESS_PROFILE_CUTLINE.md](docs/HARNESS_PROFILE_CUTLINE.md).
 
 ## Release Status
 
@@ -606,7 +608,8 @@ without recreating skills the user deliberately deleted.
 | [RELEASE_RUNBOOK.md](docs/RELEASE_RUNBOOK.md) | Release process |
 | [LOCALIZATION.md](docs/LOCALIZATION.md) | UI locale matrix & switching |
 | [OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md) | Ops & recovery |
-| [V0_9_0_EXECUTION_MAP.md](docs/V0_9_0_EXECUTION_MAP.md) | v0.9.0 issue lanes, PR harvest state, and release gates |
+| [V0_9_0_RELEASE_ACCEPTANCE.md](docs/V0_9_0_RELEASE_ACCEPTANCE.md) | v0.9.0 pre-tag acceptance matrix and release gates |
+| [HARNESS_PROFILE_CUTLINE.md](docs/HARNESS_PROFILE_CUTLINE.md) | HarnessProfile schema, resolver, and runtime boundary for v0.9 |
 | [2574-provider-fallback-chain.md](docs/rfcs/2574-provider-fallback-chain.md) | Provider fallback chain RFC |
 
 Full Changelog: [CHANGELOG.md](CHANGELOG.md).

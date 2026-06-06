@@ -99,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profiles/status display must precede evidence stores, promotion gates, or any
   automatic Harness Creator, with DeepSeek, MiMo, Arcee, and generic/HF/local
   posture expectations called out separately (#2728).
+  Release-facing HarnessProfile docs now match the current implementation:
+  v0.9 ships the typed schema/config foundation and defers runtime resolver,
+  telemetry, seed-profile selection, and status-display behavior until later
+  verified slices. `config.example.toml` includes a commented dormant
+  harness-profile example, and README links point at the real acceptance matrix
+  and HarnessProfile cutline docs.
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
