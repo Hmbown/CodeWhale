@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File-defined sub-agent roles (`~/.deepseek/agents/<name>.md`).** Drop a
+  Markdown file with YAML-ish frontmatter (`name`, `description`, optional
+  `model`/`tools`) plus a body, and that body becomes the sub-agent's system
+  prompt when the matching name is spawned as the `subagent_type` or `role` —
+  overriding the built-in role intro while still appending the shared output
+  contract. Brings Claude Code's file-defined agents to DeepSeek TUI on top of
+  the existing built-in roles (general/explore/plan/review/implementer/
+  verifier). New `agents` module with a loader, lister, and context renderer.
+
 - **`memory-consolidate` bundled skill** — a reflective maintenance pass
   over the user memory file: classify entries, merge duplicates, fix
   contradicted facts, prune stale one-offs, and keep the file short

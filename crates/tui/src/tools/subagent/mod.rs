@@ -2636,6 +2636,35 @@ fn build_subagent_system_prompt(
     agent_type: &SubAgentType,
     assignment: &SubAgentAssignment,
 ) -> String {
+    let agents_dir = crate::agents::default_agents_dir();
+    build_subagent_system_prompt_in(agent_type, assignment, agents_dir.as_deref())
+}
+
+/// Inner, dir-injectable form so tests stay hermetic. A file-defined agent at
+/// `<agents_dir>/<name>.md` — keyed by the explicit role first, then the
+/// agent-type name — overrides the built-in role intro. The shared output
+/// contract is still appended so file-defined agents stay well-behaved.
+fn build_subagent_system_prompt_in(
+    agent_type: &SubAgentType,
+    assignment: &SubAgentAssignment,
+    agents_dir: Option<&std::path::Path>,
+) -> String {
+    if let Some(dir) = agents_dir {
+        let candidates = [
+            assignment
+                .role
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty()),
+            Some(agent_type.as_str()),
+        ];
+        for name in candidates.into_iter().flatten() {
+            if let Some(def) = crate::agents::load_agent_definition(dir, name) {
+                return format!("{}\n\n{SUBAGENT_OUTPUT_FORMAT}", def.body.trim());
+            }
+        }
+    }
+
     let base = agent_type.system_prompt();
     match assignment.role.as_deref() {
         Some(role) if !role.trim().is_empty() => {

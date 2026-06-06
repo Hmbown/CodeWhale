@@ -1043,7 +1043,8 @@ fn parse_spawn_request_cwd_empty_string_yields_none() {
 #[test]
 fn build_subagent_system_prompt_appends_role_when_set() {
     let assignment = SubAgentAssignment::new("p".to_string(), Some("worker".to_string()));
-    let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
+    // `None` agents dir → no file override; exercise the built-in fallback.
+    let prompt = build_subagent_system_prompt_in(&SubAgentType::General, &assignment, None);
     assert!(
         prompt.ends_with("You are operating in the role of `worker`."),
         "expected role line at end, got: {}",
@@ -1054,15 +1055,40 @@ fn build_subagent_system_prompt_appends_role_when_set() {
 #[test]
 fn build_subagent_system_prompt_skips_role_when_none() {
     let assignment = SubAgentAssignment::new("p".to_string(), None);
-    let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
+    let prompt = build_subagent_system_prompt_in(&SubAgentType::General, &assignment, None);
     assert!(!prompt.contains("You are operating in the role of"));
 }
 
 #[test]
 fn build_subagent_system_prompt_skips_role_when_blank() {
     let assignment = SubAgentAssignment::new("p".to_string(), Some("   ".to_string()));
-    let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
+    let prompt = build_subagent_system_prompt_in(&SubAgentType::General, &assignment, None);
     assert!(!prompt.contains("You are operating in the role of"));
+}
+
+#[test]
+fn file_defined_agent_overrides_builtin_role_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("code-review.md"),
+        "---\nname: code-review\ndescription: d\n---\nYou are a custom reviewer agent.",
+    )
+    .unwrap();
+
+    // Keyed by the explicit role name.
+    let assignment = SubAgentAssignment::new("p".to_string(), Some("code-review".to_string()));
+    let prompt =
+        build_subagent_system_prompt_in(&SubAgentType::Review, &assignment, Some(dir.path()));
+    assert!(prompt.contains("You are a custom reviewer agent."));
+    assert!(!prompt.contains("You are operating in the role of"));
+    // Shared output contract is still appended.
+    assert!(prompt.contains(SUBAGENT_OUTPUT_FORMAT));
+
+    // Unknown role with no file → built-in fallback (no override).
+    let other = SubAgentAssignment::new("p".to_string(), Some("nope".to_string()));
+    let fallback =
+        build_subagent_system_prompt_in(&SubAgentType::Review, &other, Some(dir.path()));
+    assert!(!fallback.contains("You are a custom reviewer agent."));
 }
 
 #[test]
