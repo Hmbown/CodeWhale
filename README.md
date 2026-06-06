@@ -641,9 +641,15 @@ Current v0.9 track credits:
   work (#2730, #2714, #2715, #2717, #2718)
 - **[shenjackyuanjie](https://github.com/shenjackyuanjie)** — HarmonyOS /
   OpenHarmony porting work and MatePad Edge validation trail (#2634)
+- **[sximelon](https://github.com/sximelon)** — saved-session resume footer
+  hint work and provider-trait direction reviewed for the v0.9 track (#2758,
+  #2760, #2479)
 - **[aboimpinto](https://github.com/aboimpinto)** — sidebar command polish and
   pausable custom-command lifecycle direction harvested into the v0.9 track
   (#2788, #2732)
+- **[AdityaVG13](https://github.com/AdityaVG13)** — WhaleFlow orchestration and
+  cost-tracking drafts that shaped the maintained v0.9 WhaleFlow IR and
+  TraceStore foundation (#2482, #2486)
 - **[lbcheng888](https://github.com/lbcheng888)**,
   **[AiurArtanis](https://github.com/AiurArtanis)**, and
   **[nasus9527](https://github.com/nasus9527)** — VS Code extension scaffold
