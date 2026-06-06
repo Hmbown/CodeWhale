@@ -136,10 +136,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preview backed by recent runtime thread summaries, plus a read-only
   `GET /v1/snapshots` endpoint for GUI clients to inspect side-git restore
   points. The extension now renders those restore points read-only in its Agent
-  View, and thread summaries include read-only workspace and branch metadata so
-  the VS Code Agent View can show when a thread or agent lane is on another
-  branch. Agent View and restore-point data now auto-refresh on a configurable
-  read-only interval so branch/workspace changes become visible without a
+  View, and thread summaries include read-only workspace, branch, current Git
+  head, and dirty-state metadata so the VS Code Agent View can show when a
+  thread or agent lane is on another branch or has changed worktree state. Agent
+  View and restore-point data now auto-refresh on a configurable
+  read-only interval so branch/workspace/status changes become visible without a
   manual refresh. Agent View refreshes keep thread branch/workspace rows
   independent from restore-point loading, so a snapshot-listing failure no
   longer clears already-available thread metadata. This answers the VS Code GUI

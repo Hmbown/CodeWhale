@@ -191,6 +191,8 @@ workspace metadata:
   "model": "deepseek-v4-pro",
   "mode": "agent",
   "branch": "feature/runtime-api",
+  "head": "abc1234",
+  "dirty": false,
   "workspace": "/Users/you/projects/codewhale",
   "archived": false,
   "updated_at": "2026-06-06T05:43:00Z",
@@ -201,6 +203,8 @@ workspace metadata:
 
 `branch` is resolved from the thread workspace at request time and may be
 `null` when the workspace is not a Git repository or the branch cannot be read.
+`head` is the current short Git commit for that workspace when available.
+`dirty` is true when the workspace has staged, unstaged, or untracked changes.
 `workspace` is included so editor clients can show when an agent lane is working
 outside the current VS Code folder.
 

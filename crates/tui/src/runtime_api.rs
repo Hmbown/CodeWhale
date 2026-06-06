@@ -266,6 +266,8 @@ struct ThreadSummary {
     mode: String,
     workspace: PathBuf,
     branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
     archived: bool,
     updated_at: chrono::DateTime<Utc>,
     latest_turn_id: Option<String>,
@@ -277,11 +279,20 @@ struct WorkspaceStatusResponse {
     workspace: PathBuf,
     git_repo: bool,
     branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
     staged: usize,
     unstaged: usize,
     untracked: usize,
     ahead: Option<u32>,
     behind: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceGitMetadata {
+    branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1241,13 +1252,16 @@ async fn list_threads_summary(
             }
         }
 
+        let workspace_git = collect_workspace_git_metadata(&thread.workspace);
         summaries.push(ThreadSummary {
             id: thread.id,
             title,
             preview,
             model: thread.model,
             mode: thread.mode,
-            branch: current_git_branch(&thread.workspace),
+            branch: workspace_git.branch,
+            head: workspace_git.head,
+            dirty: workspace_git.dirty,
             workspace: thread.workspace,
             archived: thread.archived,
             updated_at: thread.updated_at,
@@ -2000,6 +2014,8 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
         workspace: workspace.to_path_buf(),
         git_repo: false,
         branch: None,
+        head: None,
+        dirty: false,
         staged: 0,
         unstaged: 0,
         untracked: 0,
@@ -2015,7 +2031,10 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
     }
 
     status.git_repo = true;
-    status.branch = current_git_branch(workspace);
+    let metadata = collect_workspace_git_metadata(workspace);
+    status.branch = metadata.branch;
+    status.head = metadata.head;
+    status.dirty = metadata.dirty;
 
     if let Some(porcelain) = run_git(workspace, &["status", "--porcelain=v1"]) {
         for line in porcelain.lines() {
@@ -2049,6 +2068,22 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
     status
 }
 
+fn collect_workspace_git_metadata(workspace: &std::path::Path) -> WorkspaceGitMetadata {
+    let Some(repo_check) = run_git(workspace, &["rev-parse", "--is-inside-work-tree"]) else {
+        return WorkspaceGitMetadata::default();
+    };
+    if repo_check.trim() != "true" {
+        return WorkspaceGitMetadata::default();
+    }
+
+    WorkspaceGitMetadata {
+        branch: current_git_branch(workspace),
+        head: current_git_head(workspace),
+        dirty: run_git(workspace, &["status", "--porcelain=v1"])
+            .is_some_and(|porcelain| !porcelain.trim().is_empty()),
+    }
+}
+
 fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
     let output = crate::dependencies::Git::output(args, workspace).ok()?;
     if !output.status.success() {
@@ -2073,6 +2108,12 @@ fn current_git_branch(workspace: &std::path::Path) -> Option<String> {
     let short_hash = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
     let short_hash = short_hash.trim();
     (!short_hash.is_empty()).then(|| format!("detached@{short_hash}"))
+}
+
+fn current_git_head(workspace: &std::path::Path) -> Option<String> {
+    let head = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let head = head.trim();
+    (!head.is_empty()).then(|| head.to_string())
 }
 
 fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
@@ -2456,6 +2497,43 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_status_reports_head_and_dirty_counts() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo)?;
+        run_test_git(&repo, &["init", "-b", "main"])?;
+        fs::write(repo.join("tracked.txt"), "clean\n")?;
+        run_test_git(&repo, &["add", "tracked.txt"])?;
+        run_test_git(
+            &repo,
+            &[
+                "-c",
+                "user.name=CodeWhale Test",
+                "-c",
+                "user.email=codewhale@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )?;
+
+        let clean = collect_workspace_status(&repo);
+        assert!(clean.git_repo);
+        assert_eq!(clean.branch.as_deref(), Some("main"));
+        assert!(clean.head.as_deref().is_some_and(|head| !head.is_empty()));
+        assert!(!clean.dirty);
+
+        fs::write(repo.join("tracked.txt"), "dirty\n")?;
+        fs::write(repo.join("untracked.txt"), "new\n")?;
+
+        let dirty = collect_workspace_status(&repo);
+        assert!(dirty.dirty);
+        assert_eq!(dirty.unstaged, 1);
+        assert_eq!(dirty.untracked, 1);
         Ok(())
     }
 
@@ -2949,6 +3027,10 @@ mod tests {
             .as_str()
             .context("missing git thread id")?
             .to_string();
+        fs::write(
+            repo.join("dirty.txt"),
+            "worktree changed after thread spawn\n",
+        )?;
 
         let plain_thread: serde_json::Value = client
             .post(format!("http://{addr}/v1/threads"))
@@ -2979,6 +3061,12 @@ mod tests {
             .find(|item| item["id"] == git_thread_id)
             .context("missing git workspace summary")?;
         assert_eq!(git_summary["branch"], "feature/agent");
+        assert!(
+            git_summary["head"]
+                .as_str()
+                .is_some_and(|head| !head.is_empty())
+        );
+        assert_eq!(git_summary["dirty"], true);
         assert_eq!(git_summary["workspace"], repo.to_string_lossy().as_ref());
 
         let plain_summary = summaries
@@ -2986,6 +3074,8 @@ mod tests {
             .find(|item| item["id"] == plain_thread_id)
             .context("missing plain workspace summary")?;
         assert_eq!(plain_summary["branch"], serde_json::Value::Null);
+        assert_eq!(plain_summary["head"], serde_json::Value::Null);
+        assert_eq!(plain_summary["dirty"], false);
         assert_eq!(
             plain_summary["workspace"],
             non_git.to_string_lossy().as_ref()
