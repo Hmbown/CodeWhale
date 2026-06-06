@@ -1,10 +1,10 @@
 //! Theme command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::theme_impl::theme;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::theme_impl::theme;
 
 pub struct Theme;
 impl Command for Theme {

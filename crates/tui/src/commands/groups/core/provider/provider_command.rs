@@ -2,8 +2,8 @@
 
 use crate::tui::app::App;
 
-use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 
 pub struct Provider;

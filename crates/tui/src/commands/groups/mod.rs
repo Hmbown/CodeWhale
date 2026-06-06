@@ -9,13 +9,15 @@
 //!   2. Add `mod my_group;` below
 //!   3. Add `&my_group::MyGroupCommands` to the `all_command_groups()` vec
 
-pub(crate) mod core;
-pub(crate) mod session;
 pub(crate) mod config;
+pub(crate) mod core;
 pub(crate) mod debug;
-pub(crate) mod project;
-pub(crate) mod skills;
 pub(crate) mod memory;
+pub(crate) mod project;
+pub(crate) mod session;
+pub(crate) mod skills;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod utility;
 
 use crate::commands::traits::CommandGroup;

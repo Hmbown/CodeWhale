@@ -38,4 +38,3 @@ pub fn slop(_app: &mut App, arg: Option<&str>) -> CommandResult {
         )),
     }
 }
-

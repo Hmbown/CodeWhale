@@ -1,10 +1,10 @@
 //! Verbose command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::verbose_impl::verbose;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::verbose_impl::verbose;
 
 pub struct Verbose;
 impl Command for Verbose {

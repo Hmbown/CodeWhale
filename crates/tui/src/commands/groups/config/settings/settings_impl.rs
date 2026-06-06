@@ -8,4 +8,3 @@ pub fn show_settings(app: &mut App) -> CommandResult {
         Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
     }
 }
-

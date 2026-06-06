@@ -1,7 +1,7 @@
 //! Mode command.
 
-use crate::commands::traits::{Command, CommandInfo};
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
 

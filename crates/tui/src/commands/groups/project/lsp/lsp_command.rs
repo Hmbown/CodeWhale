@@ -1,10 +1,10 @@
 //! Lsp command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::lsp_impl::lsp_command;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::lsp_impl::lsp_command;
 
 pub struct Lsp;
 impl Command for Lsp {

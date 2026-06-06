@@ -1,7 +1,7 @@
 use crate::commands::CommandResult;
+use crate::config::clear_active_provider_api_key;
 use crate::tui::app::App;
 use crate::tui::app::OnboardingState;
-use crate::config::clear_active_provider_api_key;
 
 pub fn logout(app: &mut App) -> CommandResult {
     let provider_name = app.api_provider.as_str();

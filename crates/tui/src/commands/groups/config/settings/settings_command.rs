@@ -1,10 +1,10 @@
 //! Settings command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::settings_impl::show_settings;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::settings_impl::show_settings;
 
 pub struct Settings;
 impl Command for Settings {
@@ -16,7 +16,7 @@ impl Command for Settings {
             description_id: MessageId::CmdSettingsDescription,
         }
     }
-    fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
+    fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
         show_settings(app)
     }
 }

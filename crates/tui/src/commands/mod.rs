@@ -7,19 +7,18 @@
 //! command-specific code.
 
 pub mod traits;
-pub(crate) mod shared;
-pub mod share;
 pub mod user_commands;
 
 // Group modules — each registers its commands into the registry.
 // Individual groups are declared in groups/mod.rs.
-mod groups;
+pub(crate) mod groups;
 
 use std::sync::OnceLock;
 
 use crate::tui::app::{App, AppAction};
 
-#[allow(unused_imports)] pub use traits::CommandInfo;
+#[allow(unused_imports)]
+pub use traits::CommandInfo;
 
 /// Result of executing a command
 #[derive(Debug, Clone)]
@@ -34,19 +33,39 @@ pub struct CommandResult {
 
 impl CommandResult {
     pub fn ok() -> Self {
-        Self { message: None, action: None, is_error: false }
+        Self {
+            message: None,
+            action: None,
+            is_error: false,
+        }
     }
     pub fn message(msg: impl Into<String>) -> Self {
-        Self { message: Some(msg.into()), action: None, is_error: false }
+        Self {
+            message: Some(msg.into()),
+            action: None,
+            is_error: false,
+        }
     }
     pub fn action(action: AppAction) -> Self {
-        Self { message: None, action: Some(action), is_error: false }
+        Self {
+            message: None,
+            action: Some(action),
+            is_error: false,
+        }
     }
     pub fn with_message_and_action(msg: impl Into<String>, action: AppAction) -> Self {
-        Self { message: Some(msg.into()), action: Some(action), is_error: false }
+        Self {
+            message: Some(msg.into()),
+            action: Some(action),
+            is_error: false,
+        }
     }
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { message: Some(format!("Error: {}", msg.into())), action: None, is_error: true }
+        Self {
+            message: Some(format!("Error: {}", msg.into())),
+            action: None,
+            is_error: true,
+        }
     }
 }
 
@@ -92,8 +111,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     }
 
     // Skill fallback (lowest precedence).
-    if shared::skills::run_skill_by_name(app, command, arg).is_some() {
-        return shared::skills::run_skill_by_name(app, command, arg).unwrap();
+    if let Some(result) = groups::skills::skill::skill_impl::run_skill_by_name(app, command, arg) {
+        return result;
     }
 
     let suggestions = suggest_command_names(command, 3);
@@ -192,7 +211,11 @@ mod tests {
     fn execute_help_command_succeeds() {
         let mut app = test_app();
         let result = execute("/help", &mut app);
-        assert!(!result.is_error, "help should succeed: {:?}", result.message);
+        assert!(
+            !result.is_error,
+            "help should succeed: {:?}",
+            result.message
+        );
     }
 
     #[test]
@@ -200,7 +223,13 @@ mod tests {
         let mut app = test_app();
         let result = execute("/nonexistent", &mut app);
         assert!(result.is_error);
-        assert!(result.message.as_deref().unwrap_or("").contains("Unknown command"));
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("Unknown command")
+        );
     }
 
     #[test]

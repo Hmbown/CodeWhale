@@ -1,7 +1,7 @@
 use crate::commands::CommandResult;
-use std::path::PathBuf;
-use std::path::Path;
 use crate::tui::app::App;
+use std::path::Path;
+use std::path::PathBuf;
 
 pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
@@ -106,4 +106,3 @@ fn expand_tilde(raw: &str) -> String {
     }
     raw.to_string()
 }
-

@@ -4,20 +4,22 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-pub(crate) mod help;
+pub(crate) mod agent;
 pub(crate) mod clear;
 pub(crate) mod exit;
+pub(crate) mod feedback;
+pub(crate) mod help;
+pub(crate) mod home;
+pub(crate) mod links;
 pub(crate) mod model;
 pub(crate) mod models;
-pub(crate) mod provider;
-pub(crate) mod links;
-pub(crate) mod feedback;
-pub(crate) mod home;
-pub(crate) mod workspace;
-pub(crate) mod subagents;
-pub(crate) mod agent;
 pub(crate) mod profile;
+pub(crate) mod provider;
 pub(crate) mod relay;
+pub(crate) mod subagents;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub(crate) mod workspace;
 
 use crate::commands::traits::{Command, CommandGroup};
 

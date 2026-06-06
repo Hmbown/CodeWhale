@@ -1,10 +1,10 @@
 //! Logout command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::logout_impl::logout;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::logout_impl::logout;
 
 pub struct Logout;
 impl Command for Logout {
@@ -16,7 +16,7 @@ impl Command for Logout {
             description_id: MessageId::CmdLogoutDescription,
         }
     }
-    fn execute(&self, app: &mut App, args: Option<&str>) -> CommandResult {
+    fn execute(&self, app: &mut App, _args: Option<&str>) -> CommandResult {
         logout(app)
     }
 }

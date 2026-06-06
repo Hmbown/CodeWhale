@@ -1,10 +1,10 @@
 //! Config command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::config_impl::config_command;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::config_impl::config_command;
 
 pub struct Config;
 impl Command for Config {

@@ -4,27 +4,29 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
+pub(crate) mod compact;
+pub(crate) mod export;
+pub(crate) mod fork;
+pub(crate) mod load;
+pub(crate) mod new;
+pub(crate) mod purge;
 pub(crate) mod rename;
 pub(crate) mod save;
-pub(crate) mod fork;
-pub(crate) mod new;
 pub(crate) mod sessions;
-pub(crate) mod load;
-pub(crate) mod compact;
-pub(crate) mod purge;
-pub(crate) mod export;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::commands::traits::{Command, CommandGroup};
 
+use self::compact::Compact;
+use self::export::Export;
+use self::fork::Fork;
+use self::load::Load;
+use self::new::New;
+use self::purge::Purge;
 use self::rename::Rename;
 use self::save::Save;
-use self::fork::Fork;
-use self::new::New;
 use self::sessions::Sessions;
-use self::load::Load;
-use self::compact::Compact;
-use self::purge::Purge;
-use self::export::Export;
 
 pub struct SessionCommands;
 impl CommandGroup for SessionCommands {

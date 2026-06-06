@@ -1,7 +1,7 @@
 use crate::commands::CommandResult;
-use crate::commands::shared::config::set_config_value;
-use crate::tui::app::AppAction;
+use crate::config_actions::set_config_value;
 use crate::tui::app::App;
+use crate::tui::app::AppAction;
 
 pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
@@ -9,4 +9,3 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
         Some(name) => set_config_value(app, "theme", name, true),
     }
 }
-

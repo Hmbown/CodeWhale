@@ -29,4 +29,3 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         )),
     }
 }
-

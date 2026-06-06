@@ -1,8 +1,10 @@
 use crate::commands::CommandResult;
-use crate::commands::shared::config::{show_config, set_config_value};
-use crate::settings::Settings;
 use crate::config::Config;
+use crate::config_actions::set_config_value;
+use crate::config_ui::{ConfigUiMode, parse_mode};
+use crate::settings::Settings;
 use crate::tui::app::App;
+use crate::tui::app::AppAction;
 
 pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
@@ -35,6 +37,28 @@ pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         };
         set_config_value(app, parts[0], value, persist)
     }
+}
+
+/// Open the interactive config editor.
+///
+/// Bare `/config` opens the legacy Native modal (the `OpenConfigView` action),
+/// preserving the v0.8.4 behaviour. `/config tui` opens the schemaui-driven TUI
+/// editor; `/config web` launches the web editor when the build enables it.
+fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let mode = match parse_mode(arg) {
+        Ok(mode) => mode,
+        Err(err) => return CommandResult::error(err),
+    };
+    if mode == ConfigUiMode::Web && !cfg!(feature = "web") {
+        return CommandResult::error(
+            "This build does not include the web config UI. Rebuild with the `web` feature.",
+        );
+    }
+    let action = match mode {
+        ConfigUiMode::Native => AppAction::OpenConfigView,
+        ConfigUiMode::Tui | ConfigUiMode::Web => AppAction::OpenConfigEditor(mode),
+    };
+    CommandResult::action(action)
 }
 
 /// Show the current value of a single setting.
@@ -218,4 +242,3 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         )),
     }
 }
-

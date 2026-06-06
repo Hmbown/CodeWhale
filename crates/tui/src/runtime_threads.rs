@@ -1615,7 +1615,7 @@ impl RuntimeThreadManager {
         let requested_model = req.model.unwrap_or_else(|| thread.model.clone());
         let auto_model = requested_model.trim().eq_ignore_ascii_case("auto");
         let (model, reasoning_effort) = if auto_model {
-            let selection = crate::commands::shared::model::resolve_auto_route_with_flash(
+            let selection = crate::model_routing::resolve_auto_route_with_flash(
                 &self.config,
                 &prompt,
                 "",

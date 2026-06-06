@@ -4,17 +4,20 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-pub(crate) mod skills;
-pub(crate) mod skill;
-pub(crate) mod review;
 pub(crate) mod restore;
+pub(crate) mod review;
+pub(crate) mod skill;
+pub(crate) mod skills;
+pub(crate) mod support;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::commands::traits::{Command, CommandGroup};
 
-use self::skills::Skills;
-use self::skill::Skill;
-use self::review::Review;
 use self::restore::Restore;
+use self::review::Review;
+use self::skill::Skill;
+use self::skills::Skills;
 
 pub struct SkillsCommands;
 impl CommandGroup for SkillsCommands {

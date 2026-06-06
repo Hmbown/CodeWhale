@@ -1,10 +1,10 @@
 //! Trust command.
 
-use crate::commands::traits::{Command, CommandInfo};
+use super::trust_impl::trust;
 use crate::commands::CommandResult;
+use crate::commands::traits::{Command, CommandInfo};
 use crate::localization::MessageId;
 use crate::tui::app::App;
-use super::trust_impl::trust;
 
 pub struct Trust;
 impl Command for Trust {

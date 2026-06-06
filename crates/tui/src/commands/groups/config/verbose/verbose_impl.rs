@@ -24,4 +24,3 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
         "Verbose transcript off: live thinking stays compact."
     })
 }
-

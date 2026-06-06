@@ -4,31 +4,32 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
-pub(crate) mod translate;
-pub(crate) mod tokens;
-pub(crate) mod cost;
 pub(crate) mod balance;
 pub(crate) mod cache;
-pub(crate) mod system;
 pub(crate) mod context;
-pub(crate) mod edit;
+pub(crate) mod cost;
+pub(crate) mod debug_impl;
 pub(crate) mod diff;
-pub(crate) mod undo;
+pub(crate) mod edit;
 pub(crate) mod retry;
+pub(crate) mod system;
+pub(crate) mod tokens;
+pub(crate) mod translate;
+pub(crate) mod undo;
 
 use crate::commands::traits::{Command, CommandGroup};
 
-use self::translate::Translate;
-use self::tokens::Tokens;
-use self::cost::Cost;
 use self::balance::Balance;
 use self::cache::Cache;
-use self::system::System;
 use self::context::Context;
-use self::edit::Edit;
+use self::cost::Cost;
 use self::diff::Diff;
-use self::undo::Undo;
+use self::edit::Edit;
 use self::retry::Retry;
+use self::system::System;
+use self::tokens::Tokens;
+use self::translate::Translate;
+use self::undo::Undo;
 
 pub struct DebugCommands;
 impl CommandGroup for DebugCommands {

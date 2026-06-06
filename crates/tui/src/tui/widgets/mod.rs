@@ -2293,7 +2293,8 @@ fn all_command_names_matching_loaded(
     user_commands: &[(String, String)],
 ) -> Vec<String> {
     let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    let mut result: Vec<String> = commands::registry().infos()
+    let mut result: Vec<String> = commands::registry()
+        .infos()
         .iter()
         .filter(|cmd| {
             cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
