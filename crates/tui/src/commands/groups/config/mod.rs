@@ -4,6 +4,8 @@
 //! This module declares the submodules and provides the `CommandGroup`
 //! implementation that collects them.
 
+// The `/config` command intentionally has the same name as the config group.
+#[allow(clippy::module_inception)]
 pub(crate) mod config;
 pub(crate) mod logout;
 pub(crate) mod mode;

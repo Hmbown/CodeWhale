@@ -5,6 +5,8 @@
 //! implementation that collects them.
 
 pub(crate) mod attach;
+// The `/memory` command intentionally has the same name as the memory group.
+#[allow(clippy::module_inception)]
 pub(crate) mod memory;
 pub(crate) mod note;
 

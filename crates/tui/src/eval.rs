@@ -15,7 +15,9 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-use crate::shell_invocation::{ShellInvocation, shell_invocation, shell_program_stem};
+#[cfg(windows)]
+use crate::shell_invocation::shell_program_stem;
+use crate::shell_invocation::{ShellInvocation, shell_invocation};
 #[cfg(test)]
 use crate::shell_invocation::{ShellPlatform, ShellProbe, shell_invocation_for_platform};
 

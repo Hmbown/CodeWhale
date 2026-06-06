@@ -7,6 +7,8 @@
 pub(crate) mod restore;
 pub(crate) mod review;
 pub(crate) mod skill;
+// The `/skills` command intentionally has the same name as the skills group.
+#[allow(clippy::module_inception)]
 pub(crate) mod skills;
 pub(crate) mod support;
 #[cfg(test)]

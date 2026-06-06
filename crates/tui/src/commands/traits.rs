@@ -70,14 +70,6 @@ pub trait CommandGroup: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
-/// Distributed slice of command groups.
-///
-/// Each command group file injects itself into this slice with a
-/// iterates this slice to discover all groups — no central list needed.
-
-// ---------------------------------------------------------------------------
 // CommandRegistry
 // ---------------------------------------------------------------------------
 

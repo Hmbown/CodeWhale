@@ -204,11 +204,11 @@ fn extract_first_json_object(s: &str) -> Option<serde_json::Value> {
                 }
             }
             b'}' => {
-                if depth == 1 {
-                    if let Some(start) = start {
-                        let json_str = &s[start..=i];
-                        return serde_json::from_str(json_str).ok();
-                    }
+                if depth == 1
+                    && let Some(start) = start
+                {
+                    let json_str = &s[start..=i];
+                    return serde_json::from_str(json_str).ok();
                 }
                 depth = depth.saturating_sub(1);
             }
