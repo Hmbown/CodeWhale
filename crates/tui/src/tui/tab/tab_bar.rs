@@ -85,9 +85,7 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
             let bg = group
                 .map(|g| group_color_to_ratatui(g.color))
                 .unwrap_or(ratatui::style::Color::Cyan);
-            Style::default()
-                .fg(ratatui::style::Color::Black)
-                .bg(bg)
+            Style::default().fg(ratatui::style::Color::Black).bg(bg)
         } else {
             Style::default()
                 .fg(ratatui::style::Color::White)

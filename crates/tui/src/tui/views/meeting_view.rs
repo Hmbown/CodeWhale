@@ -1,5 +1,11 @@
 //! Meeting view for displaying multi-agent meeting state
 
+// The MeetingView modal is part of the WIP collaboration UI. The narrow
+// tab-core harvest in PR #2753 does not wire it in yet, so the
+// `ModalView` plumbing (and its helpers) trips `dead_code` inside the
+// binary crate. See `tab/mod.rs` for the harvest context.
+#![allow(dead_code)]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::{
     buffer::Buffer,
@@ -150,9 +156,10 @@ impl MeetingView {
 
         // We don't have app reference here, so show placeholder.
         // In a real implementation, take &App or use a callback.
-        let placeholder = Line::from(vec![
-            Span::styled("[Participants list - read from app]", Style::default().fg(ratatui::style::Color::DarkGray)),
-        ]);
+        let placeholder = Line::from(vec![Span::styled(
+            "[Participants list - read from app]",
+            Style::default().fg(ratatui::style::Color::DarkGray),
+        )]);
         buf.set_line(inner.x, inner.y, &placeholder, inner.width);
     }
 
@@ -165,9 +172,7 @@ impl MeetingView {
                 MeetingPane::Decisions => "Decisions",
             }
         );
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title);
+        let block = Block::default().borders(Borders::ALL).title(title);
         let inner = Rect::new(
             area.x + 1,
             area.y + 1,
@@ -194,9 +199,7 @@ impl MeetingView {
             .split(area);
 
         // Decisions
-        let decisions_block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Decisions ");
+        let decisions_block = Block::default().borders(Borders::ALL).title(" Decisions ");
         let inner = Rect::new(
             chunks[0].x + 1,
             chunks[0].y + 1,
@@ -256,21 +259,14 @@ pub fn format_meeting_message(msg_type: MeetingMessageType) -> &'static str {
 }
 
 /// Render a meeting summary (used in non-modal contexts)
-pub fn render_meeting_summary(
-    area: Rect,
-    buf: &mut Buffer,
-    app: &App,
-    meeting_id: &str,
-) {
+pub fn render_meeting_summary(area: Rect, buf: &mut Buffer, app: &App, meeting_id: &str) {
     let title = if let Some(meeting) = app.tab_manager.meeting(meeting_id) {
         format!(" Meeting Summary: {} ", meeting.topic)
     } else {
         format!(" Meeting Summary: {} ", meeting_id)
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title);
+    let block = Block::default().borders(Borders::ALL).title(title);
     block.render(area, buf);
 
     if let Some(meeting) = app.tab_manager.meeting(meeting_id) {

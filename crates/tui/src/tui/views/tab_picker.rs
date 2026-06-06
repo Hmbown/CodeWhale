@@ -54,8 +54,8 @@ impl TabPickerView {
             .tab_manager
             .all_tabs()
             .into_iter()
+            .filter(|&t| Some(t.id) != current_tab_id)
             .cloned()
-            .filter(|t| Some(t.id) != current_tab_id)
             .collect();
 
         Self {
@@ -101,12 +101,10 @@ impl ModalView for TabPickerView {
             }
             KeyCode::Enter => {
                 if let Some(tab_id) = self.selected_tab_id() {
-                    ViewAction::EmitAndClose(
-                        crate::tui::views::ViewEvent::CollabRequested {
-                            kind: self.action,
-                            to_tab: tab_id.0,
-                        },
-                    )
+                    ViewAction::EmitAndClose(crate::tui::views::ViewEvent::CollabRequested {
+                        kind: self.action,
+                        to_tab: tab_id.0,
+                    })
                 } else {
                     ViewAction::Close
                 }
@@ -160,9 +158,12 @@ impl ModalView for TabPickerView {
             // Tab type indicator
             let type_str = tab.tab_type.ascii_icon();
 
-            // Construct line
-            let title_truncated = if tab.title.len() > 25 {
-                format!("{}...", &tab.title[..22])
+            // Construct line. `chars().count()` gives the display width; byte
+            // slicing (`&title[..N]`) would panic on a multi-byte char at the
+            // cut point, so we collect from a character iterator instead.
+            let title_truncated = if tab.title.chars().count() > 25 {
+                let truncated: String = tab.title.chars().take(22).collect();
+                format!("{truncated}...")
             } else {
                 tab.title.clone()
             };

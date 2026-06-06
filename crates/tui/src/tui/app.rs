@@ -2310,6 +2310,7 @@ impl App {
 
     /// Create a minimal App for testing - no config loading, no engine setup.
     /// Only the fields that render tests need (tab_manager, etc.) are populated.
+    #[allow(dead_code)] // reserved for the render_tests follow-up; not used in this PR
     pub fn new_for_test() -> App {
         use std::path::PathBuf;
         let options = TuiOptions {
