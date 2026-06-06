@@ -10,14 +10,14 @@ config source, result, and follow-up issue or PR.
 
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
-| `cargo fmt --all -- --check` | release steward | ship |  |
-| `cargo check --workspace --all-targets --locked` | release steward | ship |  |
-| `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | release steward | ship |  |
-| `cargo test --workspace --all-features --locked` | release steward | ship |  |
+| `cargo fmt --all -- --check` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df`. |
+| `cargo check --workspace --all-targets --locked` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df`. |
+| `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df`. |
+| `cargo test --workspace --all-features --locked` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df` (`4254 passed, 0 failed, 4 ignored` in `codewhale-tui`; package integration and doctest suites also passed). An earlier full run hit one transient localhost SSE reset in `mcp::tests::legacy_sse_closed_stream_reconnects_and_retries_tool_call`; the exact test passed serially before the full rerun. |
 | `./scripts/release/check-versions.sh` | release steward | ship | Passed locally during #2845 (`e22a7da53`) and remains part of the PR-local release gate for each stewardship slice. |
 | `./scripts/release/check-ohos-deps.sh` | release steward | ship | Passed locally during #2845 (`e22a7da53`); OHOS dependency graph stayed compatible for `codewhale-tui` on `aarch64-unknown-linux-ohos`. |
-| `./scripts/release/publish-crates.sh dry-run` | release steward | ship |  |
-| `node scripts/release/npm-wrapper-smoke.js` after release build | release steward | ship |  |
+| `./scripts/release/publish-crates.sh dry-run` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df`. The script performed full `cargo publish --dry-run` for crates without unpublished workspace dependencies and package-content verification for dependent workspace crates; expected 0.8.53 already-published warnings were observed. |
+| `node scripts/release/npm-wrapper-smoke.js` after release build | release steward | ship | Passed locally on 2026-06-06 at `2561a54df` after `cargo build --release --locked -p codewhale-cli -p codewhale-tui`. The harness packed `codewhale-0.8.53.tgz`, served local release assets, and verified `npx --no-install codewhale doctor --help` plus `npx --no-install codewhale-tui --help`. |
 | GitHub release asset verification before npm publish | release steward | ship |  |
 
 ## Provider, Model, And Auth
