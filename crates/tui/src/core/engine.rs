@@ -66,7 +66,7 @@ use super::capacity_memory::{
 };
 use super::coherence::{CoherenceSignal, CoherenceState, next_coherence_state};
 use super::events::{Event, TurnOutcomeStatus};
-use super::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
+use super::ops::{Op, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX};
 use super::session::Session;
 use super::tool_parser;
 use super::turn::{TurnContext, TurnToolCall, post_turn_snapshot, pre_turn_snapshot};
@@ -1263,6 +1263,21 @@ impl Engine {
                 }
                 Op::CompactContext => {
                     self.handle_manual_compaction().await;
+                }
+                Op::GetSessionSnapshot { tx } => {
+                    let total_tokens = self.session.total_usage.input_tokens
+                        + self.session.total_usage.output_tokens;
+                    let snapshot = SessionSnapshot {
+                        messages: self.session.messages.clone(),
+                        total_tokens,
+                        model: self.session.model.clone(),
+                        workspace: self.session.workspace.clone(),
+                        system_prompt: self.session.system_prompt.clone(),
+                        mode: self.current_mode.as_setting().to_string(),
+                    };
+                    if let Some(tx) = tx.lock().ok().and_then(|mut g| g.take()) {
+                        let _ = tx.send(snapshot);
+                    }
                 }
                 Op::PurgeContext => {
                     self.handle_purge().await;
