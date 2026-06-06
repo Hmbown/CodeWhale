@@ -416,7 +416,13 @@ fn workflow_builtins(builder: &mut GlobalsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentType, ControlNodeKind, MockWorkflowExecutor, WorkflowRunStatus};
+    use std::collections::BTreeMap;
+
+    use crate::{
+        AgentType, ControlNodeKind, LeafResult, MockWorkflowExecutor, ReplayControlRecord,
+        ReplayLeafRecord, WorkflowReplayExecutor, WorkflowReplayTrace, WorkflowRunStatus,
+        compute_leaf_input_hash,
+    };
 
     #[test]
     fn starlark_compiles_to_ir() {
@@ -462,6 +468,187 @@ mod tests {
                 .iter()
                 .any(|result| result.node_id == "teacher-review")
         );
+    }
+
+    #[test]
+    fn rlm_cache_change_workflow_replays_from_recorded_mock_trace() {
+        let source = include_str!("../../../workflows/rlm_cache_change.star");
+        let workflow = compile_starlark_workflow("rlm_cache_change.star", source)
+            .expect("example should compile");
+        let execution = MockWorkflowExecutor::new()
+            .with_predicate_results("implement-until-tests-pass", vec![true])
+            .run(&workflow)
+            .expect("dogfood workflow should run with mock leaves");
+        let trace = replay_trace_from_execution("trace-rlm-cache", &workflow, &execution);
+
+        let replayed = WorkflowReplayExecutor::new(trace)
+            .run(&workflow)
+            .expect("recorded dogfood trace should replay");
+
+        assert_eq!(replayed.status, WorkflowRunStatus::Succeeded);
+        assert!(
+            replayed
+                .leaf_results
+                .iter()
+                .any(|result| result.leaf_id == "regression-tests")
+        );
+        assert!(
+            replayed
+                .control_node_results
+                .iter()
+                .any(|result| result.node_id == "teacher-review")
+        );
+        assert!(
+            replayed
+                .control_node_results
+                .iter()
+                .any(|result| result.node_id == "summarize-cache-change")
+        );
+    }
+
+    #[test]
+    fn rlm_cache_change_replay_diverges_when_record_missing() {
+        let source = include_str!("../../../workflows/rlm_cache_change.star");
+        let workflow = compile_starlark_workflow("rlm_cache_change.star", source)
+            .expect("example should compile");
+        let execution = MockWorkflowExecutor::new()
+            .with_predicate_results("implement-until-tests-pass", vec![true])
+            .run(&workflow)
+            .expect("dogfood workflow should run with mock leaves");
+        let mut trace =
+            replay_trace_from_execution("trace-rlm-cache-missing", &workflow, &execution);
+        trace
+            .leaf_records
+            .retain(|record| record.leaf_id != "regression-tests");
+
+        let replayed = WorkflowReplayExecutor::new(trace)
+            .run(&workflow)
+            .expect("missing dogfood leaf record should be a replay result");
+
+        assert_eq!(replayed.status, WorkflowRunStatus::ReplayDiverged);
+        assert!(replayed.leaf_results.iter().any(|result| {
+            result.leaf_id == "regression-tests"
+                && result.status == WorkflowRunStatus::ReplayDiverged
+        }));
+    }
+
+    fn replay_trace_from_execution(
+        trace_id: &str,
+        workflow: &WorkflowSpec,
+        execution: &crate::WorkflowExecution,
+    ) -> WorkflowReplayTrace {
+        let mut resolved_outputs = BTreeMap::new();
+        let mut leaf_records = Vec::new();
+        collect_leaf_records(
+            trace_id,
+            workflow,
+            &workflow.nodes,
+            &execution.leaf_results,
+            &mut resolved_outputs,
+            &mut leaf_records,
+        );
+        let control_records = execution
+            .control_node_results
+            .iter()
+            .cloned()
+            .map(|result| ReplayControlRecord {
+                trace_id: trace_id.to_string(),
+                node_id: result.node_id.clone(),
+                kind: result.kind,
+                result,
+                generated_nodes: Vec::new(),
+            })
+            .collect();
+
+        WorkflowReplayTrace {
+            trace_id: trace_id.to_string(),
+            leaf_records,
+            control_records,
+        }
+    }
+
+    fn collect_leaf_records(
+        trace_id: &str,
+        workflow: &WorkflowSpec,
+        nodes: &[WorkflowNode],
+        results: &[LeafResult],
+        resolved_outputs: &mut BTreeMap<String, Option<String>>,
+        records: &mut Vec<ReplayLeafRecord>,
+    ) {
+        for node in nodes {
+            match node {
+                WorkflowNode::BranchSet(branch) => collect_leaf_records(
+                    trace_id,
+                    workflow,
+                    &branch.children,
+                    results,
+                    resolved_outputs,
+                    records,
+                ),
+                WorkflowNode::Leaf(leaf) => {
+                    let result = results
+                        .iter()
+                        .find(|result| result.leaf_id == leaf.id)
+                        .expect("mock execution should record every declared leaf")
+                        .clone();
+                    let resolved_inputs = leaf
+                        .depends_on_results
+                        .iter()
+                        .map(|dependency| {
+                            (
+                                dependency.clone(),
+                                resolved_outputs.get(dependency).cloned().unwrap_or(None),
+                            )
+                        })
+                        .collect();
+                    records.push(ReplayLeafRecord {
+                        trace_id: trace_id.to_string(),
+                        leaf_id: leaf.id.clone(),
+                        input_hash: compute_leaf_input_hash(workflow, leaf, &resolved_inputs)
+                            .expect("leaf input hash should serialize"),
+                        result: result.clone(),
+                    });
+                    resolved_outputs.insert(leaf.id.clone(), result.output);
+                }
+                WorkflowNode::Sequence(sequence) => collect_leaf_records(
+                    trace_id,
+                    workflow,
+                    &sequence.children,
+                    results,
+                    resolved_outputs,
+                    records,
+                ),
+                WorkflowNode::LoopUntil(loop_until) => collect_leaf_records(
+                    trace_id,
+                    workflow,
+                    &loop_until.children,
+                    results,
+                    resolved_outputs,
+                    records,
+                ),
+                WorkflowNode::Cond(cond) => {
+                    collect_leaf_records(
+                        trace_id,
+                        workflow,
+                        &cond.then_nodes,
+                        results,
+                        resolved_outputs,
+                        records,
+                    );
+                    collect_leaf_records(
+                        trace_id,
+                        workflow,
+                        &cond.else_nodes,
+                        results,
+                        resolved_outputs,
+                        records,
+                    );
+                }
+                WorkflowNode::Expand(_)
+                | WorkflowNode::Reduce(_)
+                | WorkflowNode::TeacherReview(_) => {}
+            }
+        }
     }
 
     #[test]

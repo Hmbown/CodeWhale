@@ -111,7 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WhaleFlow mock/runtime foundations, explicit external-memory boundaries, and
   docs alignment. Live workflow execution, provider calls, TraceStore writes,
   and mutation-oriented GUI endpoints remain deferred until their atomicity and
-  replay contracts are tested.
+  replay contracts are tested. The `rlm_cache_change.star` dogfood workflow can
+  now be replayed from recorded mock leaf/control records, and missing dogfood
+  records produce `ReplayDiverged` instead of falling back to live execution
+  (#2679).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
