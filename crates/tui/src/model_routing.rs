@@ -228,9 +228,9 @@ fn normalize_auto_route_model(model: &str) -> Option<&'static str> {
 
 fn parse_auto_route_reasoning_effort(effort: &str) -> Option<ReasoningEffort> {
     match effort.trim().to_ascii_lowercase().as_str() {
-        "on" | "max" | "high" | "deep" | "3" => Some(ReasoningEffort::High),
-        "medium" | "moderate" | "2" => Some(ReasoningEffort::Medium),
-        "off" | "low" | "1" | "none" | "minimum" | "0" => Some(ReasoningEffort::Low),
+        "max" | "deep" | "3" => Some(ReasoningEffort::Max),
+        "on" | "high" | "medium" | "moderate" | "low" | "1" | "2" => Some(ReasoningEffort::High),
+        "off" | "none" | "minimum" | "0" => Some(ReasoningEffort::Off),
         _ => None,
     }
 }
