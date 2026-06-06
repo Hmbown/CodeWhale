@@ -8,7 +8,7 @@ use crate::{
     BranchResult, BranchSpec, CondSpec, ControlNodeKind, ControlNodeResult, ExpandSpec, LeafResult,
     LeafSpec, LoopUntilSpec, SequenceSpec, WorkflowExecution, WorkflowExecutionError,
     WorkflowMemoUsage, WorkflowNode, WorkflowRunStatus, WorkflowSpec, WorkflowUsage,
-    validate_workflow_nodes,
+    validate_workflow_node_shapes, validate_workflow_nodes,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -316,7 +316,7 @@ impl WorkflowReplayExecutor {
             .as_ref()
             .map(|record| record.generated_nodes.clone())
             .unwrap_or_default();
-        validate_workflow_nodes(&generated_nodes)?;
+        validate_workflow_node_shapes(&generated_nodes)?;
         self.execute_nodes(spec, &generated_nodes, execution)?;
         let selected = record
             .as_ref()

@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     AgentType, BranchSpec, BudgetSpec, CondSpec, ExpandSpec, IsolationMode, LeafSpec, ModelPolicy,
     PermissionSpec, PromotionPolicy, ReduceSpec, SequenceSpec, TaskMode, TeacherReviewSpec,
-    WorkflowNode, WorkflowSpec,
+    WorkflowNode, WorkflowSpec, validate_workflow_nodes,
 };
 
 pub type StarlarkWorkflowResult<T> = std::result::Result<T, StarlarkWorkflowError>;
@@ -50,10 +50,13 @@ pub fn compile_starlark_workflow(
         eval.eval_module(ast, &globals)
             .map_err(StarlarkWorkflowError::Starlark)?;
     }
-    builder
+    let workflow = builder
         .into_inner()
         .workflow
-        .ok_or(StarlarkWorkflowError::MissingWorkflow)
+        .ok_or(StarlarkWorkflowError::MissingWorkflow)?;
+    validate_workflow_nodes(&workflow.nodes)
+        .map_err(|error| StarlarkWorkflowError::InvalidNode(error.to_string()))?;
+    Ok(workflow)
 }
 
 pub fn compile_starlark_workflow_with_repair(
@@ -529,6 +532,25 @@ workflow(goal = "bad", nodes = [])
             err,
             StarlarkWorkflowError::UnsupportedConstruct { construct: "load" }
         ));
+    }
+
+    #[test]
+    fn starlark_compile_gate_rejects_unknown_references() {
+        let source = r#"
+workflow(
+    id = "bad-reference",
+    goal = "reject missing candidates",
+    nodes = [
+        teacher_review(id = "review", candidates = ["missing-candidate"]),
+    ],
+)
+"#;
+
+        let err = compile_starlark_workflow("bad-reference.star", source)
+            .expect_err("unknown candidate should fail at the compile gate");
+
+        assert!(matches!(err, StarlarkWorkflowError::InvalidNode(_)));
+        assert!(err.to_string().contains("missing-candidate"));
     }
 
     #[test]

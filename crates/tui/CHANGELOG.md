@@ -68,7 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution in CI-oriented crate tests (#2679). Leaf, branch, and workflow
   results now also carry separate ARMH/shared-memo and provider prompt-cache
   telemetry counters, with mock aggregation tests, so #2671 can progress
-  without wiring live RLM calls or billing-affecting provider behavior yet.
+  without wiring live RLM calls or billing-affecting provider behavior yet. The
+  Starlark and typed-IR gates now also reject unknown leaf dependencies,
+  reducer inputs, and teacher-review candidates before mock execution or replay,
+  keeping generated workflows fail-closed while runtime/worktree semantics stay
+  deferred.
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

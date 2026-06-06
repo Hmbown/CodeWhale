@@ -878,7 +878,7 @@ impl MockWorkflowExecutor {
         if let Some(max_children) = spec.max_children {
             nodes.truncate(max_children);
         }
-        validate_workflow_nodes(&nodes)?;
+        validate_workflow_node_shapes(&nodes)?;
         self.execute_nodes(&nodes, execution)?;
         execution.control_node_results.push(ControlNodeResult {
             node_id: spec.id.clone(),
@@ -973,6 +973,12 @@ pub enum WorkflowExecutionError {
     EmptyLeafPrompt { leaf: String },
     #[error("duplicate workflow node `{node}`")]
     DuplicateNodeId { node: String },
+    #[error("workflow node `{node}` has unknown {field} reference `{reference}`")]
+    UnknownNodeReference {
+        node: String,
+        field: &'static str,
+        reference: String,
+    },
 }
 
 fn default_frontier_limit() -> usize {
@@ -993,6 +999,14 @@ fn node_id(node: &WorkflowNode) -> String {
 }
 
 pub(crate) fn validate_workflow_nodes(
+    nodes: &[WorkflowNode],
+) -> Result<(), WorkflowExecutionError> {
+    let mut seen = BTreeSet::new();
+    validate_workflow_nodes_inner(nodes, &mut seen)?;
+    validate_workflow_references(nodes, &seen)
+}
+
+pub(crate) fn validate_workflow_node_shapes(
     nodes: &[WorkflowNode],
 ) -> Result<(), WorkflowExecutionError> {
     let mut seen = BTreeSet::new();
@@ -1028,6 +1042,68 @@ fn validate_workflow_nodes_inner(
                 validate_workflow_nodes_inner(&spec.else_nodes, seen)?;
             }
             WorkflowNode::Reduce(_) | WorkflowNode::TeacherReview(_) | WorkflowNode::Expand(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_workflow_references(
+    nodes: &[WorkflowNode],
+    known_ids: &BTreeSet<String>,
+) -> Result<(), WorkflowExecutionError> {
+    for node in nodes {
+        match node {
+            WorkflowNode::BranchSet(spec) => {
+                validate_workflow_references(&spec.children, known_ids)?;
+            }
+            WorkflowNode::Leaf(spec) => {
+                validate_known_references(
+                    spec.id.as_str(),
+                    "depends_on_results",
+                    &spec.depends_on_results,
+                    known_ids,
+                )?;
+            }
+            WorkflowNode::Sequence(spec) => {
+                validate_workflow_references(&spec.children, known_ids)?;
+            }
+            WorkflowNode::Reduce(spec) => {
+                validate_known_references(spec.id.as_str(), "inputs", &spec.inputs, known_ids)?;
+            }
+            WorkflowNode::TeacherReview(spec) => {
+                validate_known_references(
+                    spec.id.as_str(),
+                    "candidates",
+                    &spec.candidates,
+                    known_ids,
+                )?;
+            }
+            WorkflowNode::LoopUntil(spec) => {
+                validate_workflow_references(&spec.children, known_ids)?;
+            }
+            WorkflowNode::Cond(spec) => {
+                validate_workflow_references(&spec.then_nodes, known_ids)?;
+                validate_workflow_references(&spec.else_nodes, known_ids)?;
+            }
+            WorkflowNode::Expand(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_known_references(
+    node: &str,
+    field: &'static str,
+    references: &[String],
+    known_ids: &BTreeSet<String>,
+) -> Result<(), WorkflowExecutionError> {
+    for reference in references {
+        if !known_ids.contains(reference) {
+            return Err(WorkflowExecutionError::UnknownNodeReference {
+                node: node.to_string(),
+                field,
+                reference: reference.clone(),
+            });
         }
     }
     Ok(())
@@ -2070,6 +2146,83 @@ mod tests {
             err,
             WorkflowExecutionError::EmptyLeafPrompt {
                 leaf: "bad".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn workflow_spec_rejects_unknown_leaf_dependency() {
+        let mut summarize = leaf_node("summarize");
+        let WorkflowNode::Leaf(spec) = &mut summarize else {
+            panic!("expected leaf");
+        };
+        spec.depends_on_results = vec!["missing-scan".to_string()];
+        let workflow = workflow_spec(vec![summarize]);
+
+        let mut executor = MockWorkflowExecutor::new();
+        let err = executor
+            .run(&workflow)
+            .expect_err("unknown leaf dependency should fail before execution");
+
+        assert_eq!(
+            err,
+            WorkflowExecutionError::UnknownNodeReference {
+                node: "summarize".to_string(),
+                field: "depends_on_results",
+                reference: "missing-scan".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn workflow_spec_rejects_unknown_reduce_input() {
+        let workflow = workflow_spec(vec![
+            leaf_node("scan"),
+            WorkflowNode::Reduce(ReduceSpec {
+                id: "summarize".to_string(),
+                inputs: vec!["scan".to_string(), "missing-review".to_string()],
+                prompt: "Summarize safe fixes".to_string(),
+                model_policy: ModelPolicy::default(),
+            }),
+        ]);
+
+        let mut executor = MockWorkflowExecutor::new();
+        let err = executor
+            .run(&workflow)
+            .expect_err("unknown reduce input should fail before execution");
+
+        assert_eq!(
+            err,
+            WorkflowExecutionError::UnknownNodeReference {
+                node: "summarize".to_string(),
+                field: "inputs",
+                reference: "missing-review".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn workflow_spec_rejects_unknown_teacher_candidate() {
+        let workflow = workflow_spec(vec![
+            leaf_node("candidate-a"),
+            WorkflowNode::TeacherReview(TeacherReviewSpec {
+                id: "teacher-review".to_string(),
+                candidates: vec!["candidate-a".to_string(), "candidate-b".to_string()],
+                promotion_policy: PromotionPolicy::default(),
+            }),
+        ]);
+
+        let mut executor = MockWorkflowExecutor::new();
+        let err = executor
+            .run(&workflow)
+            .expect_err("unknown teacher candidate should fail before execution");
+
+        assert_eq!(
+            err,
+            WorkflowExecutionError::UnknownNodeReference {
+                node: "teacher-review".to_string(),
+                field: "candidates",
+                reference: "candidate-b".to_string(),
             }
         );
     }
