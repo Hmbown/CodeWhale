@@ -299,6 +299,31 @@ static LOCALE_CLOSER_JA_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceL
 static LOCALE_CLOSER_PT_BR_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static LOCALE_CLOSER_VI_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static AUTHORITY_RECAP_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STATIC_PROMPT_COMPOSER: std::sync::OnceLock<Box<StaticPromptComposer>> =
+    std::sync::OnceLock::new();
+
+/// Context passed to an embedder-provided static prompt composer.
+///
+/// This hook only replaces the byte-stable base/personality prompt segment.
+/// Mode deltas, approval policy, tool taxonomy, Context Management, and the
+/// Compaction Relay stay owned by CodeWhale's runtime prompt assembly.
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct StaticPromptCtx<'a> {
+    /// Active model identifier after caller-side routing.
+    pub model_id: &'a str,
+    /// Personality overlay requested for the base static prompt.
+    pub personality: Personality,
+    /// Whether shell tools are present in the runtime tool catalog.
+    pub shell_tools_available: bool,
+    /// Default base/personality prompt layers that would be used without an
+    /// override.
+    pub default_layers: &'a str,
+}
+
+/// Embedder hook for replacing CodeWhale's byte-stable base/personality prompt
+/// segment.
+pub type StaticPromptComposer = dyn Fn(&StaticPromptCtx<'_>) -> String + Send + Sync + 'static;
 
 /// Replace `BASE_PROMPT` for all subsequent prompt composition. First call
 /// wins; later calls return the rejected string. Set before spawning any
@@ -352,8 +377,24 @@ pub fn set_authority_recap_override(s: String) -> Result<(), String> {
     set_prompt_override(&AUTHORITY_RECAP_OVERRIDE, s)
 }
 
+/// Replace the byte-stable base/personality prompt segment for subsequent
+/// prompt composition. First call wins; later calls return the rejected
+/// composer so embedders can preserve ownership.
+pub fn set_static_prompt_composer_override(
+    f: Box<StaticPromptComposer>,
+) -> Result<(), Box<StaticPromptComposer>> {
+    set_static_prompt_composer(&STATIC_PROMPT_COMPOSER, f)
+}
+
 fn set_prompt_override(cell: &std::sync::OnceLock<String>, s: String) -> Result<(), String> {
     cell.set(s)
+}
+
+fn set_static_prompt_composer(
+    cell: &std::sync::OnceLock<Box<StaticPromptComposer>>,
+    f: Box<StaticPromptComposer>,
+) -> Result<(), Box<StaticPromptComposer>> {
+    cell.set(f)
 }
 
 fn effective_prompt_override<'a>(
@@ -365,6 +406,10 @@ fn effective_prompt_override<'a>(
 
 fn effective_base_prompt() -> &'static str {
     effective_prompt_override(&BASE_PROMPT_OVERRIDE, BASE_PROMPT)
+}
+
+fn effective_static_prompt_composer() -> Option<&'static StaticPromptComposer> {
+    STATIC_PROMPT_COMPOSER.get().map(Box::as_ref)
 }
 
 fn effective_locale_preamble_zh_hans() -> &'static str {
@@ -787,6 +832,22 @@ fn compose_prompt_with_approval_model_and_shell(
     allow_shell: bool,
 ) -> String {
     let shell_tools_available = allow_shell && mode != AppMode::Plan;
+    let default_layers =
+        compose_default_static_layers(personality, model_id, shell_tools_available);
+    apply_static_prompt_composer(
+        effective_static_prompt_composer(),
+        personality,
+        model_id,
+        shell_tools_available,
+        &default_layers,
+    )
+}
+
+fn compose_default_static_layers(
+    personality: Personality,
+    model_id: &str,
+    shell_tools_available: bool,
+) -> String {
     let base_prompt = render_base_prompt_for_tool_availability(
         effective_base_prompt().trim(),
         model_id,
@@ -804,6 +865,24 @@ fn compose_prompt_with_approval_model_and_shell(
         out.push_str(part);
     }
     out
+}
+
+fn apply_static_prompt_composer(
+    composer: Option<&StaticPromptComposer>,
+    personality: Personality,
+    model_id: &str,
+    shell_tools_available: bool,
+    default_layers: &str,
+) -> String {
+    match composer {
+        Some(composer) => composer(&StaticPromptCtx {
+            model_id,
+            personality,
+            shell_tools_available,
+            default_layers,
+        }),
+        None => default_layers.to_string(),
+    }
 }
 
 fn render_base_prompt_for_tool_availability(
@@ -1215,6 +1294,80 @@ mod tests {
             Err("second".to_string())
         );
         assert_eq!(effective_prompt_override(&cell, "fallback"), "first");
+    }
+
+    #[test]
+    fn static_prompt_composer_storage_returns_rejected_composer() {
+        let cell = std::sync::OnceLock::new();
+        let first: Box<StaticPromptComposer> =
+            Box::new(|ctx| format!("first:{}", ctx.default_layers.len()));
+        let second: Box<StaticPromptComposer> =
+            Box::new(|ctx| format!("second:{}", ctx.default_layers.len()));
+
+        assert!(set_static_prompt_composer(&cell, first).is_ok());
+        let rejected = set_static_prompt_composer(&cell, second)
+            .err()
+            .expect("second composer should be rejected");
+        let ctx = StaticPromptCtx {
+            model_id: "deepseek-v4-pro",
+            personality: Personality::Calm,
+            shell_tools_available: true,
+            default_layers: "fallback",
+        };
+
+        assert_eq!(rejected(&ctx), "second:8");
+        assert_eq!(
+            cell.get().expect("first composer retained")(&ctx),
+            "first:8"
+        );
+    }
+
+    #[test]
+    fn static_prompt_composer_unset_keeps_default_layers_byte_identical() {
+        for personality in [Personality::Calm, Personality::Playful] {
+            for shell_tools_available in [true, false] {
+                let default_layers = compose_default_static_layers(
+                    personality,
+                    "deepseek-v4-flash",
+                    shell_tools_available,
+                );
+                let composed = apply_static_prompt_composer(
+                    None,
+                    personality,
+                    "deepseek-v4-flash",
+                    shell_tools_available,
+                    &default_layers,
+                );
+
+                assert_byte_identical("unset static prompt composer", &default_layers, &composed);
+            }
+        }
+    }
+
+    #[test]
+    fn static_prompt_composer_receives_context_and_replaces_layers() {
+        let default_layers =
+            compose_default_static_layers(Personality::Calm, "deepseek-v4-pro", false);
+        let composer: Box<StaticPromptComposer> = Box::new(|ctx| {
+            assert_eq!(ctx.model_id, "deepseek-v4-pro");
+            assert_eq!(ctx.personality, Personality::Calm);
+            assert!(!ctx.shell_tools_available);
+            assert!(ctx.default_layers.contains("You are deepseek-v4-pro"));
+            assert!(ctx.default_layers.contains("Personality: Calm"));
+            assert!(!ctx.default_layers.contains("## Core Tool Taxonomy"));
+            assert!(!ctx.default_layers.contains("Approval Policy"));
+            "embedder static prompt".to_string()
+        });
+
+        let composed = apply_static_prompt_composer(
+            Some(composer.as_ref()),
+            Personality::Calm,
+            "deepseek-v4-pro",
+            false,
+            &default_layers,
+        );
+
+        assert_eq!(composed, "embedder static prompt");
     }
 
     fn contains_cjk(text: &str) -> bool {

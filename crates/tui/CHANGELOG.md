@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agent View prompt, @lbcheng888 for the earlier scaffold, and @BigBenLabs,
   @lzx1545642258, @yangdaowan, @mangdehuang, @VerrPower, @hejia-v,
   @nasus9527, and @ygzhang-cn for the GUI/VS Code demand and validation trail.
+- Added a static prompt composer override for embedders that need to replace
+  the byte-stable base/personality prompt segment while leaving mode metadata,
+  approval policy, tool taxonomy, Context Management, and the Compaction Relay
+  under CodeWhale's runtime prompt assembly. This refines the embedder prompt
+  customization path from #2786 without weakening prompt-continuity safeguards.
+  Thanks @h3c-hexin.
 - Added `POST /v1/sessions` for runtime clients to save a completed thread as a
   managed session. The endpoint preserves thread title/model/mode/workspace
   metadata, maps missing threads to 404, and returns 409 instead of snapshotting

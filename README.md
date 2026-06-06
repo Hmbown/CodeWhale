@@ -663,8 +663,8 @@ Current v0.9 track credits:
   HarnessPosture provider/model policy direction (#2733, #2738, #2734,
   #2741, #2692, #2694, #2693)
 - **[h3c-hexin](https://github.com/h3c-hexin)** — sub-agent model inheritance,
-  configured `skills_dir` discovery, and prompt-environment stability work
-  (#2736, #2737)
+  configured `skills_dir` discovery, prompt-environment stability, and static
+  prompt composer direction (#2736, #2737, #2786)
 - **[gaord](https://github.com/gaord)** — runtime thread workspace updates and
   completed-thread saved-session API work (#2640, #2639)
 - **[cyq1017](https://github.com/cyq1017)** — restore-listing and
