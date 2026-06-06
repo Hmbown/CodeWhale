@@ -413,7 +413,7 @@ fn workflow_builtins(builder: &mut GlobalsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentType, ControlNodeKind};
+    use crate::{AgentType, ControlNodeKind, MockWorkflowExecutor, WorkflowRunStatus};
 
     #[test]
     fn starlark_compiles_to_ir() {
@@ -426,12 +426,39 @@ mod tests {
         let WorkflowNode::BranchSet(branch) = &workflow.nodes[0] else {
             panic!("first node should be a branch set");
         };
-        assert_eq!(branch.id, "discover");
+        assert_eq!(branch.id, "candidate-branches");
         assert!(branch.parallel);
         let WorkflowNode::Leaf(leaf) = &branch.children[0] else {
             panic!("first branch child should be a leaf");
         };
         assert_eq!(leaf.agent_type, AgentType::ToolAgent);
+    }
+
+    #[test]
+    fn rlm_cache_change_workflow_runs_with_mock_provider() {
+        let source = include_str!("../../../workflows/rlm_cache_change.star");
+        let workflow = compile_starlark_workflow("rlm_cache_change.star", source)
+            .expect("example should compile");
+        let mut executor = MockWorkflowExecutor::new()
+            .with_predicate_results("implement-until-tests-pass", vec![true]);
+
+        let execution = executor
+            .run(&workflow)
+            .expect("dogfood workflow should run with mock leaves");
+
+        assert_eq!(execution.status, WorkflowRunStatus::Succeeded);
+        assert!(
+            execution
+                .leaf_results
+                .iter()
+                .any(|result| result.leaf_id == "regression-tests")
+        );
+        assert!(
+            execution
+                .control_node_results
+                .iter()
+                .any(|result| result.node_id == "teacher-review")
+        );
     }
 
     #[test]
@@ -453,6 +480,39 @@ workflow(
 
         assert_eq!(workflow.id.as_deref(), Some("repair-demo"));
         assert!(matches!(workflow.nodes[0], WorkflowNode::BranchSet(_)));
+    }
+
+    #[test]
+    fn starlark_generated_workflow_repairs_then_runs() {
+        let source = r#"
+workflow(
+    id = "generated-repair-run",
+    goal = "repair generated workflow aliases",
+    nodes = [
+        ctx.parallel(id = "discover", children = [
+            agent(id = "scan", prompt = "scan repo"),
+        ]),
+        ctx.loop_until(
+            id = "verify",
+            condition = "checks pass",
+            max_iterations = 1,
+            children = [
+                test(id = "run-tests", command = "cargo test -p codewhale-whaleflow --locked"),
+            ],
+        ),
+    ],
+)
+"#;
+        let workflow = compile_starlark_workflow_with_repair("generated.star", source)
+            .expect("repair should produce runnable IR");
+        let mut executor = MockWorkflowExecutor::new().with_predicate_results("verify", vec![true]);
+
+        let execution = executor
+            .run(&workflow)
+            .expect("repaired workflow should run with mock leaves");
+
+        assert_eq!(execution.status, WorkflowRunStatus::Succeeded);
+        assert_eq!(execution.leaf_results.len(), 2);
     }
 
     #[test]

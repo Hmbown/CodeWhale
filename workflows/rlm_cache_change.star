@@ -3,7 +3,7 @@ workflow(
     goal = "Evaluate an RLM/cache routing change with safe mock WhaleFlow IR",
     nodes = [
         branch(
-            id = "discover",
+            id = "candidate-branches",
             parallel = True,
             children = [
                 search(
@@ -12,27 +12,59 @@ workflow(
                     file_scope = ["crates/tui/src/rlm/**", "crates/tui/src/core/**"],
                 ),
                 agent(
-                    id = "inspect-provider-cache",
-                    prompt = "Inspect provider cache behavior without editing files.",
+                    id = "minimal-patch",
+                    prompt = "Draft the smallest safe cache-routing patch using shared ARMH context.",
+                    agent_type = "implementer",
+                    mode = "read_write",
+                    isolation = "worktree",
+                    file_scope = ["crates/tui/src/rlm/**", "crates/tui/src/core/**"],
+                ),
+                agent(
+                    id = "architecture-review",
+                    prompt = "Review cache routing boundaries and identify replay or provider risks.",
                     agent_type = "explore",
-                    file_scope = ["crates/tui/src/providers/**"],
+                    file_scope = [
+                        "crates/tui/src/providers/**",
+                        "crates/tui/src/rlm/**",
+                    ],
                 ),
             ],
         ),
         sequence(
-            id = "verify-and-summarize",
+            id = "verify-select-and-summarize",
             children = [
-                test(
-                    id = "run-rlm-tests",
-                    command = "cargo test -p codewhale-tui rlm --locked",
-                    file_scope = ["crates/tui/src/rlm/**"],
+                loop_until(
+                    id = "implement-until-tests-pass",
+                    condition = "regression tests pass",
+                    max_iterations = 2,
+                    children = [
+                        test(
+                            id = "regression-tests",
+                            command = "cargo test -p codewhale-tui rlm --locked",
+                            file_scope = ["crates/tui/src/rlm/**"],
+                        ),
+                    ],
+                ),
+                tournament(
+                    id = "select-maintainer-slice",
+                    candidates = [
+                        "minimal-patch",
+                        "regression-tests",
+                        "architecture-review",
+                    ],
+                ),
+                teacher_review(
+                    id = "teacher-review",
+                    candidates = ["select-maintainer-slice"],
                 ),
                 reduce(
                     id = "summarize-cache-change",
                     inputs = [
                         "find-cache-surfaces",
-                        "inspect-provider-cache",
-                        "run-rlm-tests",
+                        "minimal-patch",
+                        "architecture-review",
+                        "regression-tests",
+                        "teacher-review",
                     ],
                     prompt = "Summarize the smallest safe cache-routing patch.",
                 ),
