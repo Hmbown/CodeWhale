@@ -6,8 +6,9 @@ use thiserror::Error;
 
 use crate::{
     BranchResult, BranchSpec, CondSpec, ControlNodeKind, ControlNodeResult, ExpandSpec, LeafResult,
-    LeafSpec, LoopUntilSpec, SequenceSpec, WorkflowExecution, WorkflowExecutionError, WorkflowNode,
-    WorkflowRunStatus, WorkflowSpec, WorkflowUsage, validate_workflow_nodes,
+    LeafSpec, LoopUntilSpec, SequenceSpec, WorkflowExecution, WorkflowExecutionError,
+    WorkflowMemoUsage, WorkflowNode, WorkflowRunStatus, WorkflowSpec, WorkflowUsage,
+    validate_workflow_nodes,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -158,8 +159,10 @@ impl WorkflowReplayExecutor {
         self.execute_nodes(spec, &branch.children, execution)?;
         let status = branch_status(&execution.leaf_results[before..]);
         let mut usage = WorkflowUsage::default();
+        let mut memo_usage = WorkflowMemoUsage::default();
         for result in &execution.leaf_results[before..] {
             usage.add_assign(result.usage);
+            memo_usage.add_assign(result.memo_usage);
         }
         if status == WorkflowRunStatus::ReplayDiverged {
             execution.mark_replay_diverged();
@@ -171,6 +174,7 @@ impl WorkflowReplayExecutor {
             task_id: branch.id.clone(),
             status,
             usage,
+            memo_usage,
             artifacts: Vec::new(),
             notes: Some("replay branch set evaluated from recorded leaf results".to_string()),
         });
@@ -209,6 +213,7 @@ impl WorkflowReplayExecutor {
                 task_id: leaf.id.clone(),
                 status: WorkflowRunStatus::ReplayDiverged,
                 usage: WorkflowUsage::default(),
+                memo_usage: WorkflowMemoUsage::default(),
                 output: None,
                 artifacts: Vec::new(),
             };
@@ -223,6 +228,7 @@ impl WorkflowReplayExecutor {
             execution.mark_failed();
         }
         execution.usage.add_assign(result.usage);
+        execution.memo_usage.add_assign(result.memo_usage);
         self.resolved_outputs
             .insert(leaf.id.clone(), result.output.clone());
         execution.leaf_results.push(result);
@@ -545,6 +551,7 @@ mod tests {
                 output_tokens: 5,
                 cost_microusd: 2,
             },
+            memo_usage: WorkflowMemoUsage::default(),
             output: Some(output.to_string()),
             artifacts: Vec::new(),
         }

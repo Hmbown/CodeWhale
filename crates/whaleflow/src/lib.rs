@@ -445,6 +445,8 @@ pub struct BranchResult {
     #[serde(default)]
     pub usage: WorkflowUsage,
     #[serde(default)]
+    pub memo_usage: WorkflowMemoUsage,
+    #[serde(default)]
     pub artifacts: Vec<String>,
     #[serde(default)]
     pub notes: Option<String>,
@@ -457,6 +459,8 @@ pub struct LeafResult {
     pub status: WorkflowRunStatus,
     #[serde(default)]
     pub usage: WorkflowUsage,
+    #[serde(default)]
+    pub memo_usage: WorkflowMemoUsage,
     #[serde(default)]
     pub output: Option<String>,
     #[serde(default)]
@@ -483,6 +487,36 @@ impl WorkflowUsage {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.cost_microusd = self.cost_microusd.saturating_add(other.cost_microusd);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WorkflowMemoUsage {
+    #[serde(default)]
+    pub armh_hits: u64,
+    #[serde(default)]
+    pub armh_misses: u64,
+    #[serde(default)]
+    pub armh_saved_estimated_tokens: u64,
+    #[serde(default)]
+    pub provider_prompt_cache_hits: u64,
+    #[serde(default)]
+    pub provider_prompt_cache_misses: u64,
+}
+
+impl WorkflowMemoUsage {
+    pub(crate) fn add_assign(&mut self, other: Self) {
+        self.armh_hits = self.armh_hits.saturating_add(other.armh_hits);
+        self.armh_misses = self.armh_misses.saturating_add(other.armh_misses);
+        self.armh_saved_estimated_tokens = self
+            .armh_saved_estimated_tokens
+            .saturating_add(other.armh_saved_estimated_tokens);
+        self.provider_prompt_cache_hits = self
+            .provider_prompt_cache_hits
+            .saturating_add(other.provider_prompt_cache_hits);
+        self.provider_prompt_cache_misses = self
+            .provider_prompt_cache_misses
+            .saturating_add(other.provider_prompt_cache_misses);
     }
 }
 
@@ -528,6 +562,8 @@ pub struct WorkflowExecution {
     #[serde(default)]
     pub usage: WorkflowUsage,
     #[serde(default)]
+    pub memo_usage: WorkflowMemoUsage,
+    #[serde(default)]
     pub leaf_results: Vec<LeafResult>,
     #[serde(default)]
     pub branch_results: Vec<BranchResult>,
@@ -540,6 +576,7 @@ impl Default for WorkflowExecution {
         Self {
             status: WorkflowRunStatus::Succeeded,
             usage: WorkflowUsage::default(),
+            memo_usage: WorkflowMemoUsage::default(),
             leaf_results: Vec::new(),
             branch_results: Vec::new(),
             control_node_results: Vec::new(),
@@ -563,6 +600,8 @@ pub struct MockLeafOutcome {
     #[serde(default)]
     pub usage: WorkflowUsage,
     #[serde(default)]
+    pub memo_usage: WorkflowMemoUsage,
+    #[serde(default)]
     pub output: Option<String>,
     #[serde(default)]
     pub artifacts: Vec<String>,
@@ -573,6 +612,7 @@ impl MockLeafOutcome {
         Self {
             status: WorkflowRunStatus::Succeeded,
             usage: WorkflowUsage::default(),
+            memo_usage: WorkflowMemoUsage::default(),
             output: Some(output.into()),
             artifacts: Vec::new(),
         }
@@ -582,6 +622,7 @@ impl MockLeafOutcome {
         Self {
             status: WorkflowRunStatus::Failed,
             usage: WorkflowUsage::default(),
+            memo_usage: WorkflowMemoUsage::default(),
             output: Some(output.into()),
             artifacts: Vec::new(),
         }
@@ -589,6 +630,11 @@ impl MockLeafOutcome {
 
     pub fn with_usage(mut self, usage: WorkflowUsage) -> Self {
         self.usage = usage;
+        self
+    }
+
+    pub fn with_memo_usage(mut self, memo_usage: WorkflowMemoUsage) -> Self {
+        self.memo_usage = memo_usage;
         self
     }
 }
@@ -719,8 +765,10 @@ impl MockWorkflowExecutor {
             WorkflowRunStatus::Succeeded
         };
         let mut usage = WorkflowUsage::default();
+        let mut memo_usage = WorkflowMemoUsage::default();
         for result in &execution.leaf_results[before..] {
             usage.add_assign(result.usage);
+            memo_usage.add_assign(result.memo_usage);
         }
         if status == WorkflowRunStatus::Failed {
             execution.mark_failed();
@@ -730,6 +778,7 @@ impl MockWorkflowExecutor {
             task_id: spec.id.clone(),
             status,
             usage,
+            memo_usage,
             artifacts: Vec::new(),
             notes: Some("mock branch set executed without runtime fanout".to_string()),
         });
@@ -752,11 +801,13 @@ impl MockWorkflowExecutor {
             execution.mark_failed();
         }
         execution.usage.add_assign(outcome.usage);
+        execution.memo_usage.add_assign(outcome.memo_usage);
         execution.leaf_results.push(LeafResult {
             leaf_id: spec.id.clone(),
             task_id: spec.id.clone(),
             status: outcome.status,
             usage: outcome.usage,
+            memo_usage: outcome.memo_usage,
             output: outcome.output,
             artifacts: outcome.artifacts,
         });
@@ -1672,6 +1723,7 @@ mod tests {
                 output_tokens: 25,
                 cost_microusd: 42,
             },
+            memo_usage: WorkflowMemoUsage::default(),
             artifacts: vec!["trace://branches/discover".to_string()],
             notes: Some("validated prompt surfaces".to_string()),
         };
@@ -1687,6 +1739,7 @@ mod tests {
             serde_json::from_str(r#"{"branch_id":"discover","task_id":"scan","status":"pending"}"#)
                 .expect("parse minimal branch result");
         assert_eq!(minimal.usage, WorkflowUsage::default());
+        assert_eq!(minimal.memo_usage, WorkflowMemoUsage::default());
         assert!(minimal.artifacts.is_empty());
         assert_eq!(minimal.notes, None);
     }
@@ -1702,6 +1755,13 @@ mod tests {
                 output_tokens: 7,
                 cost_microusd: 3,
             },
+            memo_usage: WorkflowMemoUsage {
+                armh_hits: 1,
+                armh_misses: 0,
+                armh_saved_estimated_tokens: 128,
+                provider_prompt_cache_hits: 2,
+                provider_prompt_cache_misses: 1,
+            },
             output: Some("README needs clearer setup steps".to_string()),
             artifacts: vec!["trace://leaves/scan-readme".to_string()],
         };
@@ -1710,6 +1770,7 @@ mod tests {
 
         assert!(json.contains("\"status\":\"failed\""));
         assert!(json.contains("\"input_tokens\":11"));
+        assert!(json.contains("\"armh_saved_estimated_tokens\":128"));
         let parsed: LeafResult = serde_json::from_str(&json).expect("parse leaf result");
         assert_eq!(parsed, result);
 
@@ -1718,6 +1779,7 @@ mod tests {
         )
         .expect("parse minimal leaf result");
         assert_eq!(minimal.usage, WorkflowUsage::default());
+        assert_eq!(minimal.memo_usage, WorkflowMemoUsage::default());
         assert_eq!(minimal.output, None);
         assert!(minimal.artifacts.is_empty());
     }
@@ -1833,6 +1895,63 @@ mod tests {
                 .map(|result| result.usage.cost_microusd)
                 .collect::<Vec<_>>(),
             vec![500, 250]
+        );
+    }
+
+    #[test]
+    fn mock_executor_aggregates_memo_usage() {
+        let workflow = workflow_spec(vec![WorkflowNode::BranchSet(BranchSpec {
+            id: "cache-branches".to_string(),
+            description: None,
+            parallel: true,
+            budget: BudgetSpec::default(),
+            permissions: PermissionSpec::default(),
+            model_policy: ModelPolicy::default(),
+            children: vec![leaf_node("rlm-hit"), leaf_node("rlm-miss")],
+        })]);
+
+        let mut executor = MockWorkflowExecutor::new()
+            .with_leaf_outcome(
+                "rlm-hit",
+                MockLeafOutcome::succeeded("memo hit").with_memo_usage(WorkflowMemoUsage {
+                    armh_hits: 1,
+                    armh_misses: 0,
+                    armh_saved_estimated_tokens: 4096,
+                    provider_prompt_cache_hits: 1,
+                    provider_prompt_cache_misses: 0,
+                }),
+            )
+            .with_leaf_outcome(
+                "rlm-miss",
+                MockLeafOutcome::succeeded("memo miss").with_memo_usage(WorkflowMemoUsage {
+                    armh_hits: 0,
+                    armh_misses: 1,
+                    armh_saved_estimated_tokens: 0,
+                    provider_prompt_cache_hits: 0,
+                    provider_prompt_cache_misses: 1,
+                }),
+            );
+
+        let execution = executor.run(&workflow).expect("mock workflow should run");
+
+        assert_eq!(
+            execution.memo_usage,
+            WorkflowMemoUsage {
+                armh_hits: 1,
+                armh_misses: 1,
+                armh_saved_estimated_tokens: 4096,
+                provider_prompt_cache_hits: 1,
+                provider_prompt_cache_misses: 1,
+            }
+        );
+        assert_eq!(execution.branch_results[0].memo_usage, execution.memo_usage);
+        assert_eq!(
+            execution
+                .leaf_results
+                .iter()
+                .map(|result| (result.memo_usage.armh_hits, result.memo_usage.armh_misses))
+                .collect::<Vec<_>>(),
+            vec![(1, 0), (0, 1)]
         );
     }
 

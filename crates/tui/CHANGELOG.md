@@ -59,7 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   roles without hardcoding provider-specific runtime paths (#2672). The
   `rlm_cache_change.star` dogfood workflow now exercises candidate branches,
   LoopUntil verification, tournament selection, teacher review, and mock
-  execution in CI-oriented crate tests (#2679).
+  execution in CI-oriented crate tests (#2679). Leaf, branch, and workflow
+  results now also carry separate ARMH/shared-memo and provider prompt-cache
+  telemetry counters, with mock aggregation tests, so #2671 can progress
+  without wiring live RLM calls or billing-affecting provider behavior yet.
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
