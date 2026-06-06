@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is surfaced by `codewhale doctor`; `SSL_CERT_FILE` remains the preferred path
   for corporate or private CA roots. Thanks @wavezhang for the original #1893
   direction.
+- Added a default-disabled hard-compaction planner that can identify the
+  summarizable middle of a long conversation while preserving the recent tail,
+  existing tool-call/result pair guarantees, and working-set pinning. This
+  harvests the safe planning layer from #2522 without enabling hard compaction
+  or adding a message-rewrite execution path yet. Thanks @HUQIANTAO for the
+  proposal.
 - Added rich PlanArtifact support to `update_plan`: Plan mode can now carry
   grounded objectives, context, sources, critical files, constraints,
   verification, risks, and handoff notes through the transcript card, Plan
