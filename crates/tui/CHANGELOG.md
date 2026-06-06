@@ -61,8 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   examples plus a one-pass repair for common `ctx.*` authoring aliases (#2670).
   Leaf, branch, and workflow execution results now carry deterministic token
   and cost telemetry fields that the mock executor can aggregate without live
-  provider calls or runtime sub-agent fanout (#2486). A crate-only replay
-  executor now evaluates workflows from recorded leaf/control records, computes
+  provider calls or runtime sub-agent fanout (#2486). The mock executor now
+  carries crate-local cancellation and budget-exhaustion status markers so the
+  branch/leaf runtime contract can be tested before live workflow execution is
+  exposed (#2669). A crate-only replay executor now evaluates workflows from
+  recorded leaf/control records, computes
   stable SHA-256 leaf input hashes, and marks missing records as
   `replay_diverged` instead of calling models again (#2673); the runtime replay
   command and live-provider replay fallback remain deferred. The crate also now
