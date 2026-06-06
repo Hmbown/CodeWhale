@@ -197,9 +197,12 @@ impl TabSwitcherView {
                 String::new()
             };
 
-            // Construct line
-            let title_truncated = if tab.title.len() > 30 {
-                format!("{}...", &tab.title[..27])
+            // Construct line. `chars().count()` gives the display width; byte
+            // slicing (`&title[..N]`) would panic on a multi-byte char at the
+            // cut point, so we collect from a character iterator instead.
+            let title_truncated = if tab.title.chars().count() > 30 {
+                let truncated: String = tab.title.chars().take(27).collect();
+                format!("{truncated}...")
             } else {
                 tab.title.clone()
             };

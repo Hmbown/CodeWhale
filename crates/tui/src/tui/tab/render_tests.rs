@@ -11,12 +11,12 @@
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use crate::tui::app::App;
-    use crate::tui::tab::group::GroupColor;
-    use crate::tui::tab::tab_bar::{render_tab_bar, TAB_BAR_HEIGHT};
     use crate::tui::tab::TabType;
+    use crate::tui::tab::group::GroupColor;
+    use crate::tui::tab::tab_bar::{TAB_BAR_HEIGHT, render_tab_bar};
 
     /// Helper: render the tab bar to a string buffer and return it
     fn render_to_string<F>(width: u16, render_fn: F) -> String
@@ -98,10 +98,7 @@ mod tests {
 
     #[test]
     fn test_render_with_group_color() {
-        let mut app = make_test_app(vec![
-            ("A", TabType::Chat),
-            ("B", TabType::Chat),
-        ]);
+        let mut app = make_test_app(vec![("A", TabType::Chat), ("B", TabType::Chat)]);
         let group_id = app
             .tab_manager
             .create_group("TestGroup".to_string(), GroupColor::Red);
@@ -113,7 +110,11 @@ mod tests {
             render_tab_bar(area, buf, &app);
         });
         // Should have the group tag
-        assert!(output.contains("⟨Rd⟩"), "Expected group tag, got: {}", output);
+        assert!(
+            output.contains("⟨Rd⟩"),
+            "Expected group tag, got: {}",
+            output
+        );
     }
 
     #[test]
@@ -185,10 +186,7 @@ mod tests {
 
     #[test]
     fn test_render_active_tab_has_marker() {
-        let mut app = make_test_app(vec![
-            ("A", TabType::Chat),
-            ("B", TabType::Chat),
-        ]);
+        let mut app = make_test_app(vec![("A", TabType::Chat), ("B", TabType::Chat)]);
         // Switch to first tab
         app.tab_manager.switch_to(0);
         let output = render_to_string(80, |buf, area| {
@@ -196,6 +194,10 @@ mod tests {
         });
         // First tab should be active (has * marker)
         let first_line = output.lines().next().unwrap_or("");
-        assert!(first_line.contains("*"), "First tab should be active, got: {}", first_line);
+        assert!(
+            first_line.contains("*"),
+            "First tab should be active, got: {}",
+            first_line
+        );
     }
 }

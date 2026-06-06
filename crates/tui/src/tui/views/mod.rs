@@ -14,11 +14,11 @@ use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod meeting_view;
 pub mod mode_picker;
 pub mod status_picker;
-pub mod tab_switcher;
 pub mod tab_picker;
-pub mod meeting_view;
+pub mod tab_switcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
@@ -44,6 +44,11 @@ pub enum ModalKind {
     ShellControl,
     TabSwitcher,
     TabPicker,
+    /// Meeting modal — part of the WIP collaboration surface. The narrow
+    /// tab-core harvest in PR #2753 does not yet wire it into the modal
+    /// stack; it lives here so the `ModalKind` round-trip and the future
+    /// UI pass line up.
+    #[allow(dead_code)]
     Meeting,
 }
 

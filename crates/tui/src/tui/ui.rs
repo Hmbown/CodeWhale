@@ -3569,8 +3569,7 @@ async fn run_event_loop(
                 {
                     let idx = c.to_digit(10).unwrap_or(1) as usize - 1;
                     if app.tab_manager.switch_to(idx) {
-                        app.status_message =
-                            Some(format!("Switched to tab {}", idx + 1));
+                        app.status_message = Some(format!("Switched to tab {}", idx + 1));
                     }
                     app.needs_redraw = true;
                     continue;
@@ -3960,9 +3959,7 @@ async fn run_event_loop(
                             .await;
                     }
                 }
-                KeyCode::BackTab
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                KeyCode::BackTab if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if app.tab_manager.switch_to_prev() {
                         app.status_message = Some("Switched to previous tab".to_string());
                     }
@@ -8027,10 +8024,12 @@ async fn handle_view_events(
                         // clicked cell's text) before this delegation fires.
                         let description =
                             format!("Task delegated from tab {} to tab {}", from.0, to_tab);
-                        match app
-                            .tab_manager
-                            .delegate_task(from, to_tab_id, description.clone(), Default::default())
-                        {
+                        match app.tab_manager.delegate_task(
+                            from,
+                            to_tab_id,
+                            description.clone(),
+                            Default::default(),
+                        ) {
                             Some(task_id) => {
                                 format!("{} (ID: {})", description, task_id)
                             }
