@@ -37,9 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config/IR validation and deterministic phase ordering tests. This preserves
   the WhaleFlow direction from #2482/#2486 without exposing a runtime
   `workflow_run` tool until cancellation, replay, and worktree semantics are
-  release-safe. The foundation now includes serializable branch, leaf, and
-  control-node result records toward the #2668 TraceStore contract. Thanks
-  @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
+  release-safe. The foundation now includes explicit `WorkflowSpec`,
+  `WorkflowNode`, branch/leaf/policy metadata structs, plus serializable branch,
+  leaf, and control-node result records toward the #2668 TraceStore contract.
+  Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
   migration creates persistence shape only; workflow execution and replay

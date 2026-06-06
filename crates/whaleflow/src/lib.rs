@@ -31,6 +31,183 @@ impl WorkflowConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowSpec {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub goal: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub budget: BudgetSpec,
+    #[serde(default)]
+    pub permissions: PermissionSpec,
+    #[serde(default)]
+    pub model_policy: ModelPolicy,
+    #[serde(default)]
+    pub promotion_policy: PromotionPolicy,
+    #[serde(default)]
+    pub nodes: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "spec", rename_all = "snake_case")]
+pub enum WorkflowNode {
+    BranchSet(BranchSpec),
+    Leaf(LeafSpec),
+    Sequence(SequenceSpec),
+    Reduce(ReduceSpec),
+    TeacherReview(TeacherReviewSpec),
+    LoopUntil(LoopUntilSpec),
+    Cond(CondSpec),
+    Expand(ExpandSpec),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchSpec {
+    pub id: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parallel: bool,
+    #[serde(default)]
+    pub budget: BudgetSpec,
+    #[serde(default)]
+    pub permissions: PermissionSpec,
+    #[serde(default)]
+    pub model_policy: ModelPolicy,
+    #[serde(default)]
+    pub children: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeafSpec {
+    pub id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub agent_type: AgentType,
+    #[serde(default)]
+    pub mode: TaskMode,
+    #[serde(default)]
+    pub isolation: IsolationMode,
+    #[serde(default)]
+    pub file_scope: Vec<String>,
+    #[serde(default)]
+    pub depends_on_results: Vec<String>,
+    #[serde(default)]
+    pub budget: BudgetSpec,
+    #[serde(default)]
+    pub permissions: PermissionSpec,
+    #[serde(default)]
+    pub model_policy: ModelPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequenceSpec {
+    pub id: String,
+    #[serde(default)]
+    pub children: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReduceSpec {
+    pub id: String,
+    #[serde(default)]
+    pub inputs: Vec<String>,
+    pub prompt: String,
+    #[serde(default)]
+    pub model_policy: ModelPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeacherReviewSpec {
+    pub id: String,
+    #[serde(default)]
+    pub candidates: Vec<String>,
+    #[serde(default)]
+    pub promotion_policy: PromotionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopUntilSpec {
+    pub id: String,
+    pub condition: String,
+    #[serde(default)]
+    pub max_iterations: Option<u32>,
+    #[serde(default)]
+    pub children: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CondSpec {
+    pub id: String,
+    pub condition: String,
+    #[serde(default)]
+    pub then_nodes: Vec<WorkflowNode>,
+    #[serde(default)]
+    pub else_nodes: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpandSpec {
+    pub id: String,
+    pub source: String,
+    #[serde(default)]
+    pub template: Option<Box<WorkflowNode>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BudgetSpec {
+    #[serde(default)]
+    pub max_steps: Option<u32>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub max_parallel: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PermissionSpec {
+    #[serde(default)]
+    pub allow_write: bool,
+    #[serde(default)]
+    pub allow_network: bool,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub file_scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelPolicy {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PromotionPolicy {
+    #[serde(default)]
+    pub strategy: PromotionStrategy,
+    #[serde(default)]
+    pub require_teacher_review: bool,
+    #[serde(default)]
+    pub min_successful_branches: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionStrategy {
+    #[default]
+    All,
+    FirstSuccess,
+    BestScore,
+    TeacherSelected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowPlan {
     goal: String,
@@ -767,6 +944,135 @@ mod tests {
 
         let parsed: WorkflowConfig = serde_json::from_str(&json).expect("parse workflow");
         assert_eq!(parsed, workflow);
+    }
+
+    #[test]
+    fn workflow_ir_roundtrip() {
+        let discover_leaf = LeafSpec {
+            id: "scan-readme".to_string(),
+            prompt: "Inspect README setup gaps".to_string(),
+            agent_type: AgentType::Explore,
+            mode: TaskMode::ReadOnly,
+            isolation: IsolationMode::Shared,
+            file_scope: vec!["README.md".to_string()],
+            depends_on_results: Vec::new(),
+            budget: BudgetSpec {
+                max_steps: Some(8),
+                timeout_secs: Some(300),
+                max_parallel: None,
+            },
+            permissions: PermissionSpec::default(),
+            model_policy: ModelPolicy {
+                provider: Some("openai".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                fallback_models: Vec::new(),
+            },
+        };
+        let workflow = WorkflowSpec {
+            id: Some("v090-readme-check".to_string()),
+            goal: "tighten setup docs".to_string(),
+            description: Some("metadata-only typed WhaleFlow IR".to_string()),
+            budget: BudgetSpec {
+                max_steps: Some(30),
+                timeout_secs: Some(1_800),
+                max_parallel: Some(2),
+            },
+            permissions: PermissionSpec {
+                allow_write: false,
+                allow_network: false,
+                allowed_tools: vec!["rg".to_string()],
+                file_scope: vec!["README.md".to_string()],
+            },
+            model_policy: ModelPolicy {
+                provider: Some("openai".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                fallback_models: vec!["gpt-5.4-mini".to_string()],
+            },
+            promotion_policy: PromotionPolicy {
+                strategy: PromotionStrategy::TeacherSelected,
+                require_teacher_review: true,
+                min_successful_branches: Some(1),
+            },
+            nodes: vec![
+                WorkflowNode::BranchSet(BranchSpec {
+                    id: "discover".to_string(),
+                    description: Some("parallel doc inspection".to_string()),
+                    parallel: true,
+                    budget: BudgetSpec {
+                        max_steps: Some(12),
+                        timeout_secs: Some(600),
+                        max_parallel: Some(2),
+                    },
+                    permissions: PermissionSpec::default(),
+                    model_policy: ModelPolicy::default(),
+                    children: vec![WorkflowNode::Leaf(discover_leaf)],
+                }),
+                WorkflowNode::Sequence(SequenceSpec {
+                    id: "review-and-reduce".to_string(),
+                    children: vec![
+                        WorkflowNode::TeacherReview(TeacherReviewSpec {
+                            id: "select-best".to_string(),
+                            candidates: vec!["scan-readme".to_string()],
+                            promotion_policy: PromotionPolicy {
+                                strategy: PromotionStrategy::BestScore,
+                                require_teacher_review: true,
+                                min_successful_branches: Some(1),
+                            },
+                        }),
+                        WorkflowNode::Reduce(ReduceSpec {
+                            id: "summarize".to_string(),
+                            inputs: vec!["scan-readme".to_string()],
+                            prompt: "Summarize the smallest safe patch".to_string(),
+                            model_policy: ModelPolicy::default(),
+                        }),
+                    ],
+                }),
+                WorkflowNode::Cond(CondSpec {
+                    id: "maybe-expand".to_string(),
+                    condition: "summary identifies multiple independent gaps".to_string(),
+                    then_nodes: vec![WorkflowNode::Expand(ExpandSpec {
+                        id: "split-followups".to_string(),
+                        source: "summarize".to_string(),
+                        template: Some(Box::new(WorkflowNode::Leaf(LeafSpec {
+                            id: "followup-template".to_string(),
+                            prompt: "Patch one independent gap".to_string(),
+                            agent_type: AgentType::Implementer,
+                            mode: TaskMode::ReadWrite,
+                            isolation: IsolationMode::Worktree,
+                            file_scope: vec!["README.md".to_string()],
+                            depends_on_results: Vec::new(),
+                            budget: BudgetSpec::default(),
+                            permissions: PermissionSpec {
+                                allow_write: true,
+                                allow_network: false,
+                                allowed_tools: Vec::new(),
+                                file_scope: vec!["README.md".to_string()],
+                            },
+                            model_policy: ModelPolicy::default(),
+                        }))),
+                    })],
+                    else_nodes: vec![WorkflowNode::LoopUntil(LoopUntilSpec {
+                        id: "verify-once".to_string(),
+                        condition: "local verification passes".to_string(),
+                        max_iterations: Some(1),
+                        children: Vec::new(),
+                    })],
+                }),
+            ],
+        };
+
+        let json = serde_json::to_string_pretty(&workflow).expect("serialize workflow ir");
+
+        assert!(json.contains("\"kind\": \"branch_set\""));
+        assert!(json.contains("\"strategy\": \"teacher_selected\""));
+        let parsed: WorkflowSpec = serde_json::from_str(&json).expect("parse workflow ir");
+        assert_eq!(parsed, workflow);
+
+        let minimal: WorkflowSpec = serde_json::from_str(r#"{"goal":"ship v0.9","nodes":[]}"#)
+            .expect("parse minimal workflow ir");
+        assert_eq!(minimal.budget, BudgetSpec::default());
+        assert_eq!(minimal.permissions, PermissionSpec::default());
+        assert_eq!(minimal.model_policy, ModelPolicy::default());
     }
 
     #[test]
