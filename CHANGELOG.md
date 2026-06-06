@@ -82,7 +82,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for notes, workflow recipes, skills, regression tests, cache policy, branch
   heuristics, and Starlark authoring prompt patches, plus an offline helper
   that proposes candidates from recorded execution traces without promoting
-  them or training model weights (#2674).
+  them or training model weights (#2674). StudentReplay results can now be
+  stored on teacher candidates, and a deterministic PromotionGate compares
+  baseline-vs-candidate replay deltas, required tests, policy violations,
+  staleness, and cost constraints before marking a candidate promotable (#2675).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

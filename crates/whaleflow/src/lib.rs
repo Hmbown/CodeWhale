@@ -210,6 +210,8 @@ pub struct PromotionPolicy {
     pub require_teacher_review: bool,
     #[serde(default)]
     pub min_successful_branches: Option<u32>,
+    #[serde(default)]
+    pub promotion_gate: PromotionGate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -945,6 +947,155 @@ pub struct TeacherCandidate {
     pub summary: String,
     #[serde(default)]
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub replay_results: Vec<StudentReplayResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StudentReplayMetrics {
+    #[serde(default)]
+    pub score: i32,
+    #[serde(default)]
+    pub cost_microusd: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudentReplayTestResult {
+    pub name: String,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudentReplayResult {
+    pub trace_id: String,
+    pub candidate_id: String,
+    pub baseline: StudentReplayMetrics,
+    pub candidate: StudentReplayMetrics,
+    #[serde(default)]
+    pub required_tests: Vec<StudentReplayTestResult>,
+    #[serde(default)]
+    pub policy_violations: Vec<String>,
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionGate {
+    #[serde(default = "default_min_replay_score_delta")]
+    pub min_score_delta: i32,
+    #[serde(default)]
+    pub max_cost_delta_microusd: Option<i64>,
+    #[serde(default = "default_true")]
+    pub require_all_tests_pass: bool,
+    #[serde(default = "default_true")]
+    pub reject_policy_violations: bool,
+    #[serde(default = "default_true")]
+    pub reject_stale_replay: bool,
+}
+
+impl Default for PromotionGate {
+    fn default() -> Self {
+        Self {
+            min_score_delta: default_min_replay_score_delta(),
+            max_cost_delta_microusd: None,
+            require_all_tests_pass: true,
+            reject_policy_violations: true,
+            reject_stale_replay: true,
+        }
+    }
+}
+
+impl PromotionGate {
+    pub fn evaluate_candidate(&self, candidate: &TeacherCandidate) -> PromotionGateDecision {
+        let Some(replay) = candidate.replay_results.last() else {
+            return PromotionGateDecision {
+                candidate_id: candidate.candidate_id.clone(),
+                status: TeacherCandidateStatus::Rejected,
+                score_delta: 0,
+                cost_delta_microusd: 0,
+                reasons: vec!["no student replay result recorded".to_string()],
+            };
+        };
+        self.evaluate_replay(&candidate.candidate_id, replay)
+    }
+
+    pub fn evaluate_replay(
+        &self,
+        candidate_id: &str,
+        replay: &StudentReplayResult,
+    ) -> PromotionGateDecision {
+        let score_delta = replay.score_delta();
+        let cost_delta_microusd = replay.cost_delta_microusd();
+        let mut reasons = Vec::new();
+
+        if score_delta < self.min_score_delta {
+            reasons.push(format!(
+                "score delta {score_delta} is below required {}",
+                self.min_score_delta
+            ));
+        }
+        if let Some(max_cost_delta) = self.max_cost_delta_microusd
+            && cost_delta_microusd > max_cost_delta
+        {
+            reasons.push(format!(
+                "cost delta {cost_delta_microusd} exceeds allowed {max_cost_delta}"
+            ));
+        }
+        if self.require_all_tests_pass {
+            for test in replay.required_tests.iter().filter(|test| !test.passed) {
+                reasons.push(format!("required test `{}` failed", test.name));
+            }
+        }
+        if self.reject_policy_violations {
+            for violation in &replay.policy_violations {
+                reasons.push(format!("policy violation: {violation}"));
+            }
+        }
+        if self.reject_stale_replay && replay.stale {
+            reasons.push("student replay result is stale".to_string());
+        }
+
+        let status = if reasons.is_empty() {
+            TeacherCandidateStatus::Promoted
+        } else {
+            TeacherCandidateStatus::Rejected
+        };
+        PromotionGateDecision {
+            candidate_id: candidate_id.to_string(),
+            status,
+            score_delta,
+            cost_delta_microusd,
+            reasons,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionGateDecision {
+    pub candidate_id: String,
+    pub status: TeacherCandidateStatus,
+    pub score_delta: i32,
+    pub cost_delta_microusd: i64,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
+impl PromotionGateDecision {
+    pub fn promoted(&self) -> bool {
+        self.status == TeacherCandidateStatus::Promoted
+    }
+}
+
+impl StudentReplayResult {
+    pub fn score_delta(&self) -> i32 {
+        self.candidate.score.saturating_sub(self.baseline.score)
+    }
+
+    pub fn cost_delta_microusd(&self) -> i64 {
+        signed_u64_delta(self.candidate.cost_microusd, self.baseline.cost_microusd)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1037,6 +1188,7 @@ fn teacher_candidate_from_branch(
             branch.branch_id, branch.status
         ),
         evidence,
+        replay_results: Vec::new(),
     }
 }
 
@@ -1063,6 +1215,7 @@ fn teacher_candidate_from_leaf(review: &TeacherReviewSpec, leaf: &LeafResult) ->
             leaf.leaf_id, leaf.status
         ),
         evidence,
+        replay_results: Vec::new(),
     }
 }
 
@@ -1091,6 +1244,23 @@ fn teacher_candidate_from_control(
             control.node_id, control.kind
         ),
         evidence,
+        replay_results: Vec::new(),
+    }
+}
+
+fn default_min_replay_score_delta() -> i32 {
+    1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn signed_u64_delta(candidate: u64, baseline: u64) -> i64 {
+    if candidate >= baseline {
+        i64::try_from(candidate - baseline).unwrap_or(i64::MAX)
+    } else {
+        -i64::try_from(baseline - candidate).unwrap_or(i64::MAX)
     }
 }
 
@@ -1900,6 +2070,7 @@ mod tests {
                 strategy: PromotionStrategy::TeacherSelected,
                 require_teacher_review: true,
                 min_successful_branches: Some(1),
+                promotion_gate: PromotionGate::default(),
             },
             nodes: vec![
                 WorkflowNode::BranchSet(BranchSpec {
@@ -1925,6 +2096,7 @@ mod tests {
                                 strategy: PromotionStrategy::BestScore,
                                 require_teacher_review: true,
                                 min_successful_branches: Some(1),
+                                promotion_gate: PromotionGate::default(),
                             },
                         }),
                         WorkflowNode::Reduce(ReduceSpec {
@@ -2436,12 +2608,32 @@ mod tests {
                 "status=Succeeded".to_string(),
                 "tokens=42, cost_microusd=7".to_string(),
             ],
+            replay_results: vec![StudentReplayResult {
+                trace_id: "trace-a".to_string(),
+                candidate_id: "teacher-review:branch-a".to_string(),
+                baseline: StudentReplayMetrics {
+                    score: 70,
+                    cost_microusd: 10,
+                },
+                candidate: StudentReplayMetrics {
+                    score: 74,
+                    cost_microusd: 12,
+                },
+                required_tests: vec![StudentReplayTestResult {
+                    name: "cargo test -p codewhale-whaleflow".to_string(),
+                    passed: true,
+                }],
+                policy_violations: Vec::new(),
+                stale: false,
+                notes: Some("offline replay improved the constrained student".to_string()),
+            }],
         };
 
         let json = serde_json::to_string(&candidate).expect("serialize teacher candidate");
 
         assert!(json.contains("\"kind\":\"workflow_recipe\""));
         assert!(json.contains("\"status\":\"proposed\""));
+        assert!(json.contains("\"replay_results\""));
         let parsed: TeacherCandidate =
             serde_json::from_str(&json).expect("parse teacher candidate");
         assert_eq!(parsed, candidate);
@@ -2521,6 +2713,134 @@ mod tests {
                 .evidence
                 .iter()
                 .any(|line| { line.contains("cargo test failed with a replay mismatch") })
+        );
+    }
+
+    #[test]
+    fn student_replay_promotes_only_on_delta() {
+        let gate = PromotionGate {
+            min_score_delta: 3,
+            max_cost_delta_microusd: Some(25),
+            ..PromotionGate::default()
+        };
+        let replay = StudentReplayResult {
+            trace_id: "trace-a".to_string(),
+            candidate_id: "teacher-review:branch-a".to_string(),
+            baseline: StudentReplayMetrics {
+                score: 80,
+                cost_microusd: 100,
+            },
+            candidate: StudentReplayMetrics {
+                score: 84,
+                cost_microusd: 120,
+            },
+            required_tests: vec![StudentReplayTestResult {
+                name: "workflow replay".to_string(),
+                passed: true,
+            }],
+            policy_violations: Vec::new(),
+            stale: false,
+            notes: None,
+        };
+
+        let promoted = gate.evaluate_replay("teacher-review:branch-a", &replay);
+        assert!(promoted.promoted());
+        assert_eq!(promoted.status, TeacherCandidateStatus::Promoted);
+        assert_eq!(promoted.score_delta, 4);
+
+        let weak_replay = StudentReplayResult {
+            candidate: StudentReplayMetrics {
+                score: 82,
+                cost_microusd: 120,
+            },
+            ..replay
+        };
+        let rejected = gate.evaluate_replay("teacher-review:branch-a", &weak_replay);
+        assert!(!rejected.promoted());
+        assert_eq!(rejected.status, TeacherCandidateStatus::Rejected);
+        assert!(
+            rejected
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("below required 3"))
+        );
+    }
+
+    #[test]
+    fn promotion_gate_rejects_stale_policy_cost_and_failed_tests() {
+        let gate = PromotionGate {
+            min_score_delta: 1,
+            max_cost_delta_microusd: Some(10),
+            ..PromotionGate::default()
+        };
+        let replay = StudentReplayResult {
+            trace_id: "trace-a".to_string(),
+            candidate_id: "teacher-review:branch-a".to_string(),
+            baseline: StudentReplayMetrics {
+                score: 70,
+                cost_microusd: 10,
+            },
+            candidate: StudentReplayMetrics {
+                score: 90,
+                cost_microusd: 30,
+            },
+            required_tests: vec![StudentReplayTestResult {
+                name: "required regression".to_string(),
+                passed: false,
+            }],
+            policy_violations: vec!["writes outside file scope".to_string()],
+            stale: true,
+            notes: None,
+        };
+
+        let decision = gate.evaluate_replay("teacher-review:branch-a", &replay);
+
+        assert_eq!(decision.status, TeacherCandidateStatus::Rejected);
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("cost delta 20 exceeds allowed 10") })
+        );
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("required test `required regression` failed") })
+        );
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("policy violation: writes outside file scope") })
+        );
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("student replay result is stale") })
+        );
+    }
+
+    #[test]
+    fn promotion_gate_requires_recorded_replay_before_candidate_promotion() {
+        let candidate = TeacherCandidate {
+            candidate_id: "teacher-review:branch-a".to_string(),
+            kind: TeacherCandidateKind::WorkflowRecipe,
+            status: TeacherCandidateStatus::Proposed,
+            source_node_id: "branch-a".to_string(),
+            source_branch_id: Some("branch-a".to_string()),
+            summary: "candidate waits for replay".to_string(),
+            evidence: Vec::new(),
+            replay_results: Vec::new(),
+        };
+
+        let decision = PromotionGate::default().evaluate_candidate(&candidate);
+
+        assert_eq!(decision.status, TeacherCandidateStatus::Rejected);
+        assert_eq!(
+            decision.reasons,
+            vec!["no student replay result recorded".to_string()]
         );
     }
 
