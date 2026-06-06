@@ -246,6 +246,63 @@ pub enum IsolationMode {
     Worktree,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchResult {
+    pub branch_id: String,
+    pub task_id: String,
+    pub status: WorkflowRunStatus,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeafResult {
+    pub leaf_id: String,
+    pub task_id: String,
+    pub status: WorkflowRunStatus,
+    #[serde(default)]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlNodeResult {
+    pub node_id: String,
+    pub kind: ControlNodeKind,
+    pub status: WorkflowRunStatus,
+    #[serde(default)]
+    pub selected_children: Vec<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRunStatus {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlNodeKind {
+    BranchSet,
+    Leaf,
+    Sequence,
+    Reduce,
+    TeacherReview,
+    LoopUntil,
+    Cond,
+    Expand,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WorkflowValidationError {
     #[error("{field} must not be empty")]
@@ -710,5 +767,58 @@ mod tests {
 
         let parsed: WorkflowConfig = serde_json::from_str(&json).expect("parse workflow");
         assert_eq!(parsed, workflow);
+    }
+
+    #[test]
+    fn branch_result_serialization() {
+        let result = BranchResult {
+            branch_id: "discover".to_string(),
+            task_id: "scan".to_string(),
+            status: WorkflowRunStatus::Succeeded,
+            artifacts: vec!["trace://branches/discover".to_string()],
+            notes: Some("validated prompt surfaces".to_string()),
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize branch result");
+
+        assert!(json.contains("\"status\":\"succeeded\""));
+        let parsed: BranchResult = serde_json::from_str(&json).expect("parse branch result");
+        assert_eq!(parsed, result);
+    }
+
+    #[test]
+    fn leaf_result_serialization() {
+        let result = LeafResult {
+            leaf_id: "scan-readme".to_string(),
+            task_id: "scan".to_string(),
+            status: WorkflowRunStatus::Failed,
+            output: Some("README needs clearer setup steps".to_string()),
+            artifacts: vec!["trace://leaves/scan-readme".to_string()],
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize leaf result");
+
+        assert!(json.contains("\"status\":\"failed\""));
+        let parsed: LeafResult = serde_json::from_str(&json).expect("parse leaf result");
+        assert_eq!(parsed, result);
+    }
+
+    #[test]
+    fn control_node_result_serialization() {
+        let result = ControlNodeResult {
+            node_id: "select-fix".to_string(),
+            kind: ControlNodeKind::TeacherReview,
+            status: WorkflowRunStatus::Running,
+            selected_children: vec!["branch-a".to_string(), "branch-c".to_string()],
+            summary: Some("teacher review is waiting on verifier evidence".to_string()),
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize control node result");
+
+        assert!(json.contains("\"kind\":\"teacher_review\""));
+        assert!(json.contains("\"status\":\"running\""));
+        let parsed: ControlNodeResult =
+            serde_json::from_str(&json).expect("parse control node result");
+        assert_eq!(parsed, result);
     }
 }

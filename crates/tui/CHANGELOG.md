@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config/IR validation and deterministic phase ordering tests. This preserves
   the WhaleFlow direction from #2482/#2486 without exposing a runtime
   `workflow_run` tool until cancellation, replay, and worktree semantics are
-  release-safe. Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking
-  direction.
+  release-safe. The foundation now includes serializable branch, leaf, and
+  control-node result records toward the #2668 TraceStore contract. Thanks
+  @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added an official VS Code extension Phase 0 scaffold with terminal launch,
   local runtime attach checks, status bar state, and a read-only Agent View
   preview backed by recent runtime thread summaries. This answers the VS Code
