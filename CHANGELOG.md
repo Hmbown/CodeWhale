@@ -43,8 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It also adds a crate-local mock executor skeleton for Sequence, BranchSet,
   Leaf, Reduce, LoopUntil, Cond, Expand, BranchTournament, and ParetoFrontier
   control flow so #2669 can progress without spawning agents, applying
-  worktrees, or exposing a `workflow_run` runtime tool yet. Thanks @AdityaVG13
-  for the WhaleFlow draft and cost-tracking direction.
+  worktrees, or exposing a `workflow_run` runtime tool yet. A first Starlark
+  authoring layer now compiles fail-closed model-authored workflow files into
+  that typed IR, with `rlm_cache_change.star` and `issue_fix_tournament.star`
+  examples plus a one-pass repair for common `ctx.*` authoring aliases (#2670).
+  Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
   migration creates persistence shape only; workflow execution and replay

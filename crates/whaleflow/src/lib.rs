@@ -4,11 +4,19 @@
 //! exposure, worktree application, replay, and model execution are layered on
 //! top only after their cancellation and evidence semantics are proven.
 
+#[cfg(not(target_env = "ohos"))]
+mod starlark_authoring;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[cfg(not(target_env = "ohos"))]
+pub use starlark_authoring::{
+    compile_starlark_workflow, compile_starlark_workflow_with_repair, repair_starlark_workflow_once,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowConfig {

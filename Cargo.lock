@@ -1032,8 +1032,10 @@ version = "0.8.53"
 name = "codewhale-whaleflow"
 version = "0.8.53"
 dependencies = [
+ "anyhow",
  "serde",
  "serde_json",
+ "starlark",
  "thiserror 2.0.18",
 ]
 
