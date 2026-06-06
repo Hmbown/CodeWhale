@@ -24,11 +24,11 @@ config source, result, and follow-up issue or PR.
 
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
-| DeepSeek V4 direct provider smoke | provider steward | ship |  |
-| Xiaomi MiMo token-plan and pay-as-you-go config smoke | provider steward | ship |  |
-| Arcee Trinity Thinking route smoke or explicit defer | provider steward | decide |  |
+| DeepSeek V4 direct provider smoke | provider steward | manual smoke required before tag | No dated live DeepSeek V4 direct-provider smoke has been recorded on this matrix yet. Static routing/model support exists, but release stewards must add date, OS, provider/model, command, redacted config source, and result before tagging if v0.9 release notes claim live DeepSeek V4 readiness. |
+| Xiaomi MiMo token-plan and pay-as-you-go config smoke | provider steward | ship config evidence / require live smoke before tag if claiming provider availability | Config coverage exercises token-plan and pay-as-you-go env behavior in `crates/config/src/lib.rs` (`xiaomi_mimo_env_token_plan_mode_uses_token_plan_key_and_endpoint`, `xiaomi_mimo_env_pay_as_you_go_mode_prefers_standard_key`) and mirrors the TUI config path in `crates/tui/src/config.rs`; `docs/PROVIDERS.md` documents Token Plan regions and pay-as-you-go mode. This is config evidence only, not a live Xiaomi call. |
+| Arcee Trinity Thinking route smoke or explicit defer | provider steward | defer live smoke / ship static route metadata | Static provider/model metadata exists in `docs/PROVIDERS.md`, `crates/agent/src/lib.rs`, and `crates/tui/src/config.rs`, but no live Arcee credential smoke has been recorded. Do not claim live Arcee route readiness in v0.9 release notes unless a dated manual smoke is added. |
 | Hugging Face provider route and MCP concept helpers ship; native Hub search/passports are deferred | model-lab steward | ship foundation / defer native search-passport runtime | `ProviderKind::Huggingface`, env aliases, picker/docs, and `/hf concepts` / `/hf mcp status` distinguish the chat provider route from Hugging Face MCP and explicit Hub tooling. `docs/PROVIDERS.md` states native Hub HTTP search/passport picker metadata are not shipped behavior in this checkout; #2705/#2707/#2712 remain open for native Model Lab work. |
-| OpenRouter, Novita, Fireworks, and Volcengine env behavior smoke | provider steward | ship |  |
+| OpenRouter, Novita, Fireworks, and Volcengine env behavior smoke | provider steward | ship config evidence / require live smoke before claiming live route coverage | Env/config tests cover OpenRouter, Novita, Fireworks, and Volcengine key/base-url/model override behavior in `crates/config/src/lib.rs`; TUI provider defaults and Volcengine env override are covered in `crates/tui/src/config.rs`, and `docs/PROVIDERS.md` documents the env/default behavior. This is env behavior evidence only, not live provider traffic. |
 | Provider registry drift check covers aliases/default env keys | provider steward | ship | #2820 (`5d491bc68`) added the metadata-only provider registry and `scripts/check-provider-registry.py`; verification included `python3 scripts/check-provider-registry.py` and `cargo test -p codewhale-config provider_ -- --nocapture`. |
 | Provider-scoped TLS skip-verify remains default-off and doctor-visible | security steward | ship | #2834 (`190e9f35e`, `6269cb91f`) landed provider-scoped TLS skip verify with default-off config, doctor warnings, docs, and CLI/runtime option tests. |
 
@@ -36,11 +36,11 @@ config source, result, and follow-up issue or PR.
 
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
-| Windows input/render smoke or documented manual verification | runtime steward | ship |  |
-| macOS and Linux TUI startup smoke | runtime steward | ship |  |
-| Large-repo startup smoke | runtime steward | ship |  |
-| Sub-agent timeout/completion smoke | subagent steward | ship |  |
-| Long-running command live-state smoke | runtime steward | ship |  |
+| Windows input/render smoke or documented manual verification | runtime steward | manual smoke required before tag | No dated Windows input/render smoke has been recorded on this matrix yet. Unit/shell-dispatcher tests are not a substitute for Windows ConPTY/manual input verification. |
+| macOS and Linux TUI startup smoke | runtime steward | manual smoke required before tag | Unix PTY tests cover startup/composer basics on Unix-like hosts, but exact-head macOS CI/manual startup evidence and Linux release-startup smoke must still be recorded before tagging. |
+| Large-repo startup smoke | runtime steward | defer full smoke / ship bounded-context mitigation evidence | Bounded project-context tests and changelog evidence cover the mitigation slice, but live large-workspace reports #697 and #1827 remain open. Do not close those issues or claim a full large-repo startup smoke without a dated manual run. |
+| Sub-agent timeout/completion smoke | subagent steward | ship timeout/completion slice | `docs/SUBAGENTS.md` documents per-step timeout and heartbeat behavior; `crates/tui/src/tools/subagent/tests.rs` covers `api_timeout_preserves_checkpoint_and_agent_eval_continues_from_it`, parent completion ordering, and timeout propagation. Broader hung-agent issues #1806/#2614 remain open. |
+| Long-running command live-state smoke | runtime steward | defer root-cause live-state smoke / ship shell-routing tests | Shell tests cover timeout/background/wait/cancel behavior and `shell_job_routing.rs` distinguishes live from stale process state, but #1786 remains open for shell PID/task-flow hangs and premature LIVE-state exit. |
 | Runtime API remains token-protected for GUI clients | GUI steward | ship | #2811/#2814 documented and consumed the existing runtime token flow from the official VS Code extension; #2822 (`bb8835812`) added `GET /v1/snapshots` behind the same runtime API token middleware. |
 | Snapshot/restore surfaces are read-only unless mutation semantics are tested | GUI steward | ship | #2822 (`bb8835812`) and #2828 (`293643e27`) expose restore points as read-only listing/Agent View metadata only; #2808 restore/retry/patch-undo mutation endpoints remain unmerged pending atomicity tests. |
 
@@ -80,17 +80,19 @@ config source, result, and follow-up issue or PR.
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
 | README, configuration docs, provider docs, and changelog agree | docs steward | ship | #2845 (`e22a7da53`) aligned README/config example/changelogs with the HarnessProfile cutline and removed stale `V0_9_0_EXECUTION_MAP` links. |
-| Breaking changes, deprecations, and deferred v0.9 gates are listed in release notes | release steward | ship |  |
-| Upgrade steps exist for users coming from `deepseek-tui` | docs steward | ship |  |
-| Rollback steps exist for npm wrapper, Cargo install, and side-git restore | release steward | ship |  |
-| Live GitHub Release body has its own contributor/credit section | release steward | ship |  |
-| Contributors/reporters/helpers from harvested PRs and linked issues are credited | release steward | ship |  |
+| Breaking changes, deprecations, and deferred v0.9 gates are listed in release notes | release steward | ship | Changelog and this matrix list deferred Model Lab/Hugging Face native Hub work, `codebase_search`, remote workbench runtime, WhaleFlow live runtime execution, HarnessProfile runtime selection, large-repo startup smoke, long-running command live-state smoke, and Arcee live smoke. `.github/workflows/release.yml` release-body text avoids stale v0.8.x-only shim wording and keeps CodeWhale as the canonical package/asset name. |
+| Upgrade steps exist for users coming from `deepseek-tui` | docs steward | ship | `docs/REBRAND.md` documents npm/Cargo migration commands, legacy state fallback, binary/package/asset naming, and the v0.9.0 compatibility cutline. |
+| Rollback steps exist for npm wrapper, Cargo install, and side-git restore | release steward | ship | `docs/INSTALL.md#roll-back-to-a-previous-release` and `docs/RELEASE_RUNBOOK.md#recovery-and-rollback` document pinned npm rollback, pinned Cargo rollback for both crates, exact-tag manual asset restore with checksums, and side-git `/restore list [N]` / `/restore <N>` workspace rollback. |
+| Live GitHub Release body has its own contributor/credit section | release steward | post-tag/pre-npm gate | `.github/workflows/release.yml` now creates a dedicated `## Contributors` release-body section with v0.9 contributor, reporter, helper, and harvested-PR credits. The live v0.9.0 Release does not exist yet, so this remains a release-time verification gate before npm publish or completion. |
+| Contributors/reporters/helpers from harvested PRs and linked issues are credited | release steward | ship local changelog / verify live body at release time | Changelog credits include harvested PR authors, issue reporters/helpers, and external/co-authored work including @Implementist, @jrcjrcc, and @punkcanyang. `python3 scripts/check-coauthor-trailers.py --author-map .github/AUTHOR_MAP --range origin/main..HEAD --check-authors` remains the local co-author-map gate; live release-body credits are covered by the row above. |
 
 ## Before Tagging
 
 - [ ] Every `ship` row has evidence.
 - [ ] Every `decide` row is changed to either `ship` with evidence or `defer`
       with an owner and linked follow-up.
+- [ ] Every `manual smoke required` row has dated smoke evidence, or is changed
+      to an explicit defer decision with an owner and linked follow-up.
 - [ ] Draft integration PR CI is green on the exact commit that will be tagged.
 - [ ] The release prompt points new agents to this matrix before any tag,
       publish, or GitHub Release action.

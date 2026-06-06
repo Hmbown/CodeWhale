@@ -405,7 +405,10 @@ underscore-server-name fix and Xiaomi MiMo pricing (#2747, #2744, #2750, #2731)
 and **@puneetdixit200** for independently diagnosing and fixing the same MCP
 underscore issue (#2746, #2744), **@mvanhorn** for the hydrated deferred-tool
 render fix (#2757, #2648), and **@xyuai** for the Xiaomi MiMo Token Plan region
-documentation (#2756, #2735).
+documentation (#2756, #2735). Additional thanks to **@Implementist** for Plan
+prompt scrolling, wrapping, and display-width fixes, **@jrcjrcc** for the
+Windows sub-agent completion render-width fix, and **@punkcanyang** for the
+original `/init` implementation harvested through #2771/#2745.
 
 ## [0.8.53] - 2026-06-03
 

@@ -287,6 +287,38 @@ curl -L -o /tmp/codewhale-artifacts-sha256.txt \
 
 (Use `shasum -a 256 -c` instead of `sha256sum` on macOS.)
 
+### Roll back to a previous release
+
+If a new release is bad on your machine, install the last known-good version
+explicitly. Replace `X.Y.Z` with the version you want to restore.
+
+```bash
+# npm wrapper, including the matching GitHub release binaries
+npm install -g codewhale@X.Y.Z
+
+# Cargo install path; both crates are required
+cargo install codewhale-cli --version X.Y.Z --locked --force
+cargo install codewhale-tui --version X.Y.Z --locked --force
+```
+
+For manual installs, download both binaries or the platform archive from the
+exact release tag and verify the matching checksum manifest from that same tag:
+
+```bash
+# individual binaries
+curl -L -o codewhale-artifacts-sha256.txt \
+  https://github.com/Hmbown/CodeWhale/releases/download/vX.Y.Z/codewhale-artifacts-sha256.txt
+
+# platform archives
+curl -L -o codewhale-bundles-sha256.txt \
+  https://github.com/Hmbown/CodeWhale/releases/download/vX.Y.Z/codewhale-bundles-sha256.txt
+```
+
+Inside a CodeWhale workspace, `/restore list [N]` lists side-git file snapshots
+and `/restore <N>` restores files from the chosen snapshot. That workspace
+rollback does not change your installed binary version and does not rewrite
+conversation history.
+
 ### Windows Scoop
 
 The `codewhale` package is listed in Scoop's main bucket:

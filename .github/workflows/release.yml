@@ -159,7 +159,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: codewhale-tui.exe
             artifact_name: codewhale-tui-windows-x64.exe
-          # --- deepseek (legacy dispatcher shim; removed in v0.9.0) ---
+          # --- deepseek (legacy dispatcher shim; compatibility-only) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek
@@ -180,7 +180,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: deepseek.exe
             artifact_name: deepseek-windows-x64.exe
-          # --- deepseek-tui (legacy TUI shim; removed in v0.9.0) ---
+          # --- deepseek-tui (legacy TUI shim; compatibility-only) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek-tui
@@ -538,8 +538,9 @@ jobs:
             printf '%s  %s\n' "${hash}" "${base}" >> "${manifest}"
           done < <(find artifacts -type f ! -path 'artifacts/checksums/*' -print0 | sort -z)
           # Legacy alias manifest so v0.8.40 `deepseek update` clients can
-          # still find a manifest by their hardcoded name. Same content; will
-          # be removed once the legacy shim binaries are retired in v0.9.0.
+          # still find a manifest by their hardcoded name. Same content as the
+          # canonical manifest; retire it only with an explicit release-infra
+          # cutover that also removes the legacy shim artifacts.
           cp "${manifest}" "artifacts/checksums/deepseek-artifacts-sha256.txt"
           cat "${manifest}"
       - uses: softprops/action-gh-release@v1
@@ -548,13 +549,11 @@ jobs:
           files: artifacts/*/*
           prerelease: false
           body: |
-            > This release renames the project to **CodeWhale**. The legacy
-            > `deepseek` and `deepseek-tui` binaries continue to ship as
-            > compatibility-only deprecation shims during v0.8.x; they print a
-            > one-line warning and forward to `codewhale` / `codewhale-tui`.
-            > They will be removed in v0.9.0. The legacy npm package
-            > `deepseek-tui` is deprecated and receives no further releases.
-            > See `docs/REBRAND.md` for the full migration story.
+            > **CodeWhale** is the canonical project, command, npm package, and
+            > release-asset name. The legacy npm package `deepseek-tui` is
+            > deprecated and receives no further releases. Users coming from
+            > v0.8.x legacy `deepseek` / `deepseek-tui` names should migrate
+            > with `docs/REBRAND.md`.
 
             ## Install
 
@@ -575,7 +574,7 @@ jobs:
               ghcr.io/hmbown/codewhale:${{ needs.resolve.outputs.tag }}
             ```
 
-            The image ships the `codewhale` dispatcher and `codewhale-tui` runtime (plus the legacy `deepseek` / `deepseek-tui` shims during the transition). The `latest` tag is also updated on release.
+            The image ships the `codewhale` dispatcher and `codewhale-tui` runtime. The `latest` tag is also updated on release.
 
             ### Cargo (Linux / macOS)
 
@@ -615,7 +614,7 @@ jobs:
 
             The **portable** Windows archive skips the install script — extract and run from any directory. The NSIS installer is currently unsigned and may trigger Windows SmartScreen until a signing certificate is wired into the release pipeline.
 
-            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets are compatibility-only deprecation shims for v0.8.x so that existing `deepseek update` invocations on v0.8.40 keep working; they forward to the canonical binaries. The legacy npm package `deepseek-tui` is deprecated and is not republished.
+            Individual binaries are also attached below for scripting and the npm wrapper. The legacy npm package `deepseek-tui` is deprecated and is not republished. For migration from v0.8.x legacy binary names, see `docs/REBRAND.md`.
 
             ### Verify (recommended)
 
@@ -634,6 +633,16 @@ jobs:
             ```
 
             The legacy `deepseek-artifacts-sha256.txt` is also attached for backward compatibility and contains the same hashes as the canonical manifest.
+
+            ## Contributors
+
+            Thanks to @sximelon, @cyq1017, @Artenx, @LHqweasd, @wywsoor,
+            @HUQIANTAO, @xyuai, @gaord, @shenjackyuanjie, @idling11,
+            @h3c-hexin, @AresNing, @tdccccc, @qiyuanlicn, @bevis-wong,
+            @shuxiangxuebiancheng, @hongqitai, @NASLXTO, @wuxixing,
+            @linzhiqin2003, @merchloubna70-dot, @puneetdixit200, @mvanhorn,
+            @Implementist, @jrcjrcc, and @punkcanyang for reports, PRs,
+            reviews, reproductions, and harvested work that shaped v0.9.0.
 
             ## Changelog
 
