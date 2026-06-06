@@ -4,6 +4,7 @@
 //! exposure, worktree application, replay, and model execution are layered on
 //! top only after their cancellation and evidence semantics are proven.
 
+mod replay;
 #[cfg(not(target_env = "ohos"))]
 mod starlark_authoring;
 
@@ -13,6 +14,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use replay::*;
 #[cfg(not(target_env = "ohos"))]
 pub use starlark_authoring::{
     compile_starlark_workflow, compile_starlark_workflow_with_repair, repair_starlark_workflow_once,
@@ -475,7 +477,7 @@ impl WorkflowUsage {
         self.input_tokens.saturating_add(self.output_tokens)
     }
 
-    fn add_assign(&mut self, other: Self) {
+    pub(crate) fn add_assign(&mut self, other: Self) {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.cost_microusd = self.cost_microusd.saturating_add(other.cost_microusd);
@@ -502,9 +504,10 @@ pub enum WorkflowRunStatus {
     Succeeded,
     Failed,
     Cancelled,
+    ReplayDiverged,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlNodeKind {
     BranchSet,
@@ -545,6 +548,10 @@ impl Default for WorkflowExecution {
 impl WorkflowExecution {
     pub fn mark_failed(&mut self) {
         self.status = WorkflowRunStatus::Failed;
+    }
+
+    pub(crate) fn mark_replay_diverged(&mut self) {
+        self.status = WorkflowRunStatus::ReplayDiverged;
     }
 }
 
@@ -932,7 +939,9 @@ fn node_id(node: &WorkflowNode) -> String {
     }
 }
 
-fn validate_workflow_nodes(nodes: &[WorkflowNode]) -> Result<(), WorkflowExecutionError> {
+pub(crate) fn validate_workflow_nodes(
+    nodes: &[WorkflowNode],
+) -> Result<(), WorkflowExecutionError> {
     let mut seen = BTreeSet::new();
     validate_workflow_nodes_inner(nodes, &mut seen)
 }

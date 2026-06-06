@@ -1035,6 +1035,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "starlark",
  "thiserror 2.0.18",
 ]
