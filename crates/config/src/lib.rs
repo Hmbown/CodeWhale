@@ -1,3 +1,5 @@
+pub mod provider;
+
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
@@ -134,6 +136,27 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    pub const ALL: [Self; 18] = [
+        Self::Deepseek,
+        Self::NvidiaNim,
+        Self::Openai,
+        Self::Atlascloud,
+        Self::WanjieArk,
+        Self::Volcengine,
+        Self::Openrouter,
+        Self::XiaomiMimo,
+        Self::Novita,
+        Self::Fireworks,
+        Self::Siliconflow,
+        Self::SiliconflowCN,
+        Self::Arcee,
+        Self::Moonshot,
+        Self::Sglang,
+        Self::Vllm,
+        Self::Ollama,
+        Self::Huggingface,
+    ];
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -191,6 +214,15 @@ impl ProviderKind {
     #[must_use]
     pub fn is_siliconflow(self) -> bool {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
+    }
+
+    /// Return the built-in metadata entry for this provider.
+    ///
+    /// This is a metadata foundation only; runtime routing still resolves
+    /// through [`ConfigToml::resolve_runtime_options`].
+    #[must_use]
+    pub fn provider(self) -> &'static dyn provider::Provider {
+        provider::provider_for_kind(self)
     }
 }
 
@@ -4398,6 +4430,92 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             let parsed: ConfigToml =
                 toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
             assert_eq!(parsed.provider, ProviderKind::Deepseek);
+        }
+    }
+
+    #[test]
+    fn provider_metadata_registry_covers_every_provider_kind_once() {
+        let providers = provider::all_providers();
+        assert_eq!(providers.len(), ProviderKind::ALL.len());
+
+        for (kind, provider) in ProviderKind::ALL.iter().zip(providers.iter()) {
+            assert_eq!(provider.kind(), *kind);
+            assert_eq!(provider.id(), kind.as_str());
+            assert_eq!(kind.provider().id(), kind.as_str());
+        }
+
+        let mut ids = std::collections::BTreeSet::new();
+        for provider in providers {
+            assert!(ids.insert(provider.id()), "duplicate provider id");
+        }
+    }
+
+    #[test]
+    fn provider_metadata_lookup_does_not_fall_back_to_deepseek() {
+        assert!(provider::lookup_provider("not-a-provider").is_none());
+        assert!(provider::resolve_provider("not-a-provider").is_none());
+        assert!(provider::lookup_provider("deepseek-cn").is_none());
+        assert_eq!(
+            provider::resolve_provider("deepseek-cn")
+                .expect("legacy alias resolves")
+                .kind(),
+            ProviderKind::Deepseek
+        );
+    }
+
+    #[test]
+    fn provider_metadata_preserves_alias_and_config_key_semantics() {
+        assert_eq!(
+            provider::resolve_provider("open_router")
+                .expect("openrouter alias")
+                .kind(),
+            ProviderKind::Openrouter
+        );
+        assert_eq!(
+            provider::resolve_provider("xiaomi")
+                .expect("xiaomi alias")
+                .kind(),
+            ProviderKind::XiaomiMimo
+        );
+        assert_eq!(
+            provider::resolve_provider("kimi")
+                .expect("kimi alias")
+                .kind(),
+            ProviderKind::Moonshot
+        );
+        assert_eq!(
+            provider::resolve_provider("hf")
+                .expect("huggingface alias")
+                .kind(),
+            ProviderKind::Huggingface
+        );
+
+        let siliconflow_cn =
+            provider::resolve_provider("siliconflow-cn").expect("siliconflow-cn alias resolves");
+        assert_eq!(siliconflow_cn.kind(), ProviderKind::SiliconflowCN);
+        assert_eq!(siliconflow_cn.id(), "siliconflow-CN");
+        assert_eq!(siliconflow_cn.provider_config_key(), "siliconflow");
+
+        let config = ProvidersToml::default();
+        let shared_table = config.for_provider(ProviderKind::SiliconflowCN);
+        assert!(std::ptr::eq(
+            shared_table,
+            config.for_provider(ProviderKind::Siliconflow)
+        ));
+    }
+
+    #[test]
+    fn provider_metadata_defaults_match_runtime_helpers() {
+        for kind in ProviderKind::ALL {
+            let provider = kind.provider();
+            assert_eq!(provider.default_model(), default_model_for_provider(kind));
+            assert_eq!(
+                provider.default_base_url(),
+                default_base_url_for_provider(kind)
+            );
+            assert!(!provider.display_name().trim().is_empty());
+            assert!(!provider.env_vars().is_empty());
+            assert_eq!(provider.wire(), provider::WireFormat::ChatCompletions);
         }
     }
 

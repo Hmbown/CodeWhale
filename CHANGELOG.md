@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were previously unpriced: `mimo-v2.5-pro` / `xiaomi/mimo-v2.5-pro` reuse the
   DeepSeek V4-Pro rate table and `mimo-v2.5` / `xiaomi/mimo-v2.5` reuse the
   DeepSeek V4-Flash rates. Existing DeepSeek pricing is unchanged (#2731, #2750).
+- Added a metadata-only `codewhale-config` provider registry with canonical
+  lookup, alias-aware resolution, provider defaults, config-table keys, and
+  API-key env candidates. Runtime routing remains unchanged and fallback
+  providers stay dormant; this harvests the safe provider-trait foundation from
+  #2479 toward #2075. Thanks @sximelon.
 - Added optional `[search].base_url` / `CODEWHALE_SEARCH_BASE_URL` support for
   DuckDuckGo-compatible private search endpoints, while keeping
   `DEEPSEEK_SEARCH_BASE_URL` as a legacy alias. Custom endpoints are gated by

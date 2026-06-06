@@ -642,8 +642,8 @@ Current v0.9 track credits:
 - **[shenjackyuanjie](https://github.com/shenjackyuanjie)** — HarmonyOS /
   OpenHarmony porting work and MatePad Edge validation trail (#2634)
 - **[sximelon](https://github.com/sximelon)** — saved-session resume footer
-  hint work and provider-trait direction reviewed for the v0.9 track (#2758,
-  #2760, #2479)
+  hint work plus provider-trait metadata registry direction reviewed and
+  harvested for the v0.9 track (#2758, #2760, #2479)
 - **[aboimpinto](https://github.com/aboimpinto)** — sidebar command polish and
   pausable custom-command lifecycle direction harvested into the v0.9 track
   (#2788, #2732)
