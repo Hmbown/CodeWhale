@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { RuntimeState, ThreadSummary } from "./runtime";
+import type { RuntimeState, SnapshotEntry, ThreadSummary } from "./runtime";
 
 export class RuntimeStatusView implements vscode.WebviewViewProvider {
   public static readonly viewType = "codewhale.runtimeStatus";
@@ -12,6 +12,8 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
   };
   private threads: ThreadSummary[] = [];
   private threadsDetail = "Connect to the runtime to load recent threads.";
+  private snapshots: SnapshotEntry[] = [];
+  private snapshotsDetail = "Connect to the runtime to load restore points.";
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -25,6 +27,8 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
         void vscode.commands.executeCommand("codewhale.openTerminal");
       } else if (message.command === "threads") {
         void vscode.commands.executeCommand("codewhale.refreshAgentView");
+      } else if (message.command === "snapshots") {
+        void vscode.commands.executeCommand("codewhale.refreshSnapshots");
       }
     });
     this.render();
@@ -41,6 +45,12 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  updateSnapshots(snapshots: SnapshotEntry[], detail: string): void {
+    this.snapshots = snapshots;
+    this.snapshotsDetail = detail;
+    this.render();
+  }
+
   private render(): void {
     if (!this.view) {
       return;
@@ -52,6 +62,10 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
       this.threads.length > 0
         ? this.threads.map((thread) => renderThread(thread)).join("")
         : `<p class="detail">${escapeHtml(this.threadsDetail)}</p>`;
+    const snapshotsHtml =
+      this.snapshots.length > 0
+        ? this.snapshots.map((snapshot) => renderSnapshot(snapshot)).join("")
+        : `<p class="detail">${escapeHtml(this.snapshotsDetail)}</p>`;
     this.view.webview.html = `<!doctype html>
 <html lang="en">
 <head>
@@ -64,7 +78,8 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
     .detail { margin: 0 0 14px; color: var(--vscode-descriptionForeground); line-height: 1.45; }
     .section-title { margin: 18px 0 8px; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
     .thread { padding: 8px 0; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
-    .thread-title { margin-bottom: 4px; font-weight: 600; overflow-wrap: anywhere; }
+    .snapshot { padding: 8px 0; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
+    .thread-title, .snapshot-title { margin-bottom: 4px; font-weight: 600; overflow-wrap: anywhere; }
     .thread-preview { margin-bottom: 5px; color: var(--vscode-descriptionForeground); line-height: 1.35; overflow-wrap: anywhere; }
     .thread-meta { color: var(--vscode-descriptionForeground); font-size: 11px; overflow-wrap: anywhere; }
     code { color: var(--vscode-textLink-foreground); }
@@ -77,10 +92,13 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
   <p class="detail"><code>${escapeHtml(this.state.baseUrl)}</code></p>
   <button data-command="check">Check Runtime</button>
   <button data-command="threads">Refresh Threads</button>
+  <button data-command="snapshots">Refresh Restore Points</button>
   <button data-command="start">Start Local Runtime</button>
   <button data-command="terminal">Open CodeWhale Terminal</button>
   <div class="section-title">Agent View</div>
   ${threadsHtml}
+  <div class="section-title">Restore Points</div>
+  ${snapshotsHtml}
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     for (const button of document.querySelectorAll("button[data-command]")) {
@@ -90,6 +108,13 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+function renderSnapshot(snapshot: SnapshotEntry): string {
+  return `<div class="snapshot">
+    <div class="snapshot-title">${escapeHtml(snapshot.label)}</div>
+    <div class="thread-meta">${escapeHtml(`${snapshot.id} · ${formatUnixTimestamp(snapshot.timestamp)}`)}</div>
+  </div>`;
 }
 
 function renderThread(thread: ThreadSummary): string {
@@ -122,6 +147,14 @@ function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
+  }
+  return date.toLocaleString();
+}
+
+function formatUnixTimestamp(value: number): string {
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
   }
   return date.toLocaleString();
 }

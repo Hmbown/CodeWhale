@@ -45,6 +45,8 @@ class RuntimeStatusView {
     };
     threads = [];
     threadsDetail = "Connect to the runtime to load recent threads.";
+    snapshots = [];
+    snapshotsDetail = "Connect to the runtime to load restore points.";
     resolveWebviewView(view) {
         this.view = view;
         view.webview.options = { enableScripts: true };
@@ -61,6 +63,9 @@ class RuntimeStatusView {
             else if (message.command === "threads") {
                 void vscode.commands.executeCommand("codewhale.refreshAgentView");
             }
+            else if (message.command === "snapshots") {
+                void vscode.commands.executeCommand("codewhale.refreshSnapshots");
+            }
         });
         this.render();
     }
@@ -73,6 +78,11 @@ class RuntimeStatusView {
         this.threadsDetail = detail;
         this.render();
     }
+    updateSnapshots(snapshots, detail) {
+        this.snapshots = snapshots;
+        this.snapshotsDetail = detail;
+        this.render();
+    }
     render() {
         if (!this.view) {
             return;
@@ -82,6 +92,9 @@ class RuntimeStatusView {
         const threadsHtml = this.threads.length > 0
             ? this.threads.map((thread) => renderThread(thread)).join("")
             : `<p class="detail">${escapeHtml(this.threadsDetail)}</p>`;
+        const snapshotsHtml = this.snapshots.length > 0
+            ? this.snapshots.map((snapshot) => renderSnapshot(snapshot)).join("")
+            : `<p class="detail">${escapeHtml(this.snapshotsDetail)}</p>`;
         this.view.webview.html = `<!doctype html>
 <html lang="en">
 <head>
@@ -94,7 +107,8 @@ class RuntimeStatusView {
     .detail { margin: 0 0 14px; color: var(--vscode-descriptionForeground); line-height: 1.45; }
     .section-title { margin: 18px 0 8px; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
     .thread { padding: 8px 0; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
-    .thread-title { margin-bottom: 4px; font-weight: 600; overflow-wrap: anywhere; }
+    .snapshot { padding: 8px 0; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
+    .thread-title, .snapshot-title { margin-bottom: 4px; font-weight: 600; overflow-wrap: anywhere; }
     .thread-preview { margin-bottom: 5px; color: var(--vscode-descriptionForeground); line-height: 1.35; overflow-wrap: anywhere; }
     .thread-meta { color: var(--vscode-descriptionForeground); font-size: 11px; overflow-wrap: anywhere; }
     code { color: var(--vscode-textLink-foreground); }
@@ -107,10 +121,13 @@ class RuntimeStatusView {
   <p class="detail"><code>${escapeHtml(this.state.baseUrl)}</code></p>
   <button data-command="check">Check Runtime</button>
   <button data-command="threads">Refresh Threads</button>
+  <button data-command="snapshots">Refresh Restore Points</button>
   <button data-command="start">Start Local Runtime</button>
   <button data-command="terminal">Open CodeWhale Terminal</button>
   <div class="section-title">Agent View</div>
   ${threadsHtml}
+  <div class="section-title">Restore Points</div>
+  ${snapshotsHtml}
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     for (const button of document.querySelectorAll("button[data-command]")) {
@@ -122,6 +139,12 @@ class RuntimeStatusView {
     }
 }
 exports.RuntimeStatusView = RuntimeStatusView;
+function renderSnapshot(snapshot) {
+    return `<div class="snapshot">
+    <div class="snapshot-title">${escapeHtml(snapshot.label)}</div>
+    <div class="thread-meta">${escapeHtml(`${snapshot.id} · ${formatUnixTimestamp(snapshot.timestamp)}`)}</div>
+  </div>`;
+}
 function renderThread(thread) {
     const status = thread.latestTurnStatus ? ` · ${thread.latestTurnStatus}` : "";
     const archived = thread.archived ? " · archived" : "";
@@ -150,6 +173,13 @@ function formatTimestamp(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
         return value;
+    }
+    return date.toLocaleString();
+}
+function formatUnixTimestamp(value) {
+    const date = new Date(value * 1000);
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
     }
     return date.toLocaleString();
 }

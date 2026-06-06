@@ -59,14 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local runtime attach checks, status bar state, and a read-only Agent View
   preview backed by recent runtime thread summaries, plus a read-only
   `GET /v1/snapshots` endpoint for GUI clients to inspect side-git restore
-  points. Thread summaries now include read-only workspace and branch metadata
-  so the VS Code Agent View can show when a thread or agent lane is on another
+  points. The extension now renders those restore points read-only in its Agent
+  View, and thread summaries include read-only workspace and branch metadata so
+  the VS Code Agent View can show when a thread or agent lane is on another
   branch. This answers the VS Code GUI lane without exposing chat webviews,
   inline edits, or retry/undo/restore runtime mutation endpoints yet (#461,
-  #462, #480, #1217, #2341, #1584, #2580, #2808). Thanks @AiurArtanis for the
-  Agent View prompt, @lbcheng888 for the earlier scaffold, @gaord for the GUI
-  runtime API direction, @douglarek, @caeserchen, and @nightt5879 for the branch
-  visibility trail, and @BigBenLabs, @lzx1545642258, @yangdaowan,
+  #462, #480, #1217, #2341, #1584, #2327, #2580, #2808). Thanks @AiurArtanis
+  for the Agent View prompt, @lbcheng888 for the earlier scaffold, @gaord for
+  the GUI runtime API direction, @douglarek, @caeserchen, and @nightt5879 for
+  the branch visibility trail, and @BigBenLabs, @lzx1545642258, @yangdaowan,
   @mangdehuang, @VerrPower, @hejia-v, @nasus9527, and @ygzhang-cn for the
   GUI/VS Code demand and validation trail.
 - Added inline live-output refresh for background shell Exec cards keyed by the

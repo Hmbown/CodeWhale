@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
   checkRuntime,
+  listSnapshots,
   listThreadSummaries,
   openCodeWhaleTerminal,
   readRuntimeConfig,
@@ -25,6 +26,13 @@ export function activate(context: vscode.ExtensionContext): void {
     const threads = await listThreadSummaries(config);
     statusView.updateThreads(threads, "Showing recent runtime threads.");
     output.appendLine(`Loaded ${threads.length} runtime thread summaries.`);
+  };
+
+  const refreshSnapshots = async (): Promise<void> => {
+    const config = readRuntimeConfig();
+    const snapshots = await listSnapshots(config);
+    statusView.updateSnapshots(snapshots, "Showing recent restore points.");
+    output.appendLine(`Loaded ${snapshots.length} runtime restore points.`);
   };
 
   const updateStatus = (text: string, tooltip: string): void => {
@@ -66,20 +74,24 @@ export function activate(context: vscode.ExtensionContext): void {
           updateStatus("$(check) CodeWhale", state.detail);
           try {
             await refreshAgentView();
+            await refreshSnapshots();
           } catch (error: unknown) {
             const detail = error instanceof Error ? error.message : String(error);
-            statusView.updateThreads([], detail);
-            output.appendLine(`Runtime thread summaries unavailable: ${detail}`);
+            statusView.updateThreads([], "Runtime thread summaries unavailable.");
+            statusView.updateSnapshots([], detail);
+            output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
           }
           break;
         case "auth-required":
           updateStatus("$(lock) CodeWhale", state.detail);
           statusView.updateThreads([], "Runtime token is required before threads can load.");
+          statusView.updateSnapshots([], "Runtime token is required before restore points can load.");
           break;
         case "offline":
         case "error":
           updateStatus("$(warning) CodeWhale", state.detail);
           statusView.updateThreads([], "Connect to the runtime to load recent threads.");
+          statusView.updateSnapshots([], "Connect to the runtime to load restore points.");
           break;
       }
 
@@ -92,10 +104,25 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("codewhale.refreshAgentView", async () => {
       try {
         await refreshAgentView();
+        await refreshSnapshots();
       } catch (error: unknown) {
         const detail = error instanceof Error ? error.message : String(error);
-        statusView.updateThreads([], detail);
-        output.appendLine(`Runtime thread summaries unavailable: ${detail}`);
+        statusView.updateThreads([], "Runtime thread summaries unavailable.");
+        statusView.updateSnapshots([], detail);
+        output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
+        void vscode.window.showWarningMessage(detail);
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codewhale.refreshSnapshots", async () => {
+      try {
+        await refreshSnapshots();
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        statusView.updateSnapshots([], detail);
+        output.appendLine(`Runtime restore points unavailable: ${detail}`);
         void vscode.window.showWarningMessage(detail);
       }
     }),

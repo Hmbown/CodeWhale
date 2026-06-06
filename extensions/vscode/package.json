@@ -21,6 +21,7 @@
     "onCommand:codewhale.startRuntime",
     "onCommand:codewhale.checkRuntime",
     "onCommand:codewhale.refreshAgentView",
+    "onCommand:codewhale.refreshSnapshots",
     "onCommand:codewhale.openRuntimeDocs",
     "onView:codewhale.runtimeStatus"
   ],
@@ -48,6 +49,10 @@
       {
         "command": "codewhale.refreshAgentView",
         "title": "CodeWhale: Refresh Agent View"
+      },
+      {
+        "command": "codewhale.refreshSnapshots",
+        "title": "CodeWhale: Refresh Restore Points"
       },
       {
         "command": "codewhale.openRuntimeDocs",

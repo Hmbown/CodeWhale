@@ -23,6 +23,12 @@ export interface ThreadSummary {
   latestTurnStatus?: string;
 }
 
+export interface SnapshotEntry {
+  id: string;
+  label: string;
+  timestamp: number;
+}
+
 export interface RuntimeConfig {
   commandPath: string;
   host: string;
@@ -97,6 +103,23 @@ export async function listThreadSummaries(
   }
 
   return readThreadSummaries(response.body);
+}
+
+export async function listSnapshots(config: RuntimeConfig, limit = 8): Promise<SnapshotEntry[]> {
+  const baseUrl = runtimeBaseUrl(config);
+  const response = await requestJson(
+    `${baseUrl}/v1/snapshots?limit=${encodeURIComponent(String(limit))}`,
+    config.token,
+  );
+
+  if (response.statusCode === 401) {
+    throw new Error("Restore points require the runtime bearer token.");
+  }
+  if (response.statusCode !== 200) {
+    throw new Error(`Restore points returned HTTP ${response.statusCode}.`);
+  }
+
+  return readSnapshots(response.body);
 }
 
 export function startRuntimeTerminal(config: RuntimeConfig): vscode.Terminal {
@@ -210,8 +233,33 @@ function readThreadSummaries(value: unknown): ThreadSummary[] {
   });
 }
 
+function readSnapshots(value: unknown): SnapshotEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    const id = readString(record.id);
+    const label = readString(record.label);
+    const timestamp = readNumber(record.timestamp);
+    if (!id || !label || timestamp === undefined) {
+      return [];
+    }
+
+    return [{ id, label, timestamp }];
+  });
+}
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function shellQuote(value: string): string {

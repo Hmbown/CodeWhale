@@ -10,6 +10,7 @@ This first slice is intentionally small:
 - show connection state in the status bar
 - show a read-only Agent View with recent runtime thread summaries from
   `/v1/threads/summary`
+- show recent read-only restore points from `/v1/snapshots`
 
 It does not expose the full chat webview, VS Code Agent View chat/editor
 integration, inline edit application, marketplace publish workflow, or

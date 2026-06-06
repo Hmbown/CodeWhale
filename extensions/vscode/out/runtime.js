@@ -37,6 +37,7 @@ exports.readRuntimeConfig = readRuntimeConfig;
 exports.runtimeBaseUrl = runtimeBaseUrl;
 exports.checkRuntime = checkRuntime;
 exports.listThreadSummaries = listThreadSummaries;
+exports.listSnapshots = listSnapshots;
 exports.startRuntimeTerminal = startRuntimeTerminal;
 exports.openCodeWhaleTerminal = openCodeWhaleTerminal;
 const http = __importStar(require("node:http"));
@@ -95,6 +96,17 @@ async function listThreadSummaries(config, limit = 8) {
         throw new Error(`Thread summary returned HTTP ${response.statusCode}.`);
     }
     return readThreadSummaries(response.body);
+}
+async function listSnapshots(config, limit = 8) {
+    const baseUrl = runtimeBaseUrl(config);
+    const response = await requestJson(`${baseUrl}/v1/snapshots?limit=${encodeURIComponent(String(limit))}`, config.token);
+    if (response.statusCode === 401) {
+        throw new Error("Restore points require the runtime bearer token.");
+    }
+    if (response.statusCode !== 200) {
+        throw new Error(`Restore points returned HTTP ${response.statusCode}.`);
+    }
+    return readSnapshots(response.body);
 }
 function startRuntimeTerminal(config) {
     const terminal = vscode.window.createTerminal("CodeWhale Runtime");
@@ -193,8 +205,29 @@ function readThreadSummaries(value) {
         ];
     });
 }
+function readSnapshots(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.flatMap((item) => {
+        if (!item || typeof item !== "object") {
+            return [];
+        }
+        const record = item;
+        const id = readString(record.id);
+        const label = readString(record.label);
+        const timestamp = readNumber(record.timestamp);
+        if (!id || !label || timestamp === undefined) {
+            return [];
+        }
+        return [{ id, label, timestamp }];
+    });
+}
 function readString(value) {
     return typeof value === "string" ? value : undefined;
+}
+function readNumber(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 function shellQuote(value) {
     if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) {
