@@ -92,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The external-memory cutline now documents that Aleph-style memory stays
   optional, explicit, visible, and clear/export-capable for v0.9.0 rather than
   becoming a hidden default context substrate (#2677).
+  A dedicated v0.9.0 release acceptance matrix now tracks provider, runtime,
+  UI, WhaleFlow, Model Lab, remote-workbench, docs, rollback, and credit gates
+  that must be checked or explicitly deferred before tagging (#2729).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

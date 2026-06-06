@@ -6,6 +6,11 @@ Step through this in order from a clean worktree on the release branch
 
 For deeper context on the underlying tools (preflight scripts, npm smoke,
 publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
+For v0.9.0, also complete the dedicated
+[`V0_9_0_RELEASE_ACCEPTANCE.md`](V0_9_0_RELEASE_ACCEPTANCE.md) matrix before
+tagging; it covers provider routes, WhaleFlow feature gates, GUI/runtime smoke,
+remote workbench decisions, and credit hygiene that the generic checklist does
+not enumerate.
 
 ## 1. CHANGELOG entry exists for the version
 
