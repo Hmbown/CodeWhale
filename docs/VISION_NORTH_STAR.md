@@ -280,7 +280,9 @@ clearable, and scoped**:
    `finalize`/`FINAL` is an *in-kernel Python function*, not a tool).
 6. **Cached-main overlay** — promoted lessons from the cached main branch
    (`/overlay`, §9).
-7. **External memory (Aleph)** — large local data via the `aleph` skill.
+7. **External memory (Aleph)** — large local data via the `aleph` skill;
+   see `docs/WHALEFLOW_EXTERNAL_MEMORY.md` for the v0.9.0 cutline that keeps
+   this optional, explicit, inspectable, and out of the default path.
 
 **Why it helps weaker models.** The model never has to *guess* where a fact
 should live or *re-derive* context it already established. Each layer has a
