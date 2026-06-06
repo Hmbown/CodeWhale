@@ -274,12 +274,14 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 # path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
+# insecure_skip_tls_verify = false          # set to true to accept self-signed/invalid certs (insecure)
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
 [providers.nvidia_nim]
 # api_key = "YOUR_NVIDIA_API_KEY"
 # base_url = "https://integrate.api.nvidia.com/v1"
 # model = "deepseek-ai/deepseek-v4-pro"     # or deepseek-ai/deepseek-v4-flash
+# insecure_skip_tls_verify = false
 
 # Generic OpenAI-compatible endpoint. Use the built-in `openai` provider for
 # third-party gateways; do not invent a custom provider name. For non-local
@@ -292,18 +294,21 @@ max_subagents = 10 # optional (1-20)
 # Gateway example:
 # base_url = "https://gateway.example/v1"
 # model = "your-deepseek-compatible-model"
+# insecure_skip_tls_verify = false
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]
 # api_key = "YOUR_ATLASCLOUD_API_KEY"
 # base_url = "https://api.atlascloud.ai/v1"
 # model = "deepseek-ai/deepseek-v4-flash"
+# insecure_skip_tls_verify = false
 
 # Wanjie Ark / 万界方舟 OpenAI-compatible endpoint
 [providers.wanjie_ark]
 # api_key = "YOUR_WANJIE_API_KEY"
 # base_url = "https://maas-openapi.wanjiedata.com/api/v1"
 # model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
+# insecure_skip_tls_verify = false
 
 # Volcengine / Volcano Engine Ark Coding API
 [providers.volcengine]
@@ -343,6 +348,7 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_FIREWORKS_API_KEY"
 # base_url = "https://api.fireworks.ai/inference/v1"
 # model = "accounts/fireworks/models/deepseek-v4-pro"
+# insecure_skip_tls_verify = false
 
 # SiliconFlow-hosted DeepSeek V4 (https://siliconflow.com)
 [providers.siliconflow]
@@ -371,18 +377,21 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_SGLANG_TOKEN"
 # base_url = "http://localhost:30000/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+# insecure_skip_tls_verify = false
 
 # Self-hosted vLLM OpenAI-compatible server
 [providers.vllm]
 # api_key = "OPTIONAL_VLLM_TOKEN"
 # base_url = "http://localhost:8000/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+# insecure_skip_tls_verify = false
 
 # Self-hosted Ollama OpenAI-compatible server
 [providers.ollama]
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+# insecure_skip_tls_verify = false
 
 # Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
 [providers.huggingface]

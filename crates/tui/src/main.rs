@@ -2551,6 +2551,26 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         println!("  {} Skipped (no API key configured)", "·".dimmed());
     }
 
+    // TLS certificate verification status
+    let tls_insecure = config.deepseek_insecure_skip_tls_verify();
+    if tls_insecure {
+        println!();
+        println!(
+            "{}",
+            "! TLS certificate verification is DISABLED"
+                .truecolor(sky_r, sky_g, sky_b)
+                .bold()
+        );
+        println!(
+            "    insecure_skip_tls_verify = true for provider `{}` — outbound HTTPS",
+            config.api_provider().as_str()
+        );
+        println!(
+            "    requests will accept untrusted certificates. This is intended for"
+        );
+        println!("    development and trusted internal networks only.");
+    }
+
     // MCP configuration
     println!();
     println!("{}", "MCP Servers:".bold());
@@ -3252,6 +3272,7 @@ fn run_doctor_json(
         },
         "base_url": api_target.base_url,
         "default_text_model": api_target.model,
+        "insecure_skip_tls_verify": config.deepseek_insecure_skip_tls_verify(),
         "strict_tool_mode": {
             "enabled": strict_tool_mode.enabled,
             "status": strict_tool_mode.status,

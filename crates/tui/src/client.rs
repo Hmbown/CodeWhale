@@ -585,6 +585,15 @@ impl DeepSeekClient {
         let path_suffix = config
             .provider_config_for(api_provider)
             .and_then(|p| p.path_suffix.clone());
+        let skip_verify = config.deepseek_insecure_skip_tls_verify();
+
+        if skip_verify {
+            logging::warn(
+                "TLS certificate verification is DISABLED for this provider \
+                 (insecure_skip_tls_verify = true). This is insecure and should \
+                 only be used for development or trusted internal servers.",
+            );
+        }
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!("API base URL: {base_url}"));
@@ -602,7 +611,7 @@ impl DeepSeekClient {
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client = Self::build_http_client(&api_key, &http_headers)?;
+        let http_client = Self::build_http_client(&api_key, &http_headers, skip_verify)?;
 
         Ok(Self {
             http_client,
@@ -620,9 +629,11 @@ impl DeepSeekClient {
     fn build_http_client(
         api_key: &str,
         extra_headers: &HashMap<String, String>,
+        skip_verify: bool,
     ) -> Result<reqwest::Client> {
         let headers = build_default_headers(api_key, extra_headers)?;
         let mut builder = reqwest::Client::builder()
+            .danger_accept_invalid_certs(skip_verify)
             .default_headers(headers)
             .user_agent(concat!(
                 "Mozilla/5.0 (compatible; codewhale/",
@@ -3552,5 +3563,24 @@ mod tests {
             api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
+    }
+    #[test]
+    fn build_http_client_with_skip_verify_false() {
+        let client = DeepSeekClient::build_http_client(
+            "test-key",
+            &HashMap::new(),
+            false,
+        );
+        assert!(client.is_ok(), "should succeed with skip_verify=false");
+    }
+
+    #[test]
+    fn build_http_client_with_skip_verify_true() {
+        let client = DeepSeekClient::build_http_client(
+            "test-key",
+            &HashMap::new(),
+            true,
+        );
+        assert!(client.is_ok(), "should succeed with skip_verify=true");
     }
 }

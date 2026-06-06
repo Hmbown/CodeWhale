@@ -1859,6 +1859,10 @@ pub struct ProviderConfig {
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
     pub path_suffix: Option<String>,
+    /// Skip TLS certificate verification when talking to this provider.
+    /// Defaults to `false` (verify certificates).
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -2594,6 +2598,18 @@ impl Config {
             // Return an empty key and let the client omit the Authorization header.
             ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
         }
+    }
+
+    /// Whether the active provider should have TLS certificate verification skipped.
+    ///
+    /// Returns `true` only when the provider explicitly sets
+    /// `insecure_skip_tls_verify = true` in its `[providers.<name>]` table.
+    /// Defaults to `false` (verify certificates).
+    #[must_use]
+    pub fn deepseek_insecure_skip_tls_verify(&self) -> bool {
+        self.provider_config()
+            .and_then(|provider| provider.insecure_skip_tls_verify)
+            .unwrap_or(false)
     }
 
     /// Resolve the skills directory path.
@@ -4320,6 +4336,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         path_suffix: override_cfg.path_suffix.or(base.path_suffix),
+        insecure_skip_tls_verify: override_cfg.insecure_skip_tls_verify.or(base.insecure_skip_tls_verify),
     }
 }
 
@@ -10036,6 +10053,76 @@ model = "deepseek-ai/deepseek-v4-pro"
         "#;
         let tui: TuiConfig = toml::from_str(toml_str).expect("missing status_items should parse");
         assert_eq!(tui.status_items, None);
+    }
+    // ── per-provider insecure_skip_tls_verify ──
+
+    #[test]
+    fn insecure_skip_tls_verify_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.deepseek_insecure_skip_tls_verify());
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_deserializes_true() {
+        let toml = r#"
+            provider = "ollama"
+            [providers.ollama]
+            base_url = "https://localhost:11434/v1"
+            insecure_skip_tls_verify = true
+        "#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let config = config.base;
+        assert!(config.deepseek_insecure_skip_tls_verify());
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_explicit_false() {
+        let toml = r#"
+            provider = "ollama"
+            [providers.ollama]
+            base_url = "https://localhost:11434/v1"
+            insecure_skip_tls_verify = false
+        "#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let config = config.base;
+        assert!(!config.deepseek_insecure_skip_tls_verify());
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_missing_defaults_false() {
+        let toml = r#"
+            provider = "ollama"
+            [providers.ollama]
+            base_url = "https://localhost:11434/v1"
+        "#;
+        let config: ConfigFile = toml::from_str(toml).unwrap();
+        let config = config.base;
+        assert!(!config.deepseek_insecure_skip_tls_verify());
+    }
+
+    #[test]
+    fn merge_provider_config_insecure_skip_tls_verify_override_wins() {
+        let base = ProviderConfig {
+            insecure_skip_tls_verify: Some(false),
+            ..ProviderConfig::default()
+        };
+        let ovr = ProviderConfig {
+            insecure_skip_tls_verify: Some(true),
+            ..ProviderConfig::default()
+        };
+        let merged = merge_provider_config(base, ovr);
+        assert_eq!(merged.insecure_skip_tls_verify, Some(true));
+    }
+
+    #[test]
+    fn merge_provider_config_insecure_skip_tls_verify_falls_back() {
+        let base = ProviderConfig {
+            insecure_skip_tls_verify: Some(true),
+            ..ProviderConfig::default()
+        };
+        let ovr = ProviderConfig::default();
+        let merged = merge_provider_config(base, ovr);
+        assert_eq!(merged.insecure_skip_tls_verify, Some(true));
     }
 
     #[test]

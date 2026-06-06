@@ -200,6 +200,11 @@ pub struct ProviderConfigToml {
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
     pub path_suffix: Option<String>,
+    /// Skip TLS certificate verification when talking to this provider.
+    /// Defaults to `false` (verify certificates). Set to `true` only for
+    /// self-hosted endpoints or development servers with self-signed certs.
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
