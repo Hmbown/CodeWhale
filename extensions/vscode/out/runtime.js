@@ -184,6 +184,8 @@ function readThreadSummaries(value) {
                 preview: readString(record.preview) ?? "",
                 model: readString(record.model) ?? "unknown",
                 mode: readString(record.mode) ?? "agent",
+                workspace: readString(record.workspace),
+                branch: readString(record.branch),
                 archived: record.archived === true,
                 updatedAt: readString(record.updated_at) ?? "",
                 latestTurnStatus: readString(record.latest_turn_status),

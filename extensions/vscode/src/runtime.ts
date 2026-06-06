@@ -16,6 +16,8 @@ export interface ThreadSummary {
   preview: string;
   model: string;
   mode: string;
+  workspace?: string;
+  branch?: string;
   archived: boolean;
   updatedAt: string;
   latestTurnStatus?: string;
@@ -198,6 +200,8 @@ function readThreadSummaries(value: unknown): ThreadSummary[] {
         preview: readString(record.preview) ?? "",
         model: readString(record.model) ?? "unknown",
         mode: readString(record.mode) ?? "agent",
+        workspace: readString(record.workspace),
+        branch: readString(record.branch),
         archived: record.archived === true,
         updatedAt: readString(record.updated_at) ?? "",
         latestTurnStatus: readString(record.latest_turn_status),

@@ -264,6 +264,8 @@ struct ThreadSummary {
     preview: String,
     model: String,
     mode: String,
+    workspace: PathBuf,
+    branch: Option<String>,
     archived: bool,
     updated_at: chrono::DateTime<Utc>,
     latest_turn_id: Option<String>,
@@ -1245,6 +1247,8 @@ async fn list_threads_summary(
             preview,
             model: thread.model,
             mode: thread.mode,
+            branch: current_git_branch(&thread.workspace),
+            workspace: thread.workspace,
             archived: thread.archived,
             updated_at: thread.updated_at,
             latest_turn_id: thread.latest_turn_id,
@@ -2011,9 +2015,7 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
     }
 
     status.git_repo = true;
-    status.branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    status.branch = current_git_branch(workspace);
 
     if let Some(porcelain) = run_git(workspace, &["status", "--porcelain=v1"]) {
         for line in porcelain.lines() {
@@ -2053,6 +2055,24 @@ fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
         return None;
     }
     String::from_utf8(output.stdout).ok()
+}
+
+fn current_git_branch(workspace: &std::path::Path) -> Option<String> {
+    let repo_check = run_git(workspace, &["rev-parse", "--is-inside-work-tree"])?;
+    if repo_check.trim() != "true" {
+        return None;
+    }
+    let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return None;
+    }
+    if branch != "HEAD" {
+        return Some(branch.to_string());
+    }
+    let short_hash = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let short_hash = short_hash.trim();
+    (!short_hash.is_empty()).then(|| format!("detached@{short_hash}"))
 }
 
 fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
@@ -2425,6 +2445,18 @@ mod tests {
             context_references: Vec::new(),
             artifacts: Vec::new(),
         }
+    }
+
+    fn run_test_git(workspace: &std::path::Path, args: &[&str]) -> Result<()> {
+        let output = crate::dependencies::Git::output(args, workspace)
+            .with_context(|| format!("git {args:?} failed to spawn"))?;
+        if !output.status.success() {
+            bail!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -2864,6 +2896,100 @@ mod tests {
             .await?
             .error_for_status()?;
         assert_eq!(query_token.status(), StatusCode::OK);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn thread_summary_includes_workspace_branch_metadata() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("runtime");
+        let sessions_dir = root.join("sessions");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo)?;
+        run_test_git(&repo, &["init", "-b", "feature/agent"])?;
+        fs::write(repo.join("README.md"), "branch visibility\n")?;
+        run_test_git(&repo, &["add", "README.md"])?;
+        run_test_git(
+            &repo,
+            &[
+                "-c",
+                "user.name=CodeWhale Test",
+                "-c",
+                "user.email=codewhale@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )?;
+
+        let non_git = tmp.path().join("non-git");
+        fs::create_dir_all(&non_git)?;
+
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root(root, sessions_dir).await?
+        else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let git_thread: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "title": "Git workspace",
+                "workspace": repo,
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let git_thread_id = git_thread["id"]
+            .as_str()
+            .context("missing git thread id")?
+            .to_string();
+
+        let plain_thread: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "title": "Plain workspace",
+                "workspace": non_git,
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let plain_thread_id = plain_thread["id"]
+            .as_str()
+            .context("missing plain thread id")?
+            .to_string();
+
+        let summary: serde_json::Value = client
+            .get(format!("http://{addr}/v1/threads/summary?limit=100"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let summaries = summary.as_array().context("summary should be an array")?;
+        let git_summary = summaries
+            .iter()
+            .find(|item| item["id"] == git_thread_id)
+            .context("missing git workspace summary")?;
+        assert_eq!(git_summary["branch"], "feature/agent");
+        assert_eq!(git_summary["workspace"], repo.to_string_lossy().as_ref());
+
+        let plain_summary = summaries
+            .iter()
+            .find(|item| item["id"] == plain_thread_id)
+            .context("missing plain workspace summary")?;
+        assert_eq!(plain_summary["branch"], serde_json::Value::Null);
+        assert_eq!(
+            plain_summary["workspace"],
+            non_git.to_string_lossy().as_ref()
+        );
 
         handle.abort();
         Ok(())

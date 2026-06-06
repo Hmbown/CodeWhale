@@ -95,11 +95,13 @@ export class RuntimeStatusView implements vscode.WebviewViewProvider {
 function renderThread(thread: ThreadSummary): string {
   const status = thread.latestTurnStatus ? ` · ${thread.latestTurnStatus}` : "";
   const archived = thread.archived ? " · archived" : "";
+  const branch = thread.branch ? ` · branch ${thread.branch}` : "";
+  const workspace = thread.workspace ? ` · ${thread.workspace}` : "";
   const updated = thread.updatedAt ? ` · ${formatTimestamp(thread.updatedAt)}` : "";
   return `<div class="thread">
     <div class="thread-title">${escapeHtml(thread.title)}</div>
     <div class="thread-preview">${escapeHtml(thread.preview || "No recent message.")}</div>
-    <div class="thread-meta">${escapeHtml(`${thread.mode} · ${thread.model}${status}${archived}${updated}`)}</div>
+    <div class="thread-meta">${escapeHtml(`${thread.mode} · ${thread.model}${status}${branch}${archived}${updated}${workspace}`)}</div>
   </div>`;
 }
 
