@@ -57,6 +57,24 @@ pub const DEEPSEEK_SLATE: Color = Color::Rgb(
 pub const DEEPSEEK_RED: Color =
     Color::Rgb(DEEPSEEK_RED_RGB.0, DEEPSEEK_RED_RGB.1, DEEPSEEK_RED_RGB.2);
 
+// Claude Code-style warm terracotta accent. Used as the primary accent
+// (composer border + `>` prompt, ⏺ action bullets, headings, selection) on an
+// otherwise neutral text base — terracotta is a highlight, not the whole UI.
+pub const CLAUDE_TERRACOTTA_RGB: (u8, u8, u8) = (217, 119, 87); // #D97757
+pub const CLAUDE_TERRACOTTA_SOFT_RGB: (u8, u8, u8) = (232, 155, 130); // #E89B82
+pub const CLAUDE_TERRACOTTA: Color = Color::Rgb(
+    CLAUDE_TERRACOTTA_RGB.0,
+    CLAUDE_TERRACOTTA_RGB.1,
+    CLAUDE_TERRACOTTA_RGB.2,
+);
+pub const CLAUDE_TERRACOTTA_SOFT: Color = Color::Rgb(
+    CLAUDE_TERRACOTTA_SOFT_RGB.0,
+    CLAUDE_TERRACOTTA_SOFT_RGB.1,
+    CLAUDE_TERRACOTTA_SOFT_RGB.2,
+);
+// Darker terracotta for inactive borders / subtle warm framing.
+pub const CLAUDE_TERRACOTTA_DIM: Color = Color::Rgb(122, 74, 58); // #7A4A3A
+
 pub const LIGHT_SURFACE: Color = Color::Rgb(
     LIGHT_SURFACE_RGB.0,
     LIGHT_SURFACE_RGB.1,
@@ -110,7 +128,7 @@ pub const LIGHT_SELECTION_BG: Color = Color::Rgb(
 pub const TEXT_BODY: Color = Color::Rgb(226, 232, 240); // #E2E8F0
 pub const TEXT_SECONDARY: Color = Color::Rgb(177, 190, 207); // #B1BECF
 pub const TEXT_HINT: Color = Color::Rgb(135, 151, 171); // #8797AB
-pub const TEXT_ACCENT: Color = DEEPSEEK_SKY;
+pub const TEXT_ACCENT: Color = CLAUDE_TERRACOTTA_SOFT;
 pub const SELECTION_TEXT: Color = Color::White;
 pub const TEXT_SOFT: Color = Color::Rgb(217, 226, 238); // #D9E2EE
 pub const TEXT_REASONING: Color = Color::Rgb(211, 170, 112); // #D3AA70
@@ -123,12 +141,11 @@ pub const USER_BODY: Color = Color::Rgb(74, 222, 128); // #4ADE80 green
 pub const LIGHT_USER_BODY: Color = Color::Rgb(21, 128, 61); // #15803D green
 
 // New semantic colors for UI theming
-pub const BORDER_COLOR: Color =
-    Color::Rgb(BORDER_COLOR_RGB.0, BORDER_COLOR_RGB.1, BORDER_COLOR_RGB.2);
+pub const BORDER_COLOR: Color = CLAUDE_TERRACOTTA_DIM; // warm inactive border
 #[allow(dead_code)]
-pub const ACCENT_PRIMARY: Color = DEEPSEEK_BLUE; // #3578E5
+pub const ACCENT_PRIMARY: Color = CLAUDE_TERRACOTTA; // #D97757
 #[allow(dead_code)]
-pub const ACCENT_SECONDARY: Color = TEXT_ACCENT; // #6AAEF2
+pub const ACCENT_SECONDARY: Color = TEXT_ACCENT; // #E89B82
 #[allow(dead_code)]
 pub const BACKGROUND_DARK: Color = Color::Rgb(13, 26, 48); // #0D1A30
 #[allow(dead_code)]
@@ -153,7 +170,7 @@ pub const DIFF_ADDED_BG: Color = Color::Rgb(18, 52, 38); // #123426 dark green t
 pub const DIFF_DELETED_BG: Color = Color::Rgb(52, 22, 28); // #34161C dark red tint
 pub const DIFF_ADDED: Color = Color::Rgb(87, 199, 133); // #57C785
 pub const ACCENT_REASONING_LIVE: Color = Color::Rgb(224, 153, 72); // #E09948
-pub const ACCENT_TOOL_LIVE: Color = Color::Rgb(133, 184, 234); // #85B8EA
+pub const ACCENT_TOOL_LIVE: Color = CLAUDE_TERRACOTTA; // #D97757 warm live bullet
 pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(192, 143, 153); // #C08F99
 pub const TEXT_TOOL_OUTPUT: Color = Color::Rgb(191, 205, 220); // #BFCEDC
 
@@ -343,7 +360,11 @@ pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) ->
         LIGHT_TEXT_SOFT
     } else if color == BORDER_COLOR {
         LIGHT_BORDER
-    } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
+    } else if color == TEXT_ACCENT || color == ACCENT_TOOL_LIVE {
+        // Terracotta accent (also ACCENT_PRIMARY, same RGB) → a darker
+        // terracotta so it stays legible on the light surface.
+        Color::Rgb(166, 75, 47) // #A64B2F
+    } else if color == DEEPSEEK_SKY {
         DEEPSEEK_BLUE
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
         Color::Rgb(146, 64, 14)

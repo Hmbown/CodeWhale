@@ -36,12 +36,18 @@ const TOOL_STATUS_SYMBOL_MS: u64 = 720;
 const USER_GLYPH: &str = "\u{258E}"; // ▎
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
-const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
+const ASSISTANT_GLYPH: &str = "\u{23FA}"; // ⏺ Claude Code action bullet
 /// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
 /// used as a visual left-margin anchor for continuation lines, tool-card
 /// detail rows, and affordance lines. Dimmed so it guides the eye without
 /// competing with content.
 const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
+/// Claude Code-style tree connector for tool result/detail lines. The first
+/// line of a result block carries `⎿ `; continuation lines indent two columns
+/// to align under it. Width matches [`TRANSCRIPT_RAIL`] (2 cols) so wrap math
+/// is unchanged.
+const TOOL_RESULT_CONNECTOR: &str = "\u{23BF} "; // ⎿ + space
+const TOOL_RESULT_INDENT: &str = "  "; // continuation alignment under ⎿
 /// Reasoning header opener. Replaces the spinner glyph on thinking cells —
 /// reasoning is a slow exhale, not a tool spin.
 const REASONING_OPENER: &str = "\u{2026}"; // …
@@ -53,8 +59,8 @@ const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
 const REASONING_CURSOR: &str = "\u{258E}"; // ▎
 const TOOL_CARD_SUMMARY_LINES: usize = 4;
 const THINKING_SUMMARY_LINE_LIMIT: usize = 4;
-const TOOL_DONE_SYMBOL: &str = "•";
-const TOOL_FAILED_SYMBOL: &str = "•";
+const TOOL_DONE_SYMBOL: &str = "\u{23FA}"; // ⏺ Claude Code completed-action bullet
+const TOOL_FAILED_SYMBOL: &str = "\u{23FA}"; // ⏺ (red via tool_state_color)
 
 /// Render mode controlling whether tool/thinking cells render their compact
 /// "live" form (with caps and collapsed reasoning) or their full transcript
@@ -2683,7 +2689,7 @@ fn status_symbol(started_at: Option<Instant>, status: ToolStatus, low_motion: bo
 fn details_affordance_line(text: &str, style: Style) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            TOOL_RESULT_INDENT.to_string(),
             Style::default().fg(palette::TEXT_DIM),
         ),
         Span::styled(text.to_string(), style),
@@ -2898,15 +2904,20 @@ fn render_card_detail_line(
     width: u16,
 ) -> Vec<Line<'static>> {
     let label_text = label.map(|text| format!("{text}:"));
-    let prefix_width = UnicodeWidthStr::width(TRANSCRIPT_RAIL)
+    let prefix_width = UnicodeWidthStr::width(TOOL_RESULT_CONNECTOR)
         + label_text.as_deref().map_or(0, UnicodeWidthStr::width)
         + usize::from(label.is_some());
     let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
 
     let mut lines = Vec::new();
     for (idx, part) in wrap_text(value, content_width).into_iter().enumerate() {
+        let rail = if idx == 0 {
+            TOOL_RESULT_CONNECTOR
+        } else {
+            TOOL_RESULT_INDENT
+        };
         let mut spans = vec![Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            rail.to_string(),
             Style::default().fg(palette::TEXT_DIM),
         )];
         if idx == 0 {
@@ -2935,7 +2946,7 @@ fn render_card_detail_line_single(
 ) -> Line<'static> {
     let label_text = label.map(|text| format!("{text}:"));
     let mut spans = vec![Span::styled(
-        TRANSCRIPT_RAIL.to_string(),
+        TOOL_RESULT_CONNECTOR.to_string(),
         Style::default().fg(palette::TEXT_DIM),
     )];
     if let Some(label_text) = label_text {
@@ -4223,9 +4234,9 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>();
-        assert_eq!(visible[1].trim_end(), "▏ done: scan repo");
-        assert_eq!(visible[2].trim_end(), "▏ live: extract theme");
-        assert_eq!(visible[3].trim_end(), "▏ next: land tests");
+        assert_eq!(visible[1].trim_end(), "⎿ done: scan repo");
+        assert_eq!(visible[2].trim_end(), "⎿ live: extract theme");
+        assert_eq!(visible[3].trim_end(), "⎿ next: land tests");
     }
 
     #[test]

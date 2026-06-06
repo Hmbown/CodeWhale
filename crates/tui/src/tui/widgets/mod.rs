@@ -395,6 +395,12 @@ fn render_jump_to_latest_button(area: Rect, buf: &mut Buffer, background: Color)
     );
 }
 
+/// Claude Code-style input prompt drawn at the start of the composer's first
+/// row; continuation rows indent by the same width to align under it.
+const COMPOSER_PROMPT: &str = "> ";
+const COMPOSER_PROMPT_INDENT: &str = "  ";
+const COMPOSER_PROMPT_WIDTH: usize = 2;
+
 pub struct ComposerWidget<'a> {
     app: &'a App,
     max_height: u16,
@@ -504,8 +510,12 @@ impl Renderable for ComposerWidget<'_> {
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, menu_lines_for_budget);
         let content_width = usize::from(inner_area.width.max(1));
+        // Reserve the prompt gutter ("> ") so pre-wrapped input lines plus the
+        // prompt prefix never exceed the inner width (which would make the
+        // wrapping Paragraph re-wrap them).
+        let input_width = content_width.saturating_sub(COMPOSER_PROMPT_WIDTH).max(1);
         let (visible_lines, _cursor_row, _cursor_col) =
-            layout_input(input_text, input_cursor, content_width, input_rows_budget);
+            layout_input(input_text, input_cursor, input_width, input_rows_budget);
         let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let border_color = if input_text.trim().is_empty() {
@@ -606,6 +616,7 @@ impl Renderable for ComposerWidget<'_> {
                     Style::default().fg(palette::TEXT_MUTED),
                 )))
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(border_color))
                 .style(background);
             // Vim mode indicator — shown in the top-right corner of the
@@ -630,6 +641,13 @@ impl Renderable for ComposerWidget<'_> {
             Block::default().style(background).render(area, buf);
         }
 
+        let prompt_span = Span::styled(
+            COMPOSER_PROMPT,
+            Style::default()
+                .fg(palette::ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        );
+        let prompt_indent_span = || Span::raw(COMPOSER_PROMPT_INDENT);
         let mut input_lines = Vec::new();
         if input_text.is_empty() {
             let placeholder = if self.app.is_history_search_active() {
@@ -639,16 +657,24 @@ impl Renderable for ComposerWidget<'_> {
                 self.app
                     .tr(crate::localization::MessageId::ComposerPlaceholder)
             };
-            input_lines.push(Line::from(Span::styled(
-                placeholder,
-                Style::default().fg(palette::TEXT_MUTED).italic(),
-            )));
+            input_lines.push(Line::from(vec![
+                prompt_span.clone(),
+                Span::styled(
+                    placeholder,
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
+                ),
+            ]));
         } else {
-            for line in &visible_lines {
-                input_lines.push(Line::from(Span::styled(
-                    line.clone(),
-                    Style::default().fg(palette::TEXT_PRIMARY),
-                )));
+            for (idx, line) in visible_lines.iter().enumerate() {
+                let lead = if idx == 0 {
+                    prompt_span.clone()
+                } else {
+                    prompt_indent_span()
+                };
+                input_lines.push(Line::from(vec![
+                    lead,
+                    Span::styled(line.clone(), Style::default().fg(palette::TEXT_PRIMARY)),
+                ]));
             }
         }
 
@@ -664,7 +690,7 @@ impl Renderable for ComposerWidget<'_> {
                 self.app
                     .tr(crate::localization::MessageId::ComposerPlaceholder)
             };
-            placeholder_visual_lines_for(placeholder, content_width)
+            placeholder_visual_lines_for(placeholder, input_width)
         } else {
             input_lines.len()
         };
@@ -930,13 +956,17 @@ impl Renderable for ComposerWidget<'_> {
         let input_text = self.app.composer_display_input();
         let input_cursor = self.app.composer_display_cursor();
         let content_width = usize::from(inner_area.width.max(1));
+        // Mirror the render path: the prompt gutter ("> ") narrows the text
+        // column, so wrap math must use the same reduced width and the cursor
+        // must shift right by the prompt width.
+        let input_width = content_width.saturating_sub(COMPOSER_PROMPT_WIDTH).max(1);
         // Match the render path's locked-budget calculation so the cursor
         // lands on the same row the input is drawn on.
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, self.active_menu_reserved_rows());
 
         let (visible_lines, cursor_row, cursor_col) =
-            layout_input(input_text, input_cursor, content_width, input_rows_budget);
+            layout_input(input_text, input_cursor, input_width, input_rows_budget);
         let visual_rows = if input_text.is_empty() {
             let placeholder = if self.app.is_history_search_active() {
                 self.app
@@ -945,7 +975,7 @@ impl Renderable for ComposerWidget<'_> {
                 self.app
                     .tr(crate::localization::MessageId::ComposerPlaceholder)
             };
-            placeholder_visual_lines_for(placeholder, content_width)
+            placeholder_visual_lines_for(placeholder, input_width)
         } else {
             visible_lines.len()
         };
@@ -954,6 +984,7 @@ impl Renderable for ComposerWidget<'_> {
         let cursor_x = area
             .x
             .saturating_add(inner_area.x.saturating_sub(area.x))
+            .saturating_add(COMPOSER_PROMPT_WIDTH as u16)
             .saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
         let cursor_y = area
             .y
@@ -1859,31 +1890,120 @@ fn should_render_empty_state(app: &App) -> bool {
     app.history.is_empty() && !app.is_loading && !app.is_compacting
 }
 
+/// Truncate `s` from the left, keeping the most informative tail, so it fits
+/// in `max` display columns. Prepends `…` when truncated.
+fn fit_tail(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    let budget = max.saturating_sub(1); // room for the leading ellipsis
+    let mut kept: Vec<char> = Vec::new();
+    let mut w = 0usize;
+    for ch in s.chars().rev() {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > budget {
+            break;
+        }
+        kept.push(ch);
+        w += cw;
+    }
+    kept.reverse();
+    let mut out = String::from("…");
+    out.extend(kept);
+    out
+}
+
+/// One content row inside the welcome box: `│ ` + spans + right-pad + ` │`,
+/// preceded by the centering inset. `spans` must total ≤ `inner` columns.
+fn banner_row(inset: &str, inner: usize, spans: Vec<Span<'static>>, border: Style) -> Line<'static> {
+    let used: usize = spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let pad = inner.saturating_sub(used);
+    let mut out = vec![
+        Span::raw(inset.to_string()),
+        Span::styled("\u{2502} ", border), // "│ "
+    ];
+    out.extend(spans);
+    out.push(Span::raw(" ".repeat(pad)));
+    out.push(Span::styled(" \u{2502}", border)); // " │"
+    Line::from(out)
+}
+
 fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
 
     let workspace = crate::utils::display_path(&app.workspace);
-    let body_width = usize::from(area.width.saturating_sub(8).clamp(24, 72));
-    let left_padding = usize::from(area.width.saturating_sub(body_width as u16) / 2);
+    // Box width, centered, bounded so it reads as a card on wide terminals.
+    let box_width = usize::from(area.width.saturating_sub(4)).clamp(36, 72);
+    let inner = box_width.saturating_sub(4); // "│ " + content + " │"
+    let left_padding = usize::from(area.width).saturating_sub(box_width) / 2;
     let inset = " ".repeat(left_padding);
 
-    let body = vec![
-        Line::from(Span::styled(
-            format!("{inset}>_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("{inset}model: {}  /model to switch", app.model),
-            Style::default().fg(palette::TEXT_MUTED),
-        )),
-        Line::from(Span::styled(
-            format!("{inset}directory: {workspace}"),
-            Style::default().fg(palette::TEXT_MUTED),
-        )),
-    ];
+    let border = Style::default().fg(palette::ACCENT_PRIMARY);
+    let dim = Style::default().fg(palette::TEXT_MUTED);
+
+    let top = Line::from(vec![
+        Span::raw(inset.clone()),
+        Span::styled(
+            format!("\u{256D}{}\u{256E}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+            border,
+        ),
+    ]);
+    let bottom = Line::from(vec![
+        Span::raw(inset.clone()),
+        Span::styled(
+            format!("\u{2570}{}\u{256F}", "\u{2500}".repeat(box_width.saturating_sub(2))),
+            border,
+        ),
+    ]);
+
+    let mut body = vec![top];
+    body.push(banner_row(
+        &inset,
+        inner,
+        vec![
+            Span::styled("\u{273B} ", Style::default().fg(palette::ACCENT_PRIMARY).bold()), // ✻
+            Span::styled(
+                fit_tail(
+                    &format!("Welcome to DeepSeek TUI  v{}", env!("CARGO_PKG_VERSION")),
+                    inner.saturating_sub(2),
+                ),
+                Style::default().fg(palette::TEXT_PRIMARY).bold(),
+            ),
+        ],
+        border,
+    ));
+    body.push(banner_row(&inset, inner, vec![Span::raw("")], border));
+    body.push(banner_row(
+        &inset,
+        inner,
+        vec![Span::styled(
+            fit_tail(&format!("model: {}", app.model), inner),
+            dim,
+        )],
+        border,
+    ));
+    body.push(banner_row(
+        &inset,
+        inner,
+        vec![Span::styled(fit_tail(&format!("cwd: {workspace}"), inner), dim)],
+        border,
+    ));
+    body.push(banner_row(&inset, inner, vec![Span::raw("")], border));
+    body.push(banner_row(
+        &inset,
+        inner,
+        vec![Span::styled(
+            fit_tail("/help for commands · /model to switch · type / to begin", inner),
+            dim,
+        )],
+        border,
+    ));
+    body.push(bottom);
 
     let top_padding = usize::from(area.height.saturating_sub(body.len() as u16) / 3);
     let mut lines = Vec::new();
@@ -2547,12 +2667,12 @@ mod tests {
         };
 
         // inner_area: {x:1, y:1, w:38, h:3}  (borders shrink by 1 each side)
+        // input_width = 38 - 2 (prompt gutter "> ") = 36
         // input_rows_budget = 3
-        // placeholder_visual_lines(38) = 1  (placeholder is 22 chars, fits in 38)
-        // top_padding = 3 - clamp(1, 1, 3) = 2
-        // cursor_x = 0 + (1-0) + 0 = 1
+        // placeholder fits in 36 → 1 line; top_padding = 3 - clamp(1,1,3) = 2
+        // cursor_x = 0 + (1-0) + 2 (prompt) + 0 = 3
         // cursor_y = 0 + (1-0) + (2+0) = 3
-        assert_eq!(widget.cursor_pos(area), Some((1, 3)));
+        assert_eq!(widget.cursor_pos(area), Some((3, 3)));
     }
 
     #[test]
@@ -2572,13 +2692,13 @@ mod tests {
         };
 
         // inner_area: {x:1, y:1, w:12, h:3}
+        // input_width = 12 - 2 (prompt gutter "> ") = 10
         // input_rows_budget = 3
-        // placeholder_visual_lines(12) = 2  ("Write a task" / " or use /.")
-        // top_padding = 3 - clamp(2, 1, 3) = 1
-        // cursor_x = 0 + (1-0) + 0 = 1
-        // cursor_y = 0 + (1-0) + (1+0) = 2
-        assert_eq!(placeholder_visual_lines(12), 2);
-        assert_eq!(widget.cursor_pos(area), Some((1, 2)));
+        // placeholder wraps to 3 lines at width 10 → top_padding = 3 - clamp(3,1,3) = 0
+        // cursor_x = 0 + (1-0) + 2 (prompt) + 0 = 3
+        // cursor_y = 0 + (1-0) + (0+0) = 1
+        assert_eq!(placeholder_visual_lines(10), 3);
+        assert_eq!(widget.cursor_pos(area), Some((3, 1)));
     }
 
     #[test]
@@ -2646,7 +2766,9 @@ mod tests {
             height: 3,
         };
 
-        assert_eq!(widget.cursor_pos(area), Some((0, 2)));
+        // No border: inner == area. Prompt gutter still shifts the cursor +2.
+        // cursor_x = 0 + 0 + 2 (prompt) + 0 = 2; cursor_y = 2.
+        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
     }
 
     #[test]
@@ -2716,9 +2838,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains(&format!(">_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION"))));
-        assert!(rendered.contains("model: deepseek-v4-pro  /model to switch"));
-        assert!(rendered.contains("directory: /tmp/deepseek-test-workspace"));
+        assert!(rendered.contains("\u{273B}")); // ✻ welcome icon
+        assert!(rendered.contains(&format!("Welcome to DeepSeek TUI  v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(rendered.contains("model: deepseek-v4-pro"));
+        assert!(rendered.contains("cwd: /tmp/deepseek-test-workspace"));
     }
 
     /// Probe: confirm `cell.lines_with_motion` returns no Line whose total

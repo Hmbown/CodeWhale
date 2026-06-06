@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### UI
+
+- **TUI restyled toward Claude Code's visual language.** Warm terracotta
+  accent (`#D97757`) replaces DeepSeek blue as the primary accent
+  (composer border + `>` prompt, action bullets, headings, live tool
+  markers), with a darker terracotta substituted in light mode for
+  contrast. Assistant actions and completed tools now lead with the `⏺`
+  bullet; tool results hang under a `⎿` tree connector. The composer is a
+  rounded box with a terracotta `> ` prompt (wrap math and cursor
+  position track the prompt gutter). The startup empty state is a rounded
+  `✻ Welcome to DeepSeek TUI` banner showing model + cwd + quick hints.
+
 ### Added
 
 - **`memory-consolidate` bundled skill** — a reflective maintenance pass

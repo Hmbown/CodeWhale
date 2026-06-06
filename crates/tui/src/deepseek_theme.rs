@@ -101,7 +101,7 @@ impl Theme {
             tool_title_color: palette::LIGHT_TEXT_SOFT,
             tool_value_color: palette::LIGHT_TEXT_MUTED,
             tool_label_color: palette::LIGHT_TEXT_HINT,
-            tool_running_accent: palette::DEEPSEEK_BLUE,
+            tool_running_accent: palette::CLAUDE_TERRACOTTA,
             tool_success_accent: palette::LIGHT_TEXT_HINT,
             tool_failed_accent: palette::DEEPSEEK_RED,
             plan_progress_color: palette::DEEPSEEK_BLUE,
