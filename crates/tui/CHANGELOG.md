@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoring layer now compiles fail-closed model-authored workflow files into
   that typed IR, with `rlm_cache_change.star` and `issue_fix_tournament.star`
   examples plus a one-pass repair for common `ctx.*` authoring aliases (#2670).
+  Leaf, branch, and workflow execution results now carry deterministic token
+  and cost telemetry fields that the mock executor can aggregate without live
+  provider calls or runtime sub-agent fanout (#2486).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
