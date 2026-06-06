@@ -40,7 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release-safe. The foundation now includes explicit `WorkflowSpec`,
   `WorkflowNode`, branch/leaf/policy metadata structs, plus serializable branch,
   leaf, and control-node result records toward the #2668 TraceStore contract.
-  Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
+  It also adds a crate-local mock executor skeleton for Sequence, BranchSet,
+  Leaf, Reduce, LoopUntil, Cond, Expand, BranchTournament, and ParetoFrontier
+  control flow so #2669 can progress without spawning agents, applying
+  worktrees, or exposing a `workflow_run` runtime tool yet. Thanks @AdityaVG13
+  for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
   migration creates persistence shape only; workflow execution and replay
