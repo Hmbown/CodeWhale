@@ -122,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records produce `ReplayDiverged` instead of falling back to live execution
   (#2679). The UI/workflow UX rows now also distinguish shipped transcript
   tool-run collapse, sidebar detail popovers, and PlanArtifact review/handoff
-  evidence from the deferred first-look/home redesign (#2692, #2694, #2691,
+  evidence from the deferred first-look/home redesign, and record focused
+  slash-picker readability smoke coverage for visibility, selection, skill
+  insertion, Esc priority, and stable composer height (#2692, #2694, #2691,
   #2713).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
