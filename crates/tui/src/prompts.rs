@@ -339,9 +339,13 @@ idioma. A menos que o usuário peça explicitamente a troca (por exemplo, \
 \"think in English\"), continue pensando e respondendo em português do \
 Brasil.";
 
-/// Personality overlays — voice and tone.
+/// Output-style overlays — voice, tone, and behavioral posture. Calm and
+/// Playful shape *tone*; Concise and Explanatory shape *how much* the agent
+/// says and whether it teaches as it works (Claude Code's "output styles").
 pub const CALM_PERSONALITY: &str = include_str!("prompts/personalities/calm.md");
 pub const PLAYFUL_PERSONALITY: &str = include_str!("prompts/personalities/playful.md");
+pub const CONCISE_PERSONALITY: &str = include_str!("prompts/personalities/concise.md");
+pub const EXPLANATORY_PERSONALITY: &str = include_str!("prompts/personalities/explanatory.md");
 
 /// Mode deltas — permissions, workflow expectations, mode-specific rules.
 pub const AGENT_MODE: &str = include_str!("prompts/modes/agent.md");
@@ -366,13 +370,17 @@ pub const AGENT_PROMPT: &str = include_str!("prompts/agent.txt");
 
 // ── Personality selection ─────────────────────────────────────────────
 
-/// Which personality overlay to apply.
+/// Which output-style / personality overlay to apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Personality {
     /// Cool, spatial, reserved — the default.
     Calm,
     /// Warm, energetic, playful — alternative for fun mode.
     Playful,
+    /// Minimal, answer-first output for fluent, busy users.
+    Concise,
+    /// Teaches as it works — explains choices, trade-offs, and concepts.
+    Explanatory,
 }
 
 impl Personality {
@@ -390,10 +398,38 @@ impl Personality {
         }
     }
 
+    /// Parse an output-style name (case-insensitive). Returns `None` for
+    /// unknown names so callers can fall back to the default.
+    #[must_use]
+    #[allow(dead_code)] // selection wiring (config/picker) lands separately
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "calm" | "default" => Some(Self::Calm),
+            "playful" | "fun" => Some(Self::Playful),
+            "concise" | "terse" | "minimal" => Some(Self::Concise),
+            "explanatory" | "explain" | "teaching" | "learning" => Some(Self::Explanatory),
+            _ => None,
+        }
+    }
+
+    /// Stable identifier for config / display.
+    #[must_use]
+    #[allow(dead_code)] // selection wiring (config/picker) lands separately
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Calm => "calm",
+            Self::Playful => "playful",
+            Self::Concise => "concise",
+            Self::Explanatory => "explanatory",
+        }
+    }
+
     fn prompt(self) -> &'static str {
         match self {
             Self::Calm => CALM_PERSONALITY,
             Self::Playful => PLAYFUL_PERSONALITY,
+            Self::Concise => CONCISE_PERSONALITY,
+            Self::Explanatory => EXPLANATORY_PERSONALITY,
         }
     }
 }
@@ -1269,6 +1305,36 @@ mod tests {
         assert!(calm.contains("Personality: Calm"));
         assert!(playful.contains("Personality: Playful"));
         assert!(!calm.contains("Personality: Playful"));
+    }
+
+    #[test]
+    fn output_styles_compose_distinct_overlays() {
+        let concise = compose_prompt(AppMode::Agent, Personality::Concise);
+        let explanatory = compose_prompt(AppMode::Agent, Personality::Explanatory);
+        assert!(concise.contains("Output Style: Concise"));
+        assert!(explanatory.contains("Output Style: Explanatory"));
+        assert!(!concise.contains("Output Style: Explanatory"));
+    }
+
+    #[test]
+    fn personality_from_str_round_trips_and_aliases() {
+        assert_eq!(Personality::from_str("calm"), Some(Personality::Calm));
+        assert_eq!(Personality::from_str("Concise"), Some(Personality::Concise));
+        assert_eq!(Personality::from_str("terse"), Some(Personality::Concise));
+        assert_eq!(
+            Personality::from_str("teaching"),
+            Some(Personality::Explanatory)
+        );
+        assert_eq!(Personality::from_str("nope"), None);
+        // as_str round-trips through from_str.
+        for p in [
+            Personality::Calm,
+            Personality::Playful,
+            Personality::Concise,
+            Personality::Explanatory,
+        ] {
+            assert_eq!(Personality::from_str(p.as_str()), Some(p));
+        }
     }
 
     #[test]

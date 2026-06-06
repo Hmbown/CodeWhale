@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Output styles (`concise`, `explanatory`).** The personality overlay
+  system is generalized toward Claude Code's output styles: alongside the
+  tone-shaping Calm/Playful, two behavior-shaping styles ship — `concise`
+  (answer-first, minimal) and `explanatory` (teaches as it works) — plus a
+  `Personality::from_str`/`as_str` API with aliases. Composed into the prompt
+  and tested. (Runtime selection of a non-default style via config/picker is a
+  pre-existing dormant gap — even Playful isn't yet user-selectable — and lands
+  separately.)
+
 - **File-defined sub-agent roles (`~/.deepseek/agents/<name>.md`).** Drop a
   Markdown file with YAML-ish frontmatter (`name`, `description`, optional
   `model`/`tools`) plus a body, and that body becomes the sub-agent's system
