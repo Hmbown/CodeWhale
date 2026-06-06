@@ -2859,6 +2859,7 @@ pub fn set_server_enabled(path: &Path, name: &str, enabled: bool) -> Result<()> 
     save_config(path, &cfg)
 }
 
+#[cfg(test)]
 pub fn manager_snapshot_from_config(
     path: &Path,
     restart_required: bool,
@@ -2873,12 +2874,54 @@ pub fn manager_snapshot_from_config(
     ))
 }
 
+pub fn manager_snapshot_from_config_with_workspace(
+    path: &Path,
+    workspace: &Path,
+    restart_required: bool,
+) -> Result<McpManagerSnapshot> {
+    let cfg = load_config_with_workspace(path, workspace)?;
+    Ok(snapshot_from_config(
+        path,
+        path.exists(),
+        restart_required,
+        &cfg,
+        None,
+    ))
+}
+
+#[cfg(test)]
 pub async fn discover_manager_snapshot(
     path: &Path,
     network_policy: Option<NetworkPolicyDecider>,
     restart_required: bool,
 ) -> Result<McpManagerSnapshot> {
     let cfg = load_config(path)?;
+    let mut pool = McpPool::new(cfg.clone());
+    if let Some(policy) = network_policy {
+        pool = pool.with_network_policy(policy);
+    }
+    let errors = pool
+        .connect_all()
+        .await
+        .into_iter()
+        .map(|(name, err)| (name, format!("{err:#}")))
+        .collect::<HashMap<_, _>>();
+    Ok(snapshot_from_config(
+        path,
+        path.exists(),
+        restart_required,
+        &cfg,
+        Some((&pool, &errors)),
+    ))
+}
+
+pub async fn discover_manager_snapshot_with_workspace(
+    path: &Path,
+    workspace: &Path,
+    network_policy: Option<NetworkPolicyDecider>,
+    restart_required: bool,
+) -> Result<McpManagerSnapshot> {
+    let cfg = load_config_with_workspace(path, workspace)?;
     let mut pool = McpPool::new(cfg.clone());
     if let Some(policy) = network_policy {
         pool = pool.with_network_policy(policy);
@@ -3383,6 +3426,49 @@ mod tests {
         let shared = cfg.servers.get("shared").unwrap();
         assert_eq!(shared.args, vec!["artisan", "shared:mcp"]);
         assert_eq!(shared.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn workspace_manager_snapshot_counts_global_and_project_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{
+              "servers": {
+                "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp@latest"]}
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{
+              "servers": {
+                "laravel-boost": {"command": "php", "args": ["artisan", "boost:mcp"]}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let plain = manager_snapshot_from_config(&global_path, false).unwrap();
+        let merged =
+            manager_snapshot_from_config_with_workspace(&global_path, &workspace, false).unwrap();
+
+        assert_eq!(plain.servers.len(), 2);
+        assert_eq!(merged.servers.len(), 3);
+        assert!(
+            merged
+                .servers
+                .iter()
+                .any(|server| server.name == "laravel-boost"),
+            "workspace-aware snapshots must include trusted project MCP servers"
+        );
     }
 
     #[test]

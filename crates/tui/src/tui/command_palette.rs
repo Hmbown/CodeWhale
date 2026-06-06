@@ -162,7 +162,7 @@ pub fn build_entries(
     tool_entries.sort_by(|a, b| a.label.cmp(&b.label));
     entries.extend(tool_entries);
 
-    entries.extend(build_mcp_entries(mcp_config_path, mcp_snapshot));
+    entries.extend(build_mcp_entries(workspace, mcp_config_path, mcp_snapshot));
 
     entries.sort_by(|a, b| a.label.cmp(&b.label));
     entries.sort_by_key(|entry| entry.section);
@@ -170,11 +170,13 @@ pub fn build_entries(
 }
 
 fn build_mcp_entries(
+    workspace: &Path,
     mcp_config_path: &Path,
     mcp_snapshot: Option<&crate::mcp::McpManagerSnapshot>,
 ) -> Vec<CommandPaletteEntry> {
     let owned_snapshot = if mcp_snapshot.is_none() {
-        crate::mcp::manager_snapshot_from_config(mcp_config_path, false).ok()
+        crate::mcp::manager_snapshot_from_config_with_workspace(mcp_config_path, workspace, false)
+            .ok()
     } else {
         None
     };

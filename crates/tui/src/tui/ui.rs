@@ -6529,9 +6529,19 @@ async fn handle_mcp_ui_action(
         let network_policy = config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         });
-        mcp::discover_manager_snapshot(&path, network_policy, app.mcp_restart_required).await
+        mcp::discover_manager_snapshot_with_workspace(
+            &path,
+            &app.workspace,
+            network_policy,
+            app.mcp_restart_required,
+        )
+        .await
     } else {
-        mcp::manager_snapshot_from_config(&path, app.mcp_restart_required)
+        mcp::manager_snapshot_from_config_with_workspace(
+            &path,
+            &app.workspace,
+            app.mcp_restart_required,
+        )
     };
 
     match snapshot_result {

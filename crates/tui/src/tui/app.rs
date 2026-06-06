@@ -2043,6 +2043,10 @@ impl App {
                 }
                 _ => (String::new(), 0, false),
             };
+        let mcp_configured_count =
+            crate::mcp::load_config_with_workspace(&mcp_config_path, &workspace)
+                .map(|cfg| cfg.servers.len())
+                .unwrap_or(0);
         Self {
             mode: initial_mode,
             composer: ComposerState {
@@ -2201,11 +2205,9 @@ impl App {
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
             // no live snapshot is available (#502). Cheap (just reads
-            // the JSON file); errors fall through to zero so a missing
+            // the JSON files); errors fall through to zero so a missing
             // or malformed config simply hides the chip.
-            mcp_configured_count: crate::mcp::load_config(&mcp_config_path)
-                .map(|cfg| cfg.servers.len())
-                .unwrap_or(0),
+            mcp_configured_count,
             mcp_restart_required: false,
             tool_log: Vec::new(),
             active_skill: None,

@@ -264,6 +264,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The TUI footer, `/status`, `/mcp` manager, and command-palette MCP entries
+  now count trusted workspace-local `.codewhale/mcp.json` servers together with
+  the global MCP config, matching `codewhale mcp list` for merged global +
+  project setups (#2787). Thanks @yekern for the detailed reproduction.
 - Sub-agent shell completions now refresh the workspace branch/status chip
   immediately, and `/subagents` plus the Agents sidebar show each sub-agent's
   current workspace branch when it is running in a child worktree.
