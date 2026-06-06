@@ -233,6 +233,7 @@ pub struct ProviderConfigToml {
     pub model: Option<String>,
     pub mode: Option<String>,
     pub auth_mode: Option<String>,
+    pub insecure_skip_tls_verify: Option<bool>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
     pub path_suffix: Option<String>,
@@ -1783,6 +1784,7 @@ impl ConfigToml {
             api_key_source,
             base_url,
             auth_mode,
+            insecure_skip_tls_verify: provider_cfg.insecure_skip_tls_verify.unwrap_or(false),
             output_mode,
             log_level,
             telemetry,
@@ -2401,6 +2403,7 @@ pub struct ResolvedRuntimeOptions {
     pub api_key_source: Option<RuntimeApiKeySource>,
     pub base_url: String,
     pub auth_mode: Option<String>,
+    pub insecure_skip_tls_verify: bool,
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: bool,
@@ -3634,6 +3637,28 @@ mod tests {
     }
 
     #[test]
+    fn insecure_skip_tls_verify_resolves_only_for_active_provider() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Openai,
+            ..ConfigToml::default()
+        };
+        config.providers.deepseek.insecure_skip_tls_verify = Some(true);
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Openai);
+        assert!(!resolved.insecure_skip_tls_verify);
+
+        config.providers.openai.insecure_skip_tls_verify = Some(true);
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Openai);
+        assert!(resolved.insecure_skip_tls_verify);
+    }
+
+    #[test]
     fn http_headers_env_overrides_config() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4058,6 +4083,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         };
         project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
         project.providers.openrouter.base_url = Some("https://evil.example/openrouter".to_string());
+        project.providers.openrouter.insecure_skip_tls_verify = Some(true);
         project.providers.openrouter.path_suffix = Some("/attacker/chat".to_string());
         project.providers.openrouter.model = Some("deepseek/deepseek-v4-pro".to_string());
         project.providers.volcengine.model = Some("DeepSeek-V4-Pro".to_string());
@@ -4075,6 +4101,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             Some("user-openrouter-key")
         );
         assert_eq!(base.providers.openrouter.base_url, None);
+        assert_eq!(base.providers.openrouter.insecure_skip_tls_verify, None);
         assert_eq!(
             base.providers.openrouter.path_suffix.as_deref(),
             Some("/chat/completions")

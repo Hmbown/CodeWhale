@@ -2490,6 +2490,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  · provider: {}", api_target.provider);
     println!("  · base_url: {}", api_target.base_url);
     println!("  · model: {}", api_target.model);
+    let tls_status = doctor_tls_status(config);
+    if !tls_status.certificate_verification {
+        println!("  ! {}", tls_status.message);
+        println!("    Prefer SSL_CERT_FILE with a trusted custom CA bundle when possible.");
+    }
     let strict_tool_mode = doctor_strict_tool_mode_status(config);
     let strict_icon = match strict_tool_mode.status {
         "ready" => "✓".truecolor(aqua_r, aqua_g, aqua_b),
@@ -3281,6 +3286,7 @@ fn run_doctor_json(
     });
     let api_target = doctor_api_target(config);
     let strict_tool_mode = doctor_strict_tool_mode_status(config);
+    let tls_status = doctor_tls_status(config);
 
     let report = json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -3298,6 +3304,12 @@ fn run_doctor_json(
             "function_strict_sent": strict_tool_mode.function_strict_sent,
             "message": strict_tool_mode.message,
             "recommended_base_url": strict_tool_mode.recommended_base_url,
+        },
+        "tls": {
+            "certificate_verification": tls_status.certificate_verification,
+            "insecure_skip_tls_verify": tls_status.insecure_skip_tls_verify,
+            "provider": tls_status.provider,
+            "message": tls_status.message,
         },
         "search_provider": doctor_search_provider_json(config),
         "memory": memory_summary,
@@ -3504,6 +3516,29 @@ fn doctor_strict_tool_mode_status(config: &Config) -> DoctorStrictToolModeStatus
             function_strict_sent: true,
             message: "enabled; function.strict will be sent to this custom endpoint".to_string(),
             recommended_base_url: None,
+        },
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorTlsStatus {
+    certificate_verification: bool,
+    insecure_skip_tls_verify: bool,
+    provider: &'static str,
+    message: String,
+}
+
+fn doctor_tls_status(config: &Config) -> DoctorTlsStatus {
+    let provider = config.api_provider().as_str();
+    let insecure_skip_tls_verify = config.insecure_skip_tls_verify();
+    DoctorTlsStatus {
+        certificate_verification: !insecure_skip_tls_verify,
+        insecure_skip_tls_verify,
+        provider,
+        message: if insecure_skip_tls_verify {
+            format!("TLS certificate verification disabled for provider {provider}")
+        } else {
+            "TLS certificate verification enabled".to_string()
         },
     }
 }
@@ -6295,6 +6330,34 @@ mod doctor_endpoint_tests {
         assert_eq!(status.status, "custom_endpoint");
         assert!(status.function_strict_sent);
         assert!(status.message.contains("custom endpoint"));
+    }
+
+    #[test]
+    fn doctor_tls_status_reports_verification_enabled_by_default() {
+        let status = doctor_tls_status(&Config::default());
+
+        assert!(status.certificate_verification);
+        assert!(!status.insecure_skip_tls_verify);
+        assert_eq!(status.provider, "deepseek");
+        assert!(status.message.contains("enabled"));
+    }
+
+    #[test]
+    fn doctor_tls_status_warns_when_active_provider_skips_verification() {
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.openai.insecure_skip_tls_verify = Some(true);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        let status = doctor_tls_status(&config);
+
+        assert!(!status.certificate_verification);
+        assert!(status.insecure_skip_tls_verify);
+        assert_eq!(status.provider, "openai");
+        assert!(status.message.contains("disabled"));
     }
 
     #[test]

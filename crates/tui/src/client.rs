@@ -585,6 +585,7 @@ impl DeepSeekClient {
         let default_model = config.default_model();
         let stream_idle_timeout = Duration::from_secs(config.stream_chunk_timeout_secs());
         let http_headers = config.http_headers();
+        let insecure_skip_tls_verify = config.insecure_skip_tls_verify();
         let path_suffix = config
             .provider_config_for(api_provider)
             .and_then(|p| p.path_suffix.clone());
@@ -600,13 +601,24 @@ impl DeepSeekClient {
                 http_headers.len()
             ));
         }
+        if insecure_skip_tls_verify {
+            logging::warn(format!(
+                "TLS certificate verification is disabled for provider {}; prefer SSL_CERT_FILE with a trusted custom CA bundle when possible",
+                api_provider.as_str()
+            ));
+        }
         logging::info(format!(
             "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client =
-            Self::build_http_client(&api_key, &http_headers, api_provider, &base_url)?;
+        let http_client = Self::build_http_client(
+            &api_key,
+            &http_headers,
+            api_provider,
+            &base_url,
+            insecure_skip_tls_verify,
+        )?;
 
         Ok(Self {
             http_client,
@@ -627,6 +639,7 @@ impl DeepSeekClient {
         extra_headers: &HashMap<String, String>,
         api_provider: ApiProvider,
         base_url: &str,
+        insecure_skip_tls_verify: bool,
     ) -> Result<reqwest::Client> {
         let headers = build_default_headers(api_key, extra_headers, api_provider, base_url)?;
         let mut builder = crate::tls::reqwest_client_builder()
@@ -649,6 +662,9 @@ impl DeepSeekClient {
             && !cert_path.is_empty()
         {
             builder = add_extra_root_certs(builder, &cert_path);
+        }
+        if insecure_skip_tls_verify {
+            builder = builder.danger_accept_invalid_certs(true);
         }
         builder.build().map_err(Into::into)
     }
@@ -1685,6 +1701,32 @@ mod tests {
         extra.insert("X-Blank".to_string(), "   ".to_string());
         let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
         assert!(headers.get("x-blank").is_none());
+    }
+
+    #[test]
+    fn build_http_client_accepts_default_tls_verification() {
+        let client = DeepSeekClient::build_http_client(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::Deepseek,
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+            false,
+        );
+
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn build_http_client_accepts_provider_scoped_tls_skip_verify() {
+        let client = DeepSeekClient::build_http_client(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::Openai,
+            crate::config::DEFAULT_OPENAI_BASE_URL,
+            true,
+        );
+
+        assert!(client.is_ok());
     }
 
     #[test]

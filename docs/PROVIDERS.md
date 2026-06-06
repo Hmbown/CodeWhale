@@ -102,6 +102,12 @@ base_url = "https://gateway.example/v1"
 model = "your-deepseek-compatible-model"
 ```
 
+Private gateways with broken or intercepted certificates should use
+`SSL_CERT_FILE` with a trusted CA bundle. As a last resort,
+`insecure_skip_tls_verify = true` can be set on the active `[providers.*]`
+table; it applies only to the LLM provider client and is shown by
+`codewhale doctor`.
+
 Keep `provider`, `api_key`, and `base_url` in user config or process
 environment. Project-local config overlays intentionally cannot set those keys,
 so a repository cannot silently redirect prompts or credentials to another

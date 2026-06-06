@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token totals are updated. Hooks receive structured JSON with status, usage,
   totals, duration, tool count, and queued-message count on stdin; stdout is
   ignored and failures are warn-only (#1364, #2578).
+- Added provider-scoped `insecure_skip_tls_verify` for private
+  OpenAI-compatible gateways that cannot use a trusted CA bundle. The setting is
+  disabled by default, applies only to the active LLM provider HTTP client, and
+  is surfaced by `codewhale doctor`; `SSL_CERT_FILE` remains the preferred path
+  for corporate or private CA roots. Thanks @wavezhang for the original #1893
+  direction.
 - Added rich PlanArtifact support to `update_plan`: Plan mode can now carry
   grounded objectives, context, sources, critical files, constraints,
   verification, risks, and handoff notes through the transcript card, Plan

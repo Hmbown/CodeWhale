@@ -1306,8 +1306,7 @@ mod tests {
 
         assert!(set_static_prompt_composer(&cell, first).is_ok());
         let rejected = set_static_prompt_composer(&cell, second)
-            .err()
-            .expect("second composer should be rejected");
+            .expect_err("second composer should be rejected");
         let ctx = StaticPromptCtx {
             model_id: "deepseek-v4-pro",
             personality: Personality::Calm,

@@ -1888,6 +1888,7 @@ pub struct ProviderConfig {
     pub model: Option<String>,
     pub mode: Option<String>,
     pub auth_mode: Option<String>,
+    pub insecure_skip_tls_verify: Option<bool>,
     pub http_headers: Option<HashMap<String, String>>,
     pub path_suffix: Option<String>,
 }
@@ -2269,6 +2270,13 @@ impl Config {
 
     pub(crate) fn provider_config(&self) -> Option<&ProviderConfig> {
         self.provider_config_for(self.api_provider())
+    }
+
+    #[must_use]
+    pub fn insecure_skip_tls_verify(&self) -> bool {
+        self.provider_config()
+            .and_then(|provider| provider.insecure_skip_tls_verify)
+            .unwrap_or(false)
     }
 
     #[must_use]
@@ -4527,6 +4535,9 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         mode: override_cfg.mode.or(base.mode),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
+        insecure_skip_tls_verify: override_cfg
+            .insecure_skip_tls_verify
+            .or(base.insecure_skip_tls_verify),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         path_suffix: override_cfg.path_suffix.or(base.path_suffix),
     }
@@ -8265,6 +8276,34 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         assert_eq!(config.default_model(), DEFAULT_OPENAI_MODEL);
         assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
         Ok(())
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_is_scoped_to_active_provider() {
+        let mut providers = ProvidersConfig::default();
+        providers.deepseek.insecure_skip_tls_verify = Some(true);
+        providers.openai.insecure_skip_tls_verify = Some(false);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        assert_eq!(config.api_provider(), ApiProvider::Openai);
+        assert!(!config.insecure_skip_tls_verify());
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_reads_active_provider_table() {
+        let mut providers = ProvidersConfig::default();
+        providers.openai.insecure_skip_tls_verify = Some(true);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        assert!(config.insecure_skip_tls_verify());
     }
 
     #[test]

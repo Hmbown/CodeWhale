@@ -274,6 +274,7 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 # path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
+# insecure_skip_tls_verify = true # last resort for private gateways; prefer SSL_CERT_FILE
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
 [providers.nvidia_nim]
@@ -292,6 +293,7 @@ max_subagents = 10 # optional (1-20)
 # Gateway example:
 # base_url = "https://gateway.example/v1"
 # model = "your-deepseek-compatible-model"
+# insecure_skip_tls_verify = true # last resort for private gateways; prefer SSL_CERT_FILE
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]

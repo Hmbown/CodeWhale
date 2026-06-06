@@ -524,7 +524,7 @@ Key environment variables:
 | `OLLAMA_MODEL` | Self-hosted Ollama model tag |
 | `HUGGINGFACE_API_KEY` / `HF_TOKEN` / `HUGGINGFACE_BASE_URL` / `HUGGINGFACE_MODEL` | Hugging Face endpoint and model override |
 | `NO_ANIMATIONS=1` | Force accessibility mode at startup |
-| `SSL_CERT_FILE` | Custom CA bundle for corporate proxies |
+| `SSL_CERT_FILE` | Custom CA bundle for corporate proxies; prefer this over provider-local `insecure_skip_tls_verify` |
 
 Set `locale` in `settings.toml`, use `/config locale zh-Hans`, or rely on `LC_ALL`/`LANG` to choose UI chrome and the fallback language sent to V4 models. The latest user message still wins for natural-language reasoning and replies, so Chinese user turns stay Chinese even on an English system locale. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [docs/MCP.md](docs/MCP.md).
 
