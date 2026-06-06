@@ -2081,6 +2081,16 @@ impl RuntimeThreadManager {
         Ok(engine)
     }
 
+    /// Get the engine handle for a thread, loading it if necessary.
+    /// Public wrapper around the private `ensure_engine_loaded`.
+    pub async fn get_engine(&self, thread_id: &str) -> Result<EngineHandle> {
+        let thread = self.get_thread(thread_id).await?;
+        self.ensure_engine_loaded(&thread).await
+    }
+
+    /// Reconstruct the full message history of a thread from its turn items.
+    /// Used internally by `ensure_engine_loaded` to seed the engine's
+    /// message buffer when loading a thread.
     fn reconstruct_messages_from_turns(&self, turns: &[TurnRecord]) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
         for turn in turns {
@@ -2104,6 +2114,42 @@ impl RuntimeThreadManager {
                             content: vec![ContentBlock::Text {
                                 text,
                                 cache_control: None,
+                            }],
+                        });
+                    }
+                    TurnItemKind::ToolCall | TurnItemKind::FileChange => {
+                        // Reconstruct a minimal tool_use block for the session
+                        // so the file change cards render correctly when viewing
+                        // a resumed session.
+                        let name = item.summary.clone();
+                        let input: serde_json::Value = item
+                            .metadata
+                            .clone()
+                            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                        let id = item.id.clone();
+                        let tool_use_id = id.clone();
+                        messages.push(Message {
+                            role: "assistant".to_string(),
+                            content: vec![ContentBlock::ToolUse {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                                caller: None,
+                            }],
+                        });
+                        // Synthesize a tool_result message so downstream parsers
+                        // (e.g. turn restoration) see a complete tool round-trip.
+                        let output = item.detail.clone().unwrap_or_default();
+                        messages.push(Message {
+                            role: "user".to_string(),
+                            content: vec![ContentBlock::ToolResult {
+                                tool_use_id,
+                                content: output,
+                                is_error: Some(matches!(
+                                    item.status,
+                                    TurnItemLifecycleStatus::Failed
+                                )),
+                                content_blocks: None,
                             }],
                         });
                     }

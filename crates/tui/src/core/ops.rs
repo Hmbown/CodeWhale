@@ -12,6 +12,18 @@ use std::path::PathBuf;
 /// Prefix used for tool-call ids created by local composer shell shortcuts.
 pub const USER_SHELL_TOOL_ID_PREFIX: &str = "user_shell_";
 
+/// Snapshot of session state for saving to disk.
+/// Returned by `Op::GetSessionSnapshot` via a oneshot channel.
+#[derive(Debug, Clone)]
+pub struct SessionSnapshot {
+    pub messages: Vec<Message>,
+    pub total_tokens: u64,
+    pub model: String,
+    pub workspace: PathBuf,
+    pub system_prompt: Option<SystemPrompt>,
+    pub mode: String,
+}
+
 /// Operations that can be submitted to the engine.
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -96,6 +108,13 @@ pub enum Op {
 
     /// Run context compaction immediately.
     CompactContext,
+
+    /// Get a snapshot of the current session state (messages, tokens, etc.)
+    /// for saving to disk. Returns the result via the oneshot sender so
+    /// the caller doesn't have to compete with the SSE event stream.
+    GetSessionSnapshot {
+        tx: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<SessionSnapshot>>>>,
+    },
 
     /// Run agent-driven context purging.
     PurgeContext,
