@@ -7,6 +7,7 @@ import {
   readRuntimeConfig,
   runtimeBaseUrl,
   startRuntimeTerminal,
+  type RuntimeState,
 } from "./runtime";
 import { RuntimeStatusView } from "./status";
 
@@ -14,6 +15,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CodeWhale");
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   const statusView = new RuntimeStatusView();
+  let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let autoRefreshInFlight = false;
 
   status.command = "codewhale.checkRuntime";
   context.subscriptions.push(output, status);
@@ -41,7 +44,95 @@ export function activate(context: vscode.ExtensionContext): void {
     status.show();
   };
 
+  const checkAndRefreshRuntime = async (
+    showSpinner: boolean,
+    logResult: boolean,
+  ): Promise<RuntimeState> => {
+    const config = readRuntimeConfig();
+    if (showSpinner) {
+      updateStatus("$(sync~spin) CodeWhale", "Checking CodeWhale runtime...");
+    }
+
+    const state = await checkRuntime(config);
+    statusView.update(state);
+
+    switch (state.kind) {
+      case "connected":
+        updateStatus("$(check) CodeWhale", state.detail);
+        try {
+          await refreshAgentView();
+          await refreshSnapshots();
+        } catch (error: unknown) {
+          const detail = error instanceof Error ? error.message : String(error);
+          statusView.updateThreads([], "Runtime thread summaries unavailable.");
+          statusView.updateSnapshots([], detail);
+          output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
+        }
+        break;
+      case "auth-required":
+        updateStatus("$(lock) CodeWhale", state.detail);
+        statusView.updateThreads([], "Runtime token is required before threads can load.");
+        statusView.updateSnapshots([], "Runtime token is required before restore points can load.");
+        break;
+      case "offline":
+      case "error":
+        updateStatus("$(warning) CodeWhale", state.detail);
+        statusView.updateThreads([], "Connect to the runtime to load recent threads.");
+        statusView.updateSnapshots([], "Connect to the runtime to load restore points.");
+        break;
+    }
+
+    if (logResult) {
+      output.appendLine(`${new Date().toISOString()} ${state.kind}: ${state.detail}`);
+    }
+    return state;
+  };
+
+  const runAutoRefresh = async (): Promise<void> => {
+    if (autoRefreshInFlight) {
+      return;
+    }
+
+    autoRefreshInFlight = true;
+    try {
+      await checkAndRefreshRuntime(false, false);
+    } finally {
+      autoRefreshInFlight = false;
+    }
+  };
+
+  const scheduleAutoRefresh = (): void => {
+    if (autoRefreshTimer) {
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = undefined;
+    }
+
+    const intervalSeconds = readRuntimeConfig().agentViewRefreshIntervalSeconds;
+    if (intervalSeconds === 0) {
+      output.appendLine("Agent View auto-refresh is disabled.");
+      return;
+    }
+
+    autoRefreshTimer = setInterval(() => {
+      void runAutoRefresh();
+    }, intervalSeconds * 1000);
+    output.appendLine(`Agent View auto-refresh scheduled every ${intervalSeconds}s.`);
+  };
+
   updateStatus("$(terminal) CodeWhale", "Check CodeWhale runtime");
+  scheduleAutoRefresh();
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("codewhale.agentViewRefreshIntervalSeconds")) {
+        scheduleAutoRefresh();
+      }
+    }),
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codewhale.openTerminal", () => {
@@ -64,39 +155,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codewhale.checkRuntime", async () => {
-      const config = readRuntimeConfig();
-      updateStatus("$(sync~spin) CodeWhale", "Checking CodeWhale runtime...");
-      const state = await checkRuntime(config);
-      statusView.update(state);
-
-      switch (state.kind) {
-        case "connected":
-          updateStatus("$(check) CodeWhale", state.detail);
-          try {
-            await refreshAgentView();
-            await refreshSnapshots();
-          } catch (error: unknown) {
-            const detail = error instanceof Error ? error.message : String(error);
-            statusView.updateThreads([], "Runtime thread summaries unavailable.");
-            statusView.updateSnapshots([], detail);
-            output.appendLine(`Runtime Agent View details unavailable: ${detail}`);
-          }
-          break;
-        case "auth-required":
-          updateStatus("$(lock) CodeWhale", state.detail);
-          statusView.updateThreads([], "Runtime token is required before threads can load.");
-          statusView.updateSnapshots([], "Runtime token is required before restore points can load.");
-          break;
-        case "offline":
-        case "error":
-          updateStatus("$(warning) CodeWhale", state.detail);
-          statusView.updateThreads([], "Connect to the runtime to load recent threads.");
-          statusView.updateSnapshots([], "Connect to the runtime to load restore points.");
-          break;
-      }
-
-      output.appendLine(`${new Date().toISOString()} ${state.kind}: ${state.detail}`);
-      return state;
+      return await checkAndRefreshRuntime(true, true);
     }),
   );
 

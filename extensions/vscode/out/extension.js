@@ -42,6 +42,8 @@ function activate(context) {
     const output = vscode.window.createOutputChannel("CodeWhale");
     const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     const statusView = new status_1.RuntimeStatusView();
+    let autoRefreshTimer;
+    let autoRefreshInFlight = false;
     status.command = "codewhale.checkRuntime";
     context.subscriptions.push(output, status);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(status_1.RuntimeStatusView.viewType, statusView));
@@ -62,23 +64,11 @@ function activate(context) {
         status.tooltip = tooltip;
         status.show();
     };
-    updateStatus("$(terminal) CodeWhale", "Check CodeWhale runtime");
-    context.subscriptions.push(vscode.commands.registerCommand("codewhale.openTerminal", () => {
+    const checkAndRefreshRuntime = async (showSpinner, logResult) => {
         const config = (0, runtime_1.readRuntimeConfig)();
-        (0, runtime_1.openCodeWhaleTerminal)(config);
-        output.appendLine(`Opened CodeWhale terminal using ${config.commandPath}.`);
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("codewhale.startRuntime", () => {
-        const config = (0, runtime_1.readRuntimeConfig)();
-        (0, runtime_1.startRuntimeTerminal)(config);
-        const baseUrl = (0, runtime_1.runtimeBaseUrl)(config);
-        updateStatus("$(sync~spin) CodeWhale", `Runtime terminal started for ${baseUrl}`);
-        output.appendLine(`Started CodeWhale runtime terminal at ${baseUrl}.`);
-        void vscode.window.showInformationMessage(`CodeWhale runtime starting at ${baseUrl}`);
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("codewhale.checkRuntime", async () => {
-        const config = (0, runtime_1.readRuntimeConfig)();
-        updateStatus("$(sync~spin) CodeWhale", "Checking CodeWhale runtime...");
+        if (showSpinner) {
+            updateStatus("$(sync~spin) CodeWhale", "Checking CodeWhale runtime...");
+        }
         const state = await (0, runtime_1.checkRuntime)(config);
         statusView.update(state);
         switch (state.kind) {
@@ -107,8 +97,64 @@ function activate(context) {
                 statusView.updateSnapshots([], "Connect to the runtime to load restore points.");
                 break;
         }
-        output.appendLine(`${new Date().toISOString()} ${state.kind}: ${state.detail}`);
+        if (logResult) {
+            output.appendLine(`${new Date().toISOString()} ${state.kind}: ${state.detail}`);
+        }
         return state;
+    };
+    const runAutoRefresh = async () => {
+        if (autoRefreshInFlight) {
+            return;
+        }
+        autoRefreshInFlight = true;
+        try {
+            await checkAndRefreshRuntime(false, false);
+        }
+        finally {
+            autoRefreshInFlight = false;
+        }
+    };
+    const scheduleAutoRefresh = () => {
+        if (autoRefreshTimer) {
+            clearInterval(autoRefreshTimer);
+            autoRefreshTimer = undefined;
+        }
+        const intervalSeconds = (0, runtime_1.readRuntimeConfig)().agentViewRefreshIntervalSeconds;
+        if (intervalSeconds === 0) {
+            output.appendLine("Agent View auto-refresh is disabled.");
+            return;
+        }
+        autoRefreshTimer = setInterval(() => {
+            void runAutoRefresh();
+        }, intervalSeconds * 1000);
+        output.appendLine(`Agent View auto-refresh scheduled every ${intervalSeconds}s.`);
+    };
+    updateStatus("$(terminal) CodeWhale", "Check CodeWhale runtime");
+    scheduleAutoRefresh();
+    context.subscriptions.push(new vscode.Disposable(() => {
+        if (autoRefreshTimer) {
+            clearInterval(autoRefreshTimer);
+        }
+    }), vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("codewhale.agentViewRefreshIntervalSeconds")) {
+            scheduleAutoRefresh();
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand("codewhale.openTerminal", () => {
+        const config = (0, runtime_1.readRuntimeConfig)();
+        (0, runtime_1.openCodeWhaleTerminal)(config);
+        output.appendLine(`Opened CodeWhale terminal using ${config.commandPath}.`);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand("codewhale.startRuntime", () => {
+        const config = (0, runtime_1.readRuntimeConfig)();
+        (0, runtime_1.startRuntimeTerminal)(config);
+        const baseUrl = (0, runtime_1.runtimeBaseUrl)(config);
+        updateStatus("$(sync~spin) CodeWhale", `Runtime terminal started for ${baseUrl}`);
+        output.appendLine(`Started CodeWhale runtime terminal at ${baseUrl}.`);
+        void vscode.window.showInformationMessage(`CodeWhale runtime starting at ${baseUrl}`);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand("codewhale.checkRuntime", async () => {
+        return await checkAndRefreshRuntime(true, true);
     }));
     context.subscriptions.push(vscode.commands.registerCommand("codewhale.refreshAgentView", async () => {
         try {

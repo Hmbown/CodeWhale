@@ -48,11 +48,13 @@ function readRuntimeConfig() {
     const host = config.get("runtimeHost", "127.0.0.1").trim() || "127.0.0.1";
     const port = config.get("runtimePort", 7878);
     const token = config.get("runtimeToken", "").trim();
+    const interval = config.get("agentViewRefreshIntervalSeconds", 15);
     return {
         commandPath,
         host,
         port,
         token: token.length > 0 ? token : undefined,
+        agentViewRefreshIntervalSeconds: clampRefreshInterval(interval),
     };
 }
 function runtimeBaseUrl(config) {
@@ -228,6 +230,12 @@ function readString(value) {
 }
 function readNumber(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function clampRefreshInterval(value) {
+    if (!Number.isFinite(value)) {
+        return 15;
+    }
+    return Math.max(0, Math.min(300, Math.floor(value)));
 }
 function shellQuote(value) {
     if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) {

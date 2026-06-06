@@ -34,6 +34,7 @@ export interface RuntimeConfig {
   host: string;
   port: number;
   token?: string;
+  agentViewRefreshIntervalSeconds: number;
 }
 
 export function readRuntimeConfig(): RuntimeConfig {
@@ -42,11 +43,13 @@ export function readRuntimeConfig(): RuntimeConfig {
   const host = config.get<string>("runtimeHost", "127.0.0.1").trim() || "127.0.0.1";
   const port = config.get<number>("runtimePort", 7878);
   const token = config.get<string>("runtimeToken", "").trim();
+  const interval = config.get<number>("agentViewRefreshIntervalSeconds", 15);
   return {
     commandPath,
     host,
     port,
     token: token.length > 0 ? token : undefined,
+    agentViewRefreshIntervalSeconds: clampRefreshInterval(interval),
   };
 }
 
@@ -260,6 +263,13 @@ function readString(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function clampRefreshInterval(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 15;
+  }
+  return Math.max(0, Math.min(300, Math.floor(value)));
 }
 
 function shellQuote(value: string): string {

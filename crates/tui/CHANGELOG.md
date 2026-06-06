@@ -72,9 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points. The extension now renders those restore points read-only in its Agent
   View, and thread summaries include read-only workspace and branch metadata so
   the VS Code Agent View can show when a thread or agent lane is on another
-  branch. This answers the VS Code GUI lane without exposing chat webviews,
-  inline edits, or retry/undo/restore runtime mutation endpoints yet (#461,
-  #462, #480, #1217, #2341, #1584, #2327, #2580, #2808). Thanks @AiurArtanis
+  branch. Agent View and restore-point data now auto-refresh on a configurable
+  read-only interval so branch/workspace changes become visible without a
+  manual refresh. This answers the VS Code GUI lane without exposing chat
+  webviews, inline edits, or retry/undo/restore runtime mutation endpoints yet
+  (#461, #462, #480, #1217, #2341, #1584, #2327, #2580, #2808). Thanks @AiurArtanis
   for the Agent View prompt, @lbcheng888 for the earlier scaffold, @gaord for
   the GUI runtime API direction, @douglarek, @caeserchen, and @nightt5879 for
   the branch visibility trail, and @BigBenLabs, @lzx1545642258, @yangdaowan,

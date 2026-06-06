@@ -83,6 +83,13 @@
           "type": "string",
           "default": "",
           "description": "Optional bearer token for authenticated runtime endpoints."
+        },
+        "codewhale.agentViewRefreshIntervalSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Seconds between read-only Agent View refreshes. Set to 0 to disable automatic refresh."
         }
       }
     },
