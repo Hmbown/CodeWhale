@@ -53,7 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   executor now evaluates workflows from recorded leaf/control records, computes
   stable SHA-256 leaf input hashes, and marks missing records as
   `replay_diverged` instead of calling models again (#2673); the runtime replay
-  command and live-provider replay fallback remain deferred.
+  command and live-provider replay fallback remain deferred. The crate also now
+  has a model-agnostic role/capability registry with mock provider plumbing and
+  fail-closed JSON repair parsing, so WhaleFlow can choose capable models for
+  roles without hardcoding provider-specific runtime paths (#2672).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

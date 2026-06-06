@@ -4,6 +4,7 @@
 //! exposure, worktree application, replay, and model execution are layered on
 //! top only after their cancellation and evidence semantics are proven.
 
+mod model_policy;
 mod replay;
 #[cfg(not(target_env = "ohos"))]
 mod starlark_authoring;
@@ -14,6 +15,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use model_policy::*;
 pub use replay::*;
 #[cfg(not(target_env = "ohos"))]
 pub use starlark_authoring::{
