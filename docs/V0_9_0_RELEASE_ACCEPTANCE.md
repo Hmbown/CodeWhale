@@ -18,7 +18,7 @@ config source, result, and follow-up issue or PR.
 | `./scripts/release/check-ohos-deps.sh` | release steward | ship | Passed locally during #2845 (`e22a7da53`); OHOS dependency graph stayed compatible for `codewhale-tui` on `aarch64-unknown-linux-ohos`. |
 | `./scripts/release/publish-crates.sh dry-run` | release steward | ship | Passed locally on 2026-06-06 at `2561a54df`. The script performed full `cargo publish --dry-run` for crates without unpublished workspace dependencies and package-content verification for dependent workspace crates; expected 0.8.53 already-published warnings were observed. |
 | `node scripts/release/npm-wrapper-smoke.js` after release build | release steward | ship | Passed locally on 2026-06-06 at `2561a54df` after `cargo build --release --locked -p codewhale-cli -p codewhale-tui`. The harness packed `codewhale-0.8.53.tgz`, served local release assets, and verified `npx --no-install codewhale doctor --help` plus `npx --no-install codewhale-tui --help`. |
-| GitHub release asset verification before npm publish | release steward | ship |  |
+| GitHub release asset verification before npm publish | release steward | post-tag/pre-npm gate | The live v0.9.0 GitHub Release does not exist yet. After tagging and before `npm publish`, verify the Release contains the expected platform archives, individual binaries, Windows installer/portable assets, `codewhale-artifacts-sha256.txt`, and `codewhale-bundles-sha256.txt`; `npm/codewhale/scripts/verify-release-assets.js` remains the npm prepublish asset guard. |
 
 ## Provider, Model, And Auth
 
