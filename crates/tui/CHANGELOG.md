@@ -105,6 +105,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified slices. `config.example.toml` includes a commented dormant
   harness-profile example, and README links point at the real acceptance matrix
   and HarnessProfile cutline docs.
+  The release acceptance matrix now records evidence for already-landed gates:
+  provider-registry drift checks, provider-scoped TLS skip verify, read-only
+  GUI runtime/restore-point surfaces, VS Code Agent View branch visibility,
+  WhaleFlow mock/runtime foundations, explicit external-memory boundaries, and
+  docs alignment. Live workflow execution, provider calls, TraceStore writes,
+  and mutation-oriented GUI endpoints remain deferred until their atomicity and
+  replay contracts are tested.
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The
