@@ -14,10 +14,10 @@ For the per-thread triage flow + GraphQL tooling, see `phase2-playbook.md`.
 
 | field | value |
 | --- | --- |
-| head | `7038ab36` (on `feat/multi-agent-v0850`) |
-| base | `main` |
+| head | `8e260880` (on `feat/multi-agent-v0850`) |
+| base | `codex/v0.9.0-stewardship` (changed from `main` to drop the unrelated 187-commit stewardship delta) |
 | state | OPEN |
-| size | 201 files changed, 7,832 insertions(+), 32,009 deletions(-) |
+| size | 25 files changed, 5,961 insertions(+), 2 deletions(-) |
 | checks | GitGuardian pending · Greptile ✓ · CodeWhale CI matrix = `action_required` (fork-PR gate, can't be approved from contributor side) |
 | Hmbown verdict | "too large for the current v0.9 stabilization harvest… narrow tab-core/persistence slice after UTF-8 truncation and stub collab paths are resolved" |
 
