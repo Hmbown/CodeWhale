@@ -401,6 +401,8 @@ safety_posture = "standard"        # standard | strict | permissive
 Unknown posture names or unknown keys inside a harness profile fail config
 deserialization instead of silently becoming `custom`. That is intentional:
 once runtime wiring consumes these profiles, a typo should be visible.
+The v0.9 implementation order and automatic-creator boundary are documented in
+[`HARNESS_PROFILE_CUTLINE.md`](HARNESS_PROFILE_CUTLINE.md).
 
 ## Environment Variables
 

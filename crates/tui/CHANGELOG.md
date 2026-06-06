@@ -95,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A dedicated v0.9.0 release acceptance matrix now tracks provider, runtime,
   UI, WhaleFlow, Model Lab, remote-workbench, docs, rollback, and credit gates
   that must be checked or explicitly deferred before tagging (#2729).
+  HarnessProfile docs now pin the v0.9.0 order: posture/schema/resolver/seed
+  profiles/status display must precede evidence stores, promotion gates, or any
+  automatic Harness Creator, with DeepSeek, MiMo, Arcee, and generic/HF/local
+  posture expectations called out separately (#2728).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

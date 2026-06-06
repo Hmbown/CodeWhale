@@ -53,7 +53,7 @@ areas:
 | Project context stability | Bounded project-context packs and generated instructions keep large/noisy repositories from turning the first turn into an unbounded filesystem walk. |
 | HarmonyOS / OHOS | The lane carries safe OpenHarmony setup, OHOS platform guards, self-update disablement on OHOS, and target gating for PTY and Starlark execpolicy paths. Full OHOS target builds still require a host with the OpenHarmony native SDK configured. |
 | Nix and Starlark compatibility | Dependency stewardship keeps OHOS builds from pulling incompatible Nix-chain crates through PTY or Starlark paths where those features are gated. |
-| HarnessProfile | The branch carries the typed `HarnessPosture` / `HarnessProfile` config data model and strict schema validation. Provider/model posture selection, prompt/tool/runtime behavior, telemetry, and docs remain follow-up work. |
+| HarnessProfile | The branch carries the typed `HarnessPosture` / `HarnessProfile` config data model, strict schema validation, and a documented [profile cutline](docs/HARNESS_PROFILE_CUTLINE.md). Provider/model posture resolution, prompt/tool/runtime behavior, telemetry, and status display remain follow-up work. |
 | Contributor stewardship | Harvested PRs stay credited, contributor identity mapping is machine-readable, and community gates remain dry-run and human-toned while the branch is reviewed. |
 | WhaleFlow | Typed branch/leaf workflows, deterministic replay, pod-style workflow monitoring, provider/model posture, and evidence-backed profile evolution remain the larger v0.9 workbench goal. |
 
