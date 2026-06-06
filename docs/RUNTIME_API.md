@@ -178,6 +178,32 @@ fronting layer.
 - `POST /v1/threads/{id}/resume`
 - `POST /v1/threads/{id}/fork`
 
+`GET /v1/threads/summary` is the read-only summary surface used by the VS Code
+Agent View. Each item includes `id`, `title`, `preview`, `model`, `mode`,
+`archived`, `updated_at`, `latest_turn_id`, `latest_turn_status`, plus
+workspace metadata:
+
+```json
+{
+  "id": "thread_...",
+  "title": "Implement MCP status count",
+  "preview": "The TUI footer should count project MCP servers...",
+  "model": "deepseek-v4-pro",
+  "mode": "agent",
+  "branch": "feature/runtime-api",
+  "workspace": "/Users/you/projects/codewhale",
+  "archived": false,
+  "updated_at": "2026-06-06T05:43:00Z",
+  "latest_turn_id": "turn_...",
+  "latest_turn_status": "completed"
+}
+```
+
+`branch` is resolved from the thread workspace at request time and may be
+`null` when the workspace is not a Git repository or the branch cannot be read.
+`workspace` is included so editor clients can show when an agent lane is working
+outside the current VS Code folder.
+
 Thread forks are sibling runtime threads, not an in-place tree projection.
 `thread.forked` events include `source_thread_id`; internal backtrack-aware
 forks may also include `backtrack_depth_from_tail` and `dropped_turn_id`.
@@ -218,6 +244,28 @@ accept an empty string to clear a previously-set value. Added in v0.8.10 (#562):
 
 **Events** (SSE replay + live stream)
 - `GET /v1/threads/{id}/events?since_seq=<u64>`
+
+**Snapshots** (read-only side-git restore point listing)
+- `GET /v1/snapshots?limit=20`
+
+`/v1/snapshots` lists recent side-git restore points for the runtime workspace.
+It is read-only and does not restore files. `limit` defaults to `20` and must be
+between `1` and `100`.
+
+```json
+[
+  {
+    "id": "snap_...",
+    "label": "post-turn:1",
+    "timestamp": 1780730580
+  }
+]
+```
+
+Runtime API restore/retry/undo/editor-apply mutation endpoints are intentionally
+deferred. GUI clients should treat thread summaries and snapshots as inspection
+surfaces until atomic filesystem + conversation-state mutation semantics are
+specified and tested.
 
 **Receipts** (future read-only audit export)
 - Proposed only: `GET /v1/threads/{thread_id}/turns/{turn_id}/receipt`
