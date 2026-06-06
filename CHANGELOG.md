@@ -78,7 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Starlark and typed-IR gates now also reject unknown leaf dependencies,
   reducer inputs, and teacher-review candidates before mock execution or replay,
   keeping generated workflows fail-closed while runtime/worktree semantics stay
-  deferred.
+  deferred. TeacherReview now has serializable GEPA-style candidate artifacts
+  for notes, workflow recipes, skills, regression tests, cache policy, branch
+  heuristics, and Starlark authoring prompt patches, plus an offline helper
+  that proposes candidates from recorded execution traces without promoting
+  them or training model weights (#2674).
   Thanks @AdityaVG13 for the WhaleFlow draft and cost-tracking direction.
 - Added a state-store v2 schema migration for WhaleFlow trace tables covering
   workflow, branch, leaf, control-node, and teacher-candidate runs. The

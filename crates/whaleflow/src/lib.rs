@@ -911,6 +911,202 @@ pub struct BranchCandidate {
     pub diversity_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeacherCandidateKind {
+    Note,
+    WorkflowRecipe,
+    SkillPatch,
+    RegressionTest,
+    CachePolicyPatch,
+    BranchHeuristic,
+    StarlarkAuthoringPromptPatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TeacherCandidateStatus {
+    #[default]
+    Proposed,
+    Accepted,
+    Rejected,
+    Promoted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeacherCandidate {
+    pub candidate_id: String,
+    pub kind: TeacherCandidateKind,
+    #[serde(default)]
+    pub status: TeacherCandidateStatus,
+    pub source_node_id: String,
+    #[serde(default)]
+    pub source_branch_id: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TeacherReviewReport {
+    pub review_node_id: String,
+    #[serde(default)]
+    pub candidates: Vec<TeacherCandidate>,
+}
+
+impl TeacherReviewReport {
+    pub fn from_execution(review: &TeacherReviewSpec, execution: &WorkflowExecution) -> Self {
+        let candidates = teacher_candidates_from_execution(review, execution);
+        Self {
+            review_node_id: review.id.clone(),
+            candidates,
+        }
+    }
+}
+
+pub fn teacher_candidates_from_execution(
+    review: &TeacherReviewSpec,
+    execution: &WorkflowExecution,
+) -> Vec<TeacherCandidate> {
+    let mut candidates = Vec::new();
+    for source in &review.candidates {
+        if let Some(branch) = execution
+            .branch_results
+            .iter()
+            .find(|branch| branch.branch_id == *source || branch.task_id == *source)
+        {
+            candidates.push(teacher_candidate_from_branch(review, branch));
+            continue;
+        }
+        if let Some(leaf) = execution
+            .leaf_results
+            .iter()
+            .find(|leaf| leaf.leaf_id == *source || leaf.task_id == *source)
+        {
+            candidates.push(teacher_candidate_from_leaf(review, leaf));
+            continue;
+        }
+        if let Some(control) = execution
+            .control_node_results
+            .iter()
+            .find(|control| control.node_id == *source)
+        {
+            candidates.push(teacher_candidate_from_control(review, control));
+        }
+    }
+    candidates
+}
+
+fn teacher_candidate_from_branch(
+    review: &TeacherReviewSpec,
+    branch: &BranchResult,
+) -> TeacherCandidate {
+    let kind =
+        if branch.memo_usage.armh_hits > 0 || branch.memo_usage.provider_prompt_cache_hits > 0 {
+            TeacherCandidateKind::CachePolicyPatch
+        } else if branch.status == WorkflowRunStatus::Succeeded {
+            TeacherCandidateKind::WorkflowRecipe
+        } else {
+            TeacherCandidateKind::BranchHeuristic
+        };
+    let mut evidence = vec![format!("status={:?}", branch.status)];
+    if branch.usage.total_tokens() > 0 || branch.usage.cost_microusd > 0 {
+        evidence.push(format!(
+            "tokens={}, cost_microusd={}",
+            branch.usage.total_tokens(),
+            branch.usage.cost_microusd
+        ));
+    }
+    if branch.memo_usage.armh_hits > 0 || branch.memo_usage.provider_prompt_cache_hits > 0 {
+        evidence.push(format!(
+            "armh_hits={}, provider_prompt_cache_hits={}",
+            branch.memo_usage.armh_hits, branch.memo_usage.provider_prompt_cache_hits
+        ));
+    }
+    if let Some(notes) = branch.notes.as_deref() {
+        evidence.push(format!("notes={notes}"));
+    }
+    TeacherCandidate {
+        candidate_id: format!("{}:{}", review.id, branch.branch_id),
+        kind,
+        status: TeacherCandidateStatus::Proposed,
+        source_node_id: branch.task_id.clone(),
+        source_branch_id: Some(branch.branch_id.clone()),
+        summary: format!(
+            "TeacherReview candidate from branch `{}` with {:?} status.",
+            branch.branch_id, branch.status
+        ),
+        evidence,
+    }
+}
+
+fn teacher_candidate_from_leaf(review: &TeacherReviewSpec, leaf: &LeafResult) -> TeacherCandidate {
+    let kind = if leaf.status == WorkflowRunStatus::Failed {
+        TeacherCandidateKind::RegressionTest
+    } else if leaf.memo_usage.armh_hits > 0 || leaf.memo_usage.provider_prompt_cache_hits > 0 {
+        TeacherCandidateKind::CachePolicyPatch
+    } else {
+        TeacherCandidateKind::Note
+    };
+    let mut evidence = vec![format!("status={:?}", leaf.status)];
+    if let Some(output) = leaf.output.as_deref() {
+        evidence.push(format!("output={}", truncate_evidence(output)));
+    }
+    TeacherCandidate {
+        candidate_id: format!("{}:{}", review.id, leaf.leaf_id),
+        kind,
+        status: TeacherCandidateStatus::Proposed,
+        source_node_id: leaf.leaf_id.clone(),
+        source_branch_id: None,
+        summary: format!(
+            "TeacherReview candidate from leaf `{}` with {:?} status.",
+            leaf.leaf_id, leaf.status
+        ),
+        evidence,
+    }
+}
+
+fn teacher_candidate_from_control(
+    review: &TeacherReviewSpec,
+    control: &ControlNodeResult,
+) -> TeacherCandidate {
+    let mut evidence = vec![format!("status={:?}", control.status)];
+    if !control.selected_children.is_empty() {
+        evidence.push(format!(
+            "selected_children={}",
+            control.selected_children.join(",")
+        ));
+    }
+    if let Some(summary) = control.summary.as_deref() {
+        evidence.push(format!("summary={}", truncate_evidence(summary)));
+    }
+    TeacherCandidate {
+        candidate_id: format!("{}:{}", review.id, control.node_id),
+        kind: TeacherCandidateKind::StarlarkAuthoringPromptPatch,
+        status: TeacherCandidateStatus::Proposed,
+        source_node_id: control.node_id.clone(),
+        source_branch_id: None,
+        summary: format!(
+            "TeacherReview candidate from control node `{}` ({:?}).",
+            control.node_id, control.kind
+        ),
+        evidence,
+    }
+}
+
+fn truncate_evidence(value: &str) -> String {
+    const MAX_EVIDENCE_CHARS: usize = 240;
+    if value.chars().count() <= MAX_EVIDENCE_CHARS {
+        return value.to_string();
+    }
+    let mut truncated = value
+        .chars()
+        .take(MAX_EVIDENCE_CHARS.saturating_sub(1))
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BranchTournament {
     #[serde(default)]
@@ -2224,6 +2420,107 @@ mod tests {
                 field: "candidates",
                 reference: "candidate-b".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn teacher_candidate_serialization() {
+        let candidate = TeacherCandidate {
+            candidate_id: "teacher-review:branch-a".to_string(),
+            kind: TeacherCandidateKind::WorkflowRecipe,
+            status: TeacherCandidateStatus::Proposed,
+            source_node_id: "branch-a".to_string(),
+            source_branch_id: Some("branch-a".to_string()),
+            summary: "Winning branch found a reusable workflow recipe.".to_string(),
+            evidence: vec![
+                "status=Succeeded".to_string(),
+                "tokens=42, cost_microusd=7".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&candidate).expect("serialize teacher candidate");
+
+        assert!(json.contains("\"kind\":\"workflow_recipe\""));
+        assert!(json.contains("\"status\":\"proposed\""));
+        let parsed: TeacherCandidate =
+            serde_json::from_str(&json).expect("parse teacher candidate");
+        assert_eq!(parsed, candidate);
+    }
+
+    #[test]
+    fn teacher_review_produces_candidate_from_trace() {
+        let review = TeacherReviewSpec {
+            id: "teacher-review".to_string(),
+            candidates: vec!["winning-branch".to_string()],
+            promotion_policy: PromotionPolicy::default(),
+        };
+        let execution = WorkflowExecution {
+            branch_results: vec![BranchResult {
+                branch_id: "winning-branch".to_string(),
+                task_id: "winning-branch".to_string(),
+                status: WorkflowRunStatus::Succeeded,
+                usage: WorkflowUsage {
+                    input_tokens: 30,
+                    output_tokens: 12,
+                    cost_microusd: 7,
+                },
+                memo_usage: WorkflowMemoUsage::default(),
+                artifacts: vec!["trace://branches/winning-branch".to_string()],
+                notes: Some("branch produced a minimal verified patch".to_string()),
+            }],
+            ..WorkflowExecution::default()
+        };
+
+        let report = TeacherReviewReport::from_execution(&review, &execution);
+
+        assert_eq!(report.review_node_id, "teacher-review");
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].kind,
+            TeacherCandidateKind::WorkflowRecipe
+        );
+        assert_eq!(
+            report.candidates[0].status,
+            TeacherCandidateStatus::Proposed
+        );
+        assert!(
+            report.candidates[0]
+                .evidence
+                .iter()
+                .any(|line| line.contains("tokens=42"))
+        );
+    }
+
+    #[test]
+    fn failed_leaf_becomes_regression_test_candidate() {
+        let review = TeacherReviewSpec {
+            id: "teacher-review".to_string(),
+            candidates: vec!["verify-failure".to_string()],
+            promotion_policy: PromotionPolicy::default(),
+        };
+        let execution = WorkflowExecution {
+            leaf_results: vec![LeafResult {
+                leaf_id: "verify-failure".to_string(),
+                task_id: "verify-failure".to_string(),
+                status: WorkflowRunStatus::Failed,
+                usage: WorkflowUsage::default(),
+                memo_usage: WorkflowMemoUsage::default(),
+                output: Some("cargo test failed with a replay mismatch".to_string()),
+                artifacts: Vec::new(),
+            }],
+            ..WorkflowExecution::default()
+        };
+
+        let candidates = teacher_candidates_from_execution(&review, &execution);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].kind, TeacherCandidateKind::RegressionTest);
+        assert_eq!(candidates[0].status, TeacherCandidateStatus::Proposed);
+        assert!(
+            candidates[0]
+                .evidence
+                .iter()
+                .any(|line| { line.contains("cargo test failed with a replay mismatch") })
         );
     }
 
