@@ -99,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profiles/status display must precede evidence stores, promotion gates, or any
   automatic Harness Creator, with DeepSeek, MiMo, Arcee, and generic/HF/local
   posture expectations called out separately (#2728).
+  Hugging Face / Model Lab and `codebase_search` release gates now explicitly
+  ship only the provider/MCP/docs/design foundation in v0.9; native Hub search,
+  model passports, Spaces/Jobs workflows, eval/export surfaces, and runtime
+  `codebase_search` registration remain deferred (#2705, #2680, #2727).
+  Remote workbench acceptance is also marked docs/setup-only for v0.9 so release
+  notes do not imply a shipped VM or Telegram bridge runtime (#2724).
   Release-facing HarnessProfile docs now match the current implementation:
   v0.9 ships the typed schema/config foundation and defers runtime resolver,
   telemetry, seed-profile selection, and status-display behavior until later

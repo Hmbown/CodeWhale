@@ -27,7 +27,7 @@ config source, result, and follow-up issue or PR.
 | DeepSeek V4 direct provider smoke | provider steward | ship |  |
 | Xiaomi MiMo token-plan and pay-as-you-go config smoke | provider steward | ship |  |
 | Arcee Trinity Thinking route smoke or explicit defer | provider steward | decide |  |
-| Hugging Face route/search/passport smoke or explicit defer | model-lab steward | decide |  |
+| Hugging Face provider route and MCP concept helpers ship; native Hub search/passports are deferred | model-lab steward | ship foundation / defer native search-passport runtime | `ProviderKind::Huggingface`, env aliases, picker/docs, and `/hf concepts` / `/hf mcp status` distinguish the chat provider route from Hugging Face MCP and explicit Hub tooling. `docs/PROVIDERS.md` states native Hub HTTP search/passport picker metadata are not shipped behavior in this checkout; #2705/#2707/#2712 remain open for native Model Lab work. |
 | OpenRouter, Novita, Fireworks, and Volcengine env behavior smoke | provider steward | ship |  |
 | Provider registry drift check covers aliases/default env keys | provider steward | ship | #2820 (`5d491bc68`) added the metadata-only provider registry and `scripts/check-provider-registry.py`; verification included `python3 scripts/check-provider-registry.py` and `cargo test -p codewhale-config provider_ -- --nocapture`. |
 | Provider-scoped TLS skip-verify remains default-off and doctor-visible | security steward | ship | #2834 (`190e9f35e`, `6269cb91f`) landed provider-scoped TLS skip verify with default-off config, doctor warnings, docs, and CLI/runtime option tests. |
@@ -61,19 +61,19 @@ config source, result, and follow-up issue or PR.
 | --- | --- | --- | --- |
 | WhaleFlow typed IR, mock executor, replay, TeacherReview, StudentReplay, and cutline docs are tested | WhaleFlow steward | ship | #2821/#2824/#2831/#2833/#2839/#2840/#2841 plus focused local `cargo test -p codewhale-whaleflow --locked`; #2670 closed after `cargo test -p codewhale-whaleflow starlark --locked` passed 7/7 on current stewardship head. The `rlm_cache_change.star` dogfood workflow now has recorded mock-trace replay coverage, including a missing-record divergence check. |
 | Live `workflow_run`, worktree application, provider calls, and TraceStore writes are deferred until cancellation/replay/atomicity semantics pass | WhaleFlow steward | defer | #2669 and #2679 remain open for live runtime execution, provider calls, TraceStore writes, Arcee/student replay, and CLI/TUI workflow mode; current v0.9 branch ships mock executor/replay foundations only. |
-| Model Lab / Hugging Face MVP is included or deferred with release-note wording | model-lab steward | decide |  |
+| Model Lab / Hugging Face MVP is included or deferred with release-note wording | model-lab steward | ship provider/MCP docs foundation / defer native Model Lab MVP | v0.9 ships the Hugging Face chat-provider route, provider docs, and `/hf` concept/MCP status helpers only. Native Hub search, model passports, Spaces/Jobs workflows, and Model Lab eval/export surfaces remain deferred to #2705/#2707/#2710/#2712/#2727. |
 | HarnessProfile runtime MVP is deferred; schema/resolver foundation ships with release-note wording | harness steward | ship foundation / defer runtime | #2844 (`efbcc681a`) documents the cutline; `HarnessPosture` / `HarnessProfile` config schema and strict validation are present; a pure resolver matches provider/model routes without changing runtime behavior; seed-profile runtime selection, telemetry, and status display remain follow-up work. |
-| `codebase_search` MVP is included or deferred with release-note wording | search steward | decide |  |
+| `codebase_search` MVP is included or deferred with release-note wording | search steward | defer runtime / ship design doc | `docs/CODEBASE_SEARCH_DESIGN.md` is explicitly doc-only and says no catalog code ships in this cycle; runtime tool registration, index/eval fixtures, and search implementation remain deferred to #2680. |
 | External memory remains explicit/optional per `WHALEFLOW_EXTERNAL_MEMORY.md` | memory steward | ship | #2842 (`a7052751e`) added the external-memory cutline: optional/explicit workflow node/plugin only, visible state/owner/storage/scope, and no hidden default context substrate. |
 
 ## Remote Workbench
 
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
-| Remote workbench is marked included, experimental, or deferred | remote steward | decide |  |
-| If included: VM install smoke passes | remote steward | decide |  |
-| If included: Telegram bridge smoke passes | remote steward | decide |  |
-| If deferred: release notes avoid implying remote workbench availability | remote steward | decide |  |
+| Remote workbench is marked included, experimental, or deferred | remote steward | defer runtime / ship setup docs only | `docs/REMOTE_VM_US.md`, `docs/REMOTE_SETUP_DESIGN.md`, and `docs/TENCENT_LIGHTHOUSE_HK.md` document possible VM/Telegram/Lark setup patterns, but no v0.9 remote workbench runtime is included. |
+| If included: VM install smoke passes | remote steward | defer | Not applicable while remote workbench runtime is deferred; no v0.9 VM install smoke is required before tagging. |
+| If included: Telegram bridge smoke passes | remote steward | defer | Not applicable while remote workbench runtime is deferred; Telegram bridge docs remain design/setup guidance only. |
+| If deferred: release notes avoid implying remote workbench availability | remote steward | ship | Acceptance matrix and changelog wording must say setup/design docs only, not a shipped remote workbench feature. |
 
 ## Docs, Migration, And Rollback
 

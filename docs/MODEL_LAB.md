@@ -15,10 +15,10 @@ implemented today.
 - DeepSeek is the first-class default provider today, with `deepseek-v4-pro`,
   `deepseek-v4-flash`, streaming thinking blocks, Fin routing, `DEEPSEEK_*`
   environment variables, and `~/.deepseek` config compatibility.
-- OpenRouter, Novita, Fireworks, NVIDIA NIM, AtlasCloud, Wanjie Ark, generic
-  OpenAI-compatible endpoints, SGLang, vLLM, and Ollama are supported provider
-  paths where their IDs appear in `/provider`, `codewhale --provider`, or
-  `codewhale models`.
+- OpenRouter, Novita, Fireworks, NVIDIA NIM, AtlasCloud, Wanjie Ark, Hugging
+  Face Inference Providers, generic OpenAI-compatible endpoints, SGLang, vLLM,
+  and Ollama are supported provider paths where their IDs appear in
+  `/provider`, `codewhale --provider`, or `codewhale models`.
 - Model auto-routing chooses a concrete DeepSeek model and thinking level per
   turn. It is not a TUI mode.
 - Fin is the fast `deepseek-v4-flash` thinking-off path for routing,
@@ -29,9 +29,11 @@ implemented today.
 
 ## Not Implemented Yet
 
-- A native Hugging Face provider or Hub browser.
-- Built-in Hugging Face model card, dataset, adapter, safetensors, or Jobs
-  workflows.
+- A native Hugging Face Hub browser, model passport picker, or direct Hub search
+  workflow. The OpenAI-compatible Hugging Face Inference Providers route is
+  implemented separately as a chat provider.
+- Built-in Hugging Face model card, dataset, adapter, safetensors, Spaces, or
+  Jobs workflows.
 - Native Unsloth, NeMo, or Arcee integrations.
 - A dedicated Model Lab UI tab.
 - Built-in benchmark suites, eval leaderboards, hosted observability, or
@@ -62,13 +64,13 @@ Planned scope:
 - Hub API auth and model discovery.
 - Model cards, licenses, tags, safetensors metadata, adapters, and dataset
   links surfaced in a terminal-friendly way.
-- Inference Providers as explicit provider choices when the user configures
-  them.
+- Native Hub browser and model-passport metadata on top of the already separate
+  Hugging Face Inference Providers chat route.
 - Hugging Face Jobs as an optional remote execution path for user-approved
   experiments.
 
-Non-goal for now: claiming a native Hugging Face provider exists before it is
-implemented in code.
+Non-goal for now: claiming native Hub search, model passports, Spaces/Jobs, or
+Model Lab UI exists before those surfaces are implemented in code.
 
 ## Unsloth Workset
 
