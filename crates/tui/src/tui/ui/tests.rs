@@ -1838,6 +1838,8 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             command: "cargo test --workspace --all-features".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: app.turn_started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -1869,6 +1871,106 @@ fn active_tool_status_label_summarizes_live_tool_group() {
 }
 
 #[test]
+fn shell_live_output_update_matches_exact_task_id_only() {
+    let mut app = create_test_app();
+    app.push_history_cell(HistoryCell::Tool(ToolCell::Exec(ExecCell {
+        command: "cargo test --workspace".to_string(),
+        status: ToolStatus::Running,
+        output: None,
+        live_output: None,
+        shell_task_id: Some("shell_a".to_string()),
+        started_at: None,
+        duration_ms: None,
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    })));
+    app.push_history_cell(HistoryCell::Tool(ToolCell::Exec(ExecCell {
+        command: "cargo test --workspace".to_string(),
+        status: ToolStatus::Running,
+        output: None,
+        live_output: Some("previous".to_string()),
+        shell_task_id: Some("shell_b".to_string()),
+        started_at: None,
+        duration_ms: None,
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    })));
+
+    let mut jobs = std::collections::HashMap::new();
+    jobs.insert(
+        "shell_b".to_string(),
+        ShellJobSnapshot {
+            id: "shell_b".to_string(),
+            job_id: "shell_b".to_string(),
+            command: "cargo test --workspace".to_string(),
+            cwd: PathBuf::from("/tmp/repo"),
+            status: ShellStatus::Running,
+            exit_code: None,
+            elapsed_ms: 777,
+            stdout_tail: "stdout tail\n".to_string(),
+            stderr_tail: "stderr tail\n".to_string(),
+            stdout_len: 12,
+            stderr_len: 12,
+            stdin_available: false,
+            stale: false,
+            linked_task_id: None,
+        },
+    );
+
+    assert!(shell_exec_live_update(&app, 0, &jobs).is_none());
+    let (_task_id, status, output, duration) =
+        shell_exec_live_update(&app, 1, &jobs).expect("matching task id updates");
+
+    assert_eq!(status, ToolStatus::Running);
+    assert_eq!(duration, 777);
+    assert_eq!(
+        output.as_deref(),
+        Some("stdout tail\n\n\nSTDERR:\nstderr tail\n")
+    );
+}
+
+#[test]
+fn shell_live_output_update_skips_finalized_exec_cell() {
+    let mut app = create_test_app();
+    app.push_history_cell(HistoryCell::Tool(ToolCell::Exec(ExecCell {
+        command: "cargo test --workspace".to_string(),
+        status: ToolStatus::Success,
+        output: Some("final output".to_string()),
+        live_output: Some("old live output".to_string()),
+        shell_task_id: Some("shell_a".to_string()),
+        started_at: None,
+        duration_ms: Some(10),
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    })));
+    let mut jobs = std::collections::HashMap::new();
+    jobs.insert(
+        "shell_a".to_string(),
+        ShellJobSnapshot {
+            id: "shell_a".to_string(),
+            job_id: "shell_a".to_string(),
+            command: "cargo test --workspace".to_string(),
+            cwd: PathBuf::from("/tmp/repo"),
+            status: ShellStatus::Completed,
+            exit_code: Some(0),
+            elapsed_ms: 999,
+            stdout_tail: "new live output".to_string(),
+            stderr_tail: String::new(),
+            stdout_len: 15,
+            stderr_len: 0,
+            stdin_available: false,
+            stale: false,
+            linked_task_id: None,
+        },
+    );
+
+    assert!(shell_exec_live_update(&app, 0, &jobs).is_none());
+}
+
+#[test]
 fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
     let mut app = create_test_app();
     app.turn_started_at = Some(Instant::now() - Duration::from_secs(5));
@@ -1880,6 +1982,8 @@ fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
                 .to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: app.turn_started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -5435,6 +5539,8 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
             command: "python3 -i".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: Some(Instant::now()),
             duration_ms: None,
             source: ExecSource::Assistant,

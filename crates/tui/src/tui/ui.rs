@@ -65,6 +65,7 @@ use crate::settings::Settings;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
+use crate::tools::shell::{ShellJobSnapshot, ShellStatus};
 use crate::tools::spec::{RuntimeToolServices, ToolResult};
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::app::HuntVerdict;
@@ -1014,6 +1015,89 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
     app.task_panel = entries;
 }
 
+fn refresh_shell_exec_live_output(app: &mut App) -> bool {
+    let Some(shell_mgr) = app.runtime_services.shell_manager.as_ref().cloned() else {
+        return false;
+    };
+    let jobs = {
+        let Ok(mut mgr) = shell_mgr.lock() else {
+            return false;
+        };
+        mgr.list_jobs()
+            .into_iter()
+            .map(|job| (job.id.clone(), job))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    if jobs.is_empty() {
+        return false;
+    }
+
+    let mut changed = false;
+    for index in 0..app.virtual_cell_count() {
+        let Some((task_id, next_status, next_live, next_duration)) =
+            shell_exec_live_update(app, index, &jobs)
+        else {
+            continue;
+        };
+        let Some(HistoryCell::Tool(ToolCell::Exec(exec))) = app.cell_at_virtual_index_mut(index)
+        else {
+            continue;
+        };
+        if exec.output.is_some() || exec.shell_task_id.as_deref() != Some(task_id.as_str()) {
+            continue;
+        }
+        exec.status = next_status;
+        exec.live_output = next_live;
+        exec.duration_ms = Some(next_duration);
+        changed = true;
+    }
+    changed
+}
+
+fn shell_exec_live_update(
+    app: &App,
+    index: usize,
+    jobs: &std::collections::HashMap<String, ShellJobSnapshot>,
+) -> Option<(String, ToolStatus, Option<String>, u64)> {
+    let HistoryCell::Tool(ToolCell::Exec(exec)) = app.cell_at_virtual_index(index)? else {
+        return None;
+    };
+    if exec.output.is_some() {
+        return None;
+    }
+    let task_id = exec.shell_task_id.as_deref()?;
+    let job = jobs.get(task_id)?;
+    let next_status = shell_job_tool_status(&job.status);
+    let next_live = shell_job_live_output(job).or_else(|| exec.live_output.clone());
+    if exec.status == next_status
+        && exec.live_output == next_live
+        && exec.duration_ms == Some(job.elapsed_ms)
+    {
+        return None;
+    }
+    Some((task_id.to_string(), next_status, next_live, job.elapsed_ms))
+}
+
+fn shell_job_tool_status(status: &ShellStatus) -> ToolStatus {
+    match status {
+        ShellStatus::Running => ToolStatus::Running,
+        ShellStatus::Completed => ToolStatus::Success,
+        ShellStatus::Failed | ShellStatus::Killed | ShellStatus::TimedOut => ToolStatus::Failed,
+    }
+}
+
+fn shell_job_live_output(job: &ShellJobSnapshot) -> Option<String> {
+    match (job.stdout_tail.is_empty(), job.stderr_tail.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(job.stdout_tail.clone()),
+        (true, false) => Some(format!("STDERR:\n{}", job.stderr_tail)),
+        (false, false) => Some(format!(
+            "{}\n\nSTDERR:\n{}",
+            job.stdout_tail, job.stderr_tail
+        )),
+    }
+}
+
 fn active_reasoning_task_entries(app: &App) -> Vec<TaskPanelEntry> {
     let Some(active) = app.active_cell.as_ref() else {
         return Vec::new();
@@ -1301,6 +1385,9 @@ async fn run_event_loop(
 
         if last_task_refresh.elapsed() >= Duration::from_millis(2500) {
             refresh_active_task_panel(app, &task_manager).await;
+            if refresh_shell_exec_live_output(app) {
+                app.needs_redraw = true;
+            }
             last_task_refresh = Instant::now();
             app.needs_redraw = true;
         }

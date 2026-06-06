@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visibility trail, and @BigBenLabs, @lzx1545642258, @yangdaowan,
   @mangdehuang, @VerrPower, @hejia-v, @nasus9527, and @ygzhang-cn for the
   GUI/VS Code demand and validation trail.
+- Added inline live-output refresh for background shell Exec cards keyed by the
+  exact shell task id, so long-running commands can show bounded stdout/stderr
+  tails without consuming deltas or matching by command text. Thanks
+  @donglovejava for the live shell-output direction in #2048.
 - Added a static prompt composer override for embedders that need to replace
   the byte-stable base/personality prompt segment while leaving mode metadata,
   approval policy, tool taxonomy, Context Management, and the Compaction Relay

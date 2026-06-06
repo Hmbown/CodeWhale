@@ -331,6 +331,8 @@ mod tests {
             command: command.to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: Some(Instant::now()),
             duration_ms: None,
             source: ExecSource::Assistant,

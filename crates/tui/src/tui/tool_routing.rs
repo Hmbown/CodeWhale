@@ -101,6 +101,8 @@ pub(super) fn handle_tool_call_started(
                     command,
                     status: ToolStatus::Running,
                     output: None,
+                    live_output: None,
+                    shell_task_id: None,
                     started_at: Some(Instant::now()),
                     duration_ms: None,
                     source,
@@ -133,6 +135,8 @@ pub(super) fn handle_tool_call_started(
                 command,
                 status: ToolStatus::Running,
                 output: None,
+                live_output: None,
+                shell_task_id: None,
                 started_at: Some(Instant::now()),
                 duration_ms: None,
                 source,
@@ -506,6 +510,16 @@ pub(super) fn handle_tool_call_complete(
             HistoryCell::Tool(ToolCell::Exec(exec)) => {
                 exec.status = status;
                 if let Ok(tool_result) = result.as_ref() {
+                    let shell_task_id = tool_result
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("task_id"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|task_id| !task_id.trim().is_empty())
+                        .map(str::to_string);
+                    if shell_task_id.is_some() {
+                        exec.shell_task_id = shell_task_id;
+                    }
                     if let Some(meta_command) = tool_result
                         .metadata
                         .as_ref()
@@ -538,6 +552,12 @@ pub(super) fn handle_tool_call_complete(
                         exec.output = Some(tool_result.content.clone());
                         exec.output_summary =
                             Some(super::history::summarize_tool_output(&tool_result.content));
+                        exec.live_output = None;
+                    } else if status == ToolStatus::Running
+                        && exec.interaction.is_none()
+                        && !tool_result.content.is_empty()
+                    {
+                        exec.live_output = Some(tool_result.content.clone());
                     }
                 } else if let Err(err) = result.as_ref()
                     && exec.interaction.is_none()

@@ -890,6 +890,8 @@ pub struct ExecCell {
     pub command: String,
     pub status: ToolStatus,
     pub output: Option<String>,
+    pub live_output: Option<String>,
+    pub shell_task_id: Option<String>,
     pub started_at: Option<Instant>,
     pub duration_ms: Option<u64>,
     pub source: ExecSource,
@@ -946,7 +948,7 @@ impl ExecCell {
         }
 
         if self.interaction.is_none() {
-            if let Some(output) = self.output.as_ref() {
+            if let Some(output) = self.output.as_ref().or(self.live_output.as_ref()) {
                 lines.extend(render_exec_output_mode(
                     output,
                     width,
@@ -4306,6 +4308,8 @@ mod tests {
             command: "echo hi".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -4645,6 +4649,8 @@ mod tests {
             command: "ls".to_string(),
             status: ToolStatus::Success,
             output: Some("a\nb\n".to_string()),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(10),
             source: ExecSource::Assistant,
@@ -4675,6 +4681,8 @@ mod tests {
             command: "cargo test --workspace --all-features".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -4991,6 +4999,8 @@ mod tests {
             command: "false".to_string(),
             status: ToolStatus::Failed,
             output: Some("boom".to_string()),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(42),
             source: ExecSource::Assistant,
@@ -5044,6 +5054,49 @@ mod tests {
 
     fn lines_text(lines: &[ratatui::text::Line<'static>]) -> String {
         lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn exec_cell_renders_live_shell_output_before_final_output() {
+        let cell = ExecCell {
+            command: "cargo test".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: Some("running line 1\nrunning line 2".to_string()),
+            shell_task_id: Some("shell_live".to_string()),
+            started_at: None,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        };
+
+        let text = lines_text(&cell.lines_with_motion(80, true));
+
+        assert!(text.contains("running line 1"));
+        assert!(text.contains("running line 2"));
+        assert!(!text.contains("Ctrl+B opens shell controls"));
+    }
+
+    #[test]
+    fn exec_cell_prefers_final_output_over_live_shell_tail() {
+        let cell = ExecCell {
+            command: "cargo test".to_string(),
+            status: ToolStatus::Success,
+            output: Some("final output".to_string()),
+            live_output: Some("stale live tail".to_string()),
+            shell_task_id: Some("shell_live".to_string()),
+            started_at: None,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        };
+
+        let text = lines_text(&cell.lines_with_motion(80, true));
+
+        assert!(text.contains("final output"));
+        assert!(!text.contains("stale live tail"));
     }
 
     #[test]
@@ -5162,6 +5215,8 @@ mod tests {
             command: "noisy_script.sh".to_string(),
             status: ToolStatus::Success,
             output: Some(output),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(120),
             source: ExecSource::Assistant,
@@ -5613,6 +5668,8 @@ mod tests {
             command: command.to_string(),
             status: ToolStatus::Success,
             output: Some("ok".to_string()),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
