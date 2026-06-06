@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`memory-consolidate` bundled skill** — a reflective maintenance pass
+  over the user memory file: classify entries, merge duplicates, fix
+  contradicted facts, prune stale one-offs, and keep the file short
+  enough to stay useful on every turn. Auto-installed alongside
+  `skill-creator` and triggered when the user asks to consolidate/clean
+  up memory. The system-skill installer now bundles a *list* of skills
+  with a recorded known-set marker, so newly-bundled skills install on
+  upgrade while user-deleted skills stay deleted.
 - **Four new lifecycle hook events — `stop`, `subagent_stop`,
   `pre_compact`, `notification`** — bringing the hook surface in line
   with Claude Code's most-used lifecycle hooks. `stop` fires when the
