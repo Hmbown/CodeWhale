@@ -310,6 +310,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stream/body decode failures such as `Stream read error: error decoding
+  response body` are now classified as recoverable network interruptions
+  instead of generic internal errors, keeping the transcript and triage metadata
+  aligned with the existing stream retry path (#2847). Thanks
+  @qamranmushtaq-collab for the Windows/npx DeepSeek report.
 - The TUI footer, `/status`, `/mcp` manager, and command-palette MCP entries
   now count trusted workspace-local `.codewhale/mcp.json` servers together with
   the global MCP config, matching `codewhale mcp list` for merged global +

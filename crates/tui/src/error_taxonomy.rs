@@ -342,6 +342,10 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
     if lower.contains("network")
         || lower.contains("connection")
         || lower.contains("dns")
+        || lower.contains("stream read error")
+        || lower.contains("error decoding response body")
+        || lower.contains("chunk decode error")
+        || lower.contains("body decode")
         || lower.contains("temporarily unavailable")
         || lower.contains(" 502 ")
         || lower.contains(" 503 ")
@@ -546,6 +550,22 @@ mod tests {
             classify("request timed out after 30s"),
             ErrorCategory::Timeout
         );
+    }
+
+    #[test]
+    fn network_catches_stream_body_decode_failures() {
+        for msg in [
+            "Warn Stream read error: error decoding response body",
+            "Stream read error: error decoding response body",
+            "chunk decode error",
+            "provider body decode failed mid-stream",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Network,
+                "expected Network for `{msg}`",
+            );
+        }
     }
 
     #[test]
