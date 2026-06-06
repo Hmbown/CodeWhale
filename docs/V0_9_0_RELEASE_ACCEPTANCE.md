@@ -48,11 +48,11 @@ config source, result, and follow-up issue or PR.
 
 | Gate | Owner | Ship/defer decision | Evidence |
 | --- | --- | --- | --- |
-| First-look screen included or explicitly deferred | UX steward | decide |  |
+| First-look screen included or explicitly deferred | UX steward | defer v0.9 redesign / keep existing onboarding | The existing onboarding welcome remains covered by `first_run_user_always_starts_at_welcome`; the opinionated v0.9 first-look/home redesign remains deferred to #2713 so release notes should not imply a new home screen. |
 | Slash picker readability smoke | UX steward | ship |  |
-| Transcript tool-collapse smoke or explicit defer | UX steward | decide |  |
-| Sidebar detail popovers smoke or explicit defer | UX steward | decide |  |
-| Plan review/handoff artifact smoke | Plan steward | ship |  |
+| Transcript tool-collapse smoke or explicit defer | UX steward | ship | #2776 (`c76ec4752`) landed dense successful tool-run collapse with guardrails for failed/running/shell/patch/review/diff cells; focused widget coverage includes `chat_widget_collapses_dense_tool_runs_by_default`, `chat_widget_expands_dense_tool_runs_on_demand`, and `chat_widget_expanded_mode_leaves_dense_tool_runs_visible`. |
+| Sidebar detail popovers smoke or explicit defer | UX steward | ship | #2778 (`3cb49233e`) added row-level hover metadata and wrapping detail popovers for truncated Work/Tasks/Agents rows; #2806 (`19f5c7aa6`) preserved current sub-agent progress in the sidebar hover text. Focused coverage includes `sidebar_hover_rows_mark_source_text_diff_as_truncated` and `subagent_hover_text_preserves_full_agent_id_and_progress`. |
+| Plan review/handoff artifact smoke | Plan steward | ship | #2770 (`7ac8063b6`) added rich PlanArtifact sections through the transcript/Plan prompt path; focused coverage includes `plan_update_cell_renders_rich_artifact_metadata` and `plan_prompt_renders_rich_plan_artifact_sections`. |
 | VS Code Agent View branch/workspace visibility smoke | GUI steward | ship | #2825 (`1bacaf763`) added `workspace` / `branch` metadata to `/v1/threads/summary`; #2832 (`50b773f1d`) added read-only auto-refresh so branch/workspace changes can appear without manual refresh. |
 
 ## v0.9.0 Feature Gates
