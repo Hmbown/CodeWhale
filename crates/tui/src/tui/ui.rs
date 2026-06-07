@@ -3345,7 +3345,7 @@ async fn run_event_loop(
                     app.ui_locale.tag(),
                     next
                 ));
-                let _ = crate::commands::config::set_config_value(
+                let _ = commands::set_config_value(
                     app,
                     "locale",
                     next,

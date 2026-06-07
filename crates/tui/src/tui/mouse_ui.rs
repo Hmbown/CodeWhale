@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::localization::MessageId;
+use crate::localization::{MessageId, tr};
 use crate::tui::app::App;
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,

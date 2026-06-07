@@ -259,6 +259,17 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     config::switch_mode(app, mode)
 }
+
+/// Auto-select a model based on request complexity.
+pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
+    config::auto_model_heuristic(input, current_model)
+}
+
+pub use config::{
+    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
+    parse_auto_route_recommendation, resolve_auto_route_with_flash, set_config_value,
+};
+
 /// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
 /// Zhang et al. (arXiv:2512.24601).
 ///
