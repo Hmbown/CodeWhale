@@ -2374,7 +2374,7 @@ impl App {
     pub fn finish_onboarding(&mut self) {
         self.onboarding = OnboardingState::None;
         if let Err(err) = crate::tui::onboarding::mark_onboarded() {
-            self.status_message = Some(format!("无法标记入职状态: {err}"));
+            self.status_message = Some(format!("{}{err}", tr(self.ui_locale, MessageId::StatusCannotMarkOnboarding)));
         }
         self.needs_redraw = true;
     }
@@ -2413,7 +2413,7 @@ impl App {
         let entering_yolo = mode == AppMode::Yolo && previous_mode != AppMode::Yolo;
         let leaving_yolo = previous_mode == AppMode::Yolo && mode != AppMode::Yolo;
         self.mode = mode;
-        self.status_message = Some(format!("已切换到 {} 模式", mode.label()));
+        self.status_message = Some(format!("{}{} 模式", tr(self.ui_locale, MessageId::StatusModeSwitched), mode.label()));
 
         if entering_yolo {
             self.yolo_restore = Some(YoloRestoreState {
@@ -3584,7 +3584,7 @@ impl App {
             .map_or(count.saturating_sub(1), |index| index.saturating_sub(1));
         self.selected_attachment_index = Some(next);
         self.cursor_position = 0;
-        self.status_message = Some("已选择附件 - Backspace/Delete 删除".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusAttachmentSelected).to_string());
         self.needs_redraw = true;
         true
     }
@@ -3600,7 +3600,7 @@ impl App {
                 Some("已选择附件 - Backspace/Delete 删除".to_string());
         } else {
             self.selected_attachment_index = None;
-            self.status_message = Some("输入框已聚焦".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusComposerFocused).to_string());
         }
         self.needs_redraw = true;
         true
@@ -3608,7 +3608,7 @@ impl App {
 
     pub fn clear_composer_attachment_selection(&mut self) -> bool {
         if self.selected_attachment_index.take().is_some() {
-            self.status_message = Some("输入框已聚焦".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusComposerFocused).to_string());
             self.needs_redraw = true;
             true
         } else {
@@ -3649,7 +3649,7 @@ impl App {
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
-        self.status_message = Some(format!("已移除附件: {}", reference.path));
+        self.status_message = Some(format!("{}{}", tr(self.ui_locale, MessageId::StatusAttachmentRemoved), reference.path));
         self.needs_redraw = true;
         true
     }
@@ -3731,7 +3731,7 @@ impl App {
             ClipboardContent::Image(pasted) => {
                 let description = format!("{} ({})", pasted.short_label(), pasted.size_label());
                 self.insert_media_attachment("image", &pasted.path, Some(&description));
-                self.status_message = Some(format!("已附加图片: {description}"));
+                self.status_message = Some(format!("{}{description}", tr(self.ui_locale, MessageId::StatusImageAttached)));
             }
         }
     }
@@ -4413,7 +4413,7 @@ impl App {
         self.slash_menu_hidden = true;
         self.mention_menu_hidden = true;
         self.paste_burst.clear_after_explicit_paste();
-        self.status_message = Some("历史搜索: 输入以筛选，回车确认".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchFilter).to_string());
         self.needs_redraw = true;
     }
 
@@ -4492,7 +4492,7 @@ impl App {
         if let Some(search) = self.composer_history_search.as_mut() {
             search.query.push(ch);
             search.selected = 0;
-            self.status_message = Some("历史搜索: 回车确认，Esc 恢复".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchConfirm).to_string());
             self.needs_redraw = true;
         }
     }
@@ -4504,7 +4504,7 @@ impl App {
         if let Some(search) = self.composer_history_search.as_mut() {
             search.query.push_str(&normalize_paste_text(text));
             search.selected = 0;
-            self.status_message = Some("历史搜索: 回车确认，Esc 恢复".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchConfirm).to_string());
             self.needs_redraw = true;
         }
     }
@@ -4552,12 +4552,12 @@ impl App {
             self.input = selected;
             self.cursor_position = char_count(&self.input);
             self.history_index = None;
-            self.status_message = Some("历史记录已插入到输入框".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryInserted).to_string());
             self.needs_redraw = true;
             true
         } else {
             self.composer_history_search = Some(search);
-            self.status_message = Some("没有匹配的历史记录".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryNoMatches).to_string());
             self.needs_redraw = true;
             false
         }
@@ -4569,7 +4569,7 @@ impl App {
         };
         self.input = search.pre_search_input;
         self.cursor_position = search.pre_search_cursor.min(char_count(&self.input));
-        self.status_message = Some("历史搜索已取消".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryCancelled).to_string());
         self.needs_redraw = true;
     }
 
@@ -6211,7 +6211,7 @@ mod tests {
     #[test]
     fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
         let mut app = App::new(test_options(false), &Config::default());
-        app.status_message = Some("任务已排队".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusTaskQueued).to_string());
         app.sync_status_message_to_toasts();
 
         app.set_mode(AppMode::Agent);
