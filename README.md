@@ -367,6 +367,9 @@ CodeWhale supports three Arcee models:
 | `trinity-mini` | ❌ No | 128,000 tokens | 4,096 tokens | Faster, cost-effective tasks |
 
 **Note:** The `trinity-large-thinking` model supports reasoning (thinking mode) and can handle very large contexts, making it ideal for complex programming tasks. The other models do not support reasoning but offer larger context windows than many other providers.
+
+```bash
+# Arcee
 codewhale auth set --provider arcee --api-key "YOUR_ARCEE_API_KEY"
 codewhale --provider arcee --model trinity-large-thinking
 codewhale --provider arcee --model trinity-large-preview
