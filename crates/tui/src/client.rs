@@ -852,7 +852,10 @@ impl DeepSeekClient {
             anyhow::bail!("Speech synthesis failed: HTTP {status}: {error_text}");
         }
 
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read speech synthesis response body")?;
         let payload: Value = serde_json::from_str(&response_text)
             .context("Failed to parse speech synthesis response JSON")?;
         let (audio_bytes, transcript) = parse_speech_audio_response(&payload)?;
@@ -904,6 +907,8 @@ impl DeepSeekClient {
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
+                // Consume the response body so the connection can be returned to the pool.
+                let _ = resp.text().await;
                 self.mark_request_success().await;
                 logging::info("Recovery probe succeeded");
             }
@@ -1021,6 +1026,8 @@ impl LlmClient for DeepSeekClient {
         let response = self.http_client.get(health_url).send().await;
         match response {
             Ok(resp) if resp.status().is_success() => {
+                // Consume the response body so the connection can be returned to the pool.
+                let _ = resp.text().await;
                 self.mark_request_success().await;
                 Ok(true)
             }
@@ -1360,7 +1367,10 @@ impl DeepSeekClient {
             );
             anyhow::bail!("FIM API error: HTTP {status}: {error_text}");
         }
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read FIM API response body")?;
         let value: serde_json::Value =
             serde_json::from_str(&response_text).context("Failed to parse FIM API response")?;
         let text = value
