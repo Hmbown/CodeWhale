@@ -7168,11 +7168,12 @@ fn render(f: &mut Frame, app: &mut App) {
         (split[0], split[1])
     };
 
-    // Optional tab bar — only takes 1 row when tabs are present. Splits
-    // off the top of the body so the tab bar visually sits between the
-    // header and the chat.
+    // Tab bar — always 1 row (when height allows). Shows the open tabs
+    // when present, or a "Press Ctrl+Shift+N" hint when empty so the
+    // multi-tab system is discoverable from a fresh launch. Sits
+    // between the header and the chat.
     let mut tab_bar_area: Option<Rect> = None;
-    if !app.tab_manager.is_empty() && body_area.height > crate::tui::tab::TAB_BAR_HEIGHT + 3 {
+    if body_area.height > crate::tui::tab::TAB_BAR_HEIGHT + 3 {
         let split = Layout::default()
             .direction(Direction::Vertical)
             .flex(ratatui::layout::Flex::Start)
