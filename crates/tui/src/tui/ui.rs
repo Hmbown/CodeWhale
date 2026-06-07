@@ -51,7 +51,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
 use crate::llm_client::LlmClient;
-use crate::localization::{MessageId, tr};
+use crate::localization::{MessageId, cycle_locale_next, tr};
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
 };
@@ -3316,6 +3316,7 @@ async fn run_event_loop(
 
             if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::SHIFT)
                 && app.view_stack.is_empty()
             {
                 app.status_message = Some(if app.is_compacting {
@@ -3326,6 +3327,30 @@ async fn run_event_loop(
                 if !app.is_compacting {
                     let _ = engine_handle.send(Op::CompactContext).await;
                 }
+                app.needs_redraw = true;
+                continue;
+            }
+
+            // Ctrl+Shift+L: cycle the UI locale (en → zh-Hans → ja → pt-BR →
+            // es-419 → vi → zh-Hant → en). Composes with /locale for explicit
+            // setting; this hotkey is for fast toggling during a session.
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT)
+                && app.view_stack.is_empty()
+            {
+                let next = cycle_locale_next(app.ui_locale);
+                app.status_message = Some(format!(
+                    "🌐 Locale: {} → {}",
+                    app.ui_locale.tag(),
+                    next
+                ));
+                let _ = crate::commands::config::set_config_value(
+                    app,
+                    "locale",
+                    next,
+                    true,
+                );
                 app.needs_redraw = true;
                 continue;
             }

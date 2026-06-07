@@ -377,6 +377,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
+        name: "locale",
+        aliases: &["language", "lang"],
+        usage: "/locale [code]",
+        description_id: MessageId::CmdLocaleDescription,
+    },
+    CommandInfo {
         name: "verbose",
         aliases: &[],
         usage: "/verbose [on|off]",
@@ -616,6 +622,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jihua" => config::mode(app, Some("plan")),
         "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),
+        "locale" | "language" | "lang" => config::locale(app, arg),
         "verbose" => config::verbose(app, arg),
         "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),

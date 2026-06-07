@@ -550,6 +550,10 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    CmdLocaleDescription,
+    LocaleCurrentLabel,
+    LocaleAvailableLabel,
+    LocaleUsageLabel,
     // Status bar messages (locale-switched)
     StatusNoResumableSession,
     StatusCannotLoadSession,
@@ -933,6 +937,10 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::CmdLocaleDescription,
+    MessageId::LocaleCurrentLabel,
+    MessageId::LocaleAvailableLabel,
+    MessageId::LocaleUsageLabel,
     MessageId::StatusNoResumableSession,
     MessageId::StatusCannotLoadSession,
     MessageId::StatusCannotRestoreOfflineQueue,
@@ -995,6 +1003,21 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
     fallback_translation(translation(locale, id), id)
+}
+
+/// Return the next locale in the cycle, used by Ctrl+Shift+L. The cycle is
+/// the order in which locales are listed in the /locale help output, ending
+/// with ZhHant which is the least-shipped variant.
+pub fn cycle_locale_next(current: Locale) -> &'static str {
+    match current {
+        Locale::En => "zh-Hans",
+        Locale::ZhHans => "ja",
+        Locale::Ja => "pt-BR",
+        Locale::PtBr => "es-419",
+        Locale::Es419 => "vi",
+        Locale::Vi => "zh-Hant",
+        Locale::ZhHant => "en",
+    }
 }
 
 pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {
@@ -1626,6 +1649,10 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::CmdLocaleDescription => "Switch UI language or list available locales",
+        MessageId::LocaleCurrentLabel => "Current locale: ",
+        MessageId::LocaleAvailableLabel => "Available: ",
+        MessageId::LocaleUsageLabel => "Usage: /locale <code>  (e.g. en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
         MessageId::StatusNoResumableSession => "No resumable session found",
         MessageId::StatusCannotLoadSession => "Cannot load session: ",
         MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
@@ -3115,6 +3142,10 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::CmdLocaleDescription => "切换界面语言或列出可用语言",
+        MessageId::LocaleCurrentLabel => "当前语言: ",
+        MessageId::LocaleAvailableLabel => "可用: ",
+        MessageId::LocaleUsageLabel => "用法: /locale <代码>  (例如 en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
         MessageId::StatusNoResumableSession => "没有找到可恢复的会话",
         MessageId::StatusCannotLoadSession => "无法加载会话: ",
         MessageId::StatusCannotRestoreOfflineQueue => "无法恢复离线队列: ",
