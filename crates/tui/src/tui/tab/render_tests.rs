@@ -61,8 +61,8 @@ mod tests {
         let output = render_to_string(80, |buf, area| {
             render_tab_bar(area, buf, &app);
         });
-        // Should show the "new tab" hint
-        assert!(output.contains("New tab"));
+        // Should show the discoverability hint for the multi-tab system
+        assert!(output.contains("Create your first tab"));
         assert!(output.contains("Ctrl"));
     }
 
