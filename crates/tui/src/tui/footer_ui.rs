@@ -508,11 +508,21 @@ pub(crate) fn render_footer_from(
     // active, regardless of user-configured status items.
     let shell_chip = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
 
+    // Locale chip: shows the active UI language as a clickable target.
+    // Hidden in English to keep the bar uncluttered for the default locale.
+    let locale_chip = crate::tui::widgets::footer_locale_chip(app.ui_locale);
+
     // Right-cluster extension chips: append in `items` order so user
     // ordering is preserved across the new variants.
     let mut extra: Vec<Span<'static>> = Vec::new();
     if !shell_chip.is_empty() {
         extra.extend(shell_chip);
+    }
+    if !locale_chip.is_empty() {
+        if !extra.is_empty() {
+            extra.push(Span::raw("  "));
+        }
+        extra.extend(locale_chip);
     }
     for item in items {
         let chip = match *item {

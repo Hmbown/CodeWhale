@@ -189,6 +189,21 @@ pub fn footer_agents_chip(running: usize, locale: Locale) -> Vec<Span<'static>> 
     )]
 }
 
+/// Build a "🌐 <tag>" chip showing the active UI locale. Always rendered so
+/// the user has a visible signal of which language is currently in effect
+/// (and a clickable target for future mouse wiring). Empty when the locale
+/// is `En` to keep the bar uncluttered for English users.
+#[must_use]
+pub fn footer_locale_chip(locale: Locale) -> Vec<Span<'static>> {
+    if locale == Locale::En {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        format!("\u{1F310} {}", locale.tag()),
+        Style::default().fg(palette::DEEPSEEK_SKY),
+    )]
+}
+
 /// Build the cumulative-elapsed chip ("worked 3h 12m") for the
 /// footer's right cluster (#448). Hidden during the first minute of
 /// a session so a fresh launch doesn't render a noisy `worked 5s`

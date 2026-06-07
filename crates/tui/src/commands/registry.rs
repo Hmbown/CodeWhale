@@ -458,6 +458,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/slop [query|export]",
         description_id: MessageId::CmdSlopDescription,
     },
+    CommandInfo {
+        name: "locale",
+        aliases: &["language", "lang"],
+        usage: "/locale [code]",
+        description_id: MessageId::CmdLocaleDescription,
+    },
 ];
 
 /// Get command info by name or alias

@@ -12,7 +12,9 @@ use crate::config_persistence::{
     persist_tui_integer_key,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
-use crate::localization::resolve_locale;
+use crate::llm_client::LlmClient;
+use crate::localization::{MessageId, resolve_locale, tr};
+use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
 use crate::tui::app::{
     App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
@@ -905,6 +907,29 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => CommandResult::action(AppAction::OpenThemePicker),
         Some(name) => set_config_value(app, "theme", name, true),
+    }
+}
+
+/// `/locale [code]` — with no argument, print the current locale plus the
+/// list of available codes. With an argument, route through
+/// `set_config_value("locale", ...)` so the apply + save flow is shared with
+/// `/config`. Recognized codes: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi,
+/// plus `auto` to defer to the system environment.
+pub fn locale(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let locale = app.ui_locale;
+    match arg.map(str::trim).filter(|s| !s.is_empty()) {
+        None => {
+            let current = tr(locale, MessageId::LocaleCurrentLabel).to_string()
+                + locale.tag()
+                + " ("
+                + locale.translation_target_name()
+                + ")";
+            let available = tr(locale, MessageId::LocaleAvailableLabel).to_string()
+                + "en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto";
+            let usage = tr(locale, MessageId::LocaleUsageLabel).to_string();
+            CommandResult::message(format!("{current}\n{available}\n{usage}"))
+        }
+        Some(name) => set_config_value(app, "locale", name, true),
     }
 }
 
