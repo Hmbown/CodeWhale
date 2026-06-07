@@ -1321,8 +1321,8 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbCompleteCycleModes => {
             "Complete /command, queue running-turn follow-up, cycle modes; Shift+Tab cycles reasoning effort"
         }
-        MessageId::KbJumpPlanAgentYolo => "Jump directly to Plan / Agent / YOLO mode",
-        MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to Plan / Agent / YOLO mode",
+        MessageId::KbJumpPlanAgentYolo => "Jump directly to 计划模式/智能体模式 / YOLO mode",
+        MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to 计划模式/智能体模式 / YOLO mode",
         MessageId::KbFocusSidebar => {
             "Focus Work / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 hides it"
         }
@@ -1371,14 +1371,14 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeQuickTaskList => "/task list   - Show background task queue",
         MessageId::HomeQuickHelp => "/help        - Show help",
         MessageId::HomeModeTips => "Mode Tips",
-        MessageId::HomeAgentModeTip => "Agent mode - Use tools for autonomous tasks",
-        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in Plan mode before executing",
+        MessageId::HomeAgentModeTip => "代理模式 - 使用工具执行自主任务",
+        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in 计划模式 before executing",
         MessageId::HomeAgentModeYoloTip => "  Type /mode yolo to enable full tool access",
         MessageId::HomeYoloModeTip => "YOLO mode - Full tool access, no approvals",
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
-        MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
+        MessageId::HomePlanModeTip => "计划模式 - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
-        MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
+        MessageId::HomeGoalModeTip => "目标跟踪 - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
         MessageId::OnboardLanguageBlurb => {
@@ -2345,8 +2345,8 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "/command を補完、実行中ターンのフォローアップをキュー、モードを切り替え；Shift+Tab で推論強度を切り替え"
         }
-        MessageId::KbJumpPlanAgentYolo => "Plan / Agent / YOLO モードに直接ジャンプ",
-        MessageId::KbAltJumpPlanAgentYolo => "Plan / Agent / YOLO モードへの代替ジャンプ",
+        MessageId::KbJumpPlanAgentYolo => "计划模式/智能体模式 / YOLO モードに直接ジャンプ",
+        MessageId::KbAltJumpPlanAgentYolo => "计划模式/智能体模式 / YOLO モードへの代替ジャンプ",
         MessageId::KbFocusSidebar => {
             "Work / Tasks / Agents / Context / Auto / Hidden サイドバーにフォーカス"
         }
@@ -2769,10 +2769,10 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "补全 /command、排队运行轮次跟进、切换模式；Shift+Tab 切换推理强度"
         }
-        MessageId::KbJumpPlanAgentYolo => "直接跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
+        MessageId::KbJumpPlanAgentYolo => "直接跳转到计划模式/智能体模式 / YOLO 模式",
+        MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到计划模式/智能体模式 / YOLO 模式",
         MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
-        MessageId::KbTogglePlanAgent => "在 Plan 和 Agent 模式之间切换",
+        MessageId::KbTogglePlanAgent => "在计划模式和智能体模式之间切换",
         MessageId::KbSessionPicker => "打开会话选择器",
         MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
         MessageId::KbCopySelection => "复制当前选中内容（macOS 为 Cmd+C）",
@@ -2815,14 +2815,14 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickTaskList => "/task list   - 显示后台任务队列",
         MessageId::HomeQuickHelp => "/help        - 显示帮助",
         MessageId::HomeModeTips => "模式提示",
-        MessageId::HomeAgentModeTip => "Agent 模式 - 使用工具执行自主任务",
-        MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在 Plan 模式下审查后再执行",
+        MessageId::HomeAgentModeTip => "智能体模式 - 使用工具执行自主任务",
+        MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在计划模式下审查后再执行",
         MessageId::HomeAgentModeYoloTip => "  输入 /mode yolo 启用完整工具访问",
         MessageId::HomeYoloModeTip => "YOLO 模式 - 完整工具访问，无需审批",
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
-        MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
+        MessageId::HomePlanModeTip => "计划模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
-        MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
+        MessageId::HomeGoalModeTip => "目标跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
         MessageId::OnboardLanguageBlurb => {
@@ -2858,7 +2858,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardTipsLine1 => "用自然语言描述任务。需要命令时使用 /help 或 Ctrl+K。",
         MessageId::OnboardTipsLine2 => "底部输入框支持多行：Enter 发送，Alt+Enter 或 Ctrl+J 换行。",
         MessageId::OnboardTipsLine3 => {
-            "按需切换模式：Plan 适合先审后行，Agent 用于执行，YOLO 启用自动批准。"
+            "按需切换模式：计划模式适合先审后行，智能体模式用于执行，YOLO 启用自动批准。"
         }
         MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
         MessageId::OnboardTipsFooterEnter => "按 Enter",
@@ -3227,8 +3227,8 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "Completar /command, enfileirar follow-up, ciclar modos; Shift+Tab cicla esforço de raciocínio"
         }
-        MessageId::KbJumpPlanAgentYolo => "Pular direto para modo Plan / Agent / YOLO",
-        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo Plan / Agent / YOLO",
+        MessageId::KbJumpPlanAgentYolo => "Pular direto para modo 计划模式/智能体模式 / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo 计划模式/智能体模式 / YOLO",
         MessageId::KbFocusSidebar => {
             "Focar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
         }
@@ -3725,8 +3725,8 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "Completar /command, encolar follow-up, ciclar modos; Shift+Tab cicla esfuerzo de razonamiento"
         }
-        MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo Plan / Agent / YOLO",
-        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo Plan / Agent / YOLO",
+        MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo 计划模式/智能体模式 / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo 计划模式/智能体模式 / YOLO",
         MessageId::KbFocusSidebar => {
             "Enfocar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
         }

@@ -278,7 +278,7 @@ pub fn apply_mention_menu_selection(app: &mut App, entries: &[String]) -> bool {
     super::file_frecency::record_mention(replacement);
     replace_file_mention(app, byte_start, &partial, replacement);
     app.mention_menu_hidden = false;
-    app.status_message = Some(format!("Attached @{replacement}"));
+    app.status_message = Some(format!("已附加 @{replacement}"));
     true
 }
 
@@ -300,17 +300,14 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         find_file_mention_completions(&ws, &partial, FILE_MENTION_COMPLETION_LIMIT)
     };
     if candidates.is_empty() {
-        app.status_message = Some(no_file_mention_matches_status(
-            &partial,
-            app.mention_walk_depth,
-        ));
+        app.status_message = Some(format!("没有文件匹配 @{partial}"));
         return true;
     }
     if candidates.len() == 1 {
         // #441: a unique-match completion is also a "mention" for ranking.
         super::file_frecency::record_mention(&candidates[0]);
         replace_file_mention(app, byte_start, &partial, &candidates[0]);
-        app.status_message = Some(format!("Attached @{}", candidates[0]));
+        app.status_message = Some(format!("已附加 @{}", candidates[0]));
         return true;
     }
     let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
@@ -326,7 +323,7 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         .map(|c| format!("@{c}"))
         .collect::<Vec<_>>()
         .join(", ");
-    app.status_message = Some(format!("Matches: {preview}"));
+    app.status_message = Some(format!("匹配: {preview}"));
     true
 }
 
