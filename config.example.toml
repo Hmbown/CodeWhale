@@ -248,7 +248,8 @@ max_subagents = 10 # optional (1-20)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
-#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL, HUGGINGFACE_MODEL
+#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL (or HF_BASE_URL),
+#                 HUGGINGFACE_MODEL (or HF_MODEL)
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
 # set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
@@ -385,6 +386,7 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
 
 # Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
+# Provider aliases: huggingface, hugging-face, hugging_face, hf
 [providers.huggingface]
 # api_key = "YOUR_HF_TOKEN"
 # base_url = "https://router.huggingface.co/v1"

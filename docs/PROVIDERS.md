@@ -44,6 +44,11 @@ Use any of these surfaces to select a provider:
 as legacy aliases for `deepseek`. They do not select a different official host;
 DeepSeek uses the same official API host worldwide.
 
+`huggingface`, `hugging-face`, `hugging_face`, and `hf` all select the
+Hugging Face Inference Providers route. This is the OpenAI-compatible router
+path for chat/inference, not Hub browsing, model-card inspection, uploads, or
+artifact export.
+
 Fresh shared config writes to `~/.codewhale/config.toml`. Existing
 `~/.deepseek/config.toml` files are still read for compatibility.
 
@@ -128,7 +133,7 @@ endpoint.
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
 | `ollama` | `[providers.ollama]` | Optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Self-hosted Ollama OpenAI-compatible route. Localhost deployments commonly omit auth. `OLLAMA_MODEL` is accepted. |
-| `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`; default `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI-compatible route. Org-prefixed model IDs pass through. |
+| `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`, `HF_BASE_URL`; default `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI-compatible router route. Accepted aliases: `huggingface`, `hugging-face`, `hugging_face`, `hf`. Org-prefixed model IDs pass through. `HUGGINGFACE_MODEL` and `HF_MODEL` are accepted. Hub browsing/export are separate future features. |
 
 ### Xiaomi MiMo Notes
 
@@ -222,6 +227,18 @@ Tool-call support is tracked separately by the static `ModelRegistry` and by
 the endpoint's ability to accept OpenAI-compatible `tools` payloads. A custom
 OpenAI-compatible or local endpoint can still reject tool calls even if
 CodeWhale can send the schema.
+
+### Hugging Face Inference Providers Notes
+
+The shipped Hugging Face route targets the OpenAI-compatible Inference Providers
+router at `https://router.huggingface.co/v1`. Configure auth with
+`HUGGINGFACE_API_KEY` first, or `HF_TOKEN` as a fallback. Configure the endpoint
+with `HUGGINGFACE_BASE_URL` first, or `HF_BASE_URL` as a fallback; configure the
+model with `HUGGINGFACE_MODEL` first, or `HF_MODEL` as a fallback.
+
+This route does not imply Hub browsing, model-card metadata, dataset access,
+Jobs, uploads, or export. Those remain explicit Model Lab work items so
+provider auth and artifact movement stay separate.
 
 ### When a Local Model Prints Tool JSON
 

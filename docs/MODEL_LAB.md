@@ -7,8 +7,7 @@ those models become discoverable, evaluable, routable, servable, and exportable
 without weakening the current terminal-agent contract: local workspace control,
 explicit provider auth, approval gates, and clear privacy boundaries.
 
-This document is roadmap language. It does not mean every workset below is
-implemented today.
+This document is roadmap language. Some worksets below are roadmap-only.
 
 ## Implemented Today
 
@@ -19,6 +18,10 @@ implemented today.
   OpenAI-compatible endpoints, SGLang, vLLM, and Ollama are supported provider
   paths where their IDs appear in `/provider`, `codewhale --provider`, or
   `codewhale models`.
+- Hugging Face Inference Providers are available through the
+  OpenAI-compatible router at `https://router.huggingface.co/v1`. Select the
+  route with `huggingface`, `hugging-face`, `hugging_face`, or `hf`; configure
+  `HUGGINGFACE_API_KEY` or `HF_TOKEN` for auth.
 - Model auto-routing chooses a concrete DeepSeek model and thinking level per
   turn. It is not a TUI mode.
 - Fin is the fast `deepseek-v4-flash` thinking-off path for routing,
@@ -27,11 +30,10 @@ implemented today.
 - Self-hosted OpenAI-compatible endpoints can be used through SGLang, vLLM,
   Ollama, or the generic `openai` provider configuration.
 
-## Not Implemented Yet
+## Still Planned
 
-- A native Hugging Face provider or Hub browser.
-- Built-in Hugging Face model card, dataset, adapter, safetensors, or Jobs
-  workflows.
+- Hugging Face Hub browsing, upload/export, model card, dataset, adapter,
+  safetensors, or Jobs workflows.
 - Native Unsloth, NeMo, or Arcee integrations.
 - A dedicated Model Lab UI tab.
 - Built-in benchmark suites, eval leaderboards, hosted observability, or
@@ -57,18 +59,24 @@ describe a model as available before CodeWhale can actually route to it.
 
 ## Hugging Face Workset
 
+Implemented today:
+
+- Hugging Face Inference Providers as an explicit OpenAI-compatible router
+  provider, selected with `huggingface`, `hugging-face`, `hugging_face`, or
+  `hf`.
+- Model IDs are sent to the router exactly as selected, including
+  org-prefixed Hugging Face model IDs.
+
 Planned scope:
 
 - Hub API auth and model discovery.
 - Model cards, licenses, tags, safetensors metadata, adapters, and dataset
   links surfaced in a terminal-friendly way.
-- Inference Providers as explicit provider choices when the user configures
-  them.
 - Hugging Face Jobs as an optional remote execution path for user-approved
   experiments.
 
-Non-goal for now: claiming a native Hugging Face provider exists before it is
-implemented in code.
+Non-goal for now: treating the router route as Hub browsing/export, or
+inferring Hub upload/export auth from the inference-provider API key.
 
 ## Unsloth Workset
 
@@ -138,8 +146,9 @@ Planned scope:
 - Local files, prompts, transcripts, traces, model outputs, eval results,
   adapters, datasets, and checkpoints should remain local unless the user
   explicitly chooses a provider or export destination.
-- Provider auth must remain explicit. `DEEPSEEK_*`, OpenRouter, Hugging Face,
-  and self-hosted credentials should not be inferred from unrelated config.
+- Provider auth must remain explicit. `DEEPSEEK_*`, OpenRouter,
+  `HUGGINGFACE_API_KEY` / `HF_TOKEN`, and self-hosted credentials should not be
+  inferred from unrelated config.
 - Exportable artifacts should include provenance: source model, provider,
   route, tool policy, eval inputs, and redaction status.
 - Public sharing, hosted telemetry, sponsorship badges, and external branding

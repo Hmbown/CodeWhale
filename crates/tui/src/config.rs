@@ -3461,7 +3461,8 @@ fn apply_env_overrides(config: &mut Config) {
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Huggingface)
-        && let Ok(value) = std::env::var("HUGGINGFACE_BASE_URL")
+        && let Ok(value) =
+            std::env::var("HUGGINGFACE_BASE_URL").or_else(|_| std::env::var("HF_BASE_URL"))
         && !value.trim().is_empty()
     {
         config
@@ -3674,7 +3675,7 @@ fn apply_env_overrides(config: &mut Config) {
             .model = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Huggingface)
-        && let Ok(value) = std::env::var("HUGGINGFACE_MODEL")
+        && let Ok(value) = std::env::var("HUGGINGFACE_MODEL").or_else(|_| std::env::var("HF_MODEL"))
         && !value.trim().is_empty()
     {
         config
@@ -5763,7 +5764,9 @@ mod tests {
         huggingface_api_key: Option<OsString>,
         huggingface_token: Option<OsString>,
         huggingface_base_url: Option<OsString>,
+        hf_base_url: Option<OsString>,
         huggingface_model: Option<OsString>,
+        hf_model: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -5860,7 +5863,9 @@ mod tests {
             let huggingface_api_key_prev = env::var_os("HUGGINGFACE_API_KEY");
             let huggingface_token_prev = env::var_os("HF_TOKEN");
             let huggingface_base_url_prev = env::var_os("HUGGINGFACE_BASE_URL");
+            let hf_base_url_prev = env::var_os("HF_BASE_URL");
             let huggingface_model_prev = env::var_os("HUGGINGFACE_MODEL");
+            let hf_model_prev = env::var_os("HF_MODEL");
             // Safety: test-only environment mutation guarded by a global mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
@@ -5952,7 +5957,9 @@ mod tests {
                 env::remove_var("HUGGINGFACE_API_KEY");
                 env::remove_var("HF_TOKEN");
                 env::remove_var("HUGGINGFACE_BASE_URL");
+                env::remove_var("HF_BASE_URL");
                 env::remove_var("HUGGINGFACE_MODEL");
+                env::remove_var("HF_MODEL");
             }
             Self {
                 home: home_prev,
@@ -6044,7 +6051,9 @@ mod tests {
                 huggingface_api_key: huggingface_api_key_prev,
                 huggingface_token: huggingface_token_prev,
                 huggingface_base_url: huggingface_base_url_prev,
+                hf_base_url: hf_base_url_prev,
                 huggingface_model: huggingface_model_prev,
+                hf_model: hf_model_prev,
             }
         }
     }
@@ -6154,7 +6163,9 @@ mod tests {
                 Self::restore_var("HUGGINGFACE_API_KEY", self.huggingface_api_key.take());
                 Self::restore_var("HF_TOKEN", self.huggingface_token.take());
                 Self::restore_var("HUGGINGFACE_BASE_URL", self.huggingface_base_url.take());
+                Self::restore_var("HF_BASE_URL", self.hf_base_url.take());
                 Self::restore_var("HUGGINGFACE_MODEL", self.huggingface_model.take());
+                Self::restore_var("HF_MODEL", self.hf_model.take());
             }
         }
     }
@@ -10039,6 +10050,25 @@ model = "deepseek-ai/deepseek-v4-pro"
     }
 
     #[test]
+    fn huggingface_provider_aliases_parse() {
+        for alias in ["huggingface", "hugging-face", "hugging_face", "hf"] {
+            assert_eq!(ApiProvider::parse(alias), Some(ApiProvider::Huggingface));
+        }
+    }
+
+    #[test]
+    fn invalid_provider_error_lists_huggingface() {
+        let config = Config {
+            provider: Some("not-a-provider".to_string()),
+            ..Default::default()
+        };
+        let err = config.validate().expect_err("unknown provider should fail");
+        let message = err.to_string();
+        assert!(message.contains("Invalid provider 'not-a-provider'"));
+        assert!(message.contains("huggingface"));
+    }
+
+    #[test]
     fn huggingface_provider_uses_direct_defaults() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -10093,6 +10123,35 @@ model = "deepseek-ai/deepseek-v4-pro"
     }
 
     #[test]
+    fn huggingface_missing_key_error_mentions_env_fallbacks() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-huggingface-missing-key-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config = Config {
+            provider: Some("huggingface".to_string()),
+            ..Default::default()
+        };
+
+        config.validate()?;
+        let err = config.deepseek_api_key().expect_err("missing key");
+        let message = err.to_string();
+        assert!(message.contains("Hugging Face API key not found"));
+        assert!(message.contains("HUGGINGFACE_API_KEY"));
+        assert!(message.contains("HF_TOKEN"));
+        Ok(())
+    }
+
+    #[test]
     fn huggingface_env_overrides_key_base_url_and_model() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -10110,8 +10169,11 @@ model = "deepseek-ai/deepseek-v4-pro"
         unsafe {
             env::set_var("CODEWHALE_PROVIDER", "huggingface");
             env::set_var("HUGGINGFACE_API_KEY", "hf-env-key");
+            env::set_var("HF_TOKEN", "hf-token-fallback");
             env::set_var("HUGGINGFACE_BASE_URL", "https://custom-hf.example/v1");
+            env::set_var("HF_BASE_URL", "https://fallback-hf.example/v1");
             env::set_var("HUGGINGFACE_MODEL", "meta-llama/Llama-3-70B");
+            env::set_var("HF_MODEL", "fallback/model");
         }
 
         let config = Config::load(None, None)?;
@@ -10119,6 +10181,36 @@ model = "deepseek-ai/deepseek-v4-pro"
         assert_eq!(config.deepseek_api_key()?, "hf-env-key");
         assert_eq!(config.deepseek_base_url(), "https://custom-hf.example/v1");
         assert_eq!(config.default_model(), "meta-llama/Llama-3-70B");
+        Ok(())
+    }
+
+    #[test]
+    fn huggingface_short_env_fallbacks_configure_route() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-huggingface-short-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "hf");
+            env::set_var("HF_TOKEN", "hf-token-value");
+            env::set_var("HF_BASE_URL", "https://short-hf.example/v1");
+            env::set_var("HF_MODEL", "org/short-model");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Huggingface);
+        assert_eq!(config.deepseek_api_key()?, "hf-token-value");
+        assert_eq!(config.deepseek_base_url(), "https://short-hf.example/v1");
+        assert_eq!(config.default_model(), "org/short-model");
         Ok(())
     }
 }

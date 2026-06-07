@@ -132,6 +132,39 @@ pub enum ProviderKind {
 
 impl ProviderKind {
     #[must_use]
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Deepseek,
+            Self::NvidiaNim,
+            Self::Openai,
+            Self::Atlascloud,
+            Self::WanjieArk,
+            Self::Volcengine,
+            Self::Openrouter,
+            Self::XiaomiMimo,
+            Self::Novita,
+            Self::Fireworks,
+            Self::Siliconflow,
+            Self::SiliconflowCN,
+            Self::Arcee,
+            Self::Moonshot,
+            Self::Sglang,
+            Self::Vllm,
+            Self::Ollama,
+            Self::Huggingface,
+        ]
+    }
+
+    #[must_use]
+    pub fn names_hint() -> String {
+        Self::all()
+            .iter()
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Deepseek => "deepseek",
@@ -698,8 +731,12 @@ impl ConfigToml {
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
             "provider" => {
-                self.provider = ProviderKind::parse(value)
-                    .with_context(|| format!("unknown provider '{value}'"))?;
+                self.provider = ProviderKind::parse(value).with_context(|| {
+                    format!(
+                        "unknown provider '{value}': expected {}",
+                        ProviderKind::names_hint()
+                    )
+                })?;
             }
             "api_key" => self.api_key = Some(value.to_string()),
             "base_url" => self.base_url = Some(value.to_string()),
@@ -1418,7 +1455,7 @@ impl ConfigToml {
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
-            match codewhale_secrets::env_for(provider.as_str()) {
+            match env_api_key_for_provider(provider) {
                 Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
                 None => (None, None),
             }
@@ -1431,7 +1468,10 @@ impl ConfigToml {
                     };
                     (Some(value), Some(source))
                 }
-                None => (None, None),
+                None => match env_api_key_for_provider(provider) {
+                    Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
+                    None => (None, None),
+                },
             }
         };
 
@@ -1907,6 +1947,21 @@ fn should_skip_secret_store_for_provider(
         provider,
         ProviderKind::Sglang | ProviderKind::Vllm | ProviderKind::Ollama
     ) || base_url_uses_local_host(base_url)
+}
+
+fn env_api_key_for_provider(provider: ProviderKind) -> Option<String> {
+    if provider == ProviderKind::Huggingface {
+        return std::env::var("HUGGINGFACE_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("HF_TOKEN")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            });
+    }
+
+    codewhale_secrets::env_for(provider.as_str())
 }
 
 fn auth_mode_requires_api_key(auth_mode: Option<&str>) -> bool {
@@ -2855,6 +2910,12 @@ mod tests {
         vllm_base_url: Option<OsString>,
         ollama_api_key: Option<OsString>,
         ollama_base_url: Option<OsString>,
+        huggingface_api_key: Option<OsString>,
+        huggingface_token: Option<OsString>,
+        huggingface_base_url: Option<OsString>,
+        hf_base_url: Option<OsString>,
+        huggingface_model: Option<OsString>,
+        hf_model: Option<OsString>,
         codewhale_provider: Option<OsString>,
         codewhale_model: Option<OsString>,
         codewhale_base_url: Option<OsString>,
@@ -2928,6 +2989,12 @@ mod tests {
                 vllm_base_url: env::var_os("VLLM_BASE_URL"),
                 ollama_api_key: env::var_os("OLLAMA_API_KEY"),
                 ollama_base_url: env::var_os("OLLAMA_BASE_URL"),
+                huggingface_api_key: env::var_os("HUGGINGFACE_API_KEY"),
+                huggingface_token: env::var_os("HF_TOKEN"),
+                huggingface_base_url: env::var_os("HUGGINGFACE_BASE_URL"),
+                hf_base_url: env::var_os("HF_BASE_URL"),
+                huggingface_model: env::var_os("HUGGINGFACE_MODEL"),
+                hf_model: env::var_os("HF_MODEL"),
             };
             // Safety: test-only environment mutation guarded by a module mutex.
             unsafe {
@@ -2996,6 +3063,12 @@ mod tests {
                 env::remove_var("VLLM_BASE_URL");
                 env::remove_var("OLLAMA_API_KEY");
                 env::remove_var("OLLAMA_BASE_URL");
+                env::remove_var("HUGGINGFACE_API_KEY");
+                env::remove_var("HF_TOKEN");
+                env::remove_var("HUGGINGFACE_BASE_URL");
+                env::remove_var("HF_BASE_URL");
+                env::remove_var("HUGGINGFACE_MODEL");
+                env::remove_var("HF_MODEL");
             }
             guard
         }
@@ -3084,6 +3157,12 @@ mod tests {
                 Self::restore_var("VLLM_BASE_URL", self.vllm_base_url.take());
                 Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
                 Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
+                Self::restore_var("HUGGINGFACE_API_KEY", self.huggingface_api_key.take());
+                Self::restore_var("HF_TOKEN", self.huggingface_token.take());
+                Self::restore_var("HUGGINGFACE_BASE_URL", self.huggingface_base_url.take());
+                Self::restore_var("HF_BASE_URL", self.hf_base_url.take());
+                Self::restore_var("HUGGINGFACE_MODEL", self.huggingface_model.take());
+                Self::restore_var("HF_MODEL", self.hf_model.take());
             }
         }
     }
@@ -3987,6 +4066,13 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             ProviderKind::parse("ark_wanjie"),
             Some(ProviderKind::WanjieArk)
         );
+        for alias in ["huggingface", "hugging-face", "hugging_face", "hf"] {
+            assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Huggingface));
+
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("huggingface alias");
+            assert_eq!(parsed.provider, ProviderKind::Huggingface);
+        }
 
         let parsed: ConfigToml =
             toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
@@ -3995,6 +4081,17 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         let parsed: ConfigToml =
             toml::from_str("provider = \"silicon-flow\"").expect("siliconflow provider alias");
         assert_eq!(parsed.provider, ProviderKind::Siliconflow);
+    }
+
+    #[test]
+    fn unknown_provider_error_lists_huggingface() {
+        let mut config = ConfigToml::default();
+        let err = config
+            .set_value("provider", "not-a-provider")
+            .expect_err("unknown provider should fail");
+        let message = err.to_string();
+        assert!(message.contains("unknown provider 'not-a-provider'"));
+        assert!(message.contains("huggingface"));
     }
 
     #[test]
@@ -4685,6 +4782,69 @@ model = "mimo-v2.5-pro"
         assert_eq!(resolved.api_key.as_deref(), Some("arcee-file-key"));
         assert_eq!(resolved.base_url, DEFAULT_ARCEE_BASE_URL);
         assert_eq!(resolved.model, ARCEE_TRINITY_LARGE_PREVIEW_MODEL);
+    }
+
+    #[test]
+    fn huggingface_env_precedence_prefers_documented_names() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "hf");
+            env::set_var("HUGGINGFACE_API_KEY", "hf-full-key");
+            env::set_var("HF_TOKEN", "hf-token-fallback");
+            env::set_var("HUGGINGFACE_BASE_URL", "https://hf-full.example/v1");
+            env::set_var("HF_BASE_URL", "https://hf-short.example/v1");
+            env::set_var("HUGGINGFACE_MODEL", "org/full-model");
+            env::set_var("HF_MODEL", "org/short-model");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Huggingface);
+        assert_eq!(resolved.api_key.as_deref(), Some("hf-full-key"));
+        assert_eq!(resolved.base_url, "https://hf-full.example/v1");
+        assert_eq!(resolved.model, "org/full-model");
+    }
+
+    #[test]
+    fn huggingface_short_env_fallbacks_resolve_when_primary_names_are_absent() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "huggingface");
+            env::set_var("HF_TOKEN", "hf-token-fallback");
+            env::set_var("HF_BASE_URL", "https://hf-short.example/v1");
+            env::set_var("HF_MODEL", "org/short-model");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Huggingface);
+        assert_eq!(resolved.api_key.as_deref(), Some("hf-token-fallback"));
+        assert_eq!(resolved.base_url, "https://hf-short.example/v1");
+        assert_eq!(resolved.model, "org/short-model");
+    }
+
+    #[test]
+    fn huggingface_token_fallback_resolves_when_primary_api_key_is_blank() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "huggingface");
+            env::set_var("HUGGINGFACE_API_KEY", " ");
+            env::set_var("HF_TOKEN", "hf-token-fallback");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Huggingface);
+        assert_eq!(resolved.api_key.as_deref(), Some("hf-token-fallback"));
     }
 
     #[test]
