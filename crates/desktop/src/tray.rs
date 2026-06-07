@@ -9,7 +9,7 @@ pub fn setup(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let icon = app
         .default_window_icon()
         .ok_or("Application window icon not found")?;
-    let _tray = TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .icon(icon.clone())
         .tooltip("CodeWhale Desktop")
         .on_tray_icon_event(|tray, event| {
@@ -27,6 +27,10 @@ pub fn setup(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build(app)?;
+
+    // Store the tray icon in Tauri's managed state to keep it alive.
+    // In Tauri v2, dropping the TrayIcon removes it from the system tray.
+    app.manage(tray);
 
     Ok(())
 }
