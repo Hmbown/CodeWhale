@@ -12,7 +12,6 @@ use axum::{Json, Router};
 use codewhale_agent::ModelRegistry;
 use codewhale_config::{CliRuntimeOverrides, ConfigStore};
 use codewhale_core::Runtime;
-use codewhale_execpolicy::ExecPolicyEngine;
 use codewhale_hooks::{HookDispatcher, JsonlHookSink, StdoutHookSink, UnixSocketHookSink};
 use codewhale_mcp::McpManager;
 use codewhale_protocol::{
@@ -314,6 +313,7 @@ async fn app_handler(
 fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Result<AppState> {
     let store = ConfigStore::load(config_path.clone())?;
     let config = store.config.clone();
+    let exec_policy = store.exec_policy_engine();
     let registry = ModelRegistry::default();
 
     let state_db_path = config_path
@@ -344,7 +344,7 @@ fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Resu
         state_store,
         Arc::new(ToolRegistry::default()),
         Arc::new(McpManager::default()),
-        ExecPolicyEngine::new(Vec::new(), Vec::new()),
+        exec_policy,
         hooks,
     );
 
@@ -1048,6 +1048,43 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn build_state_loads_permissions_into_runtime_policy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "api_key = \"sk-deepseek-secret\"\n").expect("write config");
+        fs::write(
+            tmp.path().join("permissions.toml"),
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo test"
+            "#,
+        )
+        .expect("write permissions");
+
+        let state = build_state(Some(config_path), None).expect("state");
+        let runtime = state.runtime.lock().await;
+        let decision = runtime
+            .exec_policy
+            .check(codewhale_execpolicy::ExecPolicyContext {
+                command: "cargo test --workspace",
+                cwd: "/workspace",
+                tool: Some("exec_shell"),
+                path: None,
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy check");
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+    }
+
     #[test]
     fn non_loopback_bind_without_auth_fails_fast() {
         let options = AppServerOptions {
@@ -1067,7 +1104,10 @@ mod tests {
 
     #[tokio::test]
     async fn stdio_transport_keeps_raw_config_get_for_legacy_clients() {
-        let state = build_state(None, None).expect("state");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "").expect("write config");
+        let state = build_state(Some(config_path), None).expect("state");
         {
             let mut cfg = state.config.write().await;
             cfg.api_key = Some("sk-deepseek-secret".to_string());

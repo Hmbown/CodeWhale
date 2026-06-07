@@ -146,9 +146,9 @@ approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
 
 # Typed permission rules live in a sibling `permissions.toml` file, not in
-# config.toml. This schema slice is ask-only and is parsed for follow-up
-# approval-flow wiring; allow/deny records and UI persistence are intentionally
-# out of scope here.
+# config.toml. This shape is ask-only and feeds the execution policy engine;
+# allow/deny records, glob expansion, and UI persistence are intentionally out
+# of scope here.
 #
 # Example ~/.codewhale/permissions.toml:
 #

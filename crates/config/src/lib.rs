@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 pub use codewhale_execpolicy::ToolAskRule;
+use codewhale_execpolicy::{ExecPolicyEngine, Ruleset};
 use codewhale_secrets::SecretSource;
 pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
@@ -256,6 +257,11 @@ impl PermissionsToml {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
+    }
+
+    #[must_use]
+    pub fn ruleset(&self) -> Ruleset {
+        Ruleset::user(Vec::new(), Vec::new()).with_ask_rules(self.rules.clone())
     }
 }
 
@@ -2098,6 +2104,15 @@ impl ConfigStore {
     pub fn permissions_path(&self) -> PathBuf {
         permissions_path_for_config_path(&self.path)
     }
+
+    #[must_use]
+    pub fn exec_policy_engine(&self) -> ExecPolicyEngine {
+        if self.permissions.is_empty() {
+            ExecPolicyEngine::new(Vec::new(), Vec::new())
+        } else {
+            ExecPolicyEngine::with_rulesets(vec![self.permissions.ruleset()])
+        }
+    }
 }
 
 /// Process-wide default [`Secrets`] façade. The first caller wins; the
@@ -2787,6 +2802,54 @@ mod tests {
         assert_eq!(
             store.permissions().rules.as_slice(),
             &[ToolAskRule::exec_shell("cargo check")]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_store_exec_policy_engine_uses_sibling_permissions() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-engine-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "model = \"deepseek-v4-flash\"\n").expect("write config");
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo test"
+            "#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path)).expect("load config store");
+        let decision = store
+            .exec_policy_engine()
+            .check(codewhale_execpolicy::ExecPolicyContext {
+                command: "cargo test --workspace",
+                cwd: "/workspace",
+                tool: Some("exec_shell"),
+                path: None,
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy check");
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
         );
 
         let _ = fs::remove_dir_all(dir);

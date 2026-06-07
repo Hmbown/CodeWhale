@@ -759,8 +759,10 @@ If you are upgrading from older releases:
   records loaded next to `config.toml`, for example
   `~/.codewhale/permissions.toml`. This schema foundation accepts
   `[[rules]]` entries with `tool` plus optional `command` or `path` fields.
-  It intentionally does not accept typed allow/deny records or provide approval
-  UI persistence yet.
+  Loaded rules feed the execution policy engine and force approval in approval
+  modes that can ask; under `approval_policy = "never"`, matching ask rules are
+  rejected because no prompt can be shown. This intentionally does not accept
+  typed allow/deny records, glob expansion, or approval UI persistence yet.
 - `managed_config_path` (string, optional): managed config file loaded after user/env config.
 - `requirements_path` (string, optional): requirements file used to enforce allowed approval/sandbox values.
 - `max_subagents` (int, optional): defaults to `10` and is clamped to `1..=20`.

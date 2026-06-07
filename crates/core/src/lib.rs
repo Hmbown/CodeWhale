@@ -1095,11 +1095,12 @@ impl Runtime {
             ToolPayload::LocalShell { .. } => "exec_shell",
             _ => call.name.as_str(),
         };
+        let policy_path = permission_path_for_call(&call);
         let decision = self.exec_policy.check(ExecPolicyContext {
             command: &command,
             cwd: &policy_cwd,
             tool: Some(policy_tool),
-            path: None,
+            path: policy_path.as_deref(),
             ask_for_approval: approval_mode,
             sandbox_mode: None,
         })?;
@@ -1500,6 +1501,24 @@ fn preview_from_initial_history(initial_history: &InitialHistory) -> String {
     }
 }
 
+fn permission_path_for_call(call: &ToolCall) -> Option<String> {
+    match &call.payload {
+        ToolPayload::Function { arguments } => serde_json::from_str::<Value>(arguments)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        ToolPayload::Mcp { raw_arguments, .. } => raw_arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ToolPayload::Custom { .. } | ToolPayload::LocalShell { .. } => None,
+    }
+}
+
 fn truncate_preview(value: &str) -> String {
     value.chars().take(120).collect()
 }
@@ -1806,8 +1825,64 @@ fn job_state_status_to_runtime(status: JobStateStatus) -> JobStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codewhale_tools::ToolCallSource;
 
     // ── JobManager: lifecycle ──────────────────────────────────────────
+
+    #[test]
+    fn permission_path_for_call_extracts_function_path_argument() {
+        let call = ToolCall {
+            name: "read_file".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({ "path": "README.md" }).to_string(),
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(
+            permission_path_for_call(&call).as_deref(),
+            Some("README.md")
+        );
+    }
+
+    #[test]
+    fn permission_path_for_call_extracts_mcp_path_argument() {
+        let call = ToolCall {
+            name: "mcp_fs_read".to_string(),
+            payload: ToolPayload::Mcp {
+                server: "fs".to_string(),
+                tool: "read".to_string(),
+                raw_arguments: json!({ "path": "secrets/token.txt" }),
+                raw_tool_call_id: None,
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(
+            permission_path_for_call(&call).as_deref(),
+            Some("secrets/token.txt")
+        );
+    }
+
+    #[test]
+    fn permission_path_for_call_ignores_shell_payload() {
+        let call = ToolCall {
+            name: "exec_shell".to_string(),
+            payload: ToolPayload::LocalShell {
+                params: codewhale_protocol::LocalShellParams {
+                    command: "cargo test".to_string(),
+                    cwd: None,
+                    timeout_ms: None,
+                },
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(permission_path_for_call(&call), None);
+    }
 
     #[test]
     fn enqueue_creates_queued_job_with_zero_progress() {
