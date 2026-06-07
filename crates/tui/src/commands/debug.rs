@@ -1183,6 +1183,22 @@ mod tests {
         let _spill_guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
             .lock()
             .unwrap_or_else(|err| err.into_inner());
+        // Set a temporary spillover root so wire-dedup can persist
+        // SHA-addressed tool-result files without depending on a
+        // writable $HOME (nix sandboxes have a read-only home tree).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _restore = {
+            let prior = crate::tools::truncate::set_test_spillover_root(Some(
+                tmp.path().join(".deepseek").join("tool_outputs"),
+            ));
+            struct Restore(Option<std::path::PathBuf>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    crate::tools::truncate::set_test_spillover_root(self.0.take());
+                }
+            }
+            Restore(prior)
+        };
         let mut app = create_test_app();
         let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
         app.api_messages.push(Message {
