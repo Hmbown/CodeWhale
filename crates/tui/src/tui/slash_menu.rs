@@ -57,7 +57,7 @@ pub fn apply_slash_menu_selection(
     {
         replace_inline_skill_mention(app, byte_start, &partial, &skill_name);
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Skill selected: /{skill_name}"));
+        app.status_message = Some(format!("已选择技能: /{skill_name}"));
         return true;
     }
 
@@ -76,7 +76,7 @@ pub fn apply_slash_menu_selection(
     app.input = command;
     app.cursor_position = app.input.chars().count();
     app.slash_menu_hidden = false;
-    app.status_message = Some(format!("Command selected: {}", app.input.trim_end()));
+    app.status_message = Some(format!("已选择命令: {}", app.input.trim_end()));
     true
 }
 
@@ -233,7 +233,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         app.input = format!("/{shared}");
         app.cursor_position = app.input.chars().count();
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Autocomplete: /{shared}"));
+        app.status_message = Some(format!("自动补全: /{shared}"));
         return true;
     }
 
@@ -245,7 +245,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         app.input = completed.clone();
         app.cursor_position = completed.chars().count();
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Command completed: {}", completed.trim_end()));
+        app.status_message = Some(format!("命令已完成: {}", completed.trim_end()));
         return true;
     }
 
@@ -255,6 +255,6 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    app.status_message = Some(format!("Suggestions: {preview}"));
+    app.status_message = Some(format!("建议: {preview}"));
     true
 }

@@ -1089,7 +1089,7 @@ impl ConfigView {
         match key.code {
             KeyCode::Esc => {
                 self.editing = None;
-                self.status = Some("Edit cancelled".to_string());
+                self.status = Some("编辑已取消".to_string());
                 ViewAction::None
             }
             KeyCode::Enter => {
@@ -2836,7 +2836,7 @@ base_url = "https://api.xiaomimimo.com/v1"
         let cancel = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(cancel, ViewAction::None));
         assert!(view.editing.is_none());
-        assert_eq!(view.status.as_deref(), Some("Edit cancelled"));
+        assert_eq!(view.status.as_deref(), Some("编辑已取消"));
     }
 
     #[test]
