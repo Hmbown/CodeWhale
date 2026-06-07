@@ -770,19 +770,19 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
         }
         ContextMenuAction::OpenSelection => {
             if !open_pager_for_selection(app) {
-                app.status_message = Some("没有选中内容可打开".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoSelectionToOpen).to_string());
             }
         }
         ContextMenuAction::ClearSelection => {
             app.viewport.transcript_selection.clear();
-            app.status_message = Some("已清除选中内容".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSelectionCleared).to_string());
         }
         ContextMenuAction::CopyCell { cell_index } => {
             copy_cell_to_clipboard(app, cell_index);
         }
         ContextMenuAction::OpenDetails { cell_index } => {
             if !open_details_pager_for_cell(app, cell_index) {
-                app.status_message = Some("该行没有可用的详情信息".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoDetailsAvailable).to_string());
             }
         }
         ContextMenuAction::Paste => {
@@ -818,23 +818,23 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
                 width,
             );
             if crate::tui::history::try_open_file_at_line(&text, &app.workspace) {
-                app.status_message = Some("已在编辑器中打开文件".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusOpenedInEditor).to_string());
             } else {
-                app.status_message = Some("选中内容中未找到文件:行号格式".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoFileLineInSelection).to_string());
             }
         }
         ContextMenuAction::HideCell { cell_index } => {
             app.collapsed_cells.insert(cell_index);
-            app.status_message = Some("单元格已隐藏".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCellHidden).to_string());
         }
         ContextMenuAction::ShowCell { cell_index } => {
             app.collapsed_cells.remove(&cell_index);
-            app.status_message = Some("单元格已显示".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCellShown).to_string());
         }
         ContextMenuAction::ShowAllHidden => {
             let count = app.collapsed_cells.len();
             app.collapsed_cells.clear();
-            app.status_message = Some(format!("已恢复 {count} 个隐藏单元格"));
+            app.status_message = Some(format!("{}{count} 个隐藏单元格", tr(app.ui_locale, MessageId::StatusCellsRestored)));
         }
         ContextMenuAction::OpenTabPicker(kind) => {
             app.view_stack
@@ -944,13 +944,13 @@ pub(crate) fn copy_active_selection(app: &mut App) {
     }
     if let Some(text) = selection_to_text(app).filter(|text| !text.is_empty()) {
         if app.clipboard.write_text(&text).is_ok() {
-            app.status_message = Some("已复制选中内容".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCopiedSelection).to_string());
         } else {
-            app.status_message = Some("复制失败".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCopyFailed).to_string());
         }
     } else {
         app.viewport.transcript_selection.clear();
-        app.status_message = Some("没有选中内容可复制".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoSelectionToCopy).to_string());
     }
 }
 

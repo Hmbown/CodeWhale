@@ -438,10 +438,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
                 }
             }
             Ok(None) => {
-                app.status_message = Some("没有找到可恢复的会话".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoResumableSession).to_string());
             }
             Err(e) => {
-                app.status_message = Some(format!("无法加载会话: {e}"));
+                app.status_message = Some(format!("{}{e}", tr(app.ui_locale, MessageId::StatusCannotLoadSession)));
             }
         }
     }
@@ -480,7 +480,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             Ok(None) => {}
             Err(err) => {
                 if app.status_message.is_none() {
-                    app.status_message = Some(format!("无法恢复离线队列: {err}"));
+                    app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusCannotRestoreOfflineQueue)));
                 }
             }
         }
@@ -843,7 +843,7 @@ fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
     let path = config.memory_path();
     match crate::memory::append_entry(&path, input) {
         Ok(()) => {
-            app.status_message = Some(format!("memory: 已追加到 {}", path.display()));
+            app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusMemoryAppended), path.display()));
         }
         Err(err) => {
             app.status_message = Some(format!(
@@ -1784,7 +1784,7 @@ async fn run_event_loop(
                         // hint then auto-clears as soon as anything else
                         // updates the slot.
                         if app.status_message.is_none() {
-                            app.status_message = Some("按 Esc 或 Ctrl+C 取消".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCancelHint).to_string());
                         }
                         app.runtime_turn_id = Some(turn_id);
                         app.runtime_turn_status = Some("in_progress".to_string());
@@ -1929,7 +1929,7 @@ async fn run_event_loop(
                             // Otherwise the error appears twice: once in a
                             // HistoryCell and again as a redundant status line.
                             if !app.turn_error_posted {
-                                app.status_message = Some(format!("回合失败: {error}"));
+                                app.status_message = Some(format!("{}{error}", tr(app.ui_locale, MessageId::StatusTurnFailed)));
                             }
                         }
 
@@ -2314,7 +2314,7 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message = Some(format!("子代理 {id}: {display}"));
+                        app.status_message = Some(format!("{}{id}: {display}", tr(app.ui_locale, MessageId::StatusSubagentDisplay)));
                     }
                     EngineEvent::AgentComplete { id, result } => {
                         execute_subagent_observer_hook(
@@ -2696,7 +2696,7 @@ async fn run_event_loop(
             )?;
             event_broker.resume_events();
             terminal_paused_at = None;
-            app.status_message = Some("终端控制已恢复".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusTerminalControlRestored).to_string());
             app.needs_redraw = true;
             force_terminal_repaint = true;
         }
@@ -3017,7 +3017,7 @@ async fn run_event_loop(
                     }
                     KeyCode::Esc => {
                         app.decision_card = None;
-                        app.status_message = Some("决策已取消".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusDecisionCancelled).to_string());
                         app.needs_redraw = true;
                     }
                     _ => {}
@@ -3266,7 +3266,7 @@ async fn run_event_loop(
                     if let Some(turn_id) = app.runtime_turn_id.as_ref()
                         && app.clipboard.write_text(turn_id).is_ok()
                     {
-                        app.status_message = Some(format!("已复制回合 ID {turn_id}"));
+                        app.status_message = Some(format!("{}{turn_id}", tr(app.ui_locale, MessageId::StatusCopiedTurnId)));
                     }
                     continue;
                 }
@@ -3279,7 +3279,7 @@ async fn run_event_loop(
                         let _ = write!(detail, "  status={status}");
                     }
                     if !detail.is_empty() && app.clipboard.write_text(&detail).is_ok() {
-                        app.status_message = Some(format!("已复制 {detail}"));
+                        app.status_message = Some(format!("{}{detail}", tr(app.ui_locale, MessageId::StatusCopiedDetail)));
                     }
                     continue;
                 }
@@ -3291,12 +3291,12 @@ async fn run_event_loop(
                 if let Some(_state) = app.file_tree.as_mut() {
                     // File tree visible → hide it.
                     app.file_tree = None;
-                    app.status_message = Some("文件树已关闭".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusFileTreeClosed).to_string());
                 } else {
                     // Build the file tree from the current workspace.
                     let state = crate::tui::file_tree::FileTreeState::new(&app.workspace);
                     app.file_tree = Some(state);
-                    app.status_message = Some("文件树: \u{2191}/\u{2193} 导航  Enter 选中  Esc 关闭".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusFileTreeHint).to_string());
                 }
                 app.needs_redraw = true;
                 continue;
@@ -3574,7 +3574,7 @@ async fn run_event_loop(
                 KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Work);
-                        app.status_message = Some("侧边栏焦点: 工作".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusWork).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     }
@@ -3583,7 +3583,7 @@ async fn run_event_loop(
                 KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Tasks);
-                        app.status_message = Some("侧边栏焦点: 任务".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusTasks).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     }
@@ -3592,7 +3592,7 @@ async fn run_event_loop(
                 KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Agents);
-                        app.status_message = Some("侧边栏焦点: 代理".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     }
@@ -3613,7 +3613,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Work);
-                    app.status_message = Some("侧边栏焦点: 工作".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusWork).to_string());
                     continue;
                 }
                 KeyCode::Char('@')
@@ -3621,7 +3621,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("侧边栏焦点: 任务".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusTasks).to_string());
                     continue;
                 }
                 KeyCode::Char('#')
@@ -3629,7 +3629,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("侧边栏焦点: 代理".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
                     continue;
                 }
                 KeyCode::Char('$') | KeyCode::Char('%')
@@ -3637,7 +3637,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Context);
-                    app.status_message = Some("侧边栏焦点: 上下文".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusContext).to_string());
                     continue;
                 }
                 KeyCode::Char(')')
@@ -3645,7 +3645,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("侧边栏焦点: 自动".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
                     continue;
                 }
                 KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -3810,7 +3810,7 @@ async fn run_event_loop(
                                     app.needs_redraw = true;
                                 }
                                 crate::tui::backtrack::EscEffect::Cancel => {
-                                    app.status_message = Some("回退已取消".to_string());
+                                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackCancelled).to_string());
                                     app.needs_redraw = true;
                                 }
                                 crate::tui::backtrack::EscEffect::OpenOverlay => {
@@ -3997,7 +3997,7 @@ async fn run_event_loop(
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Backward) =>
                 {
-                    app.status_message = Some("没有上一条工具输出".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoPrevToolOutput).to_string());
                 }
                 KeyCode::Char(']')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
@@ -4005,7 +4005,7 @@ async fn run_event_loop(
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Forward) =>
                 {
-                    app.status_message = Some("没有下一条工具输出".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoNextToolOutput).to_string());
                 }
                 // `Alt+?` opens the searchable help overlay (#93). F1 and
                 // Ctrl+/ are also bound; bare `?` is reserved as text input
@@ -4342,16 +4342,16 @@ async fn run_event_loop(
                                         .filter(|s| !s.trim().is_empty())
                                 })
                                 .unwrap_or_else(|| "vi".to_string());
-                            app.status_message = Some(format!("已在 {editor} 中编辑"));
+                            app.status_message = Some(format!("{}{editor} 中编辑", tr(app.ui_locale, MessageId::StatusEditedIn)));
                         }
                         Ok(super::external_editor::EditorOutcome::Unchanged) => {
-                            app.status_message = Some("编辑器已关闭（无更改）".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorClosedNoChanges).to_string());
                         }
                         Ok(super::external_editor::EditorOutcome::Cancelled) => {
-                            app.status_message = Some("编辑器已取消".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorCancelled).to_string());
                         }
                         Err(err) => {
-                            app.status_message = Some(format!("编辑器错误: {err}"));
+                            app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusEditorError)));
                         }
                     }
                     app.needs_redraw = true;
@@ -4371,7 +4371,7 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.restore_last_cleared_input_if_empty() =>
                 {
-                    app.status_message = Some("已恢复清除的草稿".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusDraftRestored).to_string());
                 }
                 KeyCode::Char('w') | KeyCode::Char('W')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
