@@ -2211,6 +2211,12 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+
+        MessageId::CmdLocaleDescription => "Chuyển đổi ngôn ngữ giao diện hoặc liệt kê các ngôn ngữ có sẵn",
+        MessageId::LocaleCurrentLabel => "Ngôn ngữ hiện tại: ",
+        MessageId::LocaleAvailableLabel => "Có sẵn: ",
+        MessageId::LocaleUsageLabel => "Cách dùng: /locale <mã>  (ví dụ: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        _ => return None,
     })
 }
 
@@ -2738,6 +2744,12 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+
+        MessageId::CmdLocaleDescription => "UI言語を切り替えるか利用可能な言語を一覧表示",
+        MessageId::LocaleCurrentLabel => "現在の言語: ",
+        MessageId::LocaleAvailableLabel => "利用可能: ",
+        MessageId::LocaleUsageLabel => "使い方: /locale <コード>  (例: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        _ => return None,
     })
 }
 
@@ -3690,6 +3702,12 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+
+        MessageId::CmdLocaleDescription => "Alternar idioma da interface ou listar idiomas disponíveis",
+        MessageId::LocaleCurrentLabel => "Idioma atual: ",
+        MessageId::LocaleAvailableLabel => "Disponíveis: ",
+        MessageId::LocaleUsageLabel => "Uso: /locale <código>  (ex: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        _ => return None,
     })
 }
 
@@ -4186,6 +4204,12 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+
+        MessageId::CmdLocaleDescription => "Cambiar idioma de la interfaz o listar idiomas disponibles",
+        MessageId::LocaleCurrentLabel => "Idioma actual: ",
+        MessageId::LocaleAvailableLabel => "Disponibles: ",
+        MessageId::LocaleUsageLabel => "Uso: /locale <código>  (ej: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        _ => return None,
     })
 }
 
