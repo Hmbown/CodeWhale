@@ -18,8 +18,8 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-05-26T17:03:21.939Z",
-  "version": "0.8.46",
+  "generatedAt": "2026-06-01T04:44:32.528Z",
+  "version": "0.8.48",
   "crates": [
     "agent",
     "app-server",
@@ -30,6 +30,7 @@ export const FACTS: RepoFacts = {
     "hooks",
     "mcp",
     "protocol",
+    "release",
     "secrets",
     "state",
     "tools",
@@ -70,9 +71,19 @@ export const FACTS: RepoFacts = {
       "env": "WANJIE_ARK_API_KEY / WANJIE_API_KEY / WANJIE_MAAS_API_KEY"
     },
     {
+      "id": "volcengine",
+      "label": "Volcengine Ark",
+      "env": "VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY"
+    },
+    {
       "id": "openrouter",
       "label": "OpenRouter",
       "env": "OPENROUTER_API_KEY"
+    },
+    {
+      "id": "xiaomi-mimo",
+      "label": "Xiaomi MiMo",
+      "env": "XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"
     },
     {
       "id": "novita",
@@ -83,6 +94,11 @@ export const FACTS: RepoFacts = {
       "id": "fireworks",
       "label": "Fireworks AI",
       "env": "FIREWORKS_API_KEY"
+    },
+    {
+      "id": "siliconflow",
+      "label": "SiliconFlow",
+      "env": "SILICONFLOW_API_KEY"
     },
     {
       "id": "moonshot",
@@ -107,7 +123,7 @@ export const FACTS: RepoFacts = {
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 70,
+  "toolCount": 75,
   "license": "MIT",
   "latestRelease": null
 };

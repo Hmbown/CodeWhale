@@ -25,6 +25,7 @@
 use crate::config::RetryPolicy;
 use crate::models::{MessageRequest, MessageResponse, StreamEvent};
 use anyhow::Result;
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -109,6 +110,9 @@ pub enum LlmError {
     /// Authentication failed (HTTP 401, 403)
     AuthenticationError(String),
 
+    /// Authorization or provider-side blocking failed (HTTP 403)
+    AuthorizationError(String),
+
     /// Invalid request parameters (HTTP 400)
     InvalidRequest { status: u16, message: String },
 
@@ -138,6 +142,7 @@ impl std::fmt::Display for LlmError {
             LlmError::NetworkError(msg) => write!(f, "Network error: {msg}"),
             LlmError::Timeout(d) => write!(f, "Request timed out after {d:?}"),
             LlmError::AuthenticationError(msg) => write!(f, "Authentication failed: {msg}"),
+            LlmError::AuthorizationError(msg) => write!(f, "Authorization failed: {msg}"),
             LlmError::InvalidRequest { status, message } => {
                 write!(f, "Invalid request ({status}): {message}")
             }
@@ -198,7 +203,14 @@ impl LlmError {
                 message: body.to_string(),
                 retry_after: None,
             },
-            401 | 403 => LlmError::AuthenticationError(body.to_string()),
+            401 => LlmError::AuthenticationError(body.to_string()),
+            403 => {
+                if looks_like_authentication_failure(body) {
+                    LlmError::AuthenticationError(body.to_string())
+                } else {
+                    LlmError::AuthorizationError(body.to_string())
+                }
+            }
             400 => {
                 // Classify 400 errors by examining the response body
                 let body_lower = body.to_lowercase();
@@ -279,6 +291,189 @@ impl LlmError {
             LlmError::Other(err.to_string())
         }
     }
+}
+
+/// Format provider HTTP error bodies before they are surfaced in the TUI.
+///
+/// Providers sometimes return whole HTML error pages for gateway/WAF blocks.
+/// Passing those pages through raw floods the transcript and can also make a
+/// provider-side 403 look like a broken API key. Keep the useful details and
+/// cap everything else.
+#[must_use]
+pub(crate) fn sanitize_http_error_body(
+    provider_label: Option<&str>,
+    status: u16,
+    body: &str,
+) -> String {
+    if let Some(message) = extract_json_error_message(body) {
+        return truncate_for_error(&collapse_whitespace(&message), 2_000);
+    }
+
+    if is_probably_html(body) {
+        let text = html_to_text(body);
+        let lower = text.to_ascii_lowercase();
+        let provider = provider_label.unwrap_or("Provider");
+
+        // Cloudflare's "Access Denied" interstitial strips the literal word
+        // "cloudflare" once tags are removed (it only survives in `<meta>`
+        // attributes and the `<style>`/`<script>` blocks we discard). Arcee's
+        // 403 page is exactly this shape, so also key off the WAF's stock copy
+        // ("security alert", "contact support") and a Cloudflare error/ray ID.
+        let error_id = extract_cloudflare_error_id(&text);
+        let is_cloudflare = lower.contains("cloudflare");
+        let looks_like_access_denied = lower.contains("access denied")
+            && (is_cloudflare
+                || lower.contains("security alert")
+                || lower.contains("contact support")
+                || lower.contains("contact us")
+                || error_id.is_some());
+        if looks_like_access_denied {
+            let label = if is_cloudflare {
+                "Cloudflare Access Denied"
+            } else {
+                "Access Denied"
+            };
+            let mut message = format!(
+                "{provider} API returned {label} (HTTP {status}). \
+                 The request was blocked before it reached the model; retry with a \
+                 smaller request or fewer tools, or contact provider support"
+            );
+            if let Some(id) = error_id {
+                message.push_str(&format!(" with ID {id}"));
+            }
+            message.push('.');
+            return message;
+        }
+
+        let text = truncate_for_error(&collapse_whitespace(&text), 900);
+        return format!("{provider} API returned an HTML error page (HTTP {status}): {text}");
+    }
+
+    truncate_for_error(&collapse_whitespace(body), 2_000)
+}
+
+fn looks_like_authentication_failure(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("authentication")
+        || lower.contains("unauthorized")
+        || lower.contains("api key")
+        || lower.contains("invalid key")
+        || lower.contains("invalid token")
+        || lower.contains("bearer token")
+        || lower.contains("missing token")
+}
+
+fn extract_json_error_message(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    for pointer in [
+        "/error/message",
+        "/error",
+        "/message",
+        "/detail",
+        "/error_description",
+    ] {
+        let Some(value) = value.pointer(pointer) else {
+            continue;
+        };
+        if let Some(message) = value.as_str() {
+            if !message.trim().is_empty() {
+                return Some(message.to_string());
+            }
+        } else if value.is_object() || value.is_array() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn is_probably_html(body: &str) -> bool {
+    let prefix = body
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    prefix.contains("<!doctype html") || prefix.contains("<html") || prefix.contains("<head")
+}
+
+fn html_to_text(html: &str) -> String {
+    let without_scripts = strip_html_block(html, "script");
+    let without_styles = strip_html_block(&without_scripts, "style");
+    let mut text = String::with_capacity(without_styles.len().min(4096));
+    let mut in_tag = false;
+    for ch in without_styles.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                text.push(' ');
+            }
+            '>' => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    decode_basic_html_entities(&collapse_whitespace(&text))
+}
+
+fn strip_html_block(input: &str, tag: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0usize;
+    let lower = input.to_ascii_lowercase();
+    let start_marker = format!("<{tag}");
+    let end_marker = format!("</{tag}>");
+
+    while let Some(relative_start) = lower[cursor..].find(&start_marker) {
+        let start = cursor + relative_start;
+        out.push_str(&input[cursor..start]);
+        let after_start = start + start_marker.len();
+        let Some(relative_end) = lower[after_start..].find(&end_marker) else {
+            cursor = input.len();
+            break;
+        };
+        cursor = after_start + relative_end + end_marker.len();
+        out.push(' ');
+    }
+    out.push_str(&input[cursor..]);
+    out
+}
+
+fn decode_basic_html_entities(input: &str) -> String {
+    input
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+}
+
+fn collapse_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_for_error(input: &str, max_chars: usize) -> String {
+    let mut out = String::with_capacity(input.len().min(max_chars + 32));
+    for (count, ch) in input.chars().enumerate() {
+        if count >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn extract_cloudflare_error_id(text: &str) -> Option<String> {
+    let mut last = None;
+    for token in text.split(|ch: char| !ch.is_ascii_hexdigit()) {
+        if (16..=64).contains(&token.len()) && token.bytes().any(|b| b.is_ascii_alphabetic()) {
+            last = Some(token.to_string());
+        }
+    }
+    last
 }
 
 impl From<reqwest::Error> for LlmError {
@@ -820,6 +1015,7 @@ mod tests {
 
         // Non-retryable errors
         assert!(!LlmError::AuthenticationError("invalid key".to_string()).is_retryable());
+        assert!(!LlmError::AuthorizationError("blocked".to_string()).is_retryable());
         assert!(
             !LlmError::InvalidRequest {
                 status: 400,
@@ -842,6 +1038,9 @@ mod tests {
         assert!(matches!(err, LlmError::AuthenticationError(_)));
 
         let err = LlmError::from_http_response(403, "forbidden");
+        assert!(matches!(err, LlmError::AuthorizationError(_)));
+
+        let err = LlmError::from_http_response(403, "invalid api key");
         assert!(matches!(err, LlmError::AuthenticationError(_)));
 
         // Server errors
@@ -870,6 +1069,77 @@ mod tests {
         // Generic 400
         let err = LlmError::from_http_response(400, "invalid json");
         assert!(matches!(err, LlmError::InvalidRequest { status: 400, .. }));
+    }
+
+    #[test]
+    fn cloudflare_html_error_is_summarized_without_raw_markup() {
+        let body = r#"<!DOCTYPE html><html><head><title>Access Denied</title><style>
+            .hidden { display: none; }
+            </style></head><body>
+            <h1>Access Denied</h1>
+            <p>The action you just performed triggered a security alert.</p>
+            <script>window.noisy = true;</script>
+            <span>2600:1700:467:d410:f137:b94f:1dd0:d1e4</span>
+            <span>a059a2873f3fdf82</span>
+            <div>Cloudflare Error Pages</div>
+            </body></html>"#;
+
+        let message = sanitize_http_error_body(Some("Arcee AI"), 403, body);
+
+        assert!(message.contains("Arcee AI API returned Cloudflare Access Denied"));
+        assert!(message.contains("ID a059a2873f3fdf82"));
+        assert!(!message.contains("<!DOCTYPE"));
+        assert!(!message.contains("tailwindcss"));
+        assert!(message.len() < 300);
+    }
+
+    #[test]
+    fn cloudflare_access_denied_403_is_authorization_not_authentication() {
+        let message = sanitize_http_error_body(
+            Some("Arcee AI"),
+            403,
+            r#"<!doctype html><html><body><h1>Access Denied</h1><p>Cloudflare Error Pages</p></body></html>"#,
+        );
+        let err = LlmError::from_http_response(403, &message);
+
+        assert!(matches!(err, LlmError::AuthorizationError(_)));
+    }
+
+    #[test]
+    fn arcee_access_denied_without_literal_cloudflare_is_still_summarized() {
+        // Mirrors api.arcee.ai's real 403 page: "Cloudflare" appears only in a
+        // `<meta>` attribute and the `<style>` block, both stripped, so the
+        // visible text never contains it. The summary must still fire from the
+        // WAF's stock "security alert" / "Contact Support" copy + error ID.
+        let body = r#"<!DOCTYPE html><html lang="en"><head>
+            <meta name="description" content="Cloudflare Error Pages">
+            <title>Access Denied</title>
+            <style>:root{--accent:cloudflare}</style></head><body>
+            <h1>Access Denied</h1>
+            <p>The action you just performed triggered a security alert.</p>
+            <p>Please contact us if this was a mistake.</p>
+            <a>Contact Support</a>
+            <span>2600:1700:467:d410:f137:b94f:1dd0:d1e4</span>
+            <span>a059c0d4caf1f9cc</span>
+            </body></html>"#;
+
+        let message = sanitize_http_error_body(Some("Arcee AI"), 403, body);
+
+        assert!(
+            message.contains("Arcee AI API returned Access Denied"),
+            "got: {message}"
+        );
+        assert!(message.contains("ID a059c0d4caf1f9cc"), "got: {message}");
+        assert!(
+            !message.to_ascii_lowercase().contains("cloudflare"),
+            "stripped Arcee page has no literal Cloudflare: {message}"
+        );
+        assert!(!message.contains('<'), "no raw markup: {message}");
+        assert!(message.len() < 300, "stays concise: {message}");
+
+        // A WAF block is authorization, not a bad API key.
+        let err = LlmError::from_http_response(403, &message);
+        assert!(matches!(err, LlmError::AuthorizationError(_)));
     }
 
     #[test]

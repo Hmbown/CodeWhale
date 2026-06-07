@@ -1,7 +1,8 @@
 //! Fuzzy file-picker modal (Ctrl+P).
 //!
 //! Opens an overlay populated with workspace-relative paths discovered by a
-//! single-pass `WalkBuilder` walk (depth 6, hidden=true, follow_links=false,
+//! single-pass `WalkBuilder` walk (depth from `mention_walk_depth`, default
+//! 10, `0` = unlimited; hidden=true, follow_links=false,
 //! `.gitignore` honored). Subsequent keystrokes filter the cached candidate
 //! list in memory using a small subsequence + first-letter-bonus scorer — no
 //! per-keystroke disk traversal.
@@ -31,8 +32,12 @@ use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_di
 /// equivalent overlay.
 const MAX_CANDIDATES: usize = 20_000;
 
-/// Walk depth for the initial scan. Mirrors the `Workspace` fuzzy index.
-const WALK_DEPTH: usize = 6;
+/// Default walk depth used by the picker's own tests. Production callers pass
+/// the configured `mention_walk_depth` (default 10, `0` = unlimited) through
+/// [`FilePickerView::new_with_relevance_and_depth`], mirroring the `Workspace`
+/// fuzzy index default (`DEFAULT_COMPLETIONS_WALK_DEPTH`).
+#[cfg(test)]
+const WALK_DEPTH: usize = 10;
 
 /// Visible candidate rows in the overlay.
 const VISIBLE_ROWS: usize = 14;
@@ -121,9 +126,29 @@ pub struct FilePickerView {
 }
 
 impl FilePickerView {
-    /// Build a picker with working-set relevance hints.
+    /// Build a picker with working-set relevance hints, using the default
+    /// walk depth ([`WALK_DEPTH`]). Test-only convenience; production code uses
+    /// [`FilePickerView::new_with_relevance_and_depth`] with the configured
+    /// `mention_walk_depth`.
+    #[cfg(test)]
     pub fn new_with_relevance(workspace_root: &Path, relevance: FilePickerRelevance) -> Self {
-        let candidates = collect_candidates(workspace_root);
+        Self::new_with_relevance_and_depth(workspace_root, relevance, WALK_DEPTH)
+    }
+
+    /// Build a picker with working-set relevance hints and an explicit walk
+    /// depth. A depth of `0` disables the depth limit so files in deeply
+    /// nested workspaces (>= 6 levels) remain discoverable (#2488).
+    pub fn new_with_relevance_and_depth(
+        workspace_root: &Path,
+        relevance: FilePickerRelevance,
+        walk_depth: usize,
+    ) -> Self {
+        let max_depth = if walk_depth == 0 {
+            None
+        } else {
+            Some(walk_depth)
+        };
+        let candidates = collect_candidates(workspace_root, max_depth);
         let mut view = Self {
             candidates,
             relevance,
@@ -406,13 +431,15 @@ fn truncate_path(path: &str, max: usize) -> String {
     format!("…{truncated}")
 }
 
-/// Single-pass walk that collects workspace-relative paths.
-fn collect_candidates(root: &Path) -> Vec<String> {
+/// Single-pass walk that collects workspace-relative paths. `max_depth` of
+/// `None` walks the whole tree (still bounded by `MAX_CANDIDATES` and
+/// `.gitignore`); `Some(n)` caps the recursion at `n` levels.
+fn collect_candidates(root: &Path, max_depth: Option<usize>) -> Vec<String> {
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(true)
         .follow_links(false)
-        .max_depth(Some(WALK_DEPTH))
+        .max_depth(max_depth)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true);
@@ -449,7 +476,7 @@ fn collect_candidates(root: &Path) -> Vec<String> {
             .follow_links(false)
             .git_ignore(false)
             .ignore(false)
-            .max_depth(Some(WALK_DEPTH.saturating_sub(1)));
+            .max_depth(max_depth.map(|d| d.saturating_sub(1)));
         for entry in dot_builder.build().flatten() {
             // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
             if path_is_excluded_from_discovery(root, entry.path()) {
@@ -736,6 +763,44 @@ mod tests {
     }
 
     #[test]
+    fn picker_finds_deeply_nested_files_within_walk_depth() {
+        // #2488: a file inside a 6-level-deep directory sits at component depth
+        // 7 and was excluded by the old depth-6 cap. The default depth (10) now
+        // reaches it, and `0` (unlimited) reaches arbitrarily deep files.
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        let nested = root.join("a/b/c/d/e/f");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("deep.rs"), "deep").unwrap();
+        let deeper = root.join("a/b/c/d/e/f/g/h/i/j/k");
+        fs::create_dir_all(&deeper).unwrap();
+        fs::write(deeper.join("very_deep.rs"), "deeper").unwrap();
+
+        // The old default (6) misses the depth-7 file — the reported bug.
+        let shallow = collect_candidates(root, Some(6));
+        assert!(
+            !shallow.iter().any(|p| p == "a/b/c/d/e/f/deep.rs"),
+            "depth-6 cap should miss the depth-7 file: {shallow:?}"
+        );
+
+        // The new default reaches files inside a 6-level-deep directory.
+        let default = collect_candidates(root, Some(WALK_DEPTH));
+        assert!(
+            default.iter().any(|p| p == "a/b/c/d/e/f/deep.rs"),
+            "default walk depth should reach depth-7 files: {default:?}"
+        );
+
+        // Unlimited (mention_walk_depth = 0) reaches arbitrarily deep files.
+        let unlimited = collect_candidates(root, None);
+        assert!(
+            unlimited
+                .iter()
+                .any(|p| p == "a/b/c/d/e/f/g/h/i/j/k/very_deep.rs"),
+            "unlimited walk should reach very deep files: {unlimited:?}"
+        );
+    }
+
+    #[test]
     fn picker_skips_generated_worktree_bulk_inside_unignored_dot_dirs() {
         let dir = TempDir::new().expect("tempdir");
         let root = dir.path();
@@ -760,7 +825,7 @@ mod tests {
         )
         .unwrap();
 
-        let candidates = collect_candidates(root);
+        let candidates = collect_candidates(root, Some(WALK_DEPTH));
 
         assert!(candidates.iter().any(|path| path == "src/main.rs"));
         assert!(

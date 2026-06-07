@@ -17,6 +17,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tools::subagent::MailboxMessage;
 use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
@@ -193,14 +194,16 @@ impl WorkerSlot {
 pub struct FanoutCard {
     pub kind: String,
     pub workers: Vec<WorkerSlot>,
+    pub locale: Locale,
 }
 
 impl FanoutCard {
     #[must_use]
-    pub fn new(kind: impl Into<String>) -> Self {
+    pub fn new(kind: impl Into<String>, locale: Locale) -> Self {
         Self {
             kind: kind.into(),
             workers: Vec::new(),
+            locale,
         }
     }
 
@@ -309,9 +312,11 @@ impl FanoutCard {
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!(
-                    "{done} done \u{00B7} {running} running \u{00B7} {failed} failed \u{00B7} {pending} pending"
-                ),
+                tr(self.locale, MessageId::FanoutCounts)
+                    .replace("{done}", &done.to_string())
+                    .replace("{running}", &running.to_string())
+                    .replace("{failed}", &failed.to_string())
+                    .replace("{pending}", &pending.to_string()),
                 Style::default().fg(palette::TEXT_MUTED),
             ),
         ]));
@@ -632,7 +637,7 @@ mod tests {
 
     #[test]
     fn fanout_card_dot_grid_renders_stateful_worker_slots() {
-        let mut card = FanoutCard::new("fanout")
+        let mut card = FanoutCard::new("fanout", Locale::En)
             .with_workers(["w_1", "w_2", "w_3", "w_4", "w_5", "w_6", "w_7"]);
         card.upsert_worker("w_1", AgentLifecycle::Completed);
         card.upsert_worker("w_2", AgentLifecycle::Completed);
@@ -649,7 +654,8 @@ mod tests {
 
     #[test]
     fn fanout_card_aggregate_counts_match_dot_grid() {
-        let mut card = FanoutCard::new("rlm").with_workers(["w_1", "w_2", "w_3", "w_4"]);
+        let mut card =
+            FanoutCard::new("rlm", Locale::En).with_workers(["w_1", "w_2", "w_3", "w_4"]);
         card.upsert_worker("w_1", AgentLifecycle::Completed);
         card.upsert_worker("w_2", AgentLifecycle::Completed);
         card.upsert_worker("w_3", AgentLifecycle::Completed);
@@ -672,7 +678,7 @@ mod tests {
 
     #[test]
     fn fanout_apply_inserts_unknown_worker_via_child_spawned() {
-        let mut card = FanoutCard::new("fanout");
+        let mut card = FanoutCard::new("fanout", Locale::En);
         let msg = MailboxMessage::ChildSpawned {
             parent_id: "root".into(),
             child_id: "agent_late".into(),
@@ -685,7 +691,7 @@ mod tests {
 
     #[test]
     fn fanout_started_claims_seeded_pending_slot_without_growing_grid() {
-        let mut card = FanoutCard::new("fanout").with_workers(["task:a", "task:b"]);
+        let mut card = FanoutCard::new("fanout", Locale::En).with_workers(["task:a", "task:b"]);
         let started =
             MailboxMessage::started("agent_live", crate::tools::subagent::SubAgentType::General);
 
@@ -700,7 +706,7 @@ mod tests {
 
     #[test]
     fn fanout_apply_transitions_worker_through_lifecycle() {
-        let mut card = FanoutCard::new("fanout").with_workers(["w_1"]);
+        let mut card = FanoutCard::new("fanout", Locale::En).with_workers(["w_1"]);
         let started = MailboxMessage::started("w_1", crate::tools::subagent::SubAgentType::General);
         apply_to_fanout(&mut card, &started);
         assert_eq!(card.workers[0].status, AgentLifecycle::Running);
@@ -729,7 +735,7 @@ mod tests {
         ];
         for (total, done, expected) in cases {
             let ids: Vec<String> = (0..*total).map(|i| format!("w_{i}")).collect();
-            let mut card = FanoutCard::new("fanout").with_workers(ids.iter().cloned());
+            let mut card = FanoutCard::new("fanout", Locale::En).with_workers(ids.iter().cloned());
             for id in ids.iter().take(*done) {
                 card.upsert_worker(id, AgentLifecycle::Completed);
             }
@@ -739,5 +745,26 @@ mod tests {
                 "fanout dot-grid for total={total} done={done}",
             );
         }
+    }
+
+    #[test]
+    fn fanout_counts_are_localized() {
+        let ids: Vec<String> = (0..16).map(|i| format!("w_{i}")).collect();
+        let mut card = FanoutCard::new("fanout", Locale::ZhHans).with_workers(ids.iter().cloned());
+        for id in ids.iter().take(12) {
+            card.upsert_worker(id, AgentLifecycle::Completed);
+        }
+        card.upsert_worker("w_12", AgentLifecycle::Running);
+        // w_13..w_15 stay Pending; 0 failed
+
+        let rendered = render_to_strings(&card.render_lines(80));
+        let stats = rendered
+            .iter()
+            .find(|line| line.contains('·'))
+            .expect("counts line present");
+        assert!(stats.contains("已完成"), "{stats}");
+        assert!(stats.contains("运行中"), "{stats}");
+        assert!(stats.contains("失败"), "{stats}");
+        assert!(stats.contains("等待中"), "{stats}");
     }
 }

@@ -1,4 +1,4 @@
-//! CLI entry point for the `DeepSeek` client.
+//! CLI entry point for CodeWhale.
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,7 +30,6 @@ mod config;
 mod config_ui;
 mod core;
 mod cost_status;
-mod cycle_manager;
 mod deepseek_theme;
 mod dependencies;
 mod error_taxonomy;
@@ -53,6 +52,7 @@ mod prefix_cache;
 mod pricing;
 mod project_context;
 mod project_doc;
+mod prompt_zones;
 mod prompts;
 mod purge;
 pub mod repl;
@@ -115,8 +115,8 @@ fn configure_windows_console_utf8() {}
     bin_name = "codewhale-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
-    about = "codewhale/CLI for DeepSeek models",
-    long_about = "Terminal-native TUI and CLI for DeepSeek models.\n\nRun 'codewhale' to start.\n\nNot affiliated with DeepSeek Inc."
+    about = "CodeWhale terminal coding agent",
+    long_about = "Terminal-native TUI and CLI for open-source and open-weight coding models.\n\nRun 'codewhale' to start.\n\nProvider routes include DeepSeek, Arcee, Hugging Face, OpenRouter, Xiaomi MiMo, local vLLM/SGLang/Ollama, and more."
 )]
 struct Cli {
     /// Subcommand to run
@@ -185,7 +185,7 @@ struct Cli {
     #[arg(long = "fresh")]
     fresh: bool,
 
-    /// Skip loading project-level config from $WORKSPACE/.deepseek/config.toml
+    /// Skip loading project-level config from $WORKSPACE/.codewhale/config.toml
     #[arg(long = "no-project-config")]
     no_project_config: bool,
 }
@@ -214,7 +214,7 @@ enum Commands {
     },
     /// Create default AGENTS.md in current directory
     Init,
-    /// Save a DeepSeek API key to the shared user config
+    /// Save an API key to the shared user config
     Login {
         /// API key to store (otherwise read from stdin)
         #[arg(long)]
@@ -224,6 +224,9 @@ enum Commands {
     Logout,
     /// List available models from the configured API endpoint
     Models(ModelsArgs),
+    /// Generate speech audio with Xiaomi MiMo TTS models
+    #[command(visible_alias = "tts")]
+    Speech(SpeechArgs),
     /// Run a non-interactive prompt. Use --auto for tool-backed agent mode.
     Exec(ExecArgs),
     /// Generate SWE-bench prediction rows from CodeWhale runs
@@ -432,6 +435,14 @@ fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
 }
 
+fn resolve_exec_model(config: &Config, explicit_model: Option<&str>) -> String {
+    explicit_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| config.default_model())
+}
+
 fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
     (!parts.is_empty()).then(|| tui::InitialInput::Submit(join_prompt_parts(parts)))
 }
@@ -518,6 +529,50 @@ struct EvalArgs {
 #[derive(Args, Debug, Clone, Default)]
 struct ModelsArgs {
     /// Print models as pretty JSON
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct SpeechArgs {
+    /// Text to synthesize. This is sent as the assistant message content.
+    #[arg(value_name = "TEXT")]
+    text: String,
+
+    /// Output audio path. Defaults to speech.<format> in --output-dir,
+    /// [speech].output_dir, or the current directory.
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
+    /// Directory for the default speech.<format> output file when -o/--output is omitted.
+    #[arg(long = "output-dir", value_name = "DIR")]
+    output_dir: Option<PathBuf>,
+
+    /// TTS model. Defaults to built-in voices, or is inferred from --voice-prompt/--clone-voice.
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Built-in voice ID, or a data:audio/...;base64,... URI for voice clone.
+    #[arg(long)]
+    voice: Option<String>,
+
+    /// Natural language style instruction; not spoken verbatim.
+    #[arg(long)]
+    instruction: Option<String>,
+
+    /// Voice design prompt. Implies mimo-v2.5-tts-voicedesign when --model is omitted.
+    #[arg(long = "voice-prompt")]
+    voice_prompt: Option<String>,
+
+    /// MP3/WAV sample used for voice cloning. Implies mimo-v2.5-tts-voiceclone when --model is omitted.
+    #[arg(long = "clone-voice", value_name = "FILE")]
+    clone_voice: Option<PathBuf>,
+
+    /// Output audio format requested from the API
+    #[arg(long, default_value = "wav")]
+    format: String,
+
+    /// Emit machine-readable JSON output
     #[arg(long, default_value_t = false)]
     json: bool,
 }
@@ -709,13 +764,13 @@ enum McpCommand {
     },
     /// Validate MCP config and required servers
     Validate,
-    /// Register this DeepSeek binary as a local MCP stdio server.
+    /// Register this CodeWhale binary as a local MCP stdio server.
     ///
     /// This adds a config entry that runs `codewhale serve --mcp` (stdio protocol).
     /// For the HTTP/SSE runtime API, use `codewhale serve --http` directly instead.
     #[command(
         name = "add-self",
-        long_about = "Register this DeepSeek binary as a local MCP stdio server.\n\nAdds a config entry to ~/.deepseek/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other DeepSeek sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
+        long_about = "Register this CodeWhale binary as a local MCP stdio server.\n\nAdds a config entry to ~/.codewhale/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other CodeWhale sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
     )]
     AddSelf {
         /// Server name in mcp.json (default: "codewhale")
@@ -887,17 +942,19 @@ async fn main() -> Result<()> {
                 let config = load_config_from_cli(&cli)?;
                 run_models(&config, args).await
             }
+            Commands::Speech(args) => {
+                let config = load_config_from_cli(&cli)?;
+                run_speech(&config, args).await
+            }
             Commands::Exec(args) => {
                 let config = load_config_from_cli(&cli)?;
-                let model = args
-                    .model
-                    .clone()
-                    .or_else(|| config.default_text_model.clone())
-                    .unwrap_or_else(|| config.default_model());
-                let prompt = join_prompt_parts(&args.prompt);
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
+                let mut config = config.clone();
+                merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                let model = resolve_exec_model(&config, args.model.as_deref());
+                let prompt = join_prompt_parts(&args.prompt);
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
                 // The `deepseek` launcher forwards `--yolo` to this binary via
                 // the DEEPSEEK_YOLO env var (which the config loader folds into
@@ -1059,7 +1116,7 @@ async fn main() -> Result<()> {
     };
 
     // Default: Interactive TUI
-    // --yolo starts in YOLO mode (shell + trust + auto-approve)
+    // --yolo starts in YOLO mode (auto-approve; shell if allow_shell=true)
     run_interactive(&cli, &config, resume_session_id, None).await
 }
 
@@ -1572,7 +1629,7 @@ fn plugins_readme_template() -> &'static str {
      Plugins are richer than tools: each one lives in its own subdirectory\n\
      with a `PLUGIN.md` describing what it does and how to enable it. The\n\
      directory is created so users have a documented place to drop\n\
-     experiments without touching `~/.deepseek/skills/`.\n\n\
+     experiments without touching `~/.codewhale/skills/`.\n\n\
      A plugin layout looks like:\n\n\
      ```\n\
      plugins/\n\
@@ -1932,7 +1989,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "codewhale auth set --provider openrouter --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::XiaomiMimo => (
-                    "XIAOMI_MIMO_API_KEY/MIMO_API_KEY",
+                    "XIAOMI_MIMO_API_KEY/XIAOMI_API_KEY/MIMO_API_KEY",
                     "codewhale auth set --provider xiaomi-mimo --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Novita => (
@@ -1943,9 +2000,14 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "FIREWORKS_API_KEY",
                     "codewhale auth set --provider fireworks --api-key \"...\"",
                 ),
-                crate::config::ApiProvider::Siliconflow => (
+                crate::config::ApiProvider::Siliconflow
+                | crate::config::ApiProvider::SiliconflowCn => (
                     "SILICONFLOW_API_KEY",
                     "codewhale auth set --provider siliconflow --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Arcee => (
+                    "ARCEE_API_KEY",
+                    "codewhale auth set --provider arcee --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Moonshot => (
                     "MOONSHOT_API_KEY/KIMI_API_KEY",
@@ -1966,12 +2028,16 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "VOLCENGINE_API_KEY",
                     "codewhale auth set --provider volcengine",
                 ),
+                crate::config::ApiProvider::Huggingface => (
+                    "HUGGINGFACE_API_KEY/HF_TOKEN",
+                    "codewhale auth set --provider huggingface",
+                ),
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
                     ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
             };
             println!(
-                "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.deepseek/config.toml; or run `{login_hint}`)",
+                "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.codewhale/config.toml; or run `{login_hint}`)",
                 "✗".truecolor(red_r, red_g, red_b),
                 match config.api_provider() {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
@@ -1983,11 +2049,14 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::XiaomiMimo => "xiaomi_mimo",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
-                    crate::config::ApiProvider::Siliconflow => "siliconflow",
+                    crate::config::ApiProvider::Siliconflow
+                    | crate::config::ApiProvider::SiliconflowCn => "siliconflow",
+                    crate::config::ApiProvider::Arcee => "arcee",
                     crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
                     crate::config::ApiProvider::Ollama => "ollama",
+                    crate::config::ApiProvider::Huggingface => "huggingface",
                     crate::config::ApiProvider::Deepseek
                     | crate::config::ApiProvider::DeepseekCN => "deepseek",
                 }
@@ -2291,7 +2360,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         (
             crate::config::ApiProvider::XiaomiMimo,
             "xiaomi-mimo",
-            &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"][..],
+            &["XIAOMI_MIMO_API_KEY", "XIAOMI_API_KEY", "MIMO_API_KEY"][..],
         ),
         (
             crate::config::ApiProvider::Novita,
@@ -2361,7 +2430,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             if in_config { "yes" } else { "no" }
         );
     }
-    println!("  · credential precedence: ~/.deepseek/config.toml, OS keyring, then env");
+    println!("  · credential precedence: ~/.codewhale/config.toml, OS keyring, then env");
 
     let api_key_source = resolve_api_key_source(config);
     let has_api_key = if config.deepseek_api_key().is_ok() {
@@ -2392,7 +2461,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "✗".truecolor(red_r, red_g, red_b)
         );
         println!(
-            "    Run 'codewhale auth set --provider <name>' to save a key to ~/.deepseek/config.toml."
+            "    Run 'codewhale auth set --provider <name>' to save a key to ~/.codewhale/config.toml."
         );
         false
     };
@@ -3435,7 +3504,7 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
                 && !target.base_url.contains("api.deepseeki.com") =>
         {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, set its HTTPS base URL in ~/.deepseek/config.toml and rerun `codewhale doctor`."
+                "If this is a custom DeepSeek-compatible endpoint, set its HTTPS base URL in ~/.codewhale/config.toml and rerun `codewhale doctor`."
                     .to_string(),
             );
         }
@@ -3505,6 +3574,198 @@ async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
+    use crate::client::{DeepSeekClient, SpeechSynthesisRequest};
+    use crate::config::ApiProvider;
+    use crate::tools::speech::{
+        DEFAULT_VOICE, SPEECH_MODEL_EXAMPLES, combine_speech_instructions,
+        default_speech_output_name, describe_speech_voice, encode_voice_clone_sample_data_uri,
+        infer_speech_model, normalize_speech_format,
+    };
+
+    let SpeechArgs {
+        text,
+        output,
+        output_dir,
+        model,
+        voice,
+        instruction,
+        voice_prompt,
+        clone_voice,
+        format,
+        json: json_output,
+    } = args;
+
+    if config.api_provider() != ApiProvider::XiaomiMimo {
+        bail!(
+            "`speech` requires provider = \"xiaomi-mimo\" (current: {}). Run with `--provider xiaomi-mimo` or set it in config.",
+            config.api_provider().as_str()
+        );
+    }
+
+    if text.trim().is_empty() {
+        bail!("Speech text cannot be empty");
+    }
+    let voice_is_data_uri = voice
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| value.starts_with("data:audio/"));
+    if clone_voice.is_some() && voice.is_some() {
+        bail!("Use either --clone-voice or --voice for cloned voice data, not both");
+    }
+    let model = infer_speech_model(
+        model.as_deref(),
+        clone_voice.is_some() || voice_is_data_uri,
+        voice_prompt.is_some(),
+    );
+    let model_lower = model.to_ascii_lowercase();
+    if !model_lower.contains("tts") {
+        bail!(
+            "speech requires a TTS model (examples: {}); got {model}",
+            SPEECH_MODEL_EXAMPLES.join(", ")
+        );
+    }
+    let is_voice_design = model_lower.contains("voicedesign");
+    let is_voice_clone = model_lower.contains("voiceclone");
+
+    let instruction = combine_speech_instructions(instruction, voice_prompt);
+    if is_voice_design
+        && instruction
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        bail!(
+            "mimo-v2.5-tts-voicedesign requires --voice-prompt or --instruction to describe the voice"
+        );
+    }
+
+    let voice = if let Some(clone_path) = clone_voice {
+        Some(encode_voice_clone_sample_data_uri(&clone_path)?)
+    } else if is_voice_design {
+        None
+    } else if let Some(value) = voice.filter(|value| !value.trim().is_empty()) {
+        Some(value)
+    } else if is_voice_clone {
+        bail!("mimo-v2.5-tts-voiceclone requires --clone-voice <mp3|wav> or --voice <data-uri>");
+    } else {
+        Some(DEFAULT_VOICE.to_string())
+    };
+    let format = normalize_speech_format(&format).with_context(|| {
+        format!("Unsupported speech format '{format}' (allowed: wav, mp3, pcm16)")
+    })?;
+    let output = output.unwrap_or_else(|| {
+        output_dir
+            .or_else(|| config.speech_output_dir())
+            .unwrap_or_default()
+            .join(default_speech_output_name(&format))
+    });
+
+    let client = DeepSeekClient::new(config)?;
+    let response = client
+        .synthesize_speech(SpeechSynthesisRequest {
+            model: model.clone(),
+            text,
+            instruction,
+            audio_format: format.clone(),
+            voice,
+        })
+        .await?;
+
+    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory {}", parent.display()))?;
+    }
+    std::fs::write(&output, &response.audio_bytes)
+        .with_context(|| format!("Failed to write audio file {}", output.display()))?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "speech",
+                "success": true,
+                "model": response.model,
+                "format": response.audio_format,
+                "output": output.display().to_string(),
+                "bytes": response.audio_bytes.len(),
+                "voice": response.voice.as_deref().map(describe_speech_voice),
+                "transcript": response.transcript,
+            }))?
+        );
+    } else {
+        println!(
+            "Generated speech: {} ({} bytes, model: {}, format: {})",
+            output.display(),
+            response.audio_bytes.len(),
+            response.model,
+            response.audio_format
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod speech_cli_tests {
+    use super::*;
+    use crate::tools::speech::{
+        default_speech_output_name, infer_speech_model, normalize_speech_format,
+    };
+
+    #[test]
+    fn normalizes_documented_speech_formats() {
+        assert_eq!(normalize_speech_format("WAV").as_deref(), Some("wav"));
+        assert_eq!(normalize_speech_format("pcm16").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("pcm").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("flac"), None);
+    }
+
+    #[test]
+    fn default_speech_output_tracks_requested_format() {
+        assert_eq!(
+            PathBuf::from(default_speech_output_name("mp3")),
+            PathBuf::from("speech.mp3")
+        );
+        assert_eq!(
+            PathBuf::from("audio").join(default_speech_output_name("pcm")),
+            PathBuf::from("audio").join("speech.pcm16")
+        );
+    }
+
+    #[test]
+    fn speech_command_parses_cli_passthrough_smoke() {
+        let cli = Cli::try_parse_from([
+            "codewhale-tui",
+            "speech",
+            "hello",
+            "--model",
+            "tts",
+            "--format",
+            "pcm",
+            "--output-dir",
+            "audio",
+            "--voice",
+            "Mia",
+        ])
+        .expect("speech command parses");
+
+        let Some(Commands::Speech(args)) = cli.command else {
+            panic!("expected speech command");
+        };
+        assert_eq!(args.text, "hello");
+        assert_eq!(
+            infer_speech_model(args.model.as_deref(), false, false),
+            "mimo-v2.5-tts"
+        );
+        assert_eq!(
+            normalize_speech_format(&args.format).as_deref(),
+            Some("pcm16")
+        );
+        assert_eq!(args.output_dir, Some(PathBuf::from("audio")));
+        assert_eq!(args.voice.as_deref(), Some("Mia"));
+    }
 }
 
 /// Test API connectivity by making a minimal request
@@ -4675,7 +4936,7 @@ fn should_use_mouse_capture_with(
 /// Off elsewhere only for JetBrains' JediTerm, which advertises mouse
 /// support but forwards the same SGR escape sequences as raw input. The
 /// user can still opt back in with `[tui] mouse_capture = true` in
-/// `~/.deepseek/config.toml` or `--mouse-capture`.
+/// `~/.codewhale/config.toml` or `--mouse-capture`.
 fn default_mouse_capture_enabled(
     terminal_emulator: Option<&str>,
     wt_session: Option<&str>,
@@ -4808,8 +5069,9 @@ fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) 
     }
 }
 
-/// Load project-level config from `$WORKSPACE/.deepseek/config.toml` and
-/// apply its fields as overrides on top of the global config (#485).
+/// Load project-level config from `$WORKSPACE/.codewhale/config.toml`, with
+/// legacy `$WORKSPACE/.deepseek/config.toml` fallback, then apply its fields as
+/// overrides on top of the global config (#485).
 /// Only explicitly set fields in the project file are applied; everything
 /// else falls back to the global value.
 fn merge_project_config(config: &mut Config, workspace: &Path) {
@@ -4870,7 +5132,7 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
         if table.contains_key(*key) {
             eprintln!(
                 "warning: project-scope config key `{key}` is ignored — \
-                 set it in `~/.deepseek/config.toml` instead. \
+                 set it in `~/.codewhale/config.toml` instead. \
                  (See #417 for the deny-list rationale.)"
             );
         }
@@ -4946,6 +5208,86 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
     }
 }
 
+fn merge_user_workspace_config(
+    config: &mut Config,
+    config_path: Option<PathBuf>,
+    workspace: &Path,
+) {
+    if config.managed_config_path.is_some() || config.requirements_path.is_some() {
+        return;
+    }
+    let allow_shell_before = config.allow_shell;
+    let allow_shell_from_env = std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some();
+    let Some(path) = crate::config::resolve_load_config_path(config_path) else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&raw) else {
+        return;
+    };
+    merge_user_workspace_config_from_doc(config, &doc, workspace);
+    if allow_shell_from_env {
+        config.allow_shell = allow_shell_before;
+    }
+}
+
+fn merge_user_workspace_config_from_doc(config: &mut Config, doc: &toml::Value, workspace: &Path) {
+    for table_name in ["workspace", "projects"] {
+        let Some(entries) = doc.get(table_name).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (raw_path, entry) in entries {
+            if !workspace_config_path_matches(raw_path, workspace) {
+                continue;
+            }
+            if let Some(allow_shell) = entry.get("allow_shell").and_then(toml::Value::as_bool) {
+                config.allow_shell = Some(allow_shell);
+            }
+        }
+    }
+}
+
+fn workspace_config_path_matches(raw_path: &str, workspace: &Path) -> bool {
+    let configured = crate::config::expand_path(raw_path);
+    let configured = configured.canonicalize().unwrap_or(configured);
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    paths_equal_for_config(&configured, &workspace)
+}
+
+#[cfg(windows)]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    normalize_windows_config_path_for_compare(left)
+        == normalize_windows_config_path_for_compare(right)
+}
+
+#[cfg(not(windows))]
+fn paths_equal_for_config(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn normalize_windows_config_path_for_compare(path: &Path) -> String {
+    normalize_windows_config_path_str(&path.to_string_lossy())
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_config_path_str(path: &str) -> String {
+    let mut normalized = path.replace('/', "\\");
+    if let Some(rest) = normalized.strip_prefix(r"\\?\UNC\") {
+        normalized = format!("\\\\{rest}");
+    } else if let Some(rest) = normalized.strip_prefix(r"\\?\") {
+        normalized = rest.to_string();
+    }
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
+}
+
 async fn run_interactive(
     cli: &Cli,
     config: &Config,
@@ -4957,9 +5299,11 @@ async fn run_interactive(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Merge project-level config from $WORKSPACE/.deepseek/config.toml
+    // Merge project-level config from $WORKSPACE/.codewhale/config.toml
+    // or legacy $WORKSPACE/.deepseek/config.toml
     // unless --no-project-config was passed (#485).
     let mut merged_config = config.clone();
+    merge_user_workspace_config(&mut merged_config, cli.config.clone(), &workspace);
     if !cli.no_project_config {
         merge_project_config(&mut merged_config, &workspace);
     }
@@ -4978,8 +5322,12 @@ async fn run_interactive(
 
     // v0.8.44: migrate config from ~/.deepseek/ to ~/.codewhale/ on first
     // launch. Non-fatal — existing installs keep working either way.
-    if let Err(err) = codewhale_config::migrate_config_if_needed() {
-        logging::warn(format!("Config migration skipped: {err}"));
+    match codewhale_config::migrate_config_if_needed() {
+        Ok(Some(migration)) => {
+            eprintln!("{}", migration.user_notice());
+        }
+        Ok(None) => {}
+        Err(err) => logging::warn(format!("Config migration skipped: {err}")),
     }
 
     let model = config.default_model();
@@ -5295,7 +5643,9 @@ async fn run_exec_agent(
     use crate::core::engine::{EngineConfig, spawn_engine};
     use crate::core::events::Event;
     use crate::core::ops::Op;
-    use crate::models::compaction_threshold_for_model;
+    use crate::models::{
+        auto_compact_default_for_model, compaction_threshold_for_model_at_percent,
+    };
     use crate::tools::plan::new_shared_plan_state;
     use crate::tools::todo::new_shared_todo_list;
     use crate::tui::app::AppMode;
@@ -5307,15 +5657,19 @@ async fn run_exec_agent(
         .reasoning_effort
         .map(|effort| effort.as_setting().to_string());
 
-    // Compaction defaults to disabled in v0.6.6: the checkpoint-restart cycle
-    // architecture (issue #124) handles long-context resets via fresh contexts
-    // rather than progressive summarization. The compaction config is still
-    // wired through so users who explicitly opt back in through TUI settings
-    // or direct engine config keep their old behavior.
+    let settings = crate::settings::Settings::load().unwrap_or_default();
+    let auto_compact_enabled = if crate::settings::Settings::auto_compact_explicitly_configured() {
+        settings.auto_compact
+    } else {
+        auto_compact_default_for_model(&effective_model)
+    };
     let compaction = CompactionConfig {
-        enabled: false,
+        enabled: auto_compact_enabled,
         model: effective_model.clone(),
-        token_threshold: compaction_threshold_for_model(&effective_model),
+        token_threshold: compaction_threshold_for_model_at_percent(
+            &effective_model,
+            settings.auto_compact_threshold_percent,
+        ),
         ..Default::default()
     };
 
@@ -5327,8 +5681,6 @@ async fn run_exec_agent(
         .lsp
         .clone()
         .map(crate::config::LspConfigToml::into_runtime);
-    let settings = crate::settings::Settings::load().unwrap_or_default();
-
     let engine_config = EngineConfig {
         model: effective_model.clone(),
         workspace: workspace.clone(),
@@ -5349,7 +5701,6 @@ async fn run_exec_agent(
         max_subagents,
         features: config.features(),
         compaction,
-        cycle: crate::cycle_manager::CycleConfig::default(),
         capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(config),
         todos: new_shared_todo_list(),
         plan_state: new_shared_plan_state(),
@@ -5365,13 +5716,18 @@ async fn run_exec_agent(
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
         subagent_api_timeout: std::time::Duration::from_secs(config.subagent_api_timeout_secs()),
+        subagent_heartbeat_timeout: std::time::Duration::from_secs(
+            config.subagent_heartbeat_timeout_secs(),
+        ),
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        speech_output_dir: config.speech_output_dir(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
         allowed_tools: None,
+        hook_executor: None,
         locale_tag: crate::localization::resolve_locale(&settings.locale)
             .tag()
             .to_string(),
@@ -5428,6 +5784,7 @@ async fn run_exec_agent(
             model: effective_model.clone(),
             goal_objective: None,
             allowed_tools: None,
+            hook_executor: None,
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_model,
             auto_model,
@@ -6060,6 +6417,31 @@ mod terminal_mode_tests {
     #[test]
     fn companion_binary_reports_its_own_name() {
         assert_eq!(Cli::command().get_name(), "codewhale-tui");
+    }
+
+    #[test]
+    fn exec_model_resolution_uses_provider_scoped_default() {
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            default_text_model: Some("deepseek/deepseek-v4-pro".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                openrouter: crate::config::ProviderConfig {
+                    model: Some("arcee-ai/trinity-large-thinking".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_exec_model(&config, None),
+            "arcee-ai/trinity-large-thinking"
+        );
+        assert_eq!(
+            resolve_exec_model(&config, Some("arcee-ai/trinity-large-thinking")),
+            "arcee-ai/trinity-large-thinking"
+        );
     }
 
     #[test]
@@ -6769,6 +7151,132 @@ allow_shell = false
         merge_project_config(&mut config, tmp.path());
         assert_eq!(config.max_subagents, Some(4));
         assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_can_enable_shell_for_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
+
+        assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn user_workspace_overlay_accepts_legacy_projects_table() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!("[projects.'{}']\nallow_shell = true\n", workspace.display());
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
+
+        assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn user_workspace_overlay_ignores_non_matching_workspace() {
+        let tmp = tempdir().expect("tempdir");
+        let configured_workspace = tmp.path().join("configured");
+        let active_workspace = tmp.path().join("active");
+        fs::create_dir_all(&configured_workspace).expect("mkdir configured workspace");
+        fs::create_dir_all(&active_workspace).expect("mkdir active workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            configured_workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        let mut config = Config::default();
+        merge_user_workspace_config_from_doc(&mut config, &doc, &active_workspace);
+
+        assert_eq!(config.allow_shell, None);
+    }
+
+    #[test]
+    fn user_workspace_overlay_preserves_allow_shell_env_override() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        unsafe {
+            std::env::set_var("DEEPSEEK_ALLOW_SHELL", "false");
+        }
+        let mut config = Config {
+            allow_shell: Some(false),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+        unsafe {
+            std::env::remove_var("DEEPSEEK_ALLOW_SHELL");
+        }
+
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn user_workspace_overlay_does_not_override_managed_config() {
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[workspace.'{}']\nallow_shell = true\n",
+                workspace.display()
+            ),
+        )
+        .expect("write config");
+
+        let mut config = Config {
+            allow_shell: Some(false),
+            managed_config_path: Some("managed.toml".to_string()),
+            ..Config::default()
+        };
+        merge_user_workspace_config(&mut config, Some(config_path), &workspace);
+
+        assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_mixed_separators() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo/")
+        );
+    }
+
+    #[test]
+    fn windows_config_path_compare_normalizes_verbatim_and_unc_prefixes() {
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\C:\Users\me\repo"),
+            normalize_windows_config_path_str(r"C:/Users/me/repo")
+        );
+        assert_eq!(
+            normalize_windows_config_path_str(r"\\?\UNC\server\share\repo"),
+            normalize_windows_config_path_str(r"\\server/share/repo/")
+        );
     }
 
     #[test]

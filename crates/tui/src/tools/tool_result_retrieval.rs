@@ -1,7 +1,7 @@
 //! `retrieve_tool_result` - selective retrieval for spilled tool outputs.
 //!
 //! Large successful tool results are spilled to
-//! `~/.deepseek/tool_outputs/<tool-call-id>.txt` by `tools::truncate`. This
+//! `~/.codewhale/tool_outputs/<tool-call-id>.txt` by `tools::truncate`. This
 //! tool gives the model a read-only, directory-scoped way to fetch summaries or
 //! slices of those historical outputs without replaying the entire file into
 //! every subsequent request.
@@ -36,7 +36,7 @@ impl ToolSpec for RetrieveToolResultTool {
     }
 
     fn description(&self) -> &'static str {
-        "Retrieve a previously spilled large tool result. Accepts a tool_call_id (`call_abc123`), artifact id (`art_call_abc123`), SHA reference (`sha:<64-hex>` or bare 64-hex from `<TOOL_RESULT_REF>`), relative filename (`call_abc123.txt`, `artifacts/art_call_abc123.txt`), or absolute path under ~/.deepseek. Modes: summary, head, tail, lines, query."
+        "Retrieve a previously spilled large tool result. Accepts a tool_call_id (`call_abc123`), artifact id (`art_call_abc123`), SHA reference (`sha:<64-hex>` or bare 64-hex from `<TOOL_RESULT_REF>`), relative filename (`call_abc123.txt`, `artifacts/art_call_abc123.txt`), or absolute path under ~/.codewhale. Modes: summary, head, tail, lines, query."
     }
 
     fn input_schema(&self) -> Value {
@@ -45,7 +45,7 @@ impl ToolSpec for RetrieveToolResultTool {
             "properties": {
                 "ref": {
                     "type": "string",
-                    "description": "Tool call id, artifact id (`art_<id>`), SHA ref (`sha:<64-hex>`), spillover filename, or absolute path under ~/.deepseek."
+                    "description": "Tool call id, artifact id (`art_<id>`), SHA ref (`sha:<64-hex>`), spillover filename, or absolute path under ~/.codewhale."
                 },
                 "mode": {
                     "type": "string",
@@ -149,18 +149,19 @@ impl ToolSpec for RetrieveToolResultTool {
 /// 3. `sha:<64-hex>` or bare 64-hex — content-addressed wire dedup, `sha_<hex>.txt`.
 /// 4. `tool_result:<x>` — `<x>` is any of the above after the prefix.
 /// 5. `artifacts/<file>.txt` or `<file>.txt` — relative paths.
-/// 6. Absolute paths under `~/.deepseek/`.
+/// 6. Absolute paths under the CodeWhale home.
 ///
 /// The error message on a miss enumerates which forms were tried so the
 /// model can correct course without a second blind guess.
 fn resolve_spillover_reference(reference: &str, session_id: &str) -> Result<PathBuf, ToolError> {
-    let root = crate::tools::truncate::spillover_root()
-        .ok_or_else(|| ToolError::execution_failed("could not resolve ~/.deepseek/tool_outputs"))?;
+    let root = crate::tools::truncate::spillover_root().ok_or_else(|| {
+        ToolError::execution_failed("could not resolve ~/.codewhale/tool_outputs")
+    })?;
     let root_canonical = root.canonicalize().ok();
 
     // Resolve the session's `artifacts/` directory.
     // `session_artifact_absolute_path(sid, p)` returns
-    // `~/.deepseek/sessions/<sid>/<p>` — so passing the literal
+    // `~/.codewhale/sessions/<sid>/<p>` — so passing the literal
     // `ARTIFACTS_DIR_NAME` ("artifacts") gets us the real artifacts
     // root. An earlier draft passed `Path::new(".")` and took
     // `.parent()`, which landed one directory too high (`<sid>` instead
@@ -202,7 +203,7 @@ fn resolve_spillover_reference(reference: &str, session_id: &str) -> Result<Path
         // `retrieve_tool_result`. canonicalize() would happily
         // follow such a link and then pass the `starts_with(root)`
         // check because of the resolved-then-compare order. The
-        // legacy `~/.deepseek/tool_outputs/` dir is engine-only and
+        // home-level `~/.codewhale/tool_outputs/` dir is engine-only and
         // never carried this concern; session artifact dirs hold
         // arbitrary tool output and need the guard.
         if let Ok(meta) = std::fs::symlink_metadata(&candidate)

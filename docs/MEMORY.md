@@ -23,7 +23,7 @@ export DEEPSEEK_MEMORY=on
 Accepted truthy values are `1`, `on`, `true`, `yes`, `y`, and
 `enabled`.
 
-…or add to `~/.deepseek/config.toml`:
+…or add to `~/.codewhale/config.toml`:
 
 ```toml
 [memory]
@@ -32,10 +32,11 @@ enabled = true
 
 Restart the TUI after toggling. Disabling is the same in reverse.
 
-The memory file lives at `~/.deepseek/memory.md` by default; override
+The memory file lives at `~/.codewhale/memory.md` by default; override
 with `memory_path` in `config.toml` or `DEEPSEEK_MEMORY_PATH` in
 the environment. `DEEPSEEK_MEMORY_PATH` wins over the config file when
-both are set.
+both are set. Existing `~/.deepseek/memory.md` files remain supported as a
+legacy fallback when no `.codewhale` memory file exists.
 
 ## Quick examples
 
@@ -60,7 +61,7 @@ When memory is enabled and the file exists, every turn's system
 prompt carries an extra block:
 
 ```xml
-<user_memory source="/Users/you/.deepseek/memory.md">
+<user_memory source="/Users/you/.codewhale/memory.md">
 - (2026-05-03 22:14 UTC) prefer pytest over unittest
 - (2026-05-03 22:31 UTC) this codebase uses 4-space indentation
 …
@@ -166,7 +167,8 @@ note was added when grooming the file.
 
 Memory is intentionally **user-scoped** rather than repo-scoped. It
 sits alongside — not inside — project instruction sources such as
-`AGENTS.md`, `.deepseek/instructions.md`, and `instructions = [...]`.
+`AGENTS.md`, `.codewhale/instructions.md`, legacy `.deepseek/instructions.md`,
+and `instructions = [...]`.
 
 - Use **memory** for durable personal preferences that should follow
   you across repos and sessions.
@@ -194,7 +196,7 @@ Memory is for **durable** signal. Things that should NOT live there:
 
 ## Privacy and scope
 
-The memory file lives entirely on your machine in `~/.deepseek/`.
+The memory file lives entirely on your machine in `~/.codewhale/`.
 It's never uploaded to any cloud service — the TUI only ever
 includes it inline in the system prompt that the LLM provider
 receives, and only when memory is enabled. If you switch providers
@@ -203,24 +205,24 @@ used; the file is provider-agnostic.
 
 The file is per-user, not per-project. If you want project-specific
 memory, use the project-level `AGENTS.md` or
-`.deepseek/instructions.md` files instead — those are loaded by
-`project_context` and live in the repo (or wherever you commit
-them).
+`.codewhale/instructions.md` files instead. Legacy
+`.deepseek/instructions.md` files are still loaded for compatibility. These are
+loaded by `project_context` and live in the repo (or wherever you commit them).
 
 ## Configuration reference
 
 ```toml
-# ~/.deepseek/config.toml
+# ~/.codewhale/config.toml
 [memory]
 enabled = true                    # default false; or set DEEPSEEK_MEMORY=on
 # Path is configured at the top-level (next to skills_dir, notes_path):
-memory_path = "~/.deepseek/memory.md"
+memory_path = "~/.codewhale/memory.md"
 ```
 
 | Setting               | Default                       | Override                              |
 |-----------------------|-------------------------------|---------------------------------------|
 | Memory enabled        | `false`                       | `[memory] enabled = true` or `DEEPSEEK_MEMORY=on` |
-| Memory file path      | `~/.deepseek/memory.md`       | `memory_path = "..."` or `DEEPSEEK_MEMORY_PATH=`  |
+| Memory file path      | `~/.codewhale/memory.md`       | `memory_path = "..."` or `DEEPSEEK_MEMORY_PATH=`  |
 | Max file size         | 100 KiB                       | (none today; truncation marker shows the cut)     |
 
 ## Related

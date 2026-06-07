@@ -104,6 +104,7 @@ jobs:
     # the same gates locally / via ci.yml on `main`.
     if: ${{ !cancelled() && (needs.parity.result == 'success' || needs.parity.result == 'skipped') }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           # --- codewhale (cli dispatcher, canonical) ---
@@ -111,7 +112,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: codewhale
             artifact_name: codewhale-linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: codewhale
             artifact_name: codewhale-linux-arm64
@@ -136,7 +137,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: codewhale-tui
             artifact_name: codewhale-tui-linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: codewhale-tui
             artifact_name: codewhale-tui-linux-arm64
@@ -161,7 +162,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: deepseek
             artifact_name: deepseek-linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: deepseek
             artifact_name: deepseek-linux-arm64
@@ -182,7 +183,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: deepseek-tui
             artifact_name: deepseek-tui-linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: deepseek-tui
             artifact_name: deepseek-tui-linux-arm64
@@ -238,13 +239,31 @@ jobs:
           sudo dpkg --add-architecture riscv64
           sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/riscv64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
           sudo apt-get install -y libdbus-1-dev:riscv64
+      - name: Install AArch64 cross-compilation toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.os == 'Linux'
+        run: |
+          . /etc/os-release
+          sudo tee /etc/apt/sources.list.d/arm64.sources <<SRC
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: ${UBUNTU_CODENAME} ${UBUNTU_CODENAME}-updates ${UBUNTU_CODENAME}-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SRC
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/arm64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libdbus-1-dev:arm64 pkg-config
       - name: Build
         shell: bash
         env:
           DEEPSEEK_BUILD_SHA: ${{ needs.resolve.outputs.sha }}
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
           CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
           PKG_CONFIG_ALLOW_CROSS: 1
+          PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu: /usr/lib/aarch64-linux-gnu/pkgconfig
           PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Rename binary
@@ -363,6 +382,48 @@ jobs:
           path: bundles/*
           if-no-files-found: error
 
+  windows-installer:
+    needs: [build, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: 'codewhale*-windows-x64.exe'
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ needs.resolve.outputs.tag }}".TrimStart("v")
+          Copy-Item "artifacts\codewhale-windows-x64.exe\codewhale-windows-x64.exe" "scripts\installer\codewhale.exe"
+          Copy-Item "artifacts\codewhale-tui-windows-x64.exe\codewhale-tui-windows-x64.exe" "scripts\installer\codewhale-tui.exe"
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (!(Test-Path $makensis)) {
+            $makensis = "${env:ProgramFiles}\NSIS\makensis.exe"
+          }
+          if (!(Test-Path $makensis)) {
+            throw "makensis.exe not found after NSIS install"
+          }
+          Push-Location scripts\installer
+          & $makensis "/DVERSION=$version" "codewhale.nsi"
+          Pop-Location
+          if (!(Test-Path "scripts\installer\CodeWhaleSetup.exe")) {
+            throw "CodeWhaleSetup.exe was not produced"
+          }
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeWhaleSetup.exe
+          path: scripts/installer/CodeWhaleSetup.exe
+          if-no-files-found: error
+
   docker:
     needs: [build, resolve]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -432,8 +493,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build, bundle, docker, resolve]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.docker.result == 'success' }}
+    needs: [build, bundle, windows-installer, docker, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.windows-installer.result == 'success' && needs.docker.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -444,6 +505,22 @@ jobs:
           # Match both the canonical `codewhale*` artifacts and the legacy
           # `deepseek*` shim artifacts that ship for the transition release.
           pattern: '*'
+      - name: Generate Windows npm launcher asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/codewhale-windows-launcher
+          {
+            printf '@echo off\r\n'
+            printf 'where wt >nul 2>nul\r\n'
+            printf 'set NO_ANIMATIONS=1\r\n'
+            printf 'if "%%ERRORLEVEL%%"=="0" (\r\n'
+            printf '    wt --title CodeWhale cmd /k "%%~dp0codewhale-windows-x64.exe"\r\n'
+            printf ') else (\r\n'
+            printf '    "%%~dp0codewhale-windows-x64.exe"\r\n'
+            printf ')\r\n'
+            printf '\r\n'
+          } > artifacts/codewhale-windows-launcher/codewhale.bat
       - name: List artifacts
         run: find artifacts -type f
       - name: Generate checksum manifest
@@ -471,10 +548,11 @@ jobs:
           body: |
             > This release renames the project to **CodeWhale**. The legacy
             > `deepseek` and `deepseek-tui` binaries continue to ship as
-            > deprecation shims for one release cycle; they print a one-line
-            > warning and forward to `codewhale` / `codewhale-tui`. They will
-            > be removed in v0.9.0. See `docs/REBRAND.md` for the full
-            > migration story.
+            > compatibility-only deprecation shims during v0.8.x; they print a
+            > one-line warning and forward to `codewhale` / `codewhale-tui`.
+            > They will be removed in v0.9.0. The legacy npm package
+            > `deepseek-tui` is deprecated and receives no further releases.
+            > See `docs/REBRAND.md` for the full migration story.
 
             ## Install
 
@@ -516,6 +594,7 @@ jobs:
             | Linux RISC-V | `codewhale-linux-riscv64.tar.gz` | `install.sh` |
             | macOS x64 | `codewhale-macos-x64.tar.gz` | `install.sh` |
             | macOS ARM | `codewhale-macos-arm64.tar.gz` | `install.sh` |
+            | Windows x64 (installer) | `CodeWhaleSetup.exe` | NSIS setup |
             | Windows x64 | `codewhale-windows-x64.zip` | `install.bat` |
             | Windows x64 (portable) | `codewhale-windows-x64-portable.zip` | — |
 
@@ -527,13 +606,14 @@ jobs:
             ```
 
             **Windows:**
+            - For the installer path, run `CodeWhaleSetup.exe`; it installs both binaries under `%LOCALAPPDATA%\Programs\CodeWhale\bin` and adds that directory to the current-user PATH.
             - Extract `codewhale-windows-x64.zip`
             - Run `install.bat` (copies to `%USERPROFILE%\bin`)
             - Add `%USERPROFILE%\bin` to your PATH
 
-            The **portable** Windows archive skips the install script — extract and run from any directory.
+            The **portable** Windows archive skips the install script — extract and run from any directory. The NSIS installer is currently unsigned and may trigger Windows SmartScreen until a signing certificate is wired into the release pipeline.
 
-            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets ship for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
+            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets are compatibility-only deprecation shims for v0.8.x so that existing `deepseek update` invocations on v0.8.40 keep working; they forward to the canonical binaries. The legacy npm package `deepseek-tui` is deprecated and is not republished.
 
             ### Verify (recommended)
 

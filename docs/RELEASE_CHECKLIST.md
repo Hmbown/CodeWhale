@@ -10,14 +10,17 @@ publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
 ## 1. CHANGELOG entry exists for the version
 
 - [ ] `CHANGELOG.md` has a `## [X.Y.Z] - YYYY-MM-DD` heading at the top
-- [ ] The entry credits every external contributor whose commit lands in this
-      version. Get the list with:
+- [ ] The entry credits every external contributor, harvested PR author,
+      linked issue reporter, reproduction/log provider, reviewer, and
+      verification helper whose work materially shaped this version. Get the
+      commit list with:
       ```
       git log vPREV..HEAD --no-merges --format="%h %an <%ae> %s" \
         | grep -v '<your-email@…>'
       ```
       For each contributor, link both their display name and (when known)
-      `@github-handle`.
+      `@github-handle`. Then inspect linked issues and harvested PRs so
+      reporters/helpers are not lost just because they did not author commits.
 - [ ] The entry uses the Keep a Changelog headers — `Added`, `Changed`,
       `Fixed`, `Security`, `Removed`, `Deprecated`. Add `Known issues` only
       if there is something material the user must work around.
@@ -31,8 +34,8 @@ publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
       pins match the new workspace version.
 - [ ] `npm/codewhale/package.json` `version` AND `codewhaleBinaryVersion`
       are both bumped.
-- [ ] `npm/deepseek-tui/package.json` `version` is bumped for the one-release
-      deprecation shim.
+- [ ] `npm/deepseek-tui/package.json` remains private/compatibility-only and
+      is **not** bumped or published.
 - [ ] `Cargo.lock` is refreshed (`cargo update --workspace --offline`).
 - [ ] `./scripts/release/check-versions.sh` reports
       `Version state OK: workspace=X.Y.Z, npm=X.Y.Z, lockfile in sync.`
@@ -84,8 +87,16 @@ Run, in order, from the repo root:
 - [ ] `git push origin vX.Y.Z`
 - [ ] The `release.yml` workflow has built and uploaded artifacts to the
       GitHub release for this tag.
+- [ ] The live GitHub Release body has its own `## Contributors` or
+      `## Credits` section; do not rely on "see CHANGELOG" alone. Verify with:
+      ```
+      gh release view vX.Y.Z --repo Hmbown/CodeWhale --json body \
+        --jq '.body | test("## (Contributors|Credits)")'
+      ```
 - [ ] `npm view codewhale@X.Y.Z version codewhaleBinaryVersion --json`
       reports the new version on the npm registry.
+- [ ] `npm view deepseek-tui deprecated` is non-empty. The legacy npm package
+      is deprecated and must not receive an `X.Y.Z` publish.
 - [ ] `crates.io` has the new version (or the `publish-crates.sh` job has
       pushed it).
 - [ ] `ghcr.io/hmbown/codewhale:vX.Y.Z` and `:latest` are updated.
@@ -94,6 +105,8 @@ Run, in order, from the repo root:
 
 - [ ] Edit the GitHub release notes to expand any CVE-style or attack
       details that were intentionally omitted from the PR title/body.
+- [ ] Re-run the GitHub Release body check after any release-workflow rerun;
+      workflows can overwrite notes and accidentally remove contributor credit.
 - [ ] Note any deferred items in the next release's tracking issue.
 - [ ] Close any issues that this release fixed.
 

@@ -2,13 +2,12 @@
 //!
 //! Tracks conversation history, token usage, and session metadata.
 
-use crate::cycle_manager::CycleBriefing;
 use crate::models::{Message, SystemPrompt, Usage};
 use crate::prefix_cache::PrefixStabilityManager;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
+use crate::prompt_zones::FrozenPrefix;
 use crate::tui::approval::ApprovalMode;
 use crate::working_set::WorkingSet;
-use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
 /// Session state for the engine.
@@ -74,23 +73,15 @@ pub struct Session {
     /// Repo-aware working set for context management.
     pub working_set: WorkingSet,
 
-    /// Number of cycle boundaries crossed in this session (issue #124). The
-    /// active cycle index is `cycle_count + 1` (cycles are 1-based for users).
-    pub cycle_count: u32,
-
-    /// UTC start time of the *current* cycle. Updated when the engine resets
-    /// the conversation buffer. Used by archive headers and the `/cycles`
-    /// command's display.
-    pub current_cycle_started: DateTime<Utc>,
-
-    /// Briefings produced at past cycle boundaries, in chronological order.
-    /// Bounded growth: one entry per cycle, briefing capped at ~3,000 tokens.
-    pub cycle_briefings: Vec<CycleBriefing>,
-
     /// Prefix-cache stability monitor (inspired by Reasonix's Pillar 1).
     /// Tracks the immutable prefix fingerprint and detects drift across turns.
     /// Set during engine construction; None until the first system prompt assembly.
     pub prefix_stability: Option<PrefixStabilityManager>,
+
+    /// Three-zone immutable prefix baseline (#2264). Frozen on the first
+    /// request of the session; verified against the current system+tool
+    /// state before every subsequent request. None until the first turn.
+    pub frozen_prefix: Option<FrozenPrefix>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -162,10 +153,8 @@ impl Session {
             },
             last_system_prompt_hash: None,
             working_set: WorkingSet::default(),
-            cycle_count: 0,
-            current_cycle_started: Utc::now(),
-            cycle_briefings: Vec::new(),
             prefix_stability: None,
+            frozen_prefix: None,
         }
     }
 

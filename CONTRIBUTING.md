@@ -121,6 +121,89 @@ instead of the Harvest path, the highest-leverage things you can do are:
    these without prior discussion are unlikely to merge directly even
    when the change is well-implemented.
 
+## Layered and EPIC-Sized Work
+
+Some architecture work is too large for one PR but still needs to be built in
+dependent layers. For those changes, use this workflow:
+
+1. Start with a tracking issue or EPIC when the work spans multiple PRs. Name
+   the intended slices and state what each slice is not trying to close yet.
+2. Keep each implementation PR focused on one behavior boundary.
+3. Later layers may stay in your fork or open as draft PRs while the lower
+   layer is still moving. Draft stacked PR titles or descriptions should say
+   `Draft / depends on #NNNN`.
+4. A dependent PR is not ready for merge review until the lower layer has
+   landed, the branch has been rebased onto current `main`, and the PR targets
+   `main`.
+5. The PR body should identify which earlier PR it builds on, what is in scope,
+   what is explicitly out of scope, which issues it references, and which local
+   commands were run.
+6. Use `Closes #...` only when the slice fully satisfies an issue. Use
+   `Refs #...` with a short `(partial)` note when the PR advances a broad issue
+   but leaves follow-up work.
+7. Structured commits are fine during review. Maintainers may squash or harvest
+   at merge time, with contributor credit preserved through authorship,
+   co-author trailers, changelog entries, or PR/issue comments.
+
+Before asking for merge review on a layered PR, check that it is:
+
+- rebased onto current `main`
+- marked ready for review, not draft
+- focused to one behavior boundary
+- backed by local command evidence in the PR body
+- green in CI, or has any remaining red lane clearly explained
+- covered by round-trip or migration-preservation tests when it changes config
+  or schema behavior
+- referencing broad issues as partial unless it really closes them
+
+For layered work, a useful PR description shape is:
+
+```text
+Summary:
+Scope:
+Not in this slice:
+Builds on:
+Issues:
+Validation:
+```
+
+## Contribution Gate
+
+CodeWhale uses a maintainer-managed contribution gate for the community front
+door. Maintainers and collaborators bypass this gate automatically. The gate
+workflows default to dry-run / comment-only mode so maintainers can observe the
+signal before closing contributor work. In dry-run mode, unapproved external
+issues and pull requests receive a short thank-you / CONTRIBUTING pointer and
+remain open.
+
+When maintainers are ready to enforce the gate, set
+`CONTRIBUTION_GATE_MODE: enforce` in the PR and issue gate workflows. In enforce
+mode, external contributors must be listed in
+`.github/APPROVED_CONTRIBUTORS` before their issues or pull requests remain
+open. Before enabling enforcement, seed the allowlist broadly enough for active
+external contributors who should not be interrupted by the rollout.
+
+The allowlist is scoped:
+
+- `pr:username` allows pull requests.
+- `issue:username` allows issues.
+- `all:username` allows both.
+
+A maintainer can approve someone by commenting `/lgtm` on a pull request for PR
+access, or `/lgtmi` on an issue for issue access. The exact bare commands
+`lgtm` and `lgtmi` are also accepted for compatibility, but the prefixed forms
+are preferred because they are harder to trigger accidentally in ordinary review
+discussion.
+
+Approvals do not edit `main` directly. The approval workflow opens a small
+allowlist update PR so the new entry is reviewable before it takes effect.
+
+If the gate fires on a good contributor incorrectly, use the same approval flow
+to restore them: comment `/lgtm` or `/lgtmi`, merge the generated allowlist PR,
+then reopen the affected issue or pull request. If GitHub will not allow the
+closed item to be reopened, ask the contributor to resubmit after the allowlist
+PR is merged.
+
 ## Agent-Assisted Improvements
 
 CodeWhale is allowed to help improve CodeWhale, but the contribution still has

@@ -28,7 +28,7 @@ use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::events::Event;
 use crate::llm_client::LlmClient;
-use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
+use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool};
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{ToolRegistry, ToolRegistryBuilder};
@@ -69,6 +69,11 @@ fn release_resident_leases_for(agent_id: &str) {
 /// the `SubAgentManager`.
 const DEFAULT_MAX_STEPS: u32 = u32::MAX;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+// Non-streaming sub-agents need enough response budget to carry large tool-call
+// arguments, especially write_file content. The API bills generated tokens, not
+// the requested ceiling.
+const SUBAGENT_RESPONSE_MAX_TOKENS: u32 = 16_384;
+const MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES: u32 = 5;
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
 /// stuck API call from blocking the sub-agent indefinitely.
@@ -89,8 +94,26 @@ const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 
-const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, tool_agent, custom, \
-     worker, explorer, awaiter, default, implement, builder, verify, validator, tester, tool-agent, executor, fin";
+const VALID_SUBAGENT_TYPES: &str = "general (aliases: general-purpose, general_purpose, worker, default), \
+     explore (aliases: exploration, explorer), plan (aliases: planning, planner, awaiter), \
+     review (aliases: code-review, code_review, reviewer), implementer (aliases: implement, implementation, builder), \
+     verifier (aliases: verify, verification, validator, tester), tool_agent (aliases: tool-agent, toolagent, executor, execution, fin), custom";
+/// Role aliases accepted by `normalize_role_alias`. Kept in sync with the
+/// match arms below so every input that `SubAgentType::from_str` accepts also
+/// resolves to a canonical role (avoids the dual-validation rejection in #2649).
+const VALID_ROLE_ALIASES: &str = "default; worker (aliases: general, general-purpose, general_purpose); \
+     explorer (aliases: explore, exploration); awaiter (aliases: plan, planning, planner); \
+     reviewer (aliases: review, code-review, code_review); implementer (aliases: implement, implementation, builder); \
+     verifier (aliases: verify, verification, validator, tester); tool_agent (aliases: tool-agent, toolagent, executor, execution, fin); custom";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Sub-agent type. Accepted vocabulary: general (aliases: general-purpose, general_purpose, worker, default), \
+     explore (aliases: exploration, explorer), plan (aliases: planning, planner, awaiter), \
+     review (aliases: code-review, code_review, reviewer), implementer (aliases: implement, implementation, builder), \
+     verifier (aliases: verify, verification, validator, tester), tool_agent (aliases: tool-agent, toolagent, executor, execution, fin), custom.";
+const SUBAGENT_ROLE_DESCRIPTION: &str = "Role alias. Accepted vocabulary: default; worker (aliases: general, general-purpose, general_purpose); \
+     explorer (aliases: explore, exploration); awaiter (aliases: plan, planning, planner); \
+     reviewer (aliases: review, code-review, code_review); implementer (aliases: implement, implementation, builder); \
+     verifier (aliases: verify, verification, validator, tester); tool_agent (aliases: tool-agent, toolagent, executor, execution, fin); custom. \
+     Must match `type` if both are given.";
 /// Whale species used as friendly names for sub-agents in the UI. The full
 /// Cetacea infraorder — baleen whales (Mysticeti), toothed whales
 /// (Odontoceti), plus select dolphin species (family Delphinidae) that
@@ -374,7 +397,7 @@ impl SubAgentType {
                 Some(Self::General)
             }
             "explore" | "exploration" | "explorer" => Some(Self::Explore),
-            "plan" | "planning" | "awaiter" => Some(Self::Plan),
+            "plan" | "planning" | "planner" | "awaiter" => Some(Self::Plan),
             "review" | "code-review" | "code_review" | "reviewer" => Some(Self::Review),
             "implementer" | "implement" | "implementation" | "builder" => Some(Self::Implementer),
             "verifier" | "verify" | "verification" | "validator" | "tester" => Some(Self::Verifier),
@@ -520,6 +543,7 @@ impl SubAgentType {
                 "exec_wait",
                 "exec_interact",
                 "run_tests",
+                "run_verifiers",
                 "diagnostics",
                 "note",
             ],
@@ -794,6 +818,10 @@ pub struct SubAgentRuntime {
     /// false-timeout the child mid-thinking. `child_runtime()` and
     /// `background_runtime()` preserve the parent's value (#1806, #1808).
     pub step_api_timeout: Duration,
+    /// Default directory for Xiaomi MiMo speech/TTS tool outputs inherited by
+    /// child registries. Keeps parent and sub-agent `speech` / `tts` tools on
+    /// the same `[speech].output_dir` / env override.
+    pub speech_output_dir: Option<PathBuf>,
 }
 
 impl SubAgentRuntime {
@@ -829,6 +857,7 @@ impl SubAgentRuntime {
             fork_context: None,
             mcp_pool: None,
             step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+            speech_output_dir: None,
         }
     }
 
@@ -849,6 +878,13 @@ impl SubAgentRuntime {
     #[must_use]
     pub fn with_step_api_timeout(mut self, timeout: Duration) -> Self {
         self.step_api_timeout = timeout;
+        self
+    }
+
+    /// Preserve the configured speech output directory for sub-agent tools.
+    #[must_use]
+    pub fn with_speech_output_dir(mut self, output_dir: Option<PathBuf>) -> Self {
+        self.speech_output_dir = output_dir;
         self
     }
 
@@ -974,6 +1010,7 @@ impl SubAgentRuntime {
             fork_context: self.fork_context.clone(),
             mcp_pool: self.mcp_pool.clone(),
             step_api_timeout: self.step_api_timeout,
+            speech_output_dir: self.speech_output_dir.clone(),
         }
     }
 
@@ -998,6 +1035,7 @@ pub struct SubAgent {
     pub result: Option<String>,
     pub steps_taken: u32,
     pub started_at: Instant,
+    pub last_activity_at: Instant,
     /// `None` = full registry inheritance, with approval-gated tools still
     /// blocked unless the parent runtime is auto-approved.
     /// `Some(list)` = explicit narrow allowlist (Custom agents, legacy).
@@ -1027,6 +1065,7 @@ impl SubAgent {
     ) -> Self {
         let session_name = id.clone();
 
+        let started_at = Instant::now();
         Self {
             id,
             session_name,
@@ -1039,7 +1078,8 @@ impl SubAgent {
             status: SubAgentStatus::Running,
             result: None,
             steps_taken: 0,
-            started_at: Instant::now(),
+            started_at,
+            last_activity_at: started_at,
             allowed_tools,
             session_boot_id,
             input_tx: Some(input_tx),
@@ -1080,6 +1120,7 @@ pub struct SubAgentManager {
     state_path: Option<PathBuf>,
     max_steps: u32,
     max_agents: usize,
+    running_heartbeat_timeout: Duration,
     /// Stable id assigned at manager construction (#405). Stamped on
     /// every agent the manager spawns; agents loaded from the
     /// persisted state file carry whatever id the prior session
@@ -1099,6 +1140,9 @@ impl SubAgentManager {
             state_path: None,
             max_steps: DEFAULT_MAX_STEPS,
             max_agents,
+            running_heartbeat_timeout: Duration::from_secs(
+                crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+            ),
             // Fresh boot id per manager. Used by #405 to classify
             // re-loaded persisted agents as "prior session".
             current_session_boot_id: format!("boot_{}", &Uuid::new_v4().to_string()[..12]),
@@ -1123,6 +1167,16 @@ impl SubAgentManager {
     #[must_use]
     fn with_state_path(mut self, path: PathBuf) -> Self {
         self.state_path = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub fn with_running_heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        self.running_heartbeat_timeout = if timeout.is_zero() {
+            Duration::from_secs(crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS)
+        } else {
+            timeout
+        };
         self
     }
 
@@ -1225,6 +1279,7 @@ impl SubAgentManager {
                 result: persisted.result,
                 steps_taken: persisted.steps_taken,
                 started_at,
+                last_activity_at: started_at,
                 allowed_tools,
                 // Empty string when loading pre-#405 records; the
                 // manager treats that the same as a non-matching id —
@@ -1249,13 +1304,32 @@ impl SubAgentManager {
                     return false;
                 }
                 // Exclude persisted agents with no task_handle (they're not actually running)
-                let Some(handle) = agent.task_handle.as_ref() else {
+                if agent.task_handle.is_none() {
                     return false;
-                };
-                // Exclude agents whose task has finished (status will be updated to Completed shortly)
-                !handle.is_finished()
+                }
+                // Keep recently finished handles counted until the terminal
+                // status update has reconciled. Otherwise a fanout burst can
+                // refill the cap before the UI/state catches up (#2211).
+                !self.running_heartbeat_timed_out(agent)
             })
             .count()
+    }
+
+    fn running_heartbeat_timed_out(&self, agent: &SubAgent) -> bool {
+        agent.status == SubAgentStatus::Running
+            && agent.task_handle.is_some()
+            && agent.last_activity_at.elapsed() >= self.running_heartbeat_timeout
+    }
+
+    pub fn touch(&mut self, agent_id: &str) -> bool {
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return false;
+        };
+        if agent.status != SubAgentStatus::Running {
+            return false;
+        }
+        agent.last_activity_at = Instant::now();
+        true
     }
 
     /// Spawn a new background sub-agent.
@@ -1353,12 +1427,17 @@ impl SubAgentManager {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            if self
+            if let Some(existing) = self
                 .agents
                 .values()
-                .any(|existing| existing.session_name == name)
+                .find(|existing| existing.session_name == name)
             {
-                return Err(anyhow!("Sub-agent session name '{name}' is already in use"));
+                return Err(anyhow!(
+                    "Sub-agent session name '{name}' is already in use by agent_id '{}' (status: {}). \
+                     Reuse that agent_id with agent_eval/agent_close, or open with a different name.",
+                    existing.id,
+                    subagent_status_name(&existing.status)
+                ));
             }
             agent.session_name = name.to_string();
         }
@@ -1527,6 +1606,7 @@ impl SubAgentManager {
             agent.result = None;
             agent.steps_taken = 0;
             agent.started_at = restarted_at;
+            agent.last_activity_at = restarted_at;
             agent.input_tx = Some(input_tx);
             agent.task_handle = Some(handle);
 
@@ -1618,9 +1698,7 @@ impl SubAgentManager {
             if let Some(role) = role {
                 let normalized = normalize_role_alias(&role)
                     .ok_or_else(|| {
-                        anyhow!(
-                            "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
-                        )
+                        anyhow!("Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}")
                     })?
                     .to_string();
                 if agent.assignment.role.as_deref() != Some(normalized.as_str()) {
@@ -1719,9 +1797,37 @@ impl SubAgentManager {
             .collect()
     }
 
-    /// Clean up completed agents older than the given duration.
-    pub fn cleanup(&mut self, max_age: Duration) {
+    /// Clean up stale running agents and completed agents older than the
+    /// given duration. Returns the number of running agents auto-cancelled
+    /// during this pass.
+    pub fn cleanup(&mut self, max_age: Duration) -> usize {
         let before = self.agents.len();
+        let mut auto_cancelled = 0;
+        let timeout = self.running_heartbeat_timeout;
+        for agent in self.agents.values_mut() {
+            if agent.status == SubAgentStatus::Running
+                && agent.task_handle.is_some()
+                && agent.last_activity_at.elapsed() >= timeout
+            {
+                tracing::warn!(
+                    target: "subagent",
+                    agent_id = %agent.id,
+                    timeout_secs = timeout.as_secs(),
+                    "auto-cancelling stale sub-agent with no manager-visible progress"
+                );
+                agent.status = SubAgentStatus::Cancelled;
+                agent.result = Some(format!(
+                    "Auto-cancelled after {}s without sub-agent progress.",
+                    timeout.as_secs()
+                ));
+                release_resident_leases_for(&agent.id);
+                if let Some(handle) = agent.task_handle.take() {
+                    handle.abort();
+                }
+                agent.input_tx = None;
+                auto_cancelled += 1;
+            }
+        }
         self.agents.retain(|_, agent| {
             if agent.status == SubAgentStatus::Running {
                 true
@@ -1729,9 +1835,10 @@ impl SubAgentManager {
                 agent.started_at.elapsed() < max_age
             }
         });
-        if self.agents.len() != before {
+        if self.agents.len() != before || auto_cancelled > 0 {
             self.persist_state_best_effort();
         }
+        auto_cancelled
     }
 
     fn update_from_result(&mut self, agent_id: &str, result: SubAgentResult) {
@@ -1897,9 +2004,26 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 /// Create a shared sub-agent manager with a configurable limit.
 #[must_use]
 pub fn new_shared_subagent_manager(workspace: PathBuf, max_agents: usize) -> SharedSubAgentManager {
+    new_shared_subagent_manager_with_timeout(
+        workspace,
+        max_agents,
+        Duration::from_secs(crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS),
+    )
+}
+
+/// Create a shared sub-agent manager with configurable concurrency and stale
+/// running-agent heartbeat timeout.
+#[must_use]
+pub fn new_shared_subagent_manager_with_timeout(
+    workspace: PathBuf,
+    max_agents: usize,
+    running_heartbeat_timeout: Duration,
+) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, MAX_SUBAGENTS);
     let state_path = default_state_path(&workspace);
-    let mut manager = SubAgentManager::new(workspace, max_agents).with_state_path(state_path);
+    let mut manager = SubAgentManager::new(workspace, max_agents)
+        .with_running_heartbeat_timeout(running_heartbeat_timeout)
+        .with_state_path(state_path);
     if let Err(err) = manager.load_state() {
         // Routed through tracing instead of stderr — see comment in
         // `persist_state_best_effort` above.
@@ -1972,7 +2096,7 @@ impl ToolSpec for AgentOpenTool {
                 },
                 "type": {
                     "type": "string",
-                    "description": "Sub-agent type: general, explore, plan, review, implementer, verifier, custom"
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "agent_type": {
                     "type": "string",
@@ -1980,7 +2104,7 @@ impl ToolSpec for AgentOpenTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -2235,7 +2359,7 @@ impl ToolSpec for AgentSpawnTool {
                 },
                 "type": {
                     "type": "string",
-                    "description": "Sub-agent type: general, explore, plan, review, implementer, verifier, custom. See docs/SUBAGENTS.md for posture per role."
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "agent_type": {
                     "type": "string",
@@ -2247,7 +2371,7 @@ impl ToolSpec for AgentSpawnTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -2496,6 +2620,10 @@ impl ToolSpec for AgentEvalTool {
                     "type": "string",
                     "description": "Session name returned by agent_open"
                 },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Alias for name (session name returned by agent_open)"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Generated agent id returned by agent_open"
@@ -2540,6 +2668,7 @@ impl ToolSpec for AgentEvalTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let agent_ref = input
             .get("name")
+            .or_else(|| input.get("agent_name"))
             .or_else(|| input.get("agent_id"))
             .or_else(|| input.get("id"))
             .and_then(Value::as_str)
@@ -2809,6 +2938,10 @@ impl ToolSpec for AgentCloseTool {
                     "type": "string",
                     "description": "Session name returned by agent_open"
                 },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Alias for name (session name returned by agent_open)"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Alias for id"
@@ -2831,6 +2964,7 @@ impl ToolSpec for AgentCloseTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let agent_id = input
             .get("name")
+            .or_else(|| input.get("agent_name"))
             .or_else(|| input.get("id"))
             .or_else(|| input.get("agent_id"))
             .and_then(|v| v.as_str())
@@ -3112,7 +3246,7 @@ impl ToolSpec for AgentAssignTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Updated role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -3344,7 +3478,7 @@ impl ToolSpec for DelegateToAgentTool {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "Name/type alias for the agent (general, explore, plan, review, implementer, verifier, worker, explorer, awaiter, builder, validator, tester)"
+                    "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "type": {
                     "type": "string",
@@ -3356,7 +3490,7 @@ impl ToolSpec for DelegateToAgentTool {
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role alias: worker, explorer, awaiter, default"
+                    "description": SUBAGENT_ROLE_DESCRIPTION
                 },
                 "agent_role": {
                     "type": "string",
@@ -3540,15 +3674,19 @@ async fn run_subagent_task(task: SubAgentTask) {
     // sentinel on the second. The sentinel uses an opaque tag
     // (`codewhale:subagent.done`) to avoid collision with normal user
     // text.
+    let model_id = task.runtime.model.clone();
     let (summary, sentinel) = match &result {
         Ok(res) => (
             summarize_subagent_result(res),
             subagent_done_sentinel(&task.agent_id, res),
         ),
-        Err(err) => (
-            format!("Failed: {err}"),
-            subagent_failed_sentinel(&task.agent_id, &err.to_string()),
-        ),
+        Err(err) => {
+            let annotated = annotate_child_model_error(&err.to_string(), &model_id);
+            (
+                format!("Failed: {annotated}"),
+                subagent_failed_sentinel(&task.agent_id, &annotated),
+            )
+        }
     };
 
     if let Some(mb) = task.runtime.mailbox.as_ref() {
@@ -3559,7 +3697,7 @@ async fn run_subagent_task(task: SubAgentTask) {
             },
             Err(err) => MailboxMessage::Failed {
                 agent_id: task.agent_id.clone(),
-                error: err.to_string(),
+                error: annotate_child_model_error(&err.to_string(), &model_id),
             },
         };
         let _ = mb.send(envelope);
@@ -3578,7 +3716,12 @@ async fn run_subagent_task(task: SubAgentTask) {
     let mut manager = task.manager_handle.write().await;
     match &result {
         Ok(res) => manager.update_from_result(&agent_id, res.clone()),
-        Err(err) => manager.update_failed(&agent_id, err.to_string()),
+        Err(err) => {
+            manager.update_failed(
+                &agent_id,
+                annotate_child_model_error(&err.to_string(), &model_id),
+            );
+        }
     }
 
     if let Some(event_tx) = task.runtime.event_tx {
@@ -3623,25 +3766,76 @@ pub(crate) fn emit_parent_completion(
 /// parent request's cache-miss tail. Wall-clock duration is useful UI
 /// telemetry, but it is volatile and not useful for model coordination.
 fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
+    let clipped = subagent_result_clipped(res);
     let payload = json!({
         "agent_id": agent_id,
         "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
         "summary_location": "previous_line",
+        "result_clipped": clipped,
+        "summary_complete": !clipped,
+        // What the parent should do next: trust the previous-line summary, or
+        // fetch the full transcript with agent_eval when it was clipped.
+        "next_action": if clipped { "call_agent_eval" } else { "use_summary" },
         "details": "agent_eval",
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
 /// Build a `<codewhale:subagent.done>` sentinel for a failed child.
+///
+/// Kept lean: the (annotated) error is on the previous line (`error_location`)
+/// and the full projection is available via `agent_eval`, so the sentinel only
+/// signals the recovery path rather than re-embedding the error text.
 fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     let payload = json!({
         "agent_id": agent_id,
         "status": "failed",
         "error_location": "previous_line",
+        "next_action": "call_agent_eval",
         "details": "agent_eval",
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
+}
+
+fn response_was_truncated(response: &MessageResponse) -> bool {
+    response.stop_reason.as_deref() == Some("length")
+}
+
+fn truncated_response_tool_results(tool_uses: &[(String, String, Value)]) -> Vec<ContentBlock> {
+    tool_uses
+        .iter()
+        .map(|(tool_id, tool_name, _)| ContentBlock::ToolResult {
+            tool_use_id: tool_id.clone(),
+            content: format!(
+                "Error: the model response was truncated by max_tokens before the tool call arguments for '{tool_name}' could be fully generated. Split large content into smaller writes and retry."
+            ),
+            is_error: Some(true),
+            content_blocks: None,
+        })
+        .collect()
+}
+
+fn truncated_response_text_retry_message() -> Vec<ContentBlock> {
+    vec![ContentBlock::Text {
+        text: "Error: the model response was truncated by max_tokens. No complete tool call was available, so the partial response was not accepted as the sub-agent result. Retry with a shorter response or split the work into smaller steps.".to_string(),
+        cache_control: None,
+    }]
+}
+
+fn record_truncated_subagent_response(consecutive: &mut u32) -> Result<()> {
+    *consecutive = consecutive.saturating_add(1);
+    if *consecutive > MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES {
+        return Err(anyhow!(
+            "Sub-agent response was truncated by max_tokens {count} consecutive times; stopping to avoid an unbounded retry loop.",
+            count = *consecutive
+        ));
+    }
+    Ok(())
+}
+
+fn reset_truncated_subagent_responses(consecutive: &mut u32) {
+    *consecutive = 0;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3672,6 +3866,18 @@ async fn insert_subagent_full_transcript_handle(
     });
     let mut store = runtime.context.runtime.handle_store.lock().await;
     store.insert_json(format!("agent:{agent_id}"), "full_transcript", payload)
+}
+
+fn record_agent_progress(runtime: &SubAgentRuntime, agent_id: &str, message: impl Into<String>) {
+    if let Ok(mut manager) = runtime.manager.try_write() {
+        manager.touch(agent_id);
+    }
+    emit_agent_progress(
+        runtime.event_tx.as_ref(),
+        runtime.mailbox.as_ref(),
+        agent_id,
+        message.into(),
+    );
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -3718,9 +3924,8 @@ async fn run_subagent(
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
-    emit_agent_progress(
-        runtime.event_tx.as_ref(),
-        runtime.mailbox.as_ref(),
+    record_agent_progress(
+        runtime,
         &agent_id,
         format!("started ({})", agent_type.as_str()),
     );
@@ -3728,15 +3933,15 @@ async fn run_subagent(
     let mut steps = 0;
     let mut final_result: Option<String> = None;
     let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
+    let mut consecutive_truncated_responses = 0;
 
     for _step in 0..max_steps {
         // Cooperative cancellation: bail if this session's token was cancelled
         // while we were between steps. Top-level model-visible sub-agents use
         // a detached token so parent turn cancellation does not stop them.
         if runtime.cancel_token.is_cancelled() {
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: cancelled"),
             );
@@ -3783,9 +3988,8 @@ async fn run_subagent(
         }
 
         steps += 1;
-        emit_agent_progress(
-            runtime.event_tx.as_ref(),
-            runtime.mailbox.as_ref(),
+        record_agent_progress(
+            runtime,
             &agent_id,
             format!("step {steps}/{max_steps}: requesting model response"),
         );
@@ -3812,7 +4016,7 @@ async fn run_subagent(
         let request = MessageRequest {
             model: runtime.model.clone(),
             messages: messages.clone(),
-            max_tokens: 4096,
+            max_tokens: SUBAGENT_RESPONSE_MAX_TOKENS,
             system: Some(request_system.clone()),
             tools: Some(tools.clone()),
             tool_choice: Some(json!({ "type": "auto" })),
@@ -3830,9 +4034,8 @@ async fn run_subagent(
         let response = tokio::select! {
             biased;
             () = runtime.cancel_token.cancelled() => {
-                emit_agent_progress(
-                    runtime.event_tx.as_ref(),
-                    runtime.mailbox.as_ref(),
+                record_agent_progress(
+                    runtime,
                     &agent_id,
                     format!("step {steps}/{max_steps}: cancelled mid-request"),
                 );
@@ -3907,6 +4110,34 @@ async fn run_subagent(
             content: response.content.clone(),
         });
 
+        if response_was_truncated(&response) {
+            final_result = None;
+            record_truncated_subagent_response(&mut consecutive_truncated_responses)?;
+            let progress = if tool_uses.is_empty() {
+                "response truncated, returning retry instruction".to_string()
+            } else {
+                format!(
+                    "response truncated, returning {} tool error(s)",
+                    tool_uses.len()
+                )
+            };
+            record_agent_progress(
+                runtime,
+                &agent_id,
+                format!("step {steps}/{max_steps}: {progress}"),
+            );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: if tool_uses.is_empty() {
+                    truncated_response_text_retry_message()
+                } else {
+                    truncated_response_tool_results(&tool_uses)
+                },
+            });
+            continue;
+        }
+        reset_truncated_subagent_responses(&mut consecutive_truncated_responses);
+
         if tool_uses.is_empty() {
             while let Ok(input) = input_rx.try_recv() {
                 if input.interrupt {
@@ -3915,9 +4146,8 @@ async fn run_subagent(
                 pending_inputs.push_back(input);
             }
             if pending_inputs.is_empty() {
-                emit_agent_progress(
-                    runtime.event_tx.as_ref(),
-                    runtime.mailbox.as_ref(),
+                record_agent_progress(
+                    runtime,
                     &agent_id,
                     format!("step {steps}/{max_steps}: complete"),
                 );
@@ -3926,9 +4156,8 @@ async fn run_subagent(
             continue;
         }
 
-        emit_agent_progress(
-            runtime.event_tx.as_ref(),
-            runtime.mailbox.as_ref(),
+        record_agent_progress(
+            runtime,
             &agent_id,
             format!(
                 "step {steps}/{max_steps}: executing {} tool call(s)",
@@ -3937,9 +4166,8 @@ async fn run_subagent(
         );
         let mut tool_results: Vec<ContentBlock> = Vec::new();
         for (tool_id, tool_name, tool_input) in tool_uses {
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: running tool '{tool_name}'"),
             );
@@ -3962,9 +4190,8 @@ async fn run_subagent(
                 Err(_) => format!("Error: Tool {tool_name} timed out"),
             };
             let tool_ok = !result.starts_with("Error:");
-            emit_agent_progress(
-                runtime.event_tx.as_ref(),
-                runtime.mailbox.as_ref(),
+            record_agent_progress(
+                runtime,
                 &agent_id,
                 format!("step {steps}/{max_steps}: finished tool '{tool_name}'"),
             );
@@ -4289,7 +4516,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .map(|role| {
             SubAgentType::from_str(role).ok_or_else(|| {
                 ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+                    "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
                 ))
             })
         })
@@ -4311,7 +4538,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         && normalize_role_alias(role).is_none()
     {
         return Err(ToolError::invalid_input(format!(
-            "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+            "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
         )));
     }
 
@@ -4667,7 +4894,7 @@ fn parse_assign_request(input: &Value) -> Result<AssignRequest, ToolError> {
         .map(|role| {
             normalize_role_alias(role).ok_or_else(|| {
                 ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
+                    "Invalid role alias '{role}'. Use: {VALID_ROLE_ALIASES}"
                 ))
             })
         })
@@ -4692,15 +4919,25 @@ fn parse_assign_request(input: &Value) -> Result<AssignRequest, ToolError> {
     })
 }
 
+/// Resolve a user-supplied role/agent_role value to a canonical role string.
+///
+/// This must accept the full set that [`SubAgentType::from_str`] accepts, plus
+/// role-only aliases (`worker`, `default`, `awaiter`). Before #2649 it covered
+/// only a subset, so `role: "reviewer"` (accepted by `from_str`) was rejected
+/// here by the second validation pass with a misleading four-value hint.
 fn normalize_role_alias(input: &str) -> Option<&'static str> {
     match input.to_ascii_lowercase().as_str() {
         "default" => Some("default"),
-        "worker" | "general" => Some("worker"),
-        "explorer" | "explore" => Some("explorer"),
-        "awaiter" | "plan" | "planner" => Some("awaiter"),
+        "worker" | "general" | "general-purpose" | "general_purpose" => Some("worker"),
+        "explorer" | "explore" | "exploration" => Some("explorer"),
+        "awaiter" | "plan" | "planner" | "planning" => Some("awaiter"),
+        "reviewer" | "review" | "code-review" | "code_review" => Some("reviewer"),
+        "implementer" | "implement" | "implementation" | "builder" => Some("implementer"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("verifier"),
         "tool-agent" | "tool_agent" | "toolagent" | "executor" | "execution" | "fin" => {
             Some("tool_agent")
         }
+        "custom" => Some("custom"),
         _ => None,
     }
 }
@@ -4971,6 +5208,21 @@ fn build_allowed_tools(
     Ok(None)
 }
 
+/// When a child agent fails because its model is unavailable under the current
+/// access profile, a bare provider 403/404 (classified `Authorization` or
+/// `State`) is unactionable. Annotate it so the parent knows the likely cause
+/// and how to recover (#2653) without re-classifying the underlying error.
+fn annotate_child_model_error(err: &str, model: &str) -> String {
+    match crate::error_taxonomy::classify_error_message(err) {
+        crate::error_taxonomy::ErrorCategory::Authorization
+        | crate::error_taxonomy::ErrorCategory::State => format!(
+            "{err}\n(child model `{model}` may be unavailable under the current access profile — \
+             retry agent_open with a different `model`, or remove `model` to inherit the parent's)"
+        ),
+        _ => err.to_string(),
+    }
+}
+
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
     match (&result.status, result.result.as_ref()) {
         (SubAgentStatus::Completed, Some(text)) => truncate_preview(text),
@@ -4992,13 +5244,33 @@ fn subagent_status_name(status: &SubAgentStatus) -> &'static str {
     }
 }
 
+/// Max length of the human-friendly one-line summary emitted alongside the
+/// completion sentinel. Longer results are clipped and the full transcript is
+/// available via `agent_eval` (see `result_clipped` in the sentinel payload).
+const SUBAGENT_SUMMARY_PREVIEW_MAX: usize = 240;
+
 fn truncate_preview(text: &str) -> String {
-    const MAX_LEN: usize = 240;
-    if text.len() <= MAX_LEN {
+    if text.len() <= SUBAGENT_SUMMARY_PREVIEW_MAX {
         text.to_string()
     } else {
-        format!("{}...", text.chars().take(MAX_LEN).collect::<String>())
+        format!(
+            "{}...",
+            text.chars()
+                .take(SUBAGENT_SUMMARY_PREVIEW_MAX)
+                .collect::<String>()
+        )
     }
+}
+
+/// Whether `summarize_subagent_result` clipped the preview, i.e. the parent's
+/// previous-line summary is incomplete and the model should call `agent_eval`
+/// for the full result rather than relying on the summary.
+fn subagent_result_clipped(res: &SubAgentResult) -> bool {
+    matches!(res.status, SubAgentStatus::Completed)
+        && res
+            .result
+            .as_deref()
+            .is_some_and(|text| text.len() > SUBAGENT_SUMMARY_PREVIEW_MAX)
 }
 
 const SUBAGENT_OUTPUT_FORMAT: &str = include_str!("../../prompts/subagent_output_format.md");

@@ -2,29 +2,67 @@
 
 codewhale has two related concepts:
 
-- **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO/Pro Plan).
+- **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO).
+- **Opt-in routing profile**: an explicit workflow that can route models across
+  phases after the user chooses it.
 - **Approval mode**: how aggressively the UI asks before executing tools.
 
 Model selection is separate. `--model auto` and `/model auto` route each turn to
 a concrete model and thinking level; they are not TUI modes and are not part of
 the `Tab` cycle.
 
+Each user turn includes a small `<turn_meta>` block with the current local date
+and the concrete model sent to the provider. When `--model auto` is active, the
+same block also records that the model was auto-routed.
+
 ## TUI Modes
 
 Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
 while a turn is running, or cycle through the visible modes when the composer is
-otherwise idle: **Plan → Agent → YOLO → Pro Plan → Plan**.
+otherwise idle: **Plan → Agent → YOLO → Plan**.
 Press `Shift+Tab` to cycle reasoning effort.
 Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
-`/mode plan`, `/mode yolo`, `/mode pro-plan`, `/mode 1`, `/mode 2`,
-`/mode 3`, or `/mode 4`.
+`/mode plan`, `/mode yolo`, `/mode 1`, `/mode 2`, or `/mode 3`.
 
 - **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
 - **Agent**: multi-step tool use. Shell execution (`exec_shell`, `task_shell_start`, `task_shell_wait`) requires `allow_shell = true` in config; approval prompts gate each call. File writes are allowed without a prompt.
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
-- **Pro Plan**: plan and review with `deepseek-v4-pro`, execute with `deepseek-v4-flash`, and keep the plan confirmation gate between planning and implementation. The YOLO accept option auto-approves only the execution pipeline; Pro Plan still returns to read-only Pro review afterwards.
 
-Agent, YOLO, and Pro Plan execution turns have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+### Tool availability by mode
+
+| Tool family | Plan | Agent | YOLO |
+|:---|:---:|:---:|:---:|
+| Read-only file, search, and diagnostic tools | yes | yes | yes |
+| File write and patch tools | no | yes | yes |
+| Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | approval-gated, when `allow_shell = true` | yes |
+| Paid or external-service tools | approval-gated | approval-gated | auto-approved |
+| Access outside the workspace root | no | only with trust mode | yes |
+
+If a shell tool is missing from the model-visible catalog in Agent mode, check
+`allow_shell` first. The setting can come from the active config/profile or from
+the runtime session. YOLO turns shell access on together with trust mode and
+auto-approval, which is why shell commands may work there even when the Agent
+mode catalog does not list them.
+
+All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+
+## Opt-In Pro Plan Profile
+
+`/mode pro-plan` enters an explicit Pro Plan routing profile. It is intentionally
+not part of the default `Tab` cycle or `/mode` picker.
+
+In Pro Plan, the user chooses the profile, then CodeWhale chooses the phase
+model:
+
+- **Plan** and **Review** use the resolved Pro route and run with Plan-mode
+  read-only tool policy.
+- **Execute** uses the resolved Flash route. If Flash is not advertised by the
+  active provider, Execute falls back to the Pro route rather than sending an
+  invalid model id.
+- The existing Plan Confirmation gate decides whether execution starts. Accept
+  uses Agent-style approvals; Accept (YOLO) enables auto-approval only for that
+  execution pass. If review asks for follow-up changes, Pro Plan returns to
+  Agent-style approvals unless the user explicitly chooses YOLO again.
 
 The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
 language. Fin is a seam for routing, summaries, cheap child calls, and

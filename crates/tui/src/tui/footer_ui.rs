@@ -17,6 +17,7 @@ use crate::tui::ui::{
     status_color,
 };
 use crate::tui::ui_text::{concise_shell_command_label, truncate_line_to_width};
+use crate::tui::widgets::tool_card::tool_activity_label_for_name;
 use crate::tui::widgets::{FooterProps, FooterToast, FooterWidget, Renderable};
 use crate::tui::workspace_context;
 
@@ -181,7 +182,7 @@ pub(crate) fn footer_working_label_frame(now_ms: u64, fancy_animations: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use super::footer_working_label_frame;
+    use super::{footer_working_label_frame, one_line_summary};
 
     #[test]
     fn footer_working_label_frame_is_static_without_fancy_animations() {
@@ -189,6 +190,13 @@ mod tests {
         assert_eq!(footer_working_label_frame(399, false), 0);
         assert_eq!(footer_working_label_frame(1_600, false), 0);
         assert_eq!(footer_working_label_frame(1_600, true), 4);
+    }
+
+    #[test]
+    fn one_line_summary_strips_ansi_before_collapsing_text() {
+        let summary = one_line_summary("read \x1b[38;2;6;174;242mfile.rs\x1b[0m", 80);
+        assert_eq!(summary, "read file.rs");
+        assert!(!summary.contains("38;2"));
     }
 }
 
@@ -392,14 +400,20 @@ fn collect_active_tool_status(cell: &HistoryCell, snapshot: &mut ActiveToolStatu
             if matches!(generic.name.as_str(), "agent_open" | "agent_spawn") {
                 return;
             }
-            snapshot.record(format!("tool {}", generic.name), generic.status, None);
+            snapshot.record(
+                tool_activity_label_for_name(&generic.name),
+                generic.status,
+                None,
+            );
         }
     }
 }
 
 pub(crate) fn one_line_summary(text: &str, max_width: usize) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    crate::tui::osc8::strip_ansi_into(text, &mut cleaned);
     truncate_line_to_width(
-        &text.split_whitespace().collect::<Vec<_>>().join(" "),
+        &cleaned.split_whitespace().collect::<Vec<_>>().join(" "),
         max_width,
     )
 }

@@ -11,7 +11,7 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "CodeWhale · DeepSeek V4 智能体运行框架" : "CodeWhale · DeepSeek V4 智能体运行框架",
+    title: isZh ? "CodeWhale · DeepSeek V4 智能体运行框架" : "CodeWhale · DeepSeek V4 Agent Harness",
     description: isZh
       ? "DeepSeek V4 的最强智能体运行框架。宪政层级、结构化信任、验证与恢复——让模型持续工作并不断进步的规则、工具和反馈循环。国际开源社区，递归自改进。"
       : "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery — rules, tools, and feedback loops that help the model keep working. An international open source community building a recursive, self-improving harness.",

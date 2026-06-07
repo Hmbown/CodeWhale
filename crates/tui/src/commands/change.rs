@@ -344,6 +344,9 @@ mod tests {
             &config,
         );
         app.ui_locale = locale;
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model_ids_passthrough = false;
+        app.onboarding_needs_api_key = !has_api_key;
         app
     }
 

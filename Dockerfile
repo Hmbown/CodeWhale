@@ -2,7 +2,7 @@
 # CodeWhale multi-arch Docker image (#501)
 #
 # Build:  docker buildx build --platform linux/amd64,linux/arm64 -t codewhale:latest .
-# Run:    docker run --rm -it -e DEEPSEEK_API_KEY -v codewhale-home:/home/codewhale/.deepseek codewhale
+# Run:    docker run --rm -it -e DEEPSEEK_API_KEY -v codewhale-home:/home/codewhale/.codewhale codewhale
 #
 # The image ships the canonical binaries (`codewhale`, `codewhale-tui`) plus
 # the legacy `deepseek` / `deepseek-tui` shims in a minimal runtime layer.
@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Non-root user with explicit UID/GID for filesystem ownership clarity.
 RUN groupadd --gid 1000 codewhale \
     && useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 codewhale \
+    && install -d -m 0700 -o codewhale -g codewhale /home/codewhale/.codewhale \
     && install -d -m 0700 -o codewhale -g codewhale /home/codewhale/.deepseek
 USER codewhale
 WORKDIR /home/codewhale

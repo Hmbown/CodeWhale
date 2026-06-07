@@ -3,7 +3,7 @@
 //! v0.8.8 ships an MVP that lets the user keep a persistent personal
 //! note file the model sees on every turn:
 //!
-//! - **Load** `~/.deepseek/memory.md` (path is configurable via
+//! - **Load** `~/.codewhale/memory.md` (path is configurable via
 //!   `memory_path` in `config.toml` and `DEEPSEEK_MEMORY_PATH` env),
 //!   wrap it in a `<user_memory>` block, and prepend it to the system
 //!   prompt alongside the existing `<project_instructions>` block.

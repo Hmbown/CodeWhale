@@ -68,8 +68,7 @@ impl Engine {
         builder = builder
             .with_review_tool(self.deepseek_client.clone(), self.session.model.clone())
             .with_user_input_tool()
-            .with_parallel_tool()
-            .with_recall_archive_tool();
+            .with_parallel_tool();
 
         // SlopLedger: plan mode only gets read-only query + export,
         // agent/yolo get the full set including append + update.
@@ -82,7 +81,11 @@ impl Engine {
         if !read_only_mode {
             builder = builder
                 .with_rlm_tool(self.deepseek_client.clone(), self.session.model.clone())
-                .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone());
+                .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone())
+                .with_speech_tools(
+                    self.deepseek_client.clone(),
+                    self.config.speech_output_dir.clone(),
+                );
         }
 
         if self.config.features.enabled(Feature::ApplyPatch) && !read_only_mode {

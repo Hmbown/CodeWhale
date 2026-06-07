@@ -14,10 +14,12 @@
 #[allow(unused_imports)]
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
 
@@ -39,6 +41,10 @@ pub enum HookEvent {
     ModeChange,
     /// Triggered when an error occurs
     OnError,
+    /// Triggered when a sub-agent is spawned
+    SubagentSpawn,
+    /// Triggered when a sub-agent reaches a terminal state
+    SubagentComplete,
     /// Triggered immediately before each `exec_shell` invocation. The hook's
     /// stdout is parsed as `KEY=VALUE\n` lines and merged on top of the
     /// shell command's environment — useful for ephemeral credentials,
@@ -60,6 +66,8 @@ impl HookEvent {
             HookEvent::ToolCallAfter => "tool_call_after",
             HookEvent::ModeChange => "mode_change",
             HookEvent::OnError => "on_error",
+            HookEvent::SubagentSpawn => "subagent_spawn",
+            HookEvent::SubagentComplete => "subagent_complete",
             HookEvent::ShellEnv => "shell_env",
         }
     }
@@ -423,6 +431,55 @@ pub struct HookResult {
     pub error: Option<String>,
 }
 
+/// Result of running mutable `message_submit` hooks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageSubmitOutcome {
+    /// No hook changed the submitted text.
+    Unchanged { warning: Option<String> },
+    /// One or more hooks replaced the submitted text.
+    Replaced {
+        text: String,
+        warning: Option<String>,
+    },
+    /// A hook intentionally blocked the submission.
+    Blocked { reason: String },
+}
+
+impl MessageSubmitOutcome {
+    pub fn unchanged() -> Self {
+        Self::Unchanged { warning: None }
+    }
+
+    pub fn replaced(text: String) -> Self {
+        Self::Replaced {
+            text,
+            warning: None,
+        }
+    }
+
+    fn with_warning(self, warning: Option<String>) -> Self {
+        match self {
+            Self::Unchanged { .. } => Self::Unchanged { warning },
+            Self::Replaced { text, .. } => Self::Replaced { text, warning },
+            Self::Blocked { reason } => Self::Blocked { reason },
+        }
+    }
+
+    pub fn warning(&self) -> Option<&str> {
+        match self {
+            Self::Unchanged { warning } | Self::Replaced { warning, .. } => warning.as_deref(),
+            Self::Blocked { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MessageSubmitStdout {
+    Unchanged,
+    Replaced(String),
+    Invalid(String),
+}
+
 /// Executor for running hooks
 #[derive(Debug, Clone)]
 pub struct HookExecutor {
@@ -498,6 +555,119 @@ impl HookExecutor {
     #[must_use]
     pub fn has_hooks_for_event(&self, event: HookEvent) -> bool {
         self.config.enabled && self.config.hooks.iter().any(|h| h.event == event)
+    }
+
+    /// Check if there are any background hooks configured for a specific event.
+    ///
+    /// Background hooks fire and forget — their `exit_code` is always `None`,
+    /// so they cannot deny tool calls. This is a known limitation; the check
+    /// is used to warn operators when a `ToolCallBefore` hook is configured
+    /// as background but expects to block a tool.
+    #[must_use]
+    pub fn has_background_hooks_for_event(&self, event: HookEvent) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+        self.config
+            .hooks
+            .iter()
+            .any(|h| h.event == event && h.background)
+    }
+
+    /// Run configured `message_submit` hooks as a mutable submit pipeline.
+    ///
+    /// This is deliberately separate from [`Self::execute`]: most hook events
+    /// are observer-only, while `message_submit` has a narrow stdout JSON
+    /// contract that can replace or block the submitted text.
+    pub fn execute_message_submit_transform(
+        &self,
+        context: &HookContext,
+        original_text: &str,
+    ) -> MessageSubmitOutcome {
+        if !self.config.enabled {
+            return MessageSubmitOutcome::unchanged();
+        }
+
+        let hooks = self.config.hooks_for_event(HookEvent::MessageSubmit);
+        if hooks.is_empty() {
+            return MessageSubmitOutcome::unchanged();
+        }
+
+        let mut current_text = original_text.to_string();
+        let mut warning = None;
+
+        for hook in hooks {
+            let hook_context = context.clone().with_message(&current_text);
+            if !self.matches_condition(hook, &hook_context) {
+                continue;
+            }
+
+            let env_vars = hook_context.to_env_vars();
+            if hook.background {
+                let _ = self.execute_background(hook, &env_vars);
+                continue;
+            }
+
+            let payload = message_submit_payload(&hook_context, &current_text);
+            let result = self.execute_sync_with_stdin(hook, &env_vars, &payload);
+
+            if result.exit_code == Some(2) {
+                return MessageSubmitOutcome::Blocked {
+                    reason: message_submit_block_reason(
+                        &result,
+                        "message_submit hook blocked submission",
+                    ),
+                };
+            }
+
+            if !result.success {
+                let label = result.name.as_deref().unwrap_or("(unnamed)");
+                tracing::warn!(
+                    target: "hooks",
+                    hook = label,
+                    event = "message_submit",
+                    exit_code = ?result.exit_code,
+                    duration_ms = result.duration.as_millis() as u64,
+                    error = result.error.as_deref().unwrap_or(""),
+                    stderr_head = %result.stderr.lines().next().unwrap_or(""),
+                    "message_submit hook failed"
+                );
+
+                if hook.continue_on_error {
+                    warning = message_submit_continue_warning(&result).or(warning);
+                    continue;
+                }
+
+                return MessageSubmitOutcome::Blocked {
+                    reason: message_submit_block_reason(
+                        &result,
+                        "message_submit hook failed and blocked submission",
+                    ),
+                };
+            }
+
+            match parse_message_submit_stdout(&result.stdout) {
+                MessageSubmitStdout::Unchanged => {}
+                MessageSubmitStdout::Replaced(text) => {
+                    current_text = text;
+                }
+                MessageSubmitStdout::Invalid(reason) => {
+                    tracing::warn!(
+                        target: "hooks",
+                        hook = result.name.as_deref().unwrap_or("(unnamed)"),
+                        event = "message_submit",
+                        reason = %reason,
+                        "ignored invalid message_submit hook stdout"
+                    );
+                }
+            }
+        }
+
+        if current_text == original_text {
+            MessageSubmitOutcome::unchanged().with_warning(warning)
+        } else {
+            MessageSubmitOutcome::replaced(current_text).with_warning(warning)
+        }
     }
 
     /// Run every `ShellEnv` hook for this context and merge their stdout
@@ -613,6 +783,59 @@ impl HookExecutor {
         results
     }
 
+    /// Execute observer hooks with a structured JSON stdin payload.
+    ///
+    /// Unlike `message_submit`, stdout is deliberately ignored by callers:
+    /// these hooks are lifecycle observers and cannot mutate or block the
+    /// underlying action.
+    pub fn execute_json_observer(
+        &self,
+        event: HookEvent,
+        context: &HookContext,
+        payload: &serde_json::Value,
+    ) -> Vec<HookResult> {
+        if !self.config.enabled {
+            return Vec::new();
+        }
+
+        let hooks = self.config.hooks_for_event(event);
+        if hooks.is_empty() {
+            return Vec::new();
+        }
+
+        let env_vars = context.to_env_vars();
+        let mut results = Vec::new();
+        for hook in hooks {
+            if !self.matches_condition(hook, context) {
+                continue;
+            }
+
+            let result = if hook.background {
+                self.execute_background_with_stdin(hook, &env_vars, payload)
+            } else {
+                self.execute_sync_with_stdin(hook, &env_vars, payload)
+            };
+
+            if !result.success {
+                let label = result.name.as_deref().unwrap_or("(unnamed)");
+                tracing::warn!(
+                    target: "hooks",
+                    hook = label,
+                    event = event.as_str(),
+                    exit_code = ?result.exit_code,
+                    duration_ms = result.duration.as_millis() as u64,
+                    error = result.error.as_deref().unwrap_or(""),
+                    stderr_head = %result.stderr.lines().next().unwrap_or(""),
+                    "observer hook failed"
+                );
+            }
+
+            results.push(result);
+        }
+
+        results
+    }
+
     /// Check if a hook's condition matches the context
     #[allow(clippy::only_used_in_recursion)]
     fn matches_condition(&self, hook: &Hook, context: &HookContext) -> bool {
@@ -659,6 +882,28 @@ impl HookExecutor {
 
     /// Execute a hook synchronously
     fn execute_sync(&self, hook: &Hook, env_vars: &HashMap<String, String>) -> HookResult {
+        self.execute_sync_inner(hook, env_vars, None)
+    }
+
+    /// Execute a hook synchronously with a structured JSON stdin payload.
+    ///
+    /// Used by mutable `message_submit` hooks. Existing observer hooks keep the
+    /// stdin-less [`Self::execute_sync`] path so their behavior is unchanged.
+    fn execute_sync_with_stdin(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: &serde_json::Value,
+    ) -> HookResult {
+        self.execute_sync_inner(hook, env_vars, Some(stdin_json))
+    }
+
+    fn execute_sync_inner(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: Option<&serde_json::Value>,
+    ) -> HookResult {
         let started = Instant::now();
         let working_dir = self
             .config
@@ -672,13 +917,32 @@ impl HookExecutor {
             .unwrap_or(hook.timeout_secs);
         let timeout = Duration::from_secs(timeout_secs);
 
-        let mut child = match Self::build_shell_command(&hook.command)
+        let stdin_bytes = match stdin_json.map(serde_json::to_vec).transpose() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to encode hook stdin: {e}")),
+                };
+            }
+        };
+
+        let mut command = Self::build_shell_command(&hook.command);
+        command
             .current_dir(&working_dir)
             .envs(env_vars)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        if stdin_bytes.is_some() {
+            command.stdin(Stdio::piped());
+        }
+
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
                 return HookResult {
@@ -693,25 +957,29 @@ impl HookExecutor {
             }
         };
 
-        fn read_pipe(mut pipe: impl Read) -> String {
-            let mut buf = String::new();
-            let _ = pipe.read_to_string(&mut buf);
-            buf
-        }
+        let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+        let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+        let _stdin_writer = match (stdin_bytes, child.stdin.take()) {
+            (Some(bytes), Some(stdin)) => Some(spawn_stdin_writer(stdin, bytes)),
+            _ => None,
+        };
 
         match child.wait_timeout(timeout) {
             Ok(Some(status)) => HookResult {
                 name: hook.name.clone(),
                 success: status.success(),
                 exit_code: status.code(),
-                stdout: child.stdout.take().map(read_pipe).unwrap_or_default(),
-                stderr: child.stderr.take().map(read_pipe).unwrap_or_default(),
+                stdout: join_reader(stdout_reader),
+                stderr: join_reader(stderr_reader),
                 duration: started.elapsed(),
                 error: None,
             },
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Do not join pipe threads on timeout: descendant processes can
+                // inherit pipe fds, and waiting for those threads would defeat
+                // the hook timeout we just enforced.
                 HookResult {
                     name: hook.name.clone(),
                     success: false,
@@ -722,20 +990,42 @@ impl HookExecutor {
                     error: Some(format!("Hook timed out after {timeout_secs}s")),
                 }
             }
-            Err(e) => HookResult {
-                name: hook.name.clone(),
-                success: false,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                duration: started.elapsed(),
-                error: Some(format!("Failed to wait for hook: {e}")),
-            },
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to wait for hook: {e}")),
+                }
+            }
         }
     }
 
     /// Execute a hook in the background (non-blocking)
     fn execute_background(&self, hook: &Hook, env_vars: &HashMap<String, String>) -> HookResult {
+        self.execute_background_inner(hook, env_vars, None)
+    }
+
+    fn execute_background_with_stdin(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: &serde_json::Value,
+    ) -> HookResult {
+        self.execute_background_inner(hook, env_vars, Some(stdin_json))
+    }
+
+    fn execute_background_inner(
+        &self,
+        hook: &Hook,
+        env_vars: &HashMap<String, String>,
+        stdin_json: Option<&serde_json::Value>,
+    ) -> HookResult {
         let started = Instant::now();
         let working_dir = self
             .config
@@ -743,16 +1033,45 @@ impl HookExecutor {
             .clone()
             .unwrap_or_else(|| self.default_working_dir.clone());
 
+        let stdin_bytes = match stdin_json.map(serde_json::to_vec).transpose() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to encode hook stdin: {e}")),
+                };
+            }
+        };
         let cmd = hook.command.clone();
         let env = env_vars.clone();
         let wd = working_dir.clone();
 
         // Spawn in a detached thread
         std::thread::spawn(move || {
-            let _ = HookExecutor::build_shell_command(&cmd)
+            let mut command = HookExecutor::build_shell_command(&cmd);
+            command
                 .current_dir(&wd)
                 .envs(&env)
-                .output();
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if stdin_bytes.is_some() {
+                command.stdin(Stdio::piped());
+            }
+
+            let Ok(mut child) = command.spawn() else {
+                return;
+            };
+            if let (Some(mut bytes), Some(mut stdin)) = (stdin_bytes, child.stdin.take()) {
+                bytes.push(b'\n');
+                let _ = stdin.write_all(&bytes);
+                let _ = stdin.flush();
+            }
+            let _ = child.wait();
         });
 
         // Return immediately with success (background execution is fire-and-forget)
@@ -766,6 +1085,115 @@ impl HookExecutor {
             error: None,
         }
     }
+}
+
+fn spawn_pipe_reader(mut pipe: impl Read + Send + 'static) -> JoinHandle<String> {
+    thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = pipe.read_to_string(&mut buf);
+        buf
+    })
+}
+
+fn join_reader(reader: Option<JoinHandle<String>>) -> String {
+    reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
+fn spawn_stdin_writer(mut stdin: std::process::ChildStdin, mut bytes: Vec<u8>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        bytes.push(b'\n');
+        let _ = stdin.write_all(&bytes);
+        let _ = stdin.flush();
+    })
+}
+
+fn message_submit_payload(context: &HookContext, text: &str) -> serde_json::Value {
+    json!({
+        "event": HookEvent::MessageSubmit.as_str(),
+        "text": text,
+        "session_id": context.session_id.as_deref(),
+        "workspace": context.workspace.as_ref().map(|path| path.display().to_string()),
+        "mode": context.mode.as_deref(),
+        "model": context.model.as_deref(),
+        "total_tokens": context.total_tokens,
+    })
+}
+
+fn parse_message_submit_stdout(stdout: &str) -> MessageSubmitStdout {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return MessageSubmitStdout::Unchanged;
+    }
+
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(value) => value,
+        Err(e) => return MessageSubmitStdout::Invalid(format!("invalid JSON: {e}")),
+    };
+
+    let Some(object) = value.as_object() else {
+        return MessageSubmitStdout::Invalid("stdout JSON must be an object".to_string());
+    };
+
+    match object.get("text") {
+        Some(serde_json::Value::String(text)) if !text.is_empty() => {
+            MessageSubmitStdout::Replaced(text.clone())
+        }
+        Some(serde_json::Value::String(_)) => {
+            MessageSubmitStdout::Invalid("stdout `text` field must not be empty".to_string())
+        }
+        Some(_) => MessageSubmitStdout::Invalid("stdout `text` field must be a string".to_string()),
+        None => MessageSubmitStdout::Unchanged,
+    }
+}
+
+fn message_submit_continue_warning(result: &HookResult) -> Option<String> {
+    message_submit_stdout_reason(&result.stdout)
+        .or_else(|| first_non_empty_line(&result.stderr))
+        .or_else(|| first_non_empty_line(&result.stdout))
+        .or_else(|| result.error.as_deref().and_then(first_non_empty_line))
+}
+
+fn message_submit_block_reason(result: &HookResult, fallback: &str) -> String {
+    if let Some(reason) = message_submit_stdout_reason(&result.stdout) {
+        return reason;
+    }
+    if let Some(reason) = first_non_empty_line(&result.stderr) {
+        return reason;
+    }
+    if let Some(reason) = first_non_empty_line(&result.stdout) {
+        return reason;
+    }
+    if let Some(reason) = result.error.as_deref().and_then(first_non_empty_line) {
+        return reason;
+    }
+    fallback.to_string()
+}
+
+fn message_submit_stdout_reason(stdout: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    value
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(truncate_hook_message)
+}
+
+fn first_non_empty_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(truncate_hook_message)
+}
+
+fn truncate_hook_message(message: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    let mut chars = message.chars();
+    let mut out: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// Parse `KEY=VALUE\n` lines from a `shell_env` hook's stdout into a map.
@@ -851,10 +1279,72 @@ NOEQUAL line dropped
     }
 
     #[test]
+    fn parse_message_submit_stdout_replaces_text() {
+        assert_eq!(
+            super::parse_message_submit_stdout(r#"{"text":"changed"}"#),
+            MessageSubmitStdout::Replaced("changed".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_empty_is_unchanged() {
+        assert_eq!(
+            super::parse_message_submit_stdout(" \n\t "),
+            MessageSubmitStdout::Unchanged
+        );
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_without_text_is_unchanged() {
+        assert_eq!(
+            super::parse_message_submit_stdout(r#"{"reason":"only used for blocks"}"#),
+            MessageSubmitStdout::Unchanged
+        );
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_rejects_malformed_json() {
+        assert!(matches!(
+            super::parse_message_submit_stdout("not json"),
+            MessageSubmitStdout::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_rejects_non_string_text() {
+        assert!(matches!(
+            super::parse_message_submit_stdout(r#"{"text":123}"#),
+            MessageSubmitStdout::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_rejects_empty_text() {
+        assert_eq!(
+            super::parse_message_submit_stdout(r#"{"text":""}"#),
+            MessageSubmitStdout::Invalid("stdout `text` field must not be empty".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_message_submit_stdout_rejects_non_object_json() {
+        assert!(matches!(
+            super::parse_message_submit_stdout(r#"["not", "an", "object"]"#),
+            MessageSubmitStdout::Invalid(_)
+        ));
+        assert!(matches!(
+            super::parse_message_submit_stdout(r#""not an object""#),
+            MessageSubmitStdout::Invalid(_)
+        ));
+    }
+
+    #[test]
     fn test_hook_event_as_str() {
         assert_eq!(HookEvent::SessionStart.as_str(), "session_start");
         assert_eq!(HookEvent::ToolCallAfter.as_str(), "tool_call_after");
         assert_eq!(HookEvent::ModeChange.as_str(), "mode_change");
+        assert_eq!(HookEvent::SubagentSpawn.as_str(), "subagent_spawn");
+        assert_eq!(HookEvent::SubagentComplete.as_str(), "subagent_complete");
     }
 
     #[test]
@@ -987,12 +1477,427 @@ NOEQUAL line dropped
         );
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_stdin_write_does_not_deadlock_when_hook_writes_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "write_before_read.sh",
+            r#"#!/bin/sh
+dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\000' x
+dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\000' e >&2
+payload=$(cat)
+printf '\ndone:%s\n' "${#payload}"
+"#,
+        );
+        let hook = Hook::new(HookEvent::MessageSubmit, &command).with_timeout(5);
+        let executor = HookExecutor::new(HooksConfig::default(), dir.path().to_path_buf());
+        let env_vars = HashMap::new();
+        let payload = json!({
+            "event": "message_submit",
+            "text": "x".repeat(256 * 1024),
+        });
+
+        let result = executor.execute_sync_with_stdin(&hook, &env_vars, &payload);
+
+        assert!(result.success, "hook should complete: {result:?}");
+        assert!(result.stdout.contains("done:"), "stdout was drained");
+        assert!(result.stderr.len() >= 256 * 1024, "stderr was drained");
+    }
+
     #[test]
     fn test_executor_session_id() {
         let executor = HookExecutor::new(HooksConfig::default(), PathBuf::from("."));
 
         assert!(executor.session_id().starts_with("sess_"));
         assert_eq!(executor.session_id().len(), 13); // "sess_" + 8 chars
+    }
+
+    #[cfg(not(windows))]
+    fn write_hook_script(dir: &tempfile::TempDir, name: &str, content: &str) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).expect("write hook script");
+        format!("sh {}", path.display())
+    }
+
+    #[cfg(not(windows))]
+    fn submit_context(dir: &tempfile::TempDir) -> HookContext {
+        HookContext::new()
+            .with_session_id("sess_test")
+            .with_workspace(dir.path().to_path_buf())
+            .with_mode("agent")
+            .with_model("deepseek-test")
+            .with_tokens(42)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn json_observer_hook_receives_structured_stdin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("payload.json");
+        let command = write_hook_script(
+            &dir,
+            "capture_observer.sh",
+            &format!(
+                r#"#!/bin/sh
+cat > "{}"
+"#,
+                out.display()
+            ),
+        );
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![Hook::new(HookEvent::SubagentSpawn, &command)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let payload = json!({
+            "event": "subagent_spawn",
+            "agent_id": "agent_123",
+            "prompt_preview": "inspect this",
+            "prompt_truncated": false,
+        });
+
+        let results = executor.execute_json_observer(
+            HookEvent::SubagentSpawn,
+            &submit_context(&dir),
+            &payload,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+        let captured: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out).expect("payload written"))
+                .expect("valid JSON payload");
+        assert_eq!(captured["event"], "subagent_spawn");
+        assert_eq!(captured["agent_id"], "agent_123");
+        assert_eq!(captured["prompt_preview"], "inspect this");
+        assert_eq!(captured["prompt_truncated"], false);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn json_observer_hook_failure_does_not_stop_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("later-ran");
+        let failing = write_hook_script(
+            &dir,
+            "failing_observer.sh",
+            r#"#!/bin/sh
+echo boom >&2
+exit 1
+"#,
+        );
+        let later = write_hook_script(
+            &dir,
+            "later_observer.sh",
+            &format!(
+                r#"#!/bin/sh
+cat > "{}"
+"#,
+                marker.display()
+            ),
+        );
+        let mut first = Hook::new(HookEvent::SubagentComplete, &failing);
+        first.continue_on_error = false;
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![first, Hook::new(HookEvent::SubagentComplete, &later)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let payload = json!({
+            "event": "subagent_complete",
+            "agent_id": "agent_456",
+            "status": "completed",
+        });
+
+        let results = executor.execute_json_observer(
+            HookEvent::SubagentComplete,
+            &submit_context(&dir),
+            &payload,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].success);
+        assert!(results[1].success);
+        assert!(
+            marker.exists(),
+            "observer failures must be warn-only and non-blocking"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_transform_applies_hooks_in_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = write_hook_script(
+            &dir,
+            "first.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"first"}'
+"#,
+        );
+        let second = write_hook_script(
+            &dir,
+            "second.sh",
+            r#"#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"text":"first"'*) printf '%s\n' '{"text":"first second"}' ;;
+  *) printf '%s\n' '{"text":"wrong"}' ;;
+esac
+"#,
+        );
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![
+                Hook::new(HookEvent::MessageSubmit, &first),
+                Hook::new(HookEvent::MessageSubmit, &second),
+            ],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::replaced("first second".to_string())
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_transform_exit_two_blocks_submission() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "block.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"reason":"policy blocked this prompt"}'
+exit 2
+"#,
+        );
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::MessageSubmit, &command)],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::Blocked {
+                reason: "policy blocked this prompt".to_string()
+            }
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn background_message_submit_hook_is_observer_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "background.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"ignored"}'
+"#,
+        );
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::MessageSubmit, &command).background()],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::unchanged()
+        );
+    }
+
+    #[test]
+    fn message_submit_transform_without_configured_hooks_is_unchanged() {
+        let executor = HookExecutor::new(HooksConfig::default(), PathBuf::from("."));
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&HookContext::new(), "original"),
+            MessageSubmitOutcome::unchanged()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_transform_skips_non_matching_condition() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "replace.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"should not apply"}'
+"#,
+        );
+        let hook =
+            Hook::new(HookEvent::MessageSubmit, &command).with_condition(HookCondition::Mode {
+                mode: "plan".into(),
+            });
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![hook],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::unchanged()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_continue_on_error_true_keeps_text_and_runs_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let failing = write_hook_script(
+            &dir,
+            "fail_continue.sh",
+            r#"#!/bin/sh
+printf '%s\n' 'soft failure' >&2
+exit 9
+"#,
+        );
+        let replacing = write_hook_script(
+            &dir,
+            "replace_after_failure.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"recovered"}'
+"#,
+        );
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![
+                Hook::new(HookEvent::MessageSubmit, &failing),
+                Hook::new(HookEvent::MessageSubmit, &replacing),
+            ],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::replaced("recovered".to_string())
+                .with_warning(Some("soft failure".to_string()))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_timeout_continue_surfaces_warning_and_runs_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let slow = write_hook_script(
+            &dir,
+            "slow_continue.sh",
+            r#"#!/bin/sh
+sleep 2
+"#,
+        );
+        let replacing = write_hook_script(
+            &dir,
+            "replace_after_timeout.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"after timeout"}'
+"#,
+        );
+        let mut slow_hook = Hook::new(HookEvent::MessageSubmit, &slow).with_timeout(1);
+        slow_hook.continue_on_error = true;
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![slow_hook, Hook::new(HookEvent::MessageSubmit, &replacing)],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::replaced("after timeout".to_string())
+                .with_warning(Some("Hook timed out after 1s".to_string()))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_invalid_stdout_keeps_text_and_runs_later_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let invalid = write_hook_script(
+            &dir,
+            "invalid_stdout.sh",
+            r#"#!/bin/sh
+printf '%s\n' 'not json'
+"#,
+        );
+        let replacing = write_hook_script(
+            &dir,
+            "replace_after_invalid.sh",
+            r#"#!/bin/sh
+printf '%s\n' '{"text":"valid later"}'
+"#,
+        );
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![
+                Hook::new(HookEvent::MessageSubmit, &invalid),
+                Hook::new(HookEvent::MessageSubmit, &replacing),
+            ],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::replaced("valid later".to_string())
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn message_submit_continue_on_error_false_blocks_on_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = write_hook_script(
+            &dir,
+            "fail.sh",
+            r#"#!/bin/sh
+printf '%s\n' 'hard failure' >&2
+exit 7
+"#,
+        );
+        let mut hook = Hook::new(HookEvent::MessageSubmit, &command);
+        hook.continue_on_error = false;
+        let config = HooksConfig {
+            enabled: true,
+            hooks: vec![hook],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..HooksConfig::default()
+        };
+        let executor = HookExecutor::new(config, dir.path().to_path_buf());
+
+        assert_eq!(
+            executor.execute_message_submit_transform(&submit_context(&dir), "original"),
+            MessageSubmitOutcome::Blocked {
+                reason: "hard failure".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1007,6 +1912,8 @@ NOEQUAL line dropped
             HookEvent::ToolCallAfter,
             HookEvent::ModeChange,
             HookEvent::OnError,
+            HookEvent::SubagentSpawn,
+            HookEvent::SubagentComplete,
         ] {
             assert!(
                 !executor.has_hooks_for_event(event),

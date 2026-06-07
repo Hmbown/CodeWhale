@@ -33,7 +33,7 @@ const cjk = Noto_Serif_SC({
 });
 
 export const metadata: Metadata = {
-  title: "CodeWhale · DeepSeek V4 智能体运行框架",
+  title: "CodeWhale · DeepSeek V4 Agent Harness",
   description:
     "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery — rules, tools, and feedback loops that help the model keep working.",
   metadataBase: new URL("https://codewhale.net"),

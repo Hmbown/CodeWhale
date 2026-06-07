@@ -263,8 +263,6 @@ pub enum MessageId {
     CmdConfigDescription,
     CmdContextDescription,
     CmdCostDescription,
-    CmdCycleDescription,
-    CmdCyclesDescription,
     CmdDiffDescription,
     CmdEditDescription,
     CmdExitDescription,
@@ -290,7 +288,21 @@ pub enum MessageId {
     CmdThemeDescription,
     CmdProviderDescription,
     CmdQueueDescription,
-    CmdRecallDescription,
+    CmdQueueUsage,
+    CmdQueueDraftHeader,
+    CmdQueueNoMessages,
+    CmdQueueListHeader,
+    CmdQueueTip,
+    CmdQueueAlreadyEditing,
+    CmdQueueNotFound,
+    CmdQueueEditingStatus,
+    CmdQueueEditingMessage,
+    CmdQueueDropped,
+    CmdQueueAlreadyEmpty,
+    CmdQueueCleared,
+    CmdQueueMissingIndex,
+    CmdQueueIndexPositive,
+    CmdQueueIndexMin,
     CmdRelayDescription,
     CmdRenameDescription,
     CmdRestoreDescription,
@@ -516,6 +528,54 @@ pub enum MessageId {
     CtxMenuContextInspectorDesc,
     CtxMenuHelp,
     CtxMenuHelpDesc,
+    // Agent fanout card.
+    FanoutCounts,
+
+    CtxInspTitle,
+    CtxInspSessionContext,
+    CtxInspSystemPrompt,
+    CtxInspReferences,
+    CtxInspRecentTools,
+    CtxInspModel,
+    CtxInspWorkspace,
+    CtxInspSession,
+    CtxInspContext,
+    CtxInspTranscript,
+    CtxInspWorkspaceStatus,
+    CtxInspNotSampledYet,
+    CtxInspOk,
+    CtxInspHigh,
+    CtxInspCritical,
+    CtxInspIncluded,
+    CtxInspAttached,
+    CtxInspNotIncluded,
+    CtxInspOutputCaptured,
+    CtxInspNoOutputYet,
+    CtxInspNoSystemPrompt,
+    CtxInspNoReferences,
+    CtxInspNoToolActivity,
+    CtxInspAltVHint,
+    CtxInspCells,
+    CtxInspApiMessages,
+    CtxInspActive,
+    CtxInspCell,
+    CtxInspMoreReferences,
+    CtxInspStablePrefix,
+    CtxInspVolatileWorkingSet,
+    CtxInspFirstLine,
+    CtxInspTotal,
+    CtxInspTextPromptLayers,
+    CtxInspSingleTextBlob,
+    CtxInspBlocks,
+    CtxInspBlock,
+    CtxInspTokens,
+    CtxInspLayers,
+    CtxInspNone,
+    CtxInspEmpty,
+    CtxInspCacheFriendly,
+    CtxInspChangesByTurn,
+    CtxInspStablePrefixOnly,
+    CtxInspCacheTip,
 }
 
 #[allow(dead_code)]
@@ -557,8 +617,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdConfigDescription,
     MessageId::CmdContextDescription,
     MessageId::CmdCostDescription,
-    MessageId::CmdCycleDescription,
-    MessageId::CmdCyclesDescription,
     MessageId::CmdDiffDescription,
     MessageId::CmdEditDescription,
     MessageId::CmdExitDescription,
@@ -582,7 +640,21 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdNoteDescription,
     MessageId::CmdProviderDescription,
     MessageId::CmdQueueDescription,
-    MessageId::CmdRecallDescription,
+    MessageId::CmdQueueUsage,
+    MessageId::CmdQueueDraftHeader,
+    MessageId::CmdQueueNoMessages,
+    MessageId::CmdQueueListHeader,
+    MessageId::CmdQueueTip,
+    MessageId::CmdQueueAlreadyEditing,
+    MessageId::CmdQueueNotFound,
+    MessageId::CmdQueueEditingStatus,
+    MessageId::CmdQueueEditingMessage,
+    MessageId::CmdQueueDropped,
+    MessageId::CmdQueueAlreadyEmpty,
+    MessageId::CmdQueueCleared,
+    MessageId::CmdQueueMissingIndex,
+    MessageId::CmdQueueIndexPositive,
+    MessageId::CmdQueueIndexMin,
     MessageId::CmdRelayDescription,
     MessageId::CmdRenameDescription,
     MessageId::CmdRestoreDescription,
@@ -808,6 +880,52 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuContextInspectorDesc,
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
+    MessageId::FanoutCounts,
+    MessageId::CtxInspTitle,
+    MessageId::CtxInspSessionContext,
+    MessageId::CtxInspSystemPrompt,
+    MessageId::CtxInspReferences,
+    MessageId::CtxInspRecentTools,
+    MessageId::CtxInspModel,
+    MessageId::CtxInspWorkspace,
+    MessageId::CtxInspSession,
+    MessageId::CtxInspContext,
+    MessageId::CtxInspTranscript,
+    MessageId::CtxInspWorkspaceStatus,
+    MessageId::CtxInspNotSampledYet,
+    MessageId::CtxInspOk,
+    MessageId::CtxInspHigh,
+    MessageId::CtxInspCritical,
+    MessageId::CtxInspIncluded,
+    MessageId::CtxInspAttached,
+    MessageId::CtxInspNotIncluded,
+    MessageId::CtxInspOutputCaptured,
+    MessageId::CtxInspNoOutputYet,
+    MessageId::CtxInspNoSystemPrompt,
+    MessageId::CtxInspNoReferences,
+    MessageId::CtxInspNoToolActivity,
+    MessageId::CtxInspAltVHint,
+    MessageId::CtxInspCells,
+    MessageId::CtxInspApiMessages,
+    MessageId::CtxInspActive,
+    MessageId::CtxInspCell,
+    MessageId::CtxInspMoreReferences,
+    MessageId::CtxInspStablePrefix,
+    MessageId::CtxInspVolatileWorkingSet,
+    MessageId::CtxInspFirstLine,
+    MessageId::CtxInspTotal,
+    MessageId::CtxInspTextPromptLayers,
+    MessageId::CtxInspSingleTextBlob,
+    MessageId::CtxInspBlocks,
+    MessageId::CtxInspBlock,
+    MessageId::CtxInspTokens,
+    MessageId::CtxInspLayers,
+    MessageId::CtxInspNone,
+    MessageId::CtxInspEmpty,
+    MessageId::CtxInspCacheFriendly,
+    MessageId::CtxInspChangesByTurn,
+    MessageId::CtxInspStablePrefixOnly,
+    MessageId::CtxInspCacheTip,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1047,17 +1165,13 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdBalanceDescription => "Check the active provider account balance",
         MessageId::CmdClearDescription => "Clear conversation history",
-        MessageId::CmdCompactDescription => {
-            "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)"
-        }
+        MessageId::CmdCompactDescription => "Trigger context compaction to free up space",
         MessageId::CmdPurgeDescription => {
             "Let the agent surgically prune conversation history to free context space"
         }
         MessageId::CmdConfigDescription => "Open interactive configuration editor",
         MessageId::CmdContextDescription => "Open compact session context inspector",
         MessageId::CmdCostDescription => "Show session cost breakdown",
-        MessageId::CmdCycleDescription => "Show the carry-forward briefing for a specific cycle",
-        MessageId::CmdCyclesDescription => "List checkpoint-restart cycle handoffs in this session",
         MessageId::CmdDiffDescription => "Show file changes since session start",
         MessageId::CmdEditDescription => "Revise and resubmit the last message",
         MessageId::CmdExitDescription => "Exit the application",
@@ -1080,18 +1194,36 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdMcpDescription => "Open or manage MCP servers",
         MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
         MessageId::CmdModeDescription => {
-            "Switch mode or open picker: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+            "Switch mode or open picker: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Switch or view current model",
         MessageId::CmdModelsDescription => "List available models from API",
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
-        MessageId::CmdProviderDescription => {
-            "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
-        }
+        MessageId::CmdProviderDescription => "Switch the active provider and/or model",
         MessageId::CmdQueueDescription => "View or edit queued messages",
-        MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editing queued message:",
+        MessageId::CmdQueueNoMessages => "No queued messages",
+        MessageId::CmdQueueListHeader => "Queued messages ({count}):",
+        MessageId::CmdQueueTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Already editing a queued message. Send it or /queue clear to discard."
+        }
+        MessageId::CmdQueueNotFound => "Queued message not found",
+        MessageId::CmdQueueEditingStatus => "Editing queued message {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editing queued message {index} (press Enter to re-queue/send)"
+        }
+        MessageId::CmdQueueDropped => "Dropped queued message {index}",
+        MessageId::CmdQueueAlreadyEmpty => "Queue already empty",
+        MessageId::CmdQueueCleared => "Queue cleared",
+        MessageId::CmdQueueMissingIndex => {
+            "Missing index. Usage: /queue edit <n> or /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Index must be a positive number",
+        MessageId::CmdQueueIndexMin => "Index must be >= 1",
         MessageId::CmdRelayDescription => "Create a session relay (接力) for a fresh thread",
         MessageId::CmdRenameDescription => "Rename the current session",
         MessageId::CmdRestoreDescription => {
@@ -1177,7 +1309,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::FooterAgentsPlural => "{count} agents",
         MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
         MessageId::FooterWorking => "working",
-        MessageId::FooterBalancePrefix => "bal",
+        MessageId::FooterBalancePrefix => "balance",
         MessageId::HelpSectionActions => "Actions",
         MessageId::HelpSectionClipboard => "Clipboard",
         MessageId::HelpSectionEditing => "Input editing",
@@ -1350,7 +1482,7 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::OnboardApiKeyStep2 => "Step 2.  Paste it below and press Enter.",
         MessageId::OnboardApiKeySavedHint => {
-            "Saved to ~/.deepseek/config.toml so it works from any folder."
+            "Saved to ~/.codewhale/config.toml so it works from any folder."
         }
         MessageId::OnboardApiKeyFormatHint => {
             "Paste the full key exactly as issued (no spaces or newlines)."
@@ -1413,6 +1545,58 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxMenuContextInspectorDesc => "active context and cache hints",
         MessageId::CtxMenuHelp => "Help",
         MessageId::CtxMenuHelpDesc => "keybindings and commands",
+        MessageId::FanoutCounts => {
+            "{done} done · {running} running · {failed} failed · {pending} pending"
+        }
+
+        MessageId::CtxInspTitle => "Context inspector",
+        MessageId::CtxInspSessionContext => "Session Context",
+        MessageId::CtxInspSystemPrompt => "System Prompt Structure",
+        MessageId::CtxInspReferences => "References",
+        MessageId::CtxInspRecentTools => "Recent Tools",
+        MessageId::CtxInspModel => "Model",
+        MessageId::CtxInspWorkspace => "Workspace",
+        MessageId::CtxInspSession => "Session",
+        MessageId::CtxInspContext => "Context",
+        MessageId::CtxInspTranscript => "Transcript",
+        MessageId::CtxInspWorkspaceStatus => "Workspace status",
+        MessageId::CtxInspNotSampledYet => "not sampled yet",
+        MessageId::CtxInspOk => "ok",
+        MessageId::CtxInspHigh => "high",
+        MessageId::CtxInspCritical => "critical",
+        MessageId::CtxInspIncluded => "included",
+        MessageId::CtxInspAttached => "attached",
+        MessageId::CtxInspNotIncluded => "not included",
+        MessageId::CtxInspOutputCaptured => "output captured",
+        MessageId::CtxInspNoOutputYet => "no output yet",
+        MessageId::CtxInspNoSystemPrompt => "No system prompt set.",
+        MessageId::CtxInspNoReferences => "No file, directory, or media references recorded yet.",
+        MessageId::CtxInspNoToolActivity => "No tool activity recorded yet.",
+        MessageId::CtxInspAltVHint => "Open the matching card and press Alt+V for full details.",
+        MessageId::CtxInspCells => "cells",
+        MessageId::CtxInspApiMessages => "API messages",
+        MessageId::CtxInspActive => "active",
+        MessageId::CtxInspCell => "cell",
+        MessageId::CtxInspMoreReferences => "more reference(s)",
+        MessageId::CtxInspStablePrefix => "Stable prefix",
+        MessageId::CtxInspVolatileWorkingSet => "Volatile working set",
+        MessageId::CtxInspFirstLine => "First line",
+        MessageId::CtxInspTotal => "Total",
+        MessageId::CtxInspTextPromptLayers => "Text prompt layers",
+        MessageId::CtxInspSingleTextBlob => "Single text blob",
+        MessageId::CtxInspBlocks => "block(s)",
+        MessageId::CtxInspBlock => "block",
+        MessageId::CtxInspTokens => "tokens",
+        MessageId::CtxInspLayers => "layer(s)",
+        MessageId::CtxInspNone => "none",
+        MessageId::CtxInspEmpty => "(empty)",
+        MessageId::CtxInspCacheFriendly => "cache-friendly",
+        MessageId::CtxInspChangesByTurn => "changes by session/turn",
+        MessageId::CtxInspStablePrefixOnly => "stable prefix only",
+        MessageId::CtxInspCacheTip => {
+            "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
+            Volatile working-set changes break the cache only for the tail."
+        }
     }
 }
 
@@ -1485,19 +1669,13 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Kiểm tra số dư tài khoản của nhà cung cấp dịch vụ đang hoạt động"
         }
         MessageId::CmdClearDescription => "Xóa lịch sử trò chuyện",
-        MessageId::CmdCompactDescription => {
-            "Kích hoạt nén ngữ cảnh để giải phóng không gian (cũ; v0.6.6 ưu tiên khởi động lại chu kỳ)"
-        }
+        MessageId::CmdCompactDescription => "Kích hoạt nén ngữ cảnh để giải phóng không gian",
         MessageId::CmdPurgeDescription => {
             "Cho agent cắt gọn lịch sử trò chuyện để giải phóng ngữ cảnh"
         }
         MessageId::CmdConfigDescription => "Mở trình chỉnh sửa cấu hình tương tác",
         MessageId::CmdContextDescription => "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
         MessageId::CmdCostDescription => "Hiển thị chi tiết chi phí của phiên làm việc",
-        MessageId::CmdCycleDescription => "Hiển thị báo cáo chuyển tiếp cho một chu kỳ cụ thể",
-        MessageId::CmdCyclesDescription => {
-            "Liệt kê các lần bàn giao chu kỳ checkpoint-restart trong phiên này"
-        }
         MessageId::CmdDiffDescription => "Hiển thị các thay đổi của tệp kể từ khi bắt đầu phiên",
         MessageId::CmdEditDescription => "Chỉnh sửa và gửi lại tin nhắn gần nhất",
         MessageId::CmdExitDescription => "Thoát ứng dụng",
@@ -1524,7 +1702,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdMcpDescription => "Mở hoặc quản lý các máy chủ MCP",
         MessageId::CmdMemoryDescription => "Kiểm tra hoặc quản lý tệp bộ nhớ người dùng liên tục",
         MessageId::CmdModeDescription => {
-            "Chuyển đổi chế độ hoặc mở bảng chọn: /mode [agent|plan|yolo|1|2|3]"
+            "Chuyển đổi chế độ hoặc mở bảng chọn: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Chuyển đổi hoặc xem mô hình AI hiện tại",
         MessageId::CmdModelsDescription => "Liệt kê các mô hình khả dụng từ API",
@@ -1537,9 +1715,27 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
-        MessageId::CmdRecallDescription => {
-            "Tìm kiếm kho lưu trữ chu kỳ trước (BM25 trên văn bản tin nhắn)"
+        MessageId::CmdQueueUsage => "Cách dùng: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Đang chỉnh sửa tin nhắn đang chờ:",
+        MessageId::CmdQueueNoMessages => "Không có tin nhắn đang chờ",
+        MessageId::CmdQueueListHeader => "Tin nhắn đang chờ ({count}):",
+        MessageId::CmdQueueTip => "Mẹo: /queue edit <n> để sửa, /queue drop <n> để xóa",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Đã đang chỉnh sửa một tin nhắn đang chờ. Hãy gửi nó hoặc dùng /queue clear để hủy."
         }
+        MessageId::CmdQueueNotFound => "Không tìm thấy tin nhắn đang chờ",
+        MessageId::CmdQueueEditingStatus => "Đang chỉnh sửa tin nhắn đang chờ {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Đang chỉnh sửa tin nhắn đang chờ {index} (nhấn Enter để xếp lại hàng/gửi)"
+        }
+        MessageId::CmdQueueDropped => "Đã xóa tin nhắn đang chờ {index}",
+        MessageId::CmdQueueAlreadyEmpty => "Hàng đợi đã trống",
+        MessageId::CmdQueueCleared => "Đã xóa hàng đợi",
+        MessageId::CmdQueueMissingIndex => {
+            "Thiếu chỉ mục. Cách dùng: /queue edit <n> hoặc /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Chỉ mục phải là số dương",
+        MessageId::CmdQueueIndexMin => "Chỉ mục phải >= 1",
         MessageId::CmdRelayDescription => "Tạo một phiên tiếp sức cho một luồng mới",
         MessageId::CmdRenameDescription => "Đổi tên phiên làm việc hiện tại",
         MessageId::CmdRestoreDescription => {
@@ -1886,6 +2082,57 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Đã xếp hàng thực thi kế hoạch (pro-plan tự động)."
         }
         MessageId::ProPlanExitedToAgent => "Đã thoát Pro Plan. Chuyển sang chế độ Agent.",
+        MessageId::FanoutCounts => {
+            "{done} hoàn thành · {running} đang chạy · {failed} thất bại · {pending} chờ"
+        }
+
+        MessageId::CtxInspTitle => "Trình kiểm tra ngữ cảnh",
+        MessageId::CtxInspSessionContext => "Ngữ cảnh phiên",
+        MessageId::CtxInspSystemPrompt => "Cấu trúc lời nhắc hệ thống",
+        MessageId::CtxInspReferences => "Tham chiếu",
+        MessageId::CtxInspRecentTools => "Công cụ gần đây",
+        MessageId::CtxInspModel => "Mô hình",
+        MessageId::CtxInspWorkspace => "Không gian làm việc",
+        MessageId::CtxInspSession => "Phiên",
+        MessageId::CtxInspContext => "Ngữ cảnh",
+        MessageId::CtxInspTranscript => "Bảng ghi",
+        MessageId::CtxInspWorkspaceStatus => "Trạng thái không gian làm việc",
+        MessageId::CtxInspNotSampledYet => "chưa lấy mẫu",
+        MessageId::CtxInspOk => "ổn",
+        MessageId::CtxInspHigh => "cao",
+        MessageId::CtxInspCritical => "nghiêm trọng",
+        MessageId::CtxInspIncluded => "đã bao gồm",
+        MessageId::CtxInspAttached => "đã đính kèm",
+        MessageId::CtxInspNotIncluded => "không bao gồm",
+        MessageId::CtxInspOutputCaptured => "đã thu được đầu ra",
+        MessageId::CtxInspNoOutputYet => "chưa có đầu ra",
+        MessageId::CtxInspNoSystemPrompt => "Chưa có lời nhắc hệ thống.",
+        MessageId::CtxInspNoReferences => "Chưa có tham chiếu tệp, thư mục hoặc phương tiện nào.",
+        MessageId::CtxInspNoToolActivity => "Chưa có hoạt động công cụ nào.",
+        MessageId::CtxInspAltVHint => "Mở thẻ phù hợp và nhấn Alt+V để biết chi tiết.",
+        MessageId::CtxInspCells => "ô",
+        MessageId::CtxInspApiMessages => "tin nhắn API",
+        MessageId::CtxInspActive => "đang hoạt động",
+        MessageId::CtxInspCell => "ô",
+        MessageId::CtxInspMoreReferences => "các tham chiếu khác",
+        MessageId::CtxInspStablePrefix => "Khối ổn định",
+        MessageId::CtxInspVolatileWorkingSet => "Vùng làm việc thay đổi",
+        MessageId::CtxInspFirstLine => "Dòng đầu",
+        MessageId::CtxInspTotal => "Tổng",
+        MessageId::CtxInspTextPromptLayers => "Lớp văn bản gợi ý",
+        MessageId::CtxInspSingleTextBlob => "Văn bản khối đơn",
+        MessageId::CtxInspBlocks => "khối",
+        MessageId::CtxInspBlock => "khối",
+        MessageId::CtxInspTokens => "token",
+        MessageId::CtxInspLayers => "lớp",
+        MessageId::CtxInspNone => "không",
+        MessageId::CtxInspEmpty => "(trống)",
+        MessageId::CtxInspCacheFriendly => "thân thiện với bộ nhớ đệm",
+        MessageId::CtxInspChangesByTurn => "thay đổi theo phiên/lượt",
+        MessageId::CtxInspStablePrefixOnly => "chỉ có tiền tố ổn định",
+        MessageId::CtxInspCacheTip => {
+            "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
+        }
     })
 }
 
@@ -1899,6 +2146,57 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::TranslationComplete => "翻譯完成",
         MessageId::TranslationFailed => "翻譯失敗",
         MessageId::FooterBalancePrefix => "餘額",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 運行中 · {failed} 失敗 · {pending} 等待中"
+        }
+
+        MessageId::CtxInspTitle => "上下文檢查器",
+        MessageId::CtxInspSessionContext => "會話上下文",
+        MessageId::CtxInspSystemPrompt => "系統提示結構",
+        MessageId::CtxInspReferences => "引用",
+        MessageId::CtxInspRecentTools => "最近使用的工具",
+        MessageId::CtxInspModel => "模型",
+        MessageId::CtxInspWorkspace => "工作區",
+        MessageId::CtxInspSession => "會話",
+        MessageId::CtxInspContext => "上下文",
+        MessageId::CtxInspTranscript => "記錄",
+        MessageId::CtxInspWorkspaceStatus => "工作區狀態",
+        MessageId::CtxInspNotSampledYet => "尚未取樣",
+        MessageId::CtxInspOk => "正常",
+        MessageId::CtxInspHigh => "較高",
+        MessageId::CtxInspCritical => "嚴重",
+        MessageId::CtxInspIncluded => "已包含",
+        MessageId::CtxInspAttached => "已附加",
+        MessageId::CtxInspNotIncluded => "未包含",
+        MessageId::CtxInspOutputCaptured => "已捕獲輸出",
+        MessageId::CtxInspNoOutputYet => "尚無輸出",
+        MessageId::CtxInspNoSystemPrompt => "未設定系統提示。",
+        MessageId::CtxInspNoReferences => "尚未記錄任何檔案、目錄或媒體引用。",
+        MessageId::CtxInspNoToolActivity => "尚未記錄任何工具活動。",
+        MessageId::CtxInspAltVHint => "開啟對應的卡片並按 Alt+V 檢視詳細資訊。",
+        MessageId::CtxInspCells => "儲存格",
+        MessageId::CtxInspApiMessages => "API 訊息",
+        MessageId::CtxInspActive => "作用中",
+        MessageId::CtxInspCell => "儲存格",
+        MessageId::CtxInspMoreReferences => "其他引用",
+        MessageId::CtxInspStablePrefix => "穩定前綴",
+        MessageId::CtxInspVolatileWorkingSet => "易變工作集",
+        MessageId::CtxInspFirstLine => "第一行",
+        MessageId::CtxInspTotal => "總計",
+        MessageId::CtxInspTextPromptLayers => "文字提示層",
+        MessageId::CtxInspSingleTextBlob => "單一文字塊",
+        MessageId::CtxInspBlocks => "個區塊",
+        MessageId::CtxInspBlock => "個區塊",
+        MessageId::CtxInspTokens => "個 token",
+        MessageId::CtxInspLayers => "個層",
+        MessageId::CtxInspNone => "無",
+        MessageId::CtxInspEmpty => "(空)",
+        MessageId::CtxInspCacheFriendly => "快取友好",
+        MessageId::CtxInspChangesByTurn => "按會話/輪次變化",
+        MessageId::CtxInspStablePrefixOnly => "僅穩定前綴",
+        MessageId::CtxInspCacheTip => {
+            "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
+        }
         other => chinese_simplified(other)?,
     })
 }
@@ -1960,19 +2258,13 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdBalanceDescription => "アクティブなプロバイダーのアカウント残高を確認",
         MessageId::CmdClearDescription => "会話履歴をクリア",
-        MessageId::CmdCompactDescription => {
-            "コンテキスト圧縮で容量を確保（旧式：v0.6.6 以降はサイクル再起動を推奨）"
-        }
+        MessageId::CmdCompactDescription => "コンテキスト圧縮で容量を確保",
         MessageId::CmdPurgeDescription => {
             "エージェントに会話履歴を分析させ、不要なメッセージを削除・要約"
         }
         MessageId::CmdConfigDescription => "インタラクティブな設定エディタを開く",
         MessageId::CmdContextDescription => "コンパクトなセッションコンテキスト検査ツールを開く",
         MessageId::CmdCostDescription => "セッションのコスト内訳を表示",
-        MessageId::CmdCycleDescription => "指定したサイクルの引き継ぎブリーフィングを表示",
-        MessageId::CmdCyclesDescription => {
-            "セッション内のチェックポイント再起動サイクルの引き継ぎを一覧表示"
-        }
         MessageId::CmdDiffDescription => "セッション開始以降のファイル変更を表示",
         MessageId::CmdEditDescription => "最後のメッセージを編集して再送信",
         MessageId::CmdExitDescription => "アプリを終了",
@@ -1997,7 +2289,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdMcpDescription => "MCP サーバを開く・管理する",
         MessageId::CmdMemoryDescription => "永続ユーザーメモリファイルを確認・管理",
         MessageId::CmdModeDescription => {
-            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "現在のモデルを切り替え・確認",
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
@@ -2010,9 +2302,27 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
-        MessageId::CmdRecallDescription => {
-            "過去のサイクルアーカイブを検索（メッセージ本文への BM25 検索）"
+        MessageId::CmdQueueUsage => "使用方法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "キューされたメッセージを編集中:",
+        MessageId::CmdQueueNoMessages => "キューされたメッセージはありません",
+        MessageId::CmdQueueListHeader => "キューされたメッセージ ({count}):",
+        MessageId::CmdQueueTip => "ヒント: /queue edit <n> で編集、/queue drop <n> で削除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "すでにキューされたメッセージを編集中です。送信するか /queue clear で破棄してください。"
         }
+        MessageId::CmdQueueNotFound => "キューされたメッセージが見つかりません",
+        MessageId::CmdQueueEditingStatus => "キューされたメッセージ {index} を編集中",
+        MessageId::CmdQueueEditingMessage => {
+            "キューされたメッセージ {index} を編集中（Enter で再キュー/送信）"
+        }
+        MessageId::CmdQueueDropped => "キューされたメッセージ {index} を削除しました",
+        MessageId::CmdQueueAlreadyEmpty => "キューはすでに空です",
+        MessageId::CmdQueueCleared => "キューをクリアしました",
+        MessageId::CmdQueueMissingIndex => {
+            "インデックスが指定されていません。使用方法: /queue edit <n> または /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "インデックスは正の数値である必要があります",
+        MessageId::CmdQueueIndexMin => "インデックスは 1 以上である必要があります",
         MessageId::CmdRelayDescription => "新しいスレッド用のセッションリレー（接力）を作成",
         MessageId::CmdRenameDescription => "現在のセッションの名前を変更",
         MessageId::CmdRestoreDescription => {
@@ -2270,7 +2580,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardApiKeyStep2 => "ステップ 2. 下に貼り付けて Enter を押してください。",
         MessageId::OnboardApiKeySavedHint => {
-            "~/.deepseek/config.toml に保存されるので、どのフォルダからでも有効になります。"
+            "~/.codewhale/config.toml に保存されるので、どのフォルダからでも有効になります。"
         }
         MessageId::OnboardApiKeyFormatHint => {
             "発行されたキーをそのまま貼り付けてください（空白や改行を含めない）。"
@@ -2333,6 +2643,59 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "アクティブなコンテキストとキャッシュヒント",
         MessageId::CtxMenuHelp => "ヘルプ",
         MessageId::CtxMenuHelpDesc => "キー操作とコマンド",
+        MessageId::FanoutCounts => {
+            "{done} 完了 · {running} 実行中 · {failed} 失敗 · {pending} 待機"
+        }
+
+        MessageId::CtxInspTitle => "コンテキストインスペクタ",
+        MessageId::CtxInspSessionContext => "セッションコンテキスト",
+        MessageId::CtxInspSystemPrompt => "システムプロンプト構造",
+        MessageId::CtxInspReferences => "参照",
+        MessageId::CtxInspRecentTools => "最近のツール",
+        MessageId::CtxInspModel => "モデル",
+        MessageId::CtxInspWorkspace => "ワークスペース",
+        MessageId::CtxInspSession => "セッション",
+        MessageId::CtxInspContext => "コンテキスト",
+        MessageId::CtxInspTranscript => "トランスクリプト",
+        MessageId::CtxInspWorkspaceStatus => "ワークスペース状態",
+        MessageId::CtxInspNotSampledYet => "未サンプリング",
+        MessageId::CtxInspOk => "良好",
+        MessageId::CtxInspHigh => "高い",
+        MessageId::CtxInspCritical => "深刻",
+        MessageId::CtxInspIncluded => "含まれている",
+        MessageId::CtxInspAttached => "添付済み",
+        MessageId::CtxInspNotIncluded => "含まれていない",
+        MessageId::CtxInspOutputCaptured => "出力取得済み",
+        MessageId::CtxInspNoOutputYet => "未出力",
+        MessageId::CtxInspNoSystemPrompt => "システムプロンプトが設定されていません。",
+        MessageId::CtxInspNoReferences => {
+            "ファイル、ディレクトリ、メディアの参照はまだ記録されていません。"
+        }
+        MessageId::CtxInspNoToolActivity => "ツールアクティビティはまだ記録されていません。",
+        MessageId::CtxInspAltVHint => "該当するカードを開き、Alt+V を押すと詳細が表示されます。",
+        MessageId::CtxInspCells => "セル",
+        MessageId::CtxInspApiMessages => "API メッセージ",
+        MessageId::CtxInspActive => "アクティブ",
+        MessageId::CtxInspCell => "セル",
+        MessageId::CtxInspMoreReferences => "その他の参照",
+        MessageId::CtxInspStablePrefix => "安定プレフィックス",
+        MessageId::CtxInspVolatileWorkingSet => "揮発性ワーキングセット",
+        MessageId::CtxInspFirstLine => "最初の行",
+        MessageId::CtxInspTotal => "合計",
+        MessageId::CtxInspTextPromptLayers => "テキストプロンプトレイヤー",
+        MessageId::CtxInspSingleTextBlob => "単一テキストブロブ",
+        MessageId::CtxInspBlocks => "ブロック",
+        MessageId::CtxInspBlock => "ブロック",
+        MessageId::CtxInspTokens => "トークン",
+        MessageId::CtxInspLayers => "レイヤー",
+        MessageId::CtxInspNone => "なし",
+        MessageId::CtxInspEmpty => "(空)",
+        MessageId::CtxInspCacheFriendly => "キャッシュフレンドリー",
+        MessageId::CtxInspChangesByTurn => "セッション/ターンごとに変更",
+        MessageId::CtxInspStablePrefixOnly => "安定プレフィックスのみ",
+        MessageId::CtxInspCacheTip => {
+            "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
+        }
     })
 }
 
@@ -2385,15 +2748,11 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdBalanceDescription => "查看当前提供商账户余额",
         MessageId::CmdClearDescription => "清除对话历史",
-        MessageId::CmdCompactDescription => {
-            "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
-        }
+        MessageId::CmdCompactDescription => "触发上下文压缩以释放空间",
         MessageId::CmdPurgeDescription => "让 Agent 分析对话历史，精确保留有用信息并移除冗余内容",
         MessageId::CmdConfigDescription => "打开交互式配置编辑器",
         MessageId::CmdContextDescription => "打开紧凑会话上下文检查器",
         MessageId::CmdCostDescription => "显示本次会话的费用明细",
-        MessageId::CmdCycleDescription => "显示指定循环的延续简报",
-        MessageId::CmdCyclesDescription => "列出本次会话中的检查点重启循环交接",
         MessageId::CmdDiffDescription => "显示会话开始以来的文件变更",
         MessageId::CmdEditDescription => "修改并重新提交最后一条消息",
         MessageId::CmdExitDescription => "退出应用",
@@ -2414,7 +2773,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdMcpDescription => "打开或管理 MCP 服务器",
         MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
         MessageId::CmdModeDescription => {
-            "切换运行模式或打开选择器：/mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+            "切换运行模式或打开选择器：/mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "切换或查看当前模型",
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
@@ -2425,7 +2784,25 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
-        MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
+        MessageId::CmdQueueUsage => "用法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "正在编辑已排队的消息:",
+        MessageId::CmdQueueNoMessages => "没有已排队的消息",
+        MessageId::CmdQueueListHeader => "已排队的消息 ({count}):",
+        MessageId::CmdQueueTip => "提示: /queue edit <n> 编辑, /queue drop <n> 删除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "已在编辑一条已排队的消息。请先发送或使用 /queue clear 放弃。"
+        }
+        MessageId::CmdQueueNotFound => "未找到已排队的消息",
+        MessageId::CmdQueueEditingStatus => "正在编辑已排队的消息 {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "正在编辑已排队的消息 {index}（按 Enter 重新排队/发送）"
+        }
+        MessageId::CmdQueueDropped => "已删除已排队的消息 {index}",
+        MessageId::CmdQueueAlreadyEmpty => "队列已空",
+        MessageId::CmdQueueCleared => "队列已清空",
+        MessageId::CmdQueueMissingIndex => "缺少索引。用法: /queue edit <n> 或 /queue drop <n>",
+        MessageId::CmdQueueIndexPositive => "索引必须为正数",
+        MessageId::CmdQueueIndexMin => "索引必须 >= 1",
         MessageId::CmdRelayDescription => "为新线程创建会话接力摘要",
         MessageId::CmdRenameDescription => "重命名当前会话",
         MessageId::CmdRestoreDescription => {
@@ -2649,7 +3026,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardApiKeyStep2 => "步骤 2.  把密钥粘贴到下方并按 Enter。",
         MessageId::OnboardApiKeySavedHint => {
-            "保存到 ~/.deepseek/config.toml，因此在任何目录下都生效。"
+            "保存到 ~/.codewhale/config.toml，因此在任何目录下都生效。"
         }
         MessageId::OnboardApiKeyFormatHint => "请完整粘贴密钥（不要含空格或换行）。",
         MessageId::OnboardApiKeyPlaceholder => "（在此粘贴密钥）",
@@ -2702,6 +3079,57 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "活动上下文和缓存提示",
         MessageId::CtxMenuHelp => "帮助",
         MessageId::CtxMenuHelpDesc => "快捷键和命令",
+        MessageId::FanoutCounts => {
+            "{done} 已完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
+        }
+
+        MessageId::CtxInspTitle => "上下文检查器",
+        MessageId::CtxInspSessionContext => "会话上下文",
+        MessageId::CtxInspSystemPrompt => "系统提示结构",
+        MessageId::CtxInspReferences => "引用",
+        MessageId::CtxInspRecentTools => "最近使用的工具",
+        MessageId::CtxInspModel => "模型",
+        MessageId::CtxInspWorkspace => "工作区",
+        MessageId::CtxInspSession => "会话",
+        MessageId::CtxInspContext => "上下文",
+        MessageId::CtxInspTranscript => "记录",
+        MessageId::CtxInspWorkspaceStatus => "工作区状态",
+        MessageId::CtxInspNotSampledYet => "尚未采样",
+        MessageId::CtxInspOk => "正常",
+        MessageId::CtxInspHigh => "较高",
+        MessageId::CtxInspCritical => "严重",
+        MessageId::CtxInspIncluded => "已包含",
+        MessageId::CtxInspAttached => "已附加",
+        MessageId::CtxInspNotIncluded => "未包含",
+        MessageId::CtxInspOutputCaptured => "已捕获输出",
+        MessageId::CtxInspNoOutputYet => "尚无输出",
+        MessageId::CtxInspNoSystemPrompt => "未设置系统提示。",
+        MessageId::CtxInspNoReferences => "尚未记录任何文件、目录或媒体引用。",
+        MessageId::CtxInspNoToolActivity => "尚未记录任何工具活动。",
+        MessageId::CtxInspAltVHint => "打开对应的卡片并按 Alt+V 查看详细信息。",
+        MessageId::CtxInspCells => "单元格",
+        MessageId::CtxInspApiMessages => "API 消息",
+        MessageId::CtxInspActive => "活动中",
+        MessageId::CtxInspCell => "单元格",
+        MessageId::CtxInspMoreReferences => "更多引用",
+        MessageId::CtxInspStablePrefix => "稳定前缀",
+        MessageId::CtxInspVolatileWorkingSet => "易变工作集",
+        MessageId::CtxInspFirstLine => "第一行",
+        MessageId::CtxInspTotal => "总计",
+        MessageId::CtxInspTextPromptLayers => "文本提示层",
+        MessageId::CtxInspSingleTextBlob => "单一文本块",
+        MessageId::CtxInspBlocks => "个区块",
+        MessageId::CtxInspBlock => "个区块",
+        MessageId::CtxInspTokens => "个 token",
+        MessageId::CtxInspLayers => "个层",
+        MessageId::CtxInspNone => "无",
+        MessageId::CtxInspEmpty => "(空)",
+        MessageId::CtxInspCacheFriendly => "缓存友好",
+        MessageId::CtxInspChangesByTurn => "按会话/轮次变化",
+        MessageId::CtxInspStablePrefixOnly => "仅稳定前缀",
+        MessageId::CtxInspCacheTip => {
+            "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
+        }
     })
 }
 
@@ -2762,21 +3190,13 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdBalanceDescription => "Verificar o saldo da conta do provedor ativo",
         MessageId::CmdClearDescription => "Limpar o histórico da conversa",
-        MessageId::CmdCompactDescription => {
-            "Compactar o contexto para liberar espaço (legado; a v0.6.6 prefere o reinício de ciclo)"
-        }
+        MessageId::CmdCompactDescription => "Compactar o contexto para liberar espaço",
         MessageId::CmdPurgeDescription => {
             "Deixe o agente podar cirurgicamente o histórico para liberar espaço de contexto"
         }
         MessageId::CmdConfigDescription => "Abrir o editor interativo de configuração",
         MessageId::CmdContextDescription => "Abrir o inspetor compacto de contexto da sessão",
         MessageId::CmdCostDescription => "Exibir o detalhamento de custo da sessão",
-        MessageId::CmdCycleDescription => {
-            "Exibir o briefing de continuidade de um ciclo específico"
-        }
-        MessageId::CmdCyclesDescription => {
-            "Listar as transferências dos ciclos checkpoint-restart desta sessão"
-        }
         MessageId::CmdDiffDescription => "Mostrar alterações em arquivos desde o início da sessão",
         MessageId::CmdEditDescription => "Revisar e reenviar a última mensagem",
         MessageId::CmdExitDescription => "Sair do aplicativo",
@@ -2805,7 +3225,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Inspecionar ou gerenciar o arquivo persistente de memória do usuário"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Trocar ou exibir o modelo atual",
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
@@ -2816,9 +3236,27 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
-        MessageId::CmdRecallDescription => {
-            "Buscar arquivos de ciclos anteriores (BM25 sobre o texto das mensagens)"
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editando mensagem enfileirada:",
+        MessageId::CmdQueueNoMessages => "Nenhuma mensagem enfileirada",
+        MessageId::CmdQueueListHeader => "Mensagens enfileiradas ({count}):",
+        MessageId::CmdQueueTip => "Dica: /queue edit <n> para editar, /queue drop <n> para remover",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Já está editando uma mensagem enfileirada. Envie-a ou use /queue clear para descartar."
         }
+        MessageId::CmdQueueNotFound => "Mensagem enfileirada não encontrada",
+        MessageId::CmdQueueEditingStatus => "Editando mensagem enfileirada {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editando mensagem enfileirada {index} (pressione Enter para re-enfileirar/enviar)"
+        }
+        MessageId::CmdQueueDropped => "Mensagem enfileirada {index} removida",
+        MessageId::CmdQueueAlreadyEmpty => "Fila já está vazia",
+        MessageId::CmdQueueCleared => "Fila limpa",
+        MessageId::CmdQueueMissingIndex => {
+            "Índice ausente. Uso: /queue edit <n> ou /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "O índice deve ser um número positivo",
+        MessageId::CmdQueueIndexMin => "O índice deve ser >= 1",
         MessageId::CmdRelayDescription => "Criar um relay da sessão para um novo thread",
         MessageId::CmdRenameDescription => "Renomear a sessão atual",
         MessageId::CmdRestoreDescription => {
@@ -3096,7 +3534,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardApiKeyStep2 => "Passo 2.  Cole abaixo e pressione Enter.",
         MessageId::OnboardApiKeySavedHint => {
-            "Salvo em ~/.deepseek/config.toml para funcionar em qualquer pasta."
+            "Salvo em ~/.codewhale/config.toml para funcionar em qualquer pasta."
         }
         MessageId::OnboardApiKeyFormatHint => {
             "Cole a chave inteira como foi emitida (sem espaços ou quebras de linha)."
@@ -3159,6 +3597,61 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto ativo e dicas de cache",
         MessageId::CtxMenuHelp => "Ajuda",
         MessageId::CtxMenuHelpDesc => "atalhos de teclado e comandos",
+        MessageId::FanoutCounts => {
+            "{done} concluído · {running} executando · {failed} falhou · {pending} pendente"
+        }
+
+        MessageId::CtxInspTitle => "Inspetor de contexto",
+        MessageId::CtxInspSessionContext => "Contexto da sessão",
+        MessageId::CtxInspSystemPrompt => "Estrutura do prompt do sistema",
+        MessageId::CtxInspReferences => "Referências",
+        MessageId::CtxInspRecentTools => "Ferramentas recentes",
+        MessageId::CtxInspModel => "Modelo",
+        MessageId::CtxInspWorkspace => "Espaço de trabalho",
+        MessageId::CtxInspSession => "Sessão",
+        MessageId::CtxInspContext => "Contexto",
+        MessageId::CtxInspTranscript => "Transcrição",
+        MessageId::CtxInspWorkspaceStatus => "Status do espaço de trabalho",
+        MessageId::CtxInspNotSampledYet => "ainda não amostrado",
+        MessageId::CtxInspOk => "ok",
+        MessageId::CtxInspHigh => "alto",
+        MessageId::CtxInspCritical => "crítico",
+        MessageId::CtxInspIncluded => "incluído",
+        MessageId::CtxInspAttached => "anexado",
+        MessageId::CtxInspNotIncluded => "não incluído",
+        MessageId::CtxInspOutputCaptured => "saída capturada",
+        MessageId::CtxInspNoOutputYet => "nenhuma saída ainda",
+        MessageId::CtxInspNoSystemPrompt => "Nenhum prompt de sistema definido.",
+        MessageId::CtxInspNoReferences => {
+            "Nenhuma referência de arquivo, diretório ou mídia registrada ainda."
+        }
+        MessageId::CtxInspNoToolActivity => "Nenhuma atividade de ferramenta registrada ainda.",
+        MessageId::CtxInspAltVHint => {
+            "Abra o cartão correspondente e pressione Alt+V para detalhes completos."
+        }
+        MessageId::CtxInspCells => "células",
+        MessageId::CtxInspApiMessages => "mensagens da API",
+        MessageId::CtxInspActive => "ativo",
+        MessageId::CtxInspCell => "célula",
+        MessageId::CtxInspMoreReferences => "mais referência(s)",
+        MessageId::CtxInspStablePrefix => "Prefixo estável",
+        MessageId::CtxInspVolatileWorkingSet => "Conjunto de trabalho volátil",
+        MessageId::CtxInspFirstLine => "Primeira linha",
+        MessageId::CtxInspTotal => "Total",
+        MessageId::CtxInspTextPromptLayers => "Camadas de prompt de texto",
+        MessageId::CtxInspSingleTextBlob => "Bloco de texto único",
+        MessageId::CtxInspBlocks => "bloco(s)",
+        MessageId::CtxInspBlock => "bloco",
+        MessageId::CtxInspTokens => "token(s)",
+        MessageId::CtxInspLayers => "camada(s)",
+        MessageId::CtxInspNone => "nenhum",
+        MessageId::CtxInspEmpty => "(vazio)",
+        MessageId::CtxInspCacheFriendly => "amigável ao cache",
+        MessageId::CtxInspChangesByTurn => "muda por sessão/turno",
+        MessageId::CtxInspStablePrefixOnly => "apenas prefixo estável",
+        MessageId::CtxInspCacheTip => {
+            "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
+        }
     })
 }
 
@@ -3219,21 +3712,13 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdBalanceDescription => "Consultar el saldo de la cuenta del proveedor activo",
         MessageId::CmdClearDescription => "Limpiar el historial de la conversación",
-        MessageId::CmdCompactDescription => {
-            "Compactar el contexto para liberar espacio (heredado; v0.6.6 prefiere reinicio de ciclo)"
-        }
+        MessageId::CmdCompactDescription => "Compactar el contexto para liberar espacio",
         MessageId::CmdPurgeDescription => {
             "Permite al agente eliminar quirúrgicamente historial innecesario para liberar espacio de contexto"
         }
         MessageId::CmdConfigDescription => "Abrir el editor interactivo de configuración",
         MessageId::CmdContextDescription => "Abrir el inspector compacto de contexto de la sesión",
         MessageId::CmdCostDescription => "Mostrar el desglose de costo de la sesión",
-        MessageId::CmdCycleDescription => {
-            "Mostrar el resumen de continuidad de un ciclo específico"
-        }
-        MessageId::CmdCyclesDescription => {
-            "Listar las transferencias de checkpoint-restart de esta sesión"
-        }
         MessageId::CmdDiffDescription => "Mostrar cambios en archivos desde el inicio de la sesión",
         MessageId::CmdEditDescription => "Revisar y reenviar el último mensaje",
         MessageId::CmdExitDescription => "Salir de la aplicación",
@@ -3266,20 +3751,42 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Inspeccionar o gestionar el archivo persistente de memoria del usuario"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo o abrir selector: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+            "Alternar modo o abrir selector: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Cambiar o mostrar el modelo actual",
         MessageId::CmdModelsDescription => "Listar los modelos disponibles por la API",
         MessageId::CmdNetworkDescription => "Gestionar reglas de red permitidas y bloqueadas",
-        MessageId::CmdNoteDescription => "Agregar nota al archivo persistente (.deepseek/notes.md)",
+        MessageId::CmdNoteDescription => {
+            "Agregar nota al archivo persistente (.codewhale/notes.md)"
+        }
         MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
         MessageId::CmdProviderDescription => {
             "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
-        MessageId::CmdRecallDescription => {
-            "Buscar archivos de ciclos anteriores (BM25 sobre el texto de los mensajes)"
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueDraftHeader => "Editando mensaje en cola:",
+        MessageId::CmdQueueNoMessages => "No hay mensajes en cola",
+        MessageId::CmdQueueListHeader => "Mensajes en cola ({count}):",
+        MessageId::CmdQueueTip => {
+            "Consejo: /queue edit <n> para editar, /queue drop <n> para eliminar"
         }
+        MessageId::CmdQueueAlreadyEditing => {
+            "Ya estás editando un mensaje en cola. Envíalo o usa /queue clear para descartarlo."
+        }
+        MessageId::CmdQueueNotFound => "Mensaje en cola no encontrado",
+        MessageId::CmdQueueEditingStatus => "Editando mensaje en cola {index}",
+        MessageId::CmdQueueEditingMessage => {
+            "Editando mensaje en cola {index} (presiona Enter para re-encolar/enviar)"
+        }
+        MessageId::CmdQueueDropped => "Mensaje en cola {index} eliminado",
+        MessageId::CmdQueueAlreadyEmpty => "La cola ya está vacía",
+        MessageId::CmdQueueCleared => "Cola limpiada",
+        MessageId::CmdQueueMissingIndex => {
+            "Índice faltante. Uso: /queue edit <n> o /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "El índice debe ser un número positivo",
+        MessageId::CmdQueueIndexMin => "El índice debe ser >= 1",
         MessageId::CmdRelayDescription => "Crear un relay de sesión (接力) para un hilo nuevo",
         MessageId::CmdRenameDescription => "Renombrar la sesión actual",
         MessageId::CmdRestoreDescription => {
@@ -3563,7 +4070,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardApiKeyStep2 => "Paso 2.  Pégala abajo y presiona Enter.",
         MessageId::OnboardApiKeySavedHint => {
-            "Guardada en ~/.deepseek/config.toml para funcionar en cualquier carpeta."
+            "Guardada en ~/.codewhale/config.toml para funcionar en cualquier carpeta."
         }
         MessageId::OnboardApiKeyFormatHint => {
             "Pega la clave completa tal como fue emitida (sin espacios ni saltos de línea)."
@@ -3624,6 +4131,61 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "contexto activo y sugerencias de caché",
         MessageId::CtxMenuHelp => "Ayuda",
         MessageId::CtxMenuHelpDesc => "atajos de teclado y comandos",
+        MessageId::FanoutCounts => {
+            "{done} completado · {running} ejecutando · {failed} falló · {pending} pendiente"
+        }
+
+        MessageId::CtxInspTitle => "Inspector de contexto",
+        MessageId::CtxInspSessionContext => "Contexto de la sesión",
+        MessageId::CtxInspSystemPrompt => "Estructura del prompt del sistema",
+        MessageId::CtxInspReferences => "Referencias",
+        MessageId::CtxInspRecentTools => "Herramientas recientes",
+        MessageId::CtxInspModel => "Modelo",
+        MessageId::CtxInspWorkspace => "Espacio de trabajo",
+        MessageId::CtxInspSession => "Sesión",
+        MessageId::CtxInspContext => "Contexto",
+        MessageId::CtxInspTranscript => "Transcripción",
+        MessageId::CtxInspWorkspaceStatus => "Estado del espacio de trabajo",
+        MessageId::CtxInspNotSampledYet => "aún no muestreado",
+        MessageId::CtxInspOk => "bien",
+        MessageId::CtxInspHigh => "alto",
+        MessageId::CtxInspCritical => "crítico",
+        MessageId::CtxInspIncluded => "incluido",
+        MessageId::CtxInspAttached => "adjunto",
+        MessageId::CtxInspNotIncluded => "no incluido",
+        MessageId::CtxInspOutputCaptured => "salida capturada",
+        MessageId::CtxInspNoOutputYet => "sin salida aún",
+        MessageId::CtxInspNoSystemPrompt => "No hay prompt de sistema establecido.",
+        MessageId::CtxInspNoReferences => {
+            "Aún no se han registrado referencias de archivos, directorios o medios."
+        }
+        MessageId::CtxInspNoToolActivity => "Aún no se ha registrado actividad de herramientas.",
+        MessageId::CtxInspAltVHint => {
+            "Abra la tarjeta correspondiente y presione Alt+V para ver los detalles completos."
+        }
+        MessageId::CtxInspCells => "celdas",
+        MessageId::CtxInspApiMessages => "mensajes de API",
+        MessageId::CtxInspActive => "activo",
+        MessageId::CtxInspCell => "celda",
+        MessageId::CtxInspMoreReferences => "más referencia(s)",
+        MessageId::CtxInspStablePrefix => "Prefijo estable",
+        MessageId::CtxInspVolatileWorkingSet => "Conjunto de trabajo volátil",
+        MessageId::CtxInspFirstLine => "Primera línea",
+        MessageId::CtxInspTotal => "Total",
+        MessageId::CtxInspTextPromptLayers => "Capas de prompt de texto",
+        MessageId::CtxInspSingleTextBlob => "Bloque de texto único",
+        MessageId::CtxInspBlocks => "bloque(s)",
+        MessageId::CtxInspBlock => "bloque",
+        MessageId::CtxInspTokens => "token(es)",
+        MessageId::CtxInspLayers => "capa(s)",
+        MessageId::CtxInspNone => "ninguno",
+        MessageId::CtxInspEmpty => "(vacío)",
+        MessageId::CtxInspCacheFriendly => "amigable con caché",
+        MessageId::CtxInspChangesByTurn => "cambia por sesión/turno",
+        MessageId::CtxInspStablePrefixOnly => "solo prefijo estable",
+        MessageId::CtxInspCacheTip => {
+            "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
+        }
     })
 }
 
@@ -3699,12 +4261,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_description_names_deepseek_backend() {
+    fn provider_description_is_present_for_all_locales() {
         for locale in Locale::shipped() {
             let description = tr(*locale, MessageId::CmdProviderDescription);
             assert!(
-                description.contains("deepseek"),
-                "{} provider description should mention deepseek: {description}",
+                !description.is_empty(),
+                "{} provider description should not be empty",
                 locale.tag()
             );
             assert!(

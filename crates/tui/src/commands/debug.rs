@@ -152,6 +152,9 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     if matches!(arg, Some("stats")) {
         return CommandResult::message(format_cache_stats(app));
     }
+    if matches!(arg, Some("zones")) {
+        return CommandResult::message(format_cache_zones(app));
+    }
 
     let want = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
     let cap = app.session.turn_cache_history.len();
@@ -518,6 +521,81 @@ fn format_cache_stats(app: &App) -> String {
             out.push_str("  NOTE: cache hit rate is low (< 80%). Check prefix stability above or consider /compact.\n");
         }
     }
+
+    out
+}
+
+/// Render three-zone prefix contract status for `/cache zones` (#2264).
+///
+/// Displays the PinnedPrefix fingerprint, AppendLog size, and TurnScratch
+/// state. The zones are type scaffolding only (Phase 1) — not yet
+/// enforcing the full contract at request time.
+fn format_cache_zones(app: &App) -> String {
+    let mut out = String::new();
+    out.push_str("Cache Zones (#2264 three-zone contract, Phase 1 foundation)\n");
+
+    // ── PinnedPrefix ─────────────────────────────────────────────────
+    out.push_str("\n── PinnedPrefix (system + tools, frozen baseline)\n");
+    match &app.last_pinned_prefix_hash {
+        Some(hash) => {
+            let short = if hash.len() >= 12 { &hash[..12] } else { hash };
+            out.push_str(&format!("  Short id: {short}\n"));
+            if app.prefix_change_count > 0 {
+                out.push_str(&format!(
+                    "  Status:    WARNING — {change} drift{plural} detected\n",
+                    change = app.prefix_change_count,
+                    plural = if app.prefix_change_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ));
+            } else {
+                out.push_str("  Status:    stable (no drift this session)\n");
+            }
+            if let Some(pct) = app.prefix_stability_pct {
+                out.push_str(&format!("  Stability: {pct}%\n"));
+            }
+        }
+        None => {
+            out.push_str("  Status:    unavailable (not yet frozen)\n");
+            out.push_str("  Run a turn first to freeze the baseline.\n");
+        }
+    }
+
+    // ── AppendLog ────────────────────────────────────────────────────
+    out.push_str("\n── AppendLog (conversation history, append-only)\n");
+    out.push_str("  Status:      Phase 1 scaffolding — not yet wired into engine\n");
+    let msg_count = app.api_messages.len();
+    out.push_str(&format!("  Messages:    {msg_count}\n"));
+    let history_count = app
+        .api_messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .count();
+    out.push_str(&format!("  History msgs: {history_count}\n"));
+
+    // ── TurnScratch ──────────────────────────────────────────────────
+    out.push_str("\n── TurnScratch (per-turn ephemeral data)\n");
+    out.push_str("  Status:      Phase 1 scaffolding — not yet wired into engine\n");
+
+    // ── Zone contract summary ────────────────────────────────────────
+    out.push_str("\n── Contract Status\n");
+    let has_drift = app.prefix_change_count > 0;
+    out.push_str(&format!(
+        "  PinnedPrefix: {}\n",
+        if app.last_pinned_prefix_hash.is_some() {
+            if has_drift {
+                "WARNING — drifted"
+            } else {
+                "OK"
+            }
+        } else {
+            "not frozen"
+        }
+    ));
+    out.push_str("  AppendLog:    Phase 1 foundation\n");
+    out.push_str("  TurnScratch:  Phase 1 foundation\n");
 
     out
 }

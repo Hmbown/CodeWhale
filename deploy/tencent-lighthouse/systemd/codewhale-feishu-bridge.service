@@ -8,7 +8,9 @@ Type=simple
 User=codewhale
 Group=codewhale
 WorkingDirectory=/opt/codewhale/bridge
-EnvironmentFile=/etc/deepseek/feishu-bridge.env
+# Legacy /etc/deepseek is loaded first for old installs; /etc/codewhale wins.
+EnvironmentFile=-/etc/deepseek/feishu-bridge.env
+EnvironmentFile=-/etc/codewhale/feishu-bridge.env
 ExecStart=/usr/bin/node /opt/codewhale/bridge/src/index.mjs
 Restart=on-failure
 RestartSec=5

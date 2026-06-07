@@ -9,7 +9,7 @@
 ## Cài đặt
 
 `codewhale` được cài đặt dưới dạng một cặp binary tự chạy bằng Rust đồng bộ với nhau:
-Lệnh điều phối `codewhale` (dispatcher) và môi trường chạy giao diện `codewhale-tui` (runtime) do nó khởi chạy để thực hiện các phiên làm việc tương tác. Các trình quản lý gói như npm, Homebrew, và Docker sẽ tự động cài đặt cả hai cho bạn; đối với Cargo hoặc cài đặt thủ công, bạn phải đặt cả hai tệp binary này trong cùng một thư mục (thông thường là một thư mục nằm trong biến môi trường `PATH` của bạn). Gói npm chỉ là một trình cài đặt/bao bọc (wrapper) cho các tệp binary phát hành này; agent không chạy trên môi trường Node.js.
+Lệnh điều phối `codewhale` (dispatcher) và môi trường chạy giao diện `codewhale-tui` (runtime) do nó khởi chạy để thực hiện các phiên làm việc tương tác. npm và Docker sẽ tự động cài đặt cả hai cho bạn; đối với Cargo hoặc cài đặt thủ công, bạn phải đặt cả hai tệp binary này trong cùng một thư mục (thông thường là một thư mục nằm trong biến môi trường `PATH` của bạn). Gói npm chỉ là một trình cài đặt/bao bọc (wrapper) cho các tệp binary phát hành này; agent không chạy trên môi trường Node.js.
 
 ```bash
 # 1. npm — dễ nhất nếu bạn đã cài đặt Node. Gói này sẽ tự động tải các
@@ -22,8 +22,9 @@ npm install -g codewhale
 cargo install codewhale-cli --locked   # cài đặt `codewhale` (điểm truy cập CLI chính)
 cargo install codewhale-tui     --locked   # cài đặt `codewhale-tui` (giao diện TUI)
 
-# 3. Homebrew — trình quản lý gói dành cho macOS.
-#    Tên tap/formula là tên cũ (legacy); nó sẽ cài đặt cả codewhale và codewhale-tui.
+# 3. Homebrew — chỉ dành cho khả năng tương thích với cài đặt cũ.
+#    Tap/formula vẫn dùng tên deepseek-tui cũ. Với cài đặt mới, hãy ưu tiên
+#    npm, Cargo, Docker hoặc tải trực tiếp cho đến khi formula được đổi tên.
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
@@ -56,7 +57,7 @@ docker run --rm -it \
 ```bash
 codewhale update                         # trình cập nhật binary phát hành trực tiếp
 npm install -g codewhale@latest      # thông qua trình bao bọc npm
-brew update && brew upgrade deepseek-tui
+brew update && brew upgrade deepseek-tui  # chỉ cho cài đặt Homebrew cũ
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
@@ -282,6 +283,10 @@ DEEPSEEK_ALLOW_INSECURE_HTTP=1 VLLM_BASE_URL="http://192.168.0.110:8000/v1" code
 # Tự host bằng Ollama
 ollama pull codewhale-coder:1.3b
 codewhale --provider ollama --model codewhale-coder:1.3b
+
+# Hugging Face Inference Providers
+codewhale auth set --provider huggingface --api-key "YOUR_HF_TOKEN"
+codewhale --provider huggingface --model deepseek-ai/DeepSeek-V4-Pro
 ```
 
 Bên trong giao diện TUI, lệnh `/provider` mở bảng chọn nhà cung cấp và `/model` mở bảng chọn mô hình/cấp độ suy nghĩ cục bộ. Lệnh `/provider openrouter` và `/model <id>` chuyển đổi trực tiếp, trong khi lệnh `/models` sẽ truy vấn trực tiếp và hiển thị danh sách các mô hình API trực tuyến từ nhà cung cấp (nếu nhà cung cấp hỗ trợ tính năng liệt kê mô hình).
@@ -407,23 +412,29 @@ Các biến môi trường chính:
 | `DEEPSEEK_HTTP_HEADERS` | Các header tùy chỉnh gửi kèm yêu cầu API, ví dụ `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Mô hình mặc định |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Thời gian chờ tối đa khi stream bị rảnh (giây), mặc định là `300`, giới hạn trong khoảng `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | Các nhà cung cấp: `deepseek` (mặc định), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | Các nhà cung cấp: `deepseek` (mặc định), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface` |
 | `DEEPSEEK_PROFILE` | Tên cấu hình profile sử dụng |
 | `DEEPSEEK_MEMORY` | Thiết lập là `on` để kích hoạt tính năng tự ghi nhớ thông tin người dùng |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Cho phép sử dụng các đường dẫn API dạng `http://` không mã hóa trong các mạng LAN tin cậy |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Thông tin đăng nhập theo từng nhà cung cấp tương ứng |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `ARK_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Thông tin đăng nhập theo từng nhà cung cấp tương ứng |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Điểm cuối (endpoint) và mã mô hình cho nhà cung cấp tương thích định dạng OpenAI chung |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | Endpoint và mô hình ghi đè cho AtlasCloud |
 | `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Endpoint và mô hình ghi đè cho Wanjie Ark |
+| `VOLCENGINE_BASE_URL` / `ARK_BASE_URL` / `VOLCENGINE_MODEL` / `ARK_MODEL` | Endpoint và mô hình ghi đè cho Volcengine Ark |
 | `OPENROUTER_BASE_URL` | Endpoint ghi đè cho OpenRouter |
+| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` | Endpoint và mô hình ghi đè cho Xiaomi MiMo |
 | `NOVITA_BASE_URL` | Endpoint ghi đè cho Novita |
 | `FIREWORKS_BASE_URL` | Endpoint ghi đè cho Fireworks |
+| `SILICONFLOW_BASE_URL` / `SILICONFLOW_MODEL` | Endpoint và mô hình ghi đè cho SiliconFlow |
+| `MOONSHOT_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_BASE_URL` / `KIMI_MODEL` | Endpoint và mô hình ghi đè cho Moonshot/Kimi |
 | `SGLANG_BASE_URL` | Endpoint cho máy chủ SGLang tự host |
 | `SGLANG_MODEL` | Mã mô hình cho máy chủ SGLang tự host |
 | `VLLM_BASE_URL` | Endpoint cho máy chủ vLLM tự host |
 | `VLLM_MODEL` | Mã mô hình cho máy chủ vLLM tự host |
 | `OLLAMA_BASE_URL` | Endpoint cho máy chủ Ollama tự host |
 | `OLLAMA_MODEL` | Thẻ mô hình (model tag) cho máy chủ Ollama tự host |
+| `HUGGINGFACE_API_KEY` / `HF_TOKEN` | Xác thực Hugging Face |
+| `HUGGINGFACE_BASE_URL` / `HUGGINGFACE_MODEL` | Ghi đè endpoint và mô hình Hugging Face |
 | `NO_ANIMATIONS=1` | Bắt buộc chạy ở chế độ hỗ trợ khả năng tiếp cận (Accessibility mode), tắt hiệu ứng khi khởi động |
 | `SSL_CERT_FILE` | Đường dẫn file CA bundle tùy chỉnh khi sử dụng proxy nội bộ doanh nghiệp |
 
@@ -508,6 +519,10 @@ Lịch sử cập nhật chi tiết: [CHANGELOG.md](CHANGELOG.md).
 - **[Open Design](https://github.com/nexu-io/open-design)** — Cảm ơn vì sự hỗ trợ và hợp tác xung quanh quy trình làm việc chú trọng thiết kế của agent.
 
 Dự án này được phát triển và vận hành trơn tru với sự đóng góp của cộng đồng các nhà phát triển ngày càng lớn mạnh:
+
+Các đóng góp đã được merge hoặc được harvest trong v0.8.48: **[@cy2311](https://github.com/cy2311)**, **[@LING71671](https://github.com/LING71671)**, **[@axobase001](https://github.com/axobase001)**, **[@dzyuan](https://github.com/dzyuan)**, **[@mvanhorn](https://github.com/mvanhorn)**, **[@malsony](https://github.com/malsony)**, **[@gaord](https://github.com/gaord)**, **[@yuanchenglu](https://github.com/yuanchenglu)**, **[@idling11](https://github.com/idling11)**, **[@h3c-hexin](https://github.com/h3c-hexin)**, **[@AdityaVG13](https://github.com/AdityaVG13)**, **[@Sskift](https://github.com/Sskift)**, **[@cyq1017](https://github.com/cyq1017)**, **[@HUQIANTAO](https://github.com/HUQIANTAO)**, **[@New2Niu](https://github.com/New2Niu)**, **[@AiurArtanis](https://github.com/AiurArtanis)**, **[@Lee-take](https://github.com/Lee-take)**, **[@nightt5879](https://github.com/nightt5879)**, **[@AresNing](https://github.com/AresNing)**, **[@AccMoment](https://github.com/AccMoment)**, **[@reidliu41](https://github.com/reidliu41)**, **[@aboimpinto](https://github.com/aboimpinto)**, **[@zhuangbiaowei](https://github.com/zhuangbiaowei)**, **[@donglovejava](https://github.com/donglovejava)**, **[@hongqitai](https://github.com/hongqitai)**, **[@zlh124](https://github.com/zlh124)**, **[@encyc](https://github.com/encyc)**, **[@Implementist](https://github.com/Implementist)**, **[@lihuan215](https://github.com/lihuan215)**, **[@LeoAlex0](https://github.com/LeoAlex0)**, **[@jimmyzhuu](https://github.com/jimmyzhuu)**, **[@rockyzhang](https://github.com/rockyzhang)**, **[@mo-vic](https://github.com/mo-vic)**, **[@hufanexplore](https://github.com/hufanexplore)**, **[@hoclaptrinh33](https://github.com/hoclaptrinh33)** và **[@BryonGo](https://github.com/BryonGo)**.
+
+Xin cảm ơn các báo cáo, bước tái hiện lỗi và xác minh từ **[@buko](https://github.com/buko)**, **[@yyyCode](https://github.com/yyyCode)**, **[@gaslebinh-glitch](https://github.com/gaslebinh-glitch)**, **[@Dr3259](https://github.com/Dr3259)**, **[@lpeng1711694086-lang](https://github.com/lpeng1711694086-lang)**, **[@VerrPower](https://github.com/VerrPower)**, **[@yan-zay](https://github.com/yan-zay)**, **[@jretz](https://github.com/jretz)**, **[@Neo-millunnium](https://github.com/Neo-millunnium)**, **[@caeserchen](https://github.com/caeserchen)**, **[@T-Phuong-Nguyen](https://github.com/T-Phuong-Nguyen)**, **[@zhyuzhyu](https://github.com/zhyuzhyu)**, **[@0gl20shk0sbt36](https://github.com/0gl20shk0sbt36)**, **[@hatakes](https://github.com/hatakes)**, **[@goodvecn-dev](https://github.com/goodvecn-dev)**, **[@bevis-wong](https://github.com/bevis-wong)**, **[@PurplePulse](https://github.com/PurplePulse)** và **[@nbiish](https://github.com/nbiish)** đã giúp định hình v0.8.48.
 
 - **[merchloubna70-dot](https://github.com/merchloubna70-dot)** — Đóng góp 28 PR bao gồm tính năng mới, sửa lỗi và dựng sẵn extension cho VS Code (#645–#681)
 - **[WyxBUPT-22](https://github.com/WyxBUPT-22)** — Xây dựng trình kết xuất Markdown hỗ trợ bảng biểu, chữ đậm/nghiêng và đường kẻ ngang (#579)

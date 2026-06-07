@@ -9,13 +9,13 @@ description = "Core runtime boundaries for DeepSeek workspace architecture"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.46" }
-codewhale-config = { path = "../config", version = "0.8.46" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.46" }
-codewhale-hooks = { path = "../hooks", version = "0.8.46" }
-codewhale-mcp = { path = "../mcp", version = "0.8.46" }
-codewhale-protocol = { path = "../protocol", version = "0.8.46" }
-codewhale-state = { path = "../state", version = "0.8.46" }
-codewhale-tools = { path = "../tools", version = "0.8.46" }
+codewhale-agent = { path = "../agent", version = "0.8.53" }
+codewhale-config = { path = "../config", version = "0.8.53" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.53" }
+codewhale-hooks = { path = "../hooks", version = "0.8.53" }
+codewhale-mcp = { path = "../mcp", version = "0.8.53" }
+codewhale-protocol = { path = "../protocol", version = "0.8.53" }
+codewhale-state = { path = "../state", version = "0.8.53" }
+codewhale-tools = { path = "../tools", version = "0.8.53" }
 serde_json.workspace = true
 uuid.workspace = true

@@ -4,6 +4,11 @@ use crate::tools::spec::ToolContext;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+#[cfg(windows)]
+use windows::Win32::Foundation::{DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, HANDLE};
+#[cfg(windows)]
+use windows::Win32::System::Threading::GetCurrentProcess;
+
 // `env_lock` exists only to serialize Unix-only env-mutating tests.
 // Windows builds gate that test out, so the helper would be dead code
 // under `-Dwarnings` if the import + helper were unconditional.
@@ -14,6 +19,33 @@ use std::sync::{Mutex, OnceLock};
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(windows)]
+const JOB_OBJECT_QUERY_ACCESS: u32 = 0x0004;
+
+#[cfg(windows)]
+fn duplicate_job_without_terminate_access(job: WindowsJob) -> WindowsJob {
+    let process = unsafe { GetCurrentProcess() };
+    let mut limited_handle = HANDLE::default();
+
+    unsafe {
+        DuplicateHandle(
+            process,
+            job.handle,
+            process,
+            &mut limited_handle,
+            JOB_OBJECT_QUERY_ACCESS,
+            false,
+            DUPLICATE_HANDLE_OPTIONS(0),
+        )
+        .expect("duplicate job handle without terminate access");
+    }
+
+    drop(job);
+    WindowsJob {
+        handle: limited_handle,
+    }
 }
 
 fn echo_command(message: &str) -> String {
@@ -100,6 +132,20 @@ fn failed_network_shell_result(stdout: &str, stderr: &str) -> ShellResult {
     }
 }
 
+fn wait_for_completed_shell(manager: &mut ShellManager, task_id: &str) -> ShellResult {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let result = manager
+            .get_output(task_id, true, 1_000)
+            .expect("get_output");
+        if result.status != ShellStatus::Running || Instant::now() >= deadline {
+            return result;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn shell_execution_scrubs_parent_env_and_keeps_explicit_env() {
@@ -119,7 +165,7 @@ fn shell_execution_scrubs_parent_env_and_keeps_explicit_env() {
 
     let result = manager
         .execute_with_options_env(
-            "printf '%s\\n%s\\n' \"${DEEPSEEK_CHILD_ENV_SHELL_SECRET-unset}\" \"${DEEPSEEK_CHILD_ENV_EXPLICIT-unset}\"",
+            "sh -c 'printf \"%s\\n%s\\n\" \"${DEEPSEEK_CHILD_ENV_SHELL_SECRET-unset}\" \"${DEEPSEEK_CHILD_ENV_EXPLICIT-unset}\"'",
             None,
             5000,
             false,
@@ -173,10 +219,7 @@ fn test_background_execution() {
         .task_id
         .expect("background execution should return task_id");
 
-    // Wait for completion
-    let final_result = manager
-        .get_output(&task_id, true, 5000)
-        .expect("get_output");
+    let final_result = wait_for_completed_shell(&mut manager, &task_id);
 
     assert_eq!(final_result.status, ShellStatus::Completed);
     assert!(final_result.stdout.contains("done"));
@@ -767,6 +810,8 @@ async fn test_completed_background_shell_releases_process_handles() {
 
     assert!(result.success);
     let mut manager = shell_manager.lock().expect("shell manager lock");
+    let result = wait_for_completed_shell(&mut manager, &task_id);
+    assert_eq!(result.status, ShellStatus::Completed);
     let shell = manager.processes.get_mut(&task_id).expect("tracked shell");
     shell.poll();
     assert_eq!(shell.status, ShellStatus::Completed);
@@ -919,6 +964,177 @@ fn test_orphaned_subprocess_does_not_block_collect_output() {
     let done = manager
         .get_output(&task_id, true, 3000)
         .expect("get_output must complete, not hang");
+    assert_eq!(done.status, ShellStatus::Completed);
+}
+
+#[cfg(unix)]
+#[test]
+fn foreground_shell_does_not_block_on_orphaned_subprocess_pipe() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let started = std::time::Instant::now();
+    let result = manager
+        .execute("sh -c 'sleep 100 &'", None, 5000, false)
+        .expect("foreground execute must complete, not hang");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "foreground execute blocked on descendant pipe handles"
+    );
+    assert_eq!(result.status, ShellStatus::Completed);
+}
+
+// Windows equivalent of the orphaned pipe-handle regression. `cmd /c start /b`
+// launches a descendant process that inherits stdout/stderr and outlives the
+// shell. Job-object cleanup must terminate that descendant before reader-thread
+// joins, otherwise get_output() blocks until ping exits.
+#[cfg(windows)]
+#[test]
+fn background_collection_does_not_block_on_detached_descendant_pipe() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute(
+            r#"cmd /c start "" /b ping 127.0.0.1 -n 4"#,
+            None,
+            5000,
+            true,
+        )
+        .expect("execute");
+    let task_id = result.task_id.expect("task id");
+
+    let started = std::time::Instant::now();
+    let done = manager
+        .get_output(&task_id, true, 3000)
+        .expect("get_output must complete, not hang");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(6),
+        "get_output blocked on descendant pipe handles"
+    );
+    assert_eq!(done.status, ShellStatus::Completed);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_terminate_denied_falls_back_to_child_kill() {
+    let mut child = Command::new("ping")
+        .args(["127.0.0.1", "-n", "20"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn ping");
+
+    let job = WindowsJob::attach_to_child(&child).expect("attach job");
+    let limited_job = duplicate_job_without_terminate_access(job);
+
+    assert!(
+        limited_job.terminate().is_err(),
+        "limited job handle should not allow TerminateJobObject"
+    );
+
+    terminate_child_and_close_windows_job(Some(limited_job), &mut child)
+        .expect("fallback child kill");
+
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(3))
+        .expect("wait after fallback kill");
+    assert!(
+        status.is_some(),
+        "fallback child kill should terminate child"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_close_releases_foreground_reader_threads_when_terminate_denied() {
+    let mut child = Command::new("ping")
+        .args(["127.0.0.1", "-n", "8"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ping");
+
+    let job = WindowsJob::attach_to_child(&child).expect("attach job");
+    let limited_job = duplicate_job_without_terminate_access(job);
+    assert!(
+        limited_job.terminate().is_err(),
+        "limited job handle should not allow TerminateJobObject"
+    );
+
+    let stdout_handle = child.stdout.take().expect("stdout pipe");
+    let stderr_handle = child.stderr.take().expect("stderr pipe");
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = stdout_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = stderr_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+
+    let started = std::time::Instant::now();
+    terminate_and_close_windows_job(Some(limited_job));
+    let _ = stdout_thread.join().unwrap_or_default();
+    let _ = stderr_thread.join().unwrap_or_default();
+    let status = child
+        .wait_timeout(std::time::Duration::from_secs(3))
+        .expect("wait after kill-on-close");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "reader joins waited for natural descendant exit instead of kill-on-close"
+    );
+    assert!(status.is_some(), "kill-on-close should terminate child");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_job_kill_on_close_releases_reader_threads_when_terminate_denied() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute(
+            r#"cmd /c start "" /b ping 127.0.0.1 -n 8"#,
+            None,
+            5000,
+            true,
+        )
+        .expect("execute");
+    let task_id = result.task_id.expect("task id");
+
+    {
+        let shell = manager
+            .processes
+            .get_mut(&task_id)
+            .expect("background shell");
+        let job = shell.windows_job.take().expect("windows job attached");
+        let limited_job = duplicate_job_without_terminate_access(job);
+        assert!(
+            limited_job.terminate().is_err(),
+            "limited job handle should not allow TerminateJobObject"
+        );
+        shell.windows_job = Some(limited_job);
+    }
+
+    let started = std::time::Instant::now();
+    let done = manager
+        .get_output(&task_id, true, 3000)
+        .expect("get_output must complete via kill-on-close fallback");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "get_output waited for natural descendant exit instead of kill-on-close"
+    );
     assert_eq!(done.status, ShellStatus::Completed);
 }
 

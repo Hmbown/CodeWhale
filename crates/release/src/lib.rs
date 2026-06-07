@@ -3,34 +3,63 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+/// Filename of the SHA-256 checksum manifest included in every release.
+///
+/// Mirror directories must contain this file alongside platform binaries so
+/// that download integrity can be verified.
 pub const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
+
+/// GitHub API URL for the single latest stable release.
 pub const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest";
+
+/// GitHub API URL listing recent releases (up to 100), used to find beta tags.
 pub const RELEASES_URL: &str =
     "https://api.github.com/repos/Hmbown/CodeWhale/releases?per_page=100";
+
+/// Base URL of the CodeWhale repository on the CNB mirror platform.
 pub const CNB_REPO_URL: &str = "https://cnb.cool/codewhale.net/codewhale";
+
+/// Environment variable that overrides the base URL for release asset downloads.
 pub const RELEASE_BASE_URL_ENV: &str = "CODEWHALE_RELEASE_BASE_URL";
+
+/// Legacy environment variable (alias for [`RELEASE_BASE_URL_ENV`]).
 pub const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
+
+/// Legacy environment variable (alias for [`RELEASE_BASE_URL_ENV`]).
 pub const DEEPSEEK_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
+
+/// Environment variable that, when set, enables the CNB mirror for downloads.
 pub const CNB_MIRROR_ENV: &str = "CODEWHALE_USE_CNB_MIRROR";
+
+/// Environment variable that pins the update target version.
 pub const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
+
+/// Legacy environment variable (alias for [`UPDATE_VERSION_ENV`]).
 pub const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
+
+/// User-Agent header sent with release metadata requests.
 pub const UPDATE_USER_AGENT: &str = "codewhale-updater";
 
 const CNB_RELEASE_ASSET_BASE: &str = "https://cnb.cool/Hmbown/CodeWhale/-/releases";
 const RELEASE_METADATA_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The release channel to query for updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseChannel {
+    /// Official stable releases only.
     Stable,
+    /// Pre-release / beta versions.
     Beta,
 }
 
 impl ReleaseChannel {
+    /// Creates a channel from a boolean flag (`true` → [`Beta`](Self::Beta)).
     pub fn from_beta_flag(beta: bool) -> Self {
         if beta { Self::Beta } else { Self::Stable }
     }
 
+    /// Returns a lowercase human-readable label (`"stable"` or `"beta"`).
     pub fn label(self) -> &'static str {
         match self {
             Self::Stable => "stable",
@@ -39,13 +68,19 @@ impl ReleaseChannel {
     }
 }
 
+/// Describes where to fetch release metadata from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseQuery {
+    /// Use a custom mirror base URL and a pinned version.
     Mirror { base_url: String, version: String },
+    /// Query the GitHub single-latest-release endpoint.
     GitHubLatest { url: &'static str },
+    /// Query the GitHub release-list endpoint (used for beta discovery).
     GitHubReleaseList { url: &'static str },
 }
 
+/// Determines the appropriate [`ReleaseQuery`] for the given channel, taking
+/// environment-variable overrides (mirror URL, pinned version) into account.
 pub fn resolve_release_query(channel: ReleaseChannel) -> ReleaseQuery {
     let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
     if let Some(base_url) = release_base_url_from_env(&version) {
@@ -60,6 +95,9 @@ pub fn resolve_release_query(channel: ReleaseChannel) -> ReleaseQuery {
     }
 }
 
+/// Reads the release base URL from environment variables, falling back to the
+/// CNB mirror if `CODEWHALE_USE_CNB_MIRROR` is set. Returns `None` when no
+/// override is configured.
 pub fn release_base_url_from_env(version: &str) -> Option<String> {
     for env_name in [
         RELEASE_BASE_URL_ENV,
@@ -80,6 +118,7 @@ pub fn release_base_url_from_env(version: &str) -> Option<String> {
     None
 }
 
+/// Constructs the CNB mirror asset URL for a given version tag.
 pub fn cnb_release_base_url(version: &str) -> String {
     format!(
         "{}/v{}",
@@ -88,6 +127,8 @@ pub fn cnb_release_base_url(version: &str) -> String {
     )
 }
 
+/// Returns the pinned update version from environment variables, or `None`
+/// if neither `DEEPSEEK_TUI_VERSION` nor `DEEPSEEK_VERSION` is set.
 pub fn update_version_from_env() -> Option<String> {
     std::env::var(UPDATE_VERSION_ENV)
         .ok()
@@ -96,10 +137,13 @@ pub fn update_version_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Joins a mirror base URL with an asset filename to produce a full download URL.
 pub fn mirror_asset_url(base_url: &str, asset_name: &str) -> String {
     format!("{}/{}", base_url.trim_end_matches('/'), asset_name)
 }
 
+/// Returns a human-readable hint explaining how to use a mirror when GitHub
+/// downloads are blocked or slow (e.g. on mainland China networks).
 pub fn update_network_fallback_hint() -> String {
     format!(
         "GitHub release downloads may be blocked or slow on this network.\n\
@@ -113,6 +157,9 @@ pub fn update_network_fallback_hint() -> String {
     )
 }
 
+/// Fetches a release JSON payload from `url` using a blocking HTTP client.
+///
+/// `description` is included in error messages to identify the request purpose.
 pub fn fetch_release_json_blocking(url: &str, description: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UPDATE_USER_AGENT)
@@ -131,6 +178,7 @@ pub fn fetch_release_json_blocking(url: &str, description: &str) -> Result<Strin
     release_response_body(status, body, url, description)
 }
 
+/// Async counterpart of [`fetch_release_json_blocking`].
 pub async fn fetch_release_json_async(url: &str, description: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .user_agent(UPDATE_USER_AGENT)
@@ -174,6 +222,7 @@ struct ReleaseListEntry {
     tag_name: String,
 }
 
+/// Extracts the `tag_name` field from a GitHub single-release JSON response.
 pub fn latest_tag_from_release_json(body: &str) -> Result<String> {
     let release: ReleaseTag = serde_json::from_str(body).with_context(|| {
         format!("failed to parse release JSON from GitHub API. Response: {body}")
@@ -181,6 +230,8 @@ pub fn latest_tag_from_release_json(body: &str) -> Result<String> {
     Ok(release.tag_name)
 }
 
+/// Scans a GitHub release-list JSON response and returns the tag of the first
+/// entry whose name contains `"beta"`.
 pub fn latest_beta_tag_from_release_list_json(body: &str) -> Result<String> {
     let releases: Vec<ReleaseListEntry> = serde_json::from_str(body).with_context(|| {
         format!("failed to parse release list JSON from GitHub API. Response: {body}")
@@ -192,6 +243,10 @@ pub fn latest_beta_tag_from_release_list_json(body: &str) -> Result<String> {
         .context("no beta release found in GitHub releases")
 }
 
+/// Async helper that resolves the latest release tag for the given channel.
+///
+/// For mirrors the version is derived from the pinned environment variable;
+/// for GitHub channels the appropriate API endpoint is queried.
 pub async fn latest_release_tag_async(channel: ReleaseChannel) -> Result<String> {
     match resolve_release_query(channel) {
         ReleaseQuery::Mirror { version, .. } => Ok(format!("v{}", version.trim_start_matches('v'))),
@@ -206,6 +261,7 @@ pub async fn latest_release_tag_async(channel: ReleaseChannel) -> Result<String>
     }
 }
 
+/// Blocking counterpart of [`latest_release_tag_async`].
 pub fn latest_release_tag_blocking(channel: ReleaseChannel) -> Result<String> {
     match resolve_release_query(channel) {
         ReleaseQuery::Mirror { version, .. } => Ok(format!("v{}", version.trim_start_matches('v'))),
@@ -220,6 +276,9 @@ pub fn latest_release_tag_blocking(channel: ReleaseChannel) -> Result<String> {
     }
 }
 
+/// Compares a current version string against a release tag using semver
+/// ordering. Both `v` prefixes and trailing build metadata (e.g. `(abc123)`)
+/// are stripped before comparison.
 pub fn compare_release_versions(
     current_version: &str,
     latest_tag: &str,
@@ -231,6 +290,11 @@ pub fn compare_release_versions(
     Ok(current.cmp(&latest))
 }
 
+/// Determines whether an update is needed for the given channel.
+///
+/// For [`Stable`](ReleaseChannel::Stable) an update is needed when the latest
+/// release is strictly newer. For [`Beta`](ReleaseChannel::Beta) the logic also
+/// allows switching from a stable release to a beta on the same release line.
 pub fn update_is_needed(
     channel: ReleaseChannel,
     current_version: &str,
@@ -260,6 +324,8 @@ pub fn update_is_needed(
     }
 }
 
+/// Parses a version string (with optional `v` prefix and trailing build info)
+/// into a [`semver::Version`].
 pub fn parse_release_version(value: &str) -> Result<semver::Version> {
     let version = value
         .trim()
@@ -270,6 +336,7 @@ pub fn parse_release_version(value: &str) -> Result<semver::Version> {
     semver::Version::parse(version).with_context(|| format!("invalid semver: {value:?}"))
 }
 
+/// Returns `true` if the tag name contains `"beta"` (case-insensitive).
 pub fn is_beta_tag(tag_name: &str) -> bool {
     tag_name.to_ascii_lowercase().contains("beta")
 }

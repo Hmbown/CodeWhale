@@ -8,7 +8,7 @@
 //!
 //! This module owns:
 //!
-//! - [`ToolFamily`] — the seven canonical families plus a `Generic`
+//! - [`ToolFamily`] — the canonical semantic families plus a `Generic`
 //!   fallback for anything we don't have a family for yet.
 //! - [`tool_family_for_title`] — maps the legacy `render_tool_header` title
 //!   string (`"Shell"`, `"Patch"`, `"Workspace"`, etc.) to a family. Lets
@@ -41,6 +41,8 @@ pub enum ToolFamily {
     Fanout,
     /// Recursive language model work. `⋮⋮ rlm`.
     Rlm,
+    /// Verification gates, tests, and validators. `✓ verify`.
+    Verify,
     /// Reasoning / chain-of-thought. `… think`. Reasoning has its own
     /// render path (`render_thinking` in `history.rs`); the family is
     /// declared here for completeness so any future code that reaches for
@@ -77,13 +79,43 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
     match name {
         "read_file" | "list_dir" | "view_image" => ToolFamily::Read,
         "edit_file" | "apply_patch" | "write_file" => ToolFamily::Patch,
-        "exec_shell" | "exec_shell_wait" | "exec_shell_interact" => ToolFamily::Run,
+        "exec_shell"
+        | "exec_shell_wait"
+        | "exec_shell_interact"
+        | "exec_shell_cancel"
+        | "task_shell_start"
+        | "task_shell_wait" => ToolFamily::Run,
         "grep_files" | "file_search" | "web_search" | "fetch_url" => ToolFamily::Find,
         "agent_open" | "agent_eval" | "agent_close" | "agent_spawn" | "tool_agent" => {
             ToolFamily::Delegate
         }
         "rlm_open" | "rlm_eval" | "rlm_configure" | "rlm_close" | "rlm" => ToolFamily::Rlm,
+        "run_tests" | "run_verifiers" | "task_gate_run" | "validate_data" => ToolFamily::Verify,
         _ => ToolFamily::Generic,
+    }
+}
+
+/// User-facing label for an arbitrary tool name. Known tools collapse to the
+/// semantic verb; unknown tools keep their exact name for debugging.
+#[must_use]
+pub fn tool_display_label_for_name(name: &str) -> String {
+    let family = tool_family_for_name(name);
+    if matches!(family, ToolFamily::Generic) {
+        name.to_string()
+    } else {
+        family_label(family).to_string()
+    }
+}
+
+/// Compact activity/status label for arbitrary tool names. Known built-ins use
+/// the semantic verb; unknown tools keep the `tool NAME` form.
+#[must_use]
+pub fn tool_activity_label_for_name(name: &str) -> String {
+    let family = tool_family_for_name(name);
+    if matches!(family, ToolFamily::Generic) {
+        format!("tool {name}")
+    } else {
+        tool_display_label_for_name(name)
     }
 }
 
@@ -103,6 +135,7 @@ pub fn tool_header_summary_for_name(name: &str, input_summary: Option<&str>) -> 
         ToolFamily::Delegate | ToolFamily::Fanout | ToolFamily::Rlm => {
             ["prompt", "task", "model"].as_slice()
         }
+        ToolFamily::Verify => ["profile", "level", "command", "args", "path"].as_slice(),
         ToolFamily::Think | ToolFamily::Generic => {
             ["query", "path", "command", "prompt"].as_slice()
         }
@@ -144,8 +177,9 @@ pub fn family_glyph(family: ToolFamily) -> &'static str {
         ToolFamily::Delegate => "\u{25D0}",       // ◐
         ToolFamily::Fanout => "\u{22EE}\u{22EE}", // ⋮⋮ (two cells)
         ToolFamily::Rlm => "\u{22EE}\u{22EE}",    // ⋮⋮ (two cells)
-        ToolFamily::Think => "\u{2026}",          // …
-        ToolFamily::Generic => "\u{2022}",        // •
+        ToolFamily::Verify => "\u{2713}",
+        ToolFamily::Think => "\u{2026}",   // …
+        ToolFamily::Generic => "\u{2022}", // •
     }
 }
 
@@ -162,6 +196,7 @@ pub fn family_label(family: ToolFamily) -> &'static str {
         ToolFamily::Delegate => "delegate",
         ToolFamily::Fanout => "fanout",
         ToolFamily::Rlm => "rlm",
+        ToolFamily::Verify => "verify",
         ToolFamily::Think => "think",
         ToolFamily::Generic => "tool",
     }
@@ -198,8 +233,9 @@ pub fn rail_glyph(rail: CardRail) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardRail, ToolFamily, family_glyph, family_label, rail_glyph, tool_family_for_name,
-        tool_family_for_title, tool_header_summary_for_name,
+        CardRail, ToolFamily, family_glyph, family_label, rail_glyph, tool_activity_label_for_name,
+        tool_display_label_for_name, tool_family_for_name, tool_family_for_title,
+        tool_header_summary_for_name,
     };
 
     #[test]
@@ -218,12 +254,32 @@ mod tests {
         assert_eq!(tool_family_for_name("read_file"), ToolFamily::Read);
         assert_eq!(tool_family_for_name("apply_patch"), ToolFamily::Patch);
         assert_eq!(tool_family_for_name("exec_shell"), ToolFamily::Run);
+        assert_eq!(tool_family_for_name("task_shell_start"), ToolFamily::Run);
         assert_eq!(tool_family_for_name("grep_files"), ToolFamily::Find);
         assert_eq!(tool_family_for_name("agent_open"), ToolFamily::Delegate);
         assert_eq!(tool_family_for_name("rlm_eval"), ToolFamily::Rlm);
+        assert_eq!(tool_family_for_name("run_verifiers"), ToolFamily::Verify);
         assert_eq!(
             tool_family_for_name("totally_new_tool"),
             ToolFamily::Generic
+        );
+    }
+
+    #[test]
+    fn tool_display_label_collapses_known_tools_to_user_verbs() {
+        assert_eq!(tool_display_label_for_name("exec_shell"), "run");
+        assert_eq!(tool_display_label_for_name("run_verifiers"), "verify");
+        assert_eq!(tool_display_label_for_name("file_search"), "find");
+        assert_eq!(
+            tool_display_label_for_name("future_private_tool"),
+            "future_private_tool"
+        );
+
+        assert_eq!(tool_activity_label_for_name("exec_shell"), "run");
+        assert_eq!(tool_activity_label_for_name("run_verifiers"), "verify");
+        assert_eq!(
+            tool_activity_label_for_name("future_private_tool"),
+            "tool future_private_tool"
         );
     }
 
@@ -245,6 +301,11 @@ mod tests {
             Some("TODO")
         );
         assert_eq!(
+            tool_header_summary_for_name("run_verifiers", Some("profile: auto, level: quick"))
+                .as_deref(),
+            Some("auto")
+        );
+        assert_eq!(
             tool_header_summary_for_name("unknown", Some("alpha: beta")).as_deref(),
             Some("alpha: beta")
         );
@@ -261,6 +322,7 @@ mod tests {
             ToolFamily::Delegate,
             ToolFamily::Fanout,
             ToolFamily::Rlm,
+            ToolFamily::Verify,
             ToolFamily::Think,
             ToolFamily::Generic,
         ] {

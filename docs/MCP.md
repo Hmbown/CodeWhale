@@ -65,7 +65,7 @@ restart-required until the TUI is restarted.
 
 Default path:
 
-- `~/.deepseek/mcp.json`
+- `~/.codewhale/mcp.json` (`~/.deepseek/mcp.json` is still read when the CodeWhale file is absent)
 
 Overrides:
 
@@ -142,7 +142,7 @@ Options:
 
 ### Manual Config
 
-Equivalent manual entry in `~/.deepseek/mcp.json`:
+Equivalent manual entry in `~/.codewhale/mcp.json`:
 
 ```json
 {
@@ -182,7 +182,7 @@ For example, the `shell` tool becomes `mcp_deepseek_shell`.
 |---|---|---|---|
 | **Protocol** | MCP stdio | HTTP/SSE JSON-RPC | ACP stdio |
 | **Use case** | Tool server for MCP clients | Runtime API for apps | Editor agent for Zed/custom ACP clients |
-| **Config** | `~/.deepseek/mcp.json` entry | Direct URL connection | Editor `agent_servers` custom command |
+| **Config** | `~/.codewhale/mcp.json` entry | Direct URL connection | Editor `agent_servers` custom command |
 | **Lifecycle** | Spawned per client session | Long-running daemon | Spawned per editor agent session |
 
 Use `mcp add-self` when you want DeepSeek tools available to other MCP clients.

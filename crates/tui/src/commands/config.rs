@@ -6,7 +6,9 @@ use std::time::Duration;
 use super::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, expand_path, normalize_model_name_for_provider,
+    ApiProvider, COMMON_DEEPSEEK_MODELS, Config, DEFAULT_XIAOMI_MIMO_BASE_URL,
+    XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL, clear_active_provider_api_key, effective_home_dir,
+    expand_path, normalize_model_name_for_provider,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
@@ -124,11 +126,26 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
                 Some(app.model.clone())
             }
         }
+        "provider" => Some(app.api_provider.as_str().to_string()),
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
+        "allow_shell" | "shell" | "exec_shell" => Some(app.allow_shell.to_string()),
         "base_url" => {
             let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
             {
                 Ok(config) => config,
+                Err(err) => {
+                    return CommandResult::error(format!("Failed to load config: {err}"));
+                }
+            };
+            Some(config.deepseek_base_url())
+        }
+        "provider_url" | "provider_base_url" | "endpoint" => {
+            let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
+            {
+                Ok(mut config) => {
+                    config.provider = Some(app.api_provider.as_str().to_string());
+                    config
+                }
                 Err(err) => {
                     return CommandResult::error(format!("Failed to load config: {err}"));
                 }
@@ -287,7 +304,7 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     })
 }
 
-/// Persist `tui.status_items` to `~/.deepseek/config.toml` without disturbing
+/// Persist `tui.status_items` to `~/.codewhale/config.toml` without disturbing
 /// the rest of the file. We round-trip through `toml::Value` so any keys we
 /// don't know about (provider blocks, MCP, etc.) survive the write
 /// untouched.
@@ -365,13 +382,159 @@ pub fn persist_root_string_key(
     Ok(path)
 }
 
-/// Resolve the path to `~/.deepseek/config.toml` (or
-/// `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
+fn persist_root_bool_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: bool,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut doc: toml::Value = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    table.insert(key.to_string(), toml::Value::Boolean(value));
+    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+    fs::write(&path, body)
+        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    Ok(path)
+}
+
+fn persist_provider_base_url_key(
+    config_path: Option<&Path>,
+    provider: ApiProvider,
+    value: &str,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut doc: toml::Value = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let providers = table
+        .entry("providers".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .context("`providers` must be a table")?;
+    let provider_key = provider_base_url_table_key(provider)?;
+    let entry = providers
+        .entry(provider_key.to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .with_context(|| format!("`providers.{provider_key}` must be a table"))?;
+    entry.insert(
+        "base_url".to_string(),
+        toml::Value::String(value.to_string()),
+    );
+
+    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+    fs::write(&path, body)
+        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    Ok(path)
+}
+
+fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static str> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            anyhow::bail!("DeepSeek uses the root base_url setting")
+        }
+        ApiProvider::NvidiaNim => Ok("nvidia_nim"),
+        ApiProvider::Openai => Ok("openai"),
+        ApiProvider::Atlascloud => Ok("atlascloud"),
+        ApiProvider::WanjieArk => Ok("wanjie_ark"),
+        ApiProvider::Volcengine => Ok("volcengine"),
+        ApiProvider::Openrouter => Ok("openrouter"),
+        ApiProvider::XiaomiMimo => Ok("xiaomi_mimo"),
+        ApiProvider::Novita => Ok("novita"),
+        ApiProvider::Fireworks => Ok("fireworks"),
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => Ok("siliconflow"),
+        ApiProvider::Arcee => Ok("arcee"),
+        ApiProvider::Huggingface => Ok("huggingface"),
+        ApiProvider::Moonshot => Ok("moonshot"),
+        ApiProvider::Sglang => Ok("sglang"),
+        ApiProvider::Vllm => Ok("vllm"),
+        ApiProvider::Ollama => Ok("ollama"),
+    }
+}
+
+fn resolve_provider_url_value(provider: ApiProvider, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("provider_url cannot be empty".to_string());
+    }
+
+    if provider == ApiProvider::XiaomiMimo {
+        match trimmed.to_ascii_lowercase().as_str() {
+            "token" | "token-plan" | "token_plan" | "token-plan-sgp" | "sgp" => {
+                return Ok(DEFAULT_XIAOMI_MIMO_BASE_URL.to_string());
+            }
+            "payg" | "pay-go" | "paygo" | "pay-as-you-go" | "pay_as_you_go" | "api" => {
+                return Ok(XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    if trimmed.contains("://") {
+        Ok(trimmed.to_string())
+    } else if provider == ApiProvider::XiaomiMimo {
+        Err("provider_url for Xiaomi MiMo must be token-plan, pay-as-you-go, or a URL".to_string())
+    } else {
+        Err("provider_url must be a URL".to_string())
+    }
+}
+
+fn parse_config_bool(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" | "enabled" => Ok(true),
+        "off" | "false" | "no" | "0" | "disabled" => Ok(false),
+        _ => Err(format!(
+            "Failed to parse boolean '{value}': expected on/off, true/false, yes/no."
+        )),
+    }
+}
+
+/// Resolve the path to `~/.codewhale/config.toml` (or
+/// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
 pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     if let Some(path) = config_path {
         return Ok(expand_path(path.to_string_lossy().as_ref()));
+    }
+    if let Ok(env) = std::env::var("CODEWHALE_CONFIG_PATH") {
+        let trimmed = env.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
     }
     if let Ok(env) = std::env::var("DEEPSEEK_CONFIG_PATH") {
         let trimmed = env.trim();
@@ -379,12 +542,17 @@ pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<Pat
             return Ok(PathBuf::from(trimmed));
         }
     }
-    let home = dirs::home_dir().context("failed to resolve home directory for config.toml path")?;
+    let home =
+        effective_home_dir().context("failed to resolve home directory for config.toml path")?;
     let primary = home.join(".codewhale").join("config.toml");
     if primary.exists() {
         return Ok(primary);
     }
-    Ok(home.join(".deepseek").join("config.toml"))
+    let legacy = home.join(".deepseek").join("config.toml");
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    Ok(primary)
 }
 
 /// Modify a setting at runtime
@@ -422,6 +590,25 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
+        "provider" => {
+            let value = value.trim();
+            let Some(provider) = ApiProvider::parse(value) else {
+                return CommandResult::error(format!(
+                    "Unknown provider '{value}'. Use: {}.",
+                    ApiProvider::names_hint()
+                ));
+            };
+            if provider == app.api_provider {
+                return CommandResult::message(format!("provider = {}", provider.as_str()));
+            }
+            return CommandResult::with_message_and_action(
+                format!("provider = {}", provider.as_str()),
+                AppAction::SwitchProvider {
+                    provider,
+                    model: None,
+                },
+            );
+        }
         "approval_mode" | "approval" => {
             let mode = ApprovalMode::from_config_value(value);
             return match mode {
@@ -433,6 +620,27 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     "Invalid approval_mode. Use: auto, suggest/on-request/untrusted, never/deny",
                 ),
             };
+        }
+        "allow_shell" | "shell" | "exec_shell" => {
+            let enabled = match parse_config_bool(value) {
+                Ok(enabled) => enabled,
+                Err(err) => return CommandResult::error(err),
+            };
+            app.allow_shell = enabled;
+            let suffix = if persist {
+                match persist_root_bool_key(app.config_path.as_deref(), "allow_shell", enabled) {
+                    Ok(path) => format!(" (saved to {})", path.display()),
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            } else {
+                " (session only, add --save to persist)".to_string()
+            };
+            let mode_hint = if enabled {
+                " Agent mode will expose shell on the next turn with approval gating. YOLO also enables shell and auto-approves."
+            } else {
+                " Shell tools will be hidden on the next turn. Re-enable with `/config allow_shell true`."
+            };
+            return CommandResult::message(format!("allow_shell = {enabled}{suffix}.{mode_hint}"));
         }
         "mcp_config_path" | "mcp" => {
             if value.trim().is_empty() {
@@ -478,6 +686,46 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
             );
         }
+        "provider_url" | "provider_base_url" | "endpoint" => {
+            let value = match resolve_provider_url_value(app.api_provider, value) {
+                Ok(value) => value,
+                Err(err) => return CommandResult::error(err),
+            };
+            if matches!(
+                app.api_provider,
+                ApiProvider::Deepseek | ApiProvider::DeepseekCN
+            ) {
+                if persist {
+                    match persist_root_string_key(app.config_path.as_deref(), "base_url", &value) {
+                        Ok(path) => {
+                            return CommandResult::message(format!(
+                                "provider_url = {value} (saved to {}; restart required)",
+                                path.display()
+                            ));
+                        }
+                        Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    }
+                }
+            } else if persist {
+                match persist_provider_base_url_key(
+                    app.config_path.as_deref(),
+                    app.api_provider,
+                    &value,
+                ) {
+                    Ok(path) => {
+                        return CommandResult::message(format!(
+                            "provider_url = {value} for {} (saved to {}; restart required)",
+                            app.api_provider.as_str(),
+                            path.display()
+                        ));
+                    }
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            }
+            return CommandResult::error(
+                "provider_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
+            );
+        }
         _ => {}
     }
 
@@ -500,6 +748,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     match key.as_str() {
         "auto_compact" | "compact" => {
             app.auto_compact = settings.auto_compact;
+            app.auto_compact_user_configured = true;
             action = Some(AppAction::UpdateCompaction(app.compaction_config()));
         }
         "calm_mode" | "calm" => {
@@ -577,6 +826,21 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             if !app.use_paste_burst_detection {
                 app.paste_burst.clear_after_explicit_paste();
             }
+        }
+        "mention_menu_limit" | "mention_limit" => {
+            app.mention_menu_limit = settings.mention_menu_limit;
+            app.composer.mention_completion_cache = None;
+            app.needs_redraw = true;
+        }
+        "mention_menu_behavior" | "mention_behavior" | "mention_menu" => {
+            app.mention_menu_behavior = settings.mention_menu_behavior.clone();
+            app.composer.mention_completion_cache = None;
+            app.needs_redraw = true;
+        }
+        "mention_walk_depth" | "mention_depth" | "completions_walk_depth" => {
+            app.mention_walk_depth = settings.mention_walk_depth;
+            app.composer.mention_completion_cache = None;
+            app.needs_redraw = true;
         }
         "transcript_spacing" | "spacing" => {
             app.transcript_spacing =
@@ -703,16 +967,33 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
         return CommandResult::action(AppAction::OpenModePicker);
     };
     match parse_mode_arg(arg) {
-        Some(mode) => CommandResult::message(switch_mode(app, mode)),
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"),
+        Some(mode) => {
+            let (message, changed) = switch_mode_with_status(app, mode);
+            if changed {
+                CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
+            } else {
+                CommandResult::message(message)
+            }
+        }
+        None => CommandResult::error("Usage: /mode [agent|plan|yolo|pro-plan|1|2|3]"),
     }
 }
 
 pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
+    switch_mode_with_status(app, mode).0
+}
+
+fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     if app.set_mode(mode) {
-        format!("Switched to {} mode.", mode_display_name(mode))
+        (
+            format!("Switched to {} mode.", mode_display_name(mode)),
+            true,
+        )
     } else {
-        format!("Already in {} mode.", mode_display_name(mode))
+        (
+            format!("Already in {} mode.", mode_display_name(mode)),
+            false,
+        )
     }
 }
 
@@ -721,7 +1002,7 @@ fn parse_mode_arg(arg: &str) -> Option<AppMode> {
         "agent" | "1" => Some(AppMode::Agent),
         "plan" | "2" => Some(AppMode::Plan),
         "yolo" | "3" => Some(AppMode::Yolo),
-        "pro-plan" | "proplan" | "4" => Some(AppMode::ProPlan),
+        "pro-plan" | "proplan" => Some(AppMode::ProPlan),
         _ => None,
     }
 }
@@ -1321,17 +1602,25 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// Logout - clear API key and return to onboarding
+/// Logout - clear all saved API keys and return to onboarding.
+/// This is NOT provider-scoped — it clears keys for every saved provider.
+/// For single-provider key replacement, use
+/// `codewhale auth clear --provider <id>` and
+/// `codewhale auth set --provider <id>`.
 pub fn logout(app: &mut App) -> CommandResult {
-    match clear_api_key() {
+    let provider_name = app.api_provider.as_str();
+    match clear_active_provider_api_key(provider_name) {
         Ok(()) => {
             app.onboarding = OnboardingState::ApiKey;
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message("Logged out. Enter a new API key to continue.")
+            CommandResult::message(format!(
+                "Cleared API key for {provider_name}. \
+                 Use `codewhale auth clear --provider <id>` to clear a different provider."
+            ))
         }
-        Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+        Err(e) => CommandResult::error(format!("Failed to clear API key for {provider_name}: {e}")),
     }
 }
 
@@ -1352,6 +1641,7 @@ mod tests {
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
+        codewhale_config_path: Option<OsString>,
         deepseek_config_path: Option<OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -1364,18 +1654,21 @@ mod tests {
             let config_str = OsString::from(config_path.as_os_str());
             let home_prev = env::var_os("HOME");
             let userprofile_prev = env::var_os("USERPROFILE");
+            let codewhale_config_prev = env::var_os("CODEWHALE_CONFIG_PATH");
             let deepseek_config_prev = env::var_os("DEEPSEEK_CONFIG_PATH");
 
             // Safety: test-only environment mutation guarded by process-wide mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
                 env::set_var("USERPROFILE", &home_str);
+                env::remove_var("CODEWHALE_CONFIG_PATH");
                 env::set_var("DEEPSEEK_CONFIG_PATH", &config_str);
             }
 
             Self {
                 home: home_prev,
                 userprofile: userprofile_prev,
+                codewhale_config_path: codewhale_config_prev,
                 deepseek_config_path: deepseek_config_prev,
                 _lock: lock,
             }
@@ -1405,6 +1698,18 @@ mod tests {
                 // Safety: test-only environment mutation guarded by a global mutex.
                 unsafe {
                     env::remove_var("USERPROFILE");
+                }
+            }
+
+            if let Some(value) = self.codewhale_config_path.take() {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::set_var("CODEWHALE_CONFIG_PATH", value);
+                }
+            } else {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::remove_var("CODEWHALE_CONFIG_PATH");
                 }
             }
 
@@ -1444,7 +1749,15 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        // App::new folds in saved TUI settings from the developer machine.
+        // Pin command tests back to DeepSeek semantics so model aliases are
+        // not normalized through a provider selected in an interactive run.
+        app.model = "test-model".to_string();
+        app.auto_model = false;
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model_ids_passthrough = false;
+        app
     }
 
     #[test]
@@ -1455,6 +1768,7 @@ mod tests {
         let _ = mode(&mut app, Some("agent"));
         let result = mode(&mut app, Some("yolo"));
         assert!(result.message.unwrap().contains("Switched to YOLO mode"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
         assert!(app.allow_shell);
         assert!(app.trust_mode);
         assert!(app.yolo);
@@ -1467,13 +1781,20 @@ mod tests {
         let mut app = create_test_app();
         let _ = mode(&mut app, Some("agent"));
         assert_eq!(app.mode, AppMode::Agent);
-        let _ = mode(&mut app, Some("2"));
+        let result = mode(&mut app, Some("2"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Plan)));
         assert_eq!(app.mode, AppMode::Plan);
-        let _ = mode(&mut app, Some("3"));
+        let result = mode(&mut app, Some("3"));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
         assert_eq!(app.mode, AppMode::Yolo);
-        let _ = mode(&mut app, Some("4"));
-        assert_eq!(app.mode, AppMode::ProPlan);
-        let _ = mode(&mut app, Some("proplan"));
+        let result = mode(&mut app, Some("4"));
+        assert!(result.is_error);
+        assert_eq!(app.mode, AppMode::Yolo);
+        let result = mode(&mut app, Some("proplan"));
+        assert_eq!(
+            result.action,
+            Some(AppAction::ModeChanged(AppMode::ProPlan))
+        );
         assert_eq!(app.mode, AppMode::ProPlan);
     }
 
@@ -1876,6 +2197,88 @@ mod tests {
     }
 
     #[test]
+    fn config_command_provider_emits_switch_action() {
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("provider openrouter"));
+
+        assert!(!result.is_error);
+        assert_eq!(result.message.as_deref(), Some("provider = openrouter"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::Openrouter);
+                assert_eq!(model, None);
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_command_provider_rejects_unknown_provider() {
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("provider anthropic"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+        assert!(msg.contains("Unknown provider 'anthropic'"));
+        assert!(msg.contains("openrouter"));
+        assert!(msg.contains("xiaomi-mimo"));
+    }
+
+    #[test]
+    fn config_command_allow_shell_enables_agent_shell_session_only() {
+        let mut app = create_test_app();
+        assert!(!app.allow_shell);
+
+        let result = config_command(&mut app, Some("allow_shell true"));
+        assert!(!result.is_error);
+        assert!(app.allow_shell);
+        let msg = result.message.unwrap();
+
+        assert!(msg.contains("allow_shell = true"));
+        assert!(msg.contains("session only"));
+        assert!(msg.contains("Agent mode"));
+        assert!(msg.contains("approval gating"));
+        assert!(msg.contains("next turn"));
+        assert!(msg.contains("YOLO also enables shell and auto-approves"));
+    }
+
+    #[test]
+    fn config_command_allow_shell_save_persists_root_boolean() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-allow-shell-save-app-path-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let config_path = temp_root.join("custom-config.toml");
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let result = config_command(&mut app, Some("allow_shell true --save"));
+        let msg = result.message.unwrap();
+        let saved = fs::read_to_string(&config_path).unwrap();
+
+        assert!(app.allow_shell);
+        assert_eq!(
+            msg,
+            format!(
+                "allow_shell = true (saved to {}). Agent mode will expose shell on the next turn with approval gating. YOLO also enables shell and auto-approves.",
+                config_path.display()
+            )
+        );
+        assert!(saved.contains("allow_shell = true"));
+    }
+
+    #[test]
+    fn config_command_allow_shell_rejects_invalid_boolean() {
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("allow_shell maybe"));
+        assert!(result.is_error);
+        assert!(!app.allow_shell);
+        let msg = result.message.unwrap();
+        assert!(msg.contains("Failed to parse boolean 'maybe'"));
+    }
+
+    #[test]
     fn config_command_base_url_without_save_requires_save() {
         let _lock = lock_test_env();
         let mut app = create_test_app();
@@ -1968,6 +2371,50 @@ mod tests {
             )
         );
         assert!(saved.contains("base_url = \"https://example.session.local/v1\""));
+    }
+
+    #[test]
+    fn config_command_provider_url_token_plan_persists_provider_base_url() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-provider-url-save-app-path-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let config_path = temp_root.join("custom-config.toml");
+
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::XiaomiMimo;
+        app.config_path = Some(config_path.clone());
+        let result = config_command(&mut app, Some("provider_url token-plan --save"));
+        let msg = result.message.unwrap();
+        let saved = fs::read_to_string(&config_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "provider_url = {} for xiaomi-mimo (saved to {}; restart required)",
+                DEFAULT_XIAOMI_MIMO_BASE_URL,
+                config_path.display()
+            )
+        );
+        assert!(saved.contains("[providers.xiaomi_mimo]"));
+        assert!(saved.contains(&format!("base_url = \"{}\"", DEFAULT_XIAOMI_MIMO_BASE_URL)));
+    }
+
+    #[test]
+    fn config_command_provider_url_without_save_requires_save() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::XiaomiMimo;
+        let result = config_command(&mut app, Some("provider_url token-plan"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+
+        assert!(
+            msg.contains("provider_url must be saved with --save"),
+            "got {msg}"
+        );
     }
 
     #[test]
@@ -2175,6 +2622,77 @@ mod tests {
         );
         assert!(body.contains("\"mode\""), "expected mode key in {body}");
         assert!(body.contains("\"cost\""), "expected cost key in {body}");
+    }
+
+    #[test]
+    fn config_toml_path_uses_codewhale_home_for_fresh_installs() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-config-path-fresh-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        unsafe {
+            env::remove_var("DEEPSEEK_CONFIG_PATH");
+        }
+
+        assert_eq!(
+            config_toml_path(None).unwrap(),
+            temp_root.join(".codewhale").join("config.toml")
+        );
+    }
+
+    #[test]
+    fn config_toml_path_preserves_legacy_config_when_it_exists() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-config-path-legacy-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let legacy_config = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(legacy_config.parent().unwrap()).unwrap();
+        fs::write(&legacy_config, "").unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        unsafe {
+            env::remove_var("DEEPSEEK_CONFIG_PATH");
+        }
+
+        assert_eq!(config_toml_path(None).unwrap(), legacy_config);
+    }
+
+    #[test]
+    fn config_toml_path_prefers_codewhale_env_over_legacy_env() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-config-path-env-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+        let preferred = temp_root.join("preferred.toml");
+        let legacy = temp_root.join("legacy.toml");
+
+        unsafe {
+            env::set_var("CODEWHALE_CONFIG_PATH", &preferred);
+            env::set_var("DEEPSEEK_CONFIG_PATH", &legacy);
+        }
+
+        assert_eq!(config_toml_path(None).unwrap(), preferred);
     }
 
     #[test]

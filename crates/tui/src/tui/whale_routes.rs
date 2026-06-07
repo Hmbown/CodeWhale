@@ -2,8 +2,10 @@
 //!
 //! Maps each `(model, reasoning_effort)` pair to a friendly whale-species label,
 //! sorted from largest/deepest to smallest/fastest. The labels share the same
-//! species pool as sub-agent nicknames (#2016) but serve a different purpose:
-//! route/tier names help users understand depth/cost/speed at a glance.
+//! species pool as sub-agent nicknames (#2016). These labels are kept as an
+//! internal taxonomy for sub-agent routing receipts and related affordances; the
+//! main `/model` picker stays neutral and lets users choose model and thinking
+//! independently.
 //!
 //! ## Route ordering (size → speed)
 //!

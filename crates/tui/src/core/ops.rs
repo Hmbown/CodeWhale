@@ -9,6 +9,9 @@ use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use std::path::PathBuf;
 
+/// Prefix used for tool-call ids created by local composer shell shortcuts.
+pub const USER_SHELL_TOOL_ID_PREFIX: &str = "user_shell_";
+
 /// Operations that can be submitted to the engine.
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -35,6 +38,20 @@ pub enum Op {
         /// Tool restriction from custom slash command frontmatter.
         /// `None` means the current turn may use the normal tool set.
         allowed_tools: Option<Vec<String>>,
+        /// Hook executor for control-plane hooks.
+        /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
+        hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
+    },
+
+    /// Execute a user-submitted composer shell command (`! <command>`) without
+    /// sending a model turn. This still routes through `exec_shell`, approval,
+    /// sandbox, and command-safety handling.
+    RunShellCommand {
+        command: String,
+        mode: AppMode,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: ApprovalMode,
     },
 
     /// Cancel the current request
@@ -60,9 +77,9 @@ pub enum Op {
     #[allow(dead_code)]
     ChangeMode { mode: AppMode },
 
-    /// Update the model being used
+    /// Update the model being used and refresh the prompt for the current mode.
     #[allow(dead_code)]
-    SetModel { model: String },
+    SetModel { model: String, mode: AppMode },
 
     /// Update auto-compaction settings
     SetCompaction { config: CompactionConfig },

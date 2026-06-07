@@ -2,7 +2,7 @@ import type { FeedItem, RepoStats } from "./types";
 
 const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const GH = "https://api.github.com";
-const MIN_KNOWN_CONTRIBUTORS = 99;
+const MIN_KNOWN_CONTRIBUTORS = 141;
 
 function headers(token?: string): HeadersInit {
   const h: Record<string, string> = {
@@ -70,7 +70,7 @@ async function contributorCount(res: Response): Promise<number> {
   return MIN_KNOWN_CONTRIBUTORS;
 }
 
-function lastPageFromLink(link: string | null): number | undefined {
+export function lastPageFromLink(link: string | null): number | undefined {
   if (!link) return undefined;
 
   for (const part of link.split(",")) {

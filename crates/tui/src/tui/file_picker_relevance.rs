@@ -28,10 +28,15 @@ use crate::tui::file_picker::FilePickerView;
 /// per-session relevance ranks (modified, @-mentioned, tool-touched).
 pub(super) fn open_file_picker(app: &mut App) {
     let relevance = build_relevance(app);
-    app.view_stack.push(FilePickerView::new_with_relevance(
-        &app.workspace,
-        relevance,
-    ));
+    // Honor the configured `mention_walk_depth` (0 = unlimited) so the picker
+    // and `@`-mention completion agree, and files in deeply nested trees stay
+    // discoverable (#2488).
+    app.view_stack
+        .push(FilePickerView::new_with_relevance_and_depth(
+            &app.workspace,
+            relevance,
+            app.mention_walk_depth,
+        ));
 }
 
 pub(super) fn build_relevance(app: &App) -> FilePickerRelevance {

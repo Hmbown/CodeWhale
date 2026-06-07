@@ -17,7 +17,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Repo-aware resolver for `@`-mentions and file pickers.
@@ -26,12 +26,13 @@ use std::sync::OnceLock;
 /// during a session, build a fresh `Workspace`. Fuzzy lookups are backed by a
 /// lazy basename → paths index built once on first miss and reused for the
 /// rest of the session — without it, every mis-typed mention triggered a full
-/// `WalkBuilder` traversal up to depth 6 (Gemini code-review feedback).
+/// `WalkBuilder` traversal up to the configured completion depth.
 #[derive(Debug)]
 pub struct Workspace {
     pub root: PathBuf,
     cwd: Option<PathBuf>,
     file_index: OnceLock<HashMap<String, Vec<PathBuf>>>,
+    completion_walk_depth: Option<usize>,
 }
 
 impl Workspace {
@@ -48,10 +49,17 @@ impl Workspace {
     /// resolution against a known directory without depending on (and
     /// mutating) the process's real working directory.
     pub fn with_cwd(root: PathBuf, cwd: Option<PathBuf>) -> Self {
+        Self::with_cwd_and_depth(root, cwd, DEFAULT_COMPLETIONS_WALK_DEPTH)
+    }
+
+    /// Construct with an explicit completion walk depth. A depth of `0`
+    /// disables the depth limit for users with deeply nested workspaces.
+    pub fn with_cwd_and_depth(root: PathBuf, cwd: Option<PathBuf>, walk_depth: usize) -> Self {
         Self {
             root,
             cwd,
             file_index: OnceLock::new(),
+            completion_walk_depth: normalize_completion_walk_depth(walk_depth),
         }
     }
 
@@ -97,7 +105,7 @@ impl Workspace {
     fn build_file_index(&self) -> HashMap<String, Vec<PathBuf>> {
         let mut index: HashMap<String, Vec<PathBuf>> = HashMap::new();
         let mut total: usize = 0;
-        let builder = discovery_walk_builder(&self.root, Some(6));
+        let builder = discovery_walk_builder(&self.root, self.completion_walk_depth);
 
         for entry in builder.build().flatten() {
             if total >= FILE_INDEX_MAX_ENTRIES {
@@ -135,8 +143,10 @@ impl Workspace {
                 .hidden(true)
                 .follow_links(false)
                 .git_ignore(false)
-                .ignore(false)
-                .max_depth(Some(5));
+                .ignore(false);
+            if let Some(depth) = child_completion_walk_depth(self.completion_walk_depth) {
+                dot_builder.max_depth(Some(depth));
+            }
             for entry in dot_builder.build().flatten() {
                 if total >= FILE_INDEX_MAX_ENTRIES {
                     break;
@@ -163,7 +173,11 @@ impl Workspace {
         // hidden/ignored path the user might `@`-mention (e.g. a project's
         // own `.generated/specs/`). `local_reference_paths` walks with
         // gitignore disabled but still honors `.deepseekignore`.
-        for path in local_reference_paths(&self.root, LOCAL_REFERENCE_SCAN_LIMIT) {
+        for path in local_reference_paths(
+            &self.root,
+            LOCAL_REFERENCE_SCAN_LIMIT,
+            self.completion_walk_depth,
+        ) {
             if total >= FILE_INDEX_MAX_ENTRIES {
                 break;
             }
@@ -220,6 +234,7 @@ impl Workspace {
                 &mut prefix_hits,
                 &mut substring_hits,
                 &mut seen,
+                self.completion_walk_depth,
             );
             add_local_reference_completions(
                 cwd,
@@ -229,6 +244,7 @@ impl Workspace {
                 &mut prefix_hits,
                 &mut substring_hits,
                 &mut seen,
+                self.completion_walk_depth,
             );
         }
         walk_for_completions(
@@ -239,6 +255,7 @@ impl Workspace {
             &mut prefix_hits,
             &mut substring_hits,
             &mut seen,
+            self.completion_walk_depth,
         );
         add_local_reference_completions(
             &self.root,
@@ -248,6 +265,7 @@ impl Workspace {
             &mut prefix_hits,
             &mut substring_hits,
             &mut seen,
+            self.completion_walk_depth,
         );
 
         prefix_hits.sort();
@@ -256,12 +274,107 @@ impl Workspace {
         prefix_hits.truncate(limit);
         prefix_hits
     }
+
+    /// Deterministic directory-browser completions for `@` mentions.
+    ///
+    /// Unlike [`Workspace::completions`], this mode does not fuzzy-rank across
+    /// the full workspace. It locks onto the directory part of `partial` and
+    /// returns only that directory's immediate children in case-insensitive
+    /// alphabetical order.
+    #[must_use]
+    pub fn browser_completions(&self, partial: &str, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let normalized = partial.replace('\\', "/");
+        let trimmed = normalized.trim_start_matches('/');
+        let (dir_part, name_part) = match trimmed.rsplit_once('/') {
+            Some((dir, name)) => (dir.trim_end_matches('/'), name),
+            None => ("", trimmed),
+        };
+        let Some(safe_dir_part) = browser_completion_dir_part(dir_part) else {
+            return Vec::new();
+        };
+        let dir = if safe_dir_part.as_os_str().is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(&safe_dir_part)
+        };
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        let display_dir_part = safe_dir_part.to_string_lossy().replace('\\', "/");
+
+        let show_hidden = name_part.starts_with('.');
+        let needle = name_part.to_lowercase();
+        let mut entries = Vec::new();
+
+        let mut builder = WalkBuilder::new(&dir);
+        builder
+            .hidden(!show_hidden)
+            .follow_links(false)
+            .max_depth(Some(1));
+        let _ = builder.add_custom_ignore_filename(".deepseekignore");
+
+        for entry in builder.build().flatten() {
+            let path = entry.path();
+            if path == dir || path_is_excluded_from_discovery(&self.root, path) {
+                continue;
+            }
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() && !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            if !needle.is_empty() && !name.to_lowercase().starts_with(&needle) {
+                continue;
+            }
+            let mut candidate = if display_dir_part.is_empty() {
+                name.to_string()
+            } else {
+                format!("{display_dir_part}/{name}")
+            };
+            if file_type.is_dir() {
+                candidate.push('/');
+            }
+            entries.push(candidate);
+        }
+
+        entries.sort_by_key(|entry| entry.to_lowercase());
+        entries.truncate(limit);
+        entries
+    }
 }
 
-/// Maximum directory depth walked when surfacing file-mention completions.
-/// Mirrors the existing `project_tree` cutoff and keeps Tab snappy in deep
-/// monorepos.
-const COMPLETIONS_WALK_DEPTH: usize = 6;
+fn browser_completion_dir_part(dir_part: &str) -> Option<PathBuf> {
+    let mut safe = PathBuf::new();
+    for component in Path::new(dir_part).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => safe.push(part),
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => return None,
+        }
+    }
+    Some(safe)
+}
+
+/// Default directory depth walked when surfacing file-mention completions.
+/// Set high enough that conventionally nested source trees (Java/.NET/web
+/// projects routinely reach 7-9 levels) stay reachable, while a `0` override
+/// removes the limit entirely. Keeps Tab snappy in deep monorepos via the
+/// `.gitignore`-aware walk and per-keypress candidate caps (#2488).
+pub const DEFAULT_COMPLETIONS_WALK_DEPTH: usize = 10;
+
+fn normalize_completion_walk_depth(depth: usize) -> Option<usize> {
+    if depth == 0 { None } else { Some(depth) }
+}
+
+fn child_completion_walk_depth(depth: Option<usize>) -> Option<usize> {
+    depth.map(|depth| depth.saturating_sub(1))
+}
 
 /// Hard cap on the number of `(file or directory)` entries indexed by
 /// [`Workspace::build_file_index`]. The fuzzy-resolve index is a
@@ -360,8 +473,9 @@ fn walk_for_completions(
     prefix_hits: &mut Vec<String>,
     substring_hits: &mut Vec<String>,
     seen: &mut HashSet<PathBuf>,
+    max_depth: Option<usize>,
 ) {
-    let builder = discovery_walk_builder(walk_root, Some(COMPLETIONS_WALK_DEPTH));
+    let builder = discovery_walk_builder(walk_root, max_depth);
 
     for entry in builder.build().flatten() {
         if prefix_hits.len() + substring_hits.len() >= limit {
@@ -405,7 +519,7 @@ fn walk_for_completions(
         prefix_hits,
         substring_hits,
         seen,
-        Some(COMPLETIONS_WALK_DEPTH),
+        max_depth,
     );
 }
 
@@ -420,12 +534,13 @@ fn add_local_reference_completions(
     prefix_hits: &mut Vec<String>,
     substring_hits: &mut Vec<String>,
     seen: &mut HashSet<PathBuf>,
+    max_depth: Option<usize>,
 ) {
     if !should_try_local_reference_completion(needle) {
         return;
     }
 
-    for path in local_reference_paths(root, LOCAL_REFERENCE_SCAN_LIMIT) {
+    for path in local_reference_paths(root, LOCAL_REFERENCE_SCAN_LIMIT, max_depth) {
         if prefix_hits.len() + substring_hits.len() >= limit {
             break;
         }
@@ -460,16 +575,18 @@ fn should_try_local_reference_completion(needle: &str) -> bool {
     needle.starts_with('.') || needle.contains('/') || needle.contains('\\')
 }
 
-fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
+fn local_reference_paths(root: &Path, limit: usize, max_depth: Option<usize>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
         .follow_links(false)
-        .max_depth(Some(COMPLETIONS_WALK_DEPTH))
         .git_ignore(false)
         .git_global(false)
         .git_exclude(false);
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
+    }
     let _ = builder.add_custom_ignore_filename(".deepseekignore");
     let root_for_filter = root.to_path_buf();
     builder.filter_entry(move |entry| {
@@ -502,6 +619,7 @@ impl Clone for Workspace {
             root: self.root.clone(),
             cwd: self.cwd.clone(),
             file_index: OnceLock::new(),
+            completion_walk_depth: self.completion_walk_depth,
         }
     }
 }
@@ -928,7 +1046,8 @@ fn extract_paths_from_message(message: &Message) -> Vec<String> {
             ContentBlock::Thinking { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => {}
         }
     }
     paths
@@ -1093,7 +1212,8 @@ fn message_mentions_any_path(message: &Message, needles: &[String], max_scan_cha
             ContentBlock::Thinking { .. }
             | ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
+            | ContentBlock::CodeExecutionToolResult { .. }
+            | ContentBlock::ImageUrl { .. } => {}
         }
     }
     false
@@ -1439,6 +1559,103 @@ mod tests {
         assert!(
             entries.iter().any(|e| e == "alphabeta.txt"),
             "expected cwd entry alphabeta.txt; got: {entries:?}",
+        );
+    }
+
+    #[test]
+    fn workspace_completions_honor_configured_walk_depth() {
+        let tmp = TempDir::new().unwrap();
+        // Sits at component depth 12, past the default walk depth (10) but
+        // within the explicit deeper walk (16) below.
+        let deep_dir = tmp.path().join("a/b/c/d/e/f/g/h/i/j/k");
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        std::fs::write(deep_dir.join("target.txt"), "target").unwrap();
+
+        let default_ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+        let default_entries = default_ws.completions("target", 16);
+        assert!(
+            !default_entries
+                .iter()
+                .any(|entry| entry.ends_with("target.txt")),
+            "default depth should keep very deep entries out of the hot completion path: {default_entries:?}",
+        );
+
+        let deep_ws = Workspace::with_cwd_and_depth(tmp.path().to_path_buf(), None, 16);
+        let deep_entries = deep_ws.completions("target", 16);
+        assert!(
+            deep_entries
+                .iter()
+                .any(|entry| entry.ends_with("target.txt")),
+            "configured deeper walk should surface the nested file: {deep_entries:?}",
+        );
+
+        let unlimited_ws = Workspace::with_cwd_and_depth(tmp.path().to_path_buf(), None, 0);
+        let unlimited_entries = unlimited_ws.completions("target", 16);
+        assert!(
+            unlimited_entries
+                .iter()
+                .any(|entry| entry.ends_with("target.txt")),
+            "depth 0 should disable the completion walk depth limit: {unlimited_entries:?}",
+        );
+    }
+
+    #[test]
+    fn browser_completions_show_only_immediate_children() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/nested")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "lib").unwrap();
+        std::fs::write(tmp.path().join("src/nested/deep.rs"), "deep").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "readme").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+
+        let root_entries = ws.browser_completions("", 16);
+        assert_eq!(root_entries, vec!["README.md", "src/"]);
+
+        let src_entries = ws.browser_completions("src/", 16);
+        assert_eq!(src_entries, vec!["src/lib.rs", "src/nested/"]);
+        assert!(
+            !src_entries.iter().any(|entry| entry.ends_with("deep.rs")),
+            "browser mode must not walk past immediate children: {src_entries:?}",
+        );
+    }
+
+    #[test]
+    fn browser_completions_hide_dot_entries_until_dot_query() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
+        std::fs::write(tmp.path().join(".env"), "secret-ish fixture").unwrap();
+        std::fs::write(tmp.path().join("app.rs"), "app").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+
+        let default_entries = ws.browser_completions("", 16);
+        assert_eq!(default_entries, vec!["app.rs"]);
+
+        let dot_entries = ws.browser_completions(".", 16);
+        assert_eq!(dot_entries, vec![".agents/", ".env"]);
+    }
+
+    #[test]
+    fn browser_completions_reject_path_escape_segments() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let sibling = tmp.path().join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(workspace.join("inside.rs"), "inside").unwrap();
+        std::fs::write(sibling.join("secret.rs"), "outside").unwrap();
+
+        let ws = Workspace::with_cwd(workspace, None);
+
+        assert_eq!(ws.browser_completions("", 16), vec!["inside.rs"]);
+        assert!(
+            ws.browser_completions("../", 16).is_empty(),
+            "browser mode must not list workspace siblings",
+        );
+        assert!(
+            ws.browser_completions("../outside", 16).is_empty(),
+            "browser mode must not complete names from outside the workspace",
         );
     }
 

@@ -13,13 +13,14 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
-# `--provider siliconflow`, `/provider sglang`, `/provider vllm`,
-# `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `--provider volcengine`, `--provider openrouter`, `--provider xiaomi-mimo`,
+# `--provider fireworks`, `--provider siliconflow`, `--provider siliconflow-CN`,
+# `/provider arcee`, `/provider moonshot`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`, `/provider huggingface`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -36,15 +37,26 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-v4-flash           — fast, cost-efficient (legacy aliases: deepseek-chat, deepseek-reasoner)
 #   deepseek-ai/deepseek-v4-pro   — NVIDIA NIM-hosted Pro model ID
 #   deepseek-ai/deepseek-v4-flash — NVIDIA NIM-hosted Flash model ID
+#   deepseek/deepseek-v4-pro      — default OpenRouter DeepSeek model ID
+#   arcee-ai/trinity-large-thinking — OpenRouter Arcee Trinity Large Thinking
+#   xiaomi/mimo-v2.5-pro          — OpenRouter Xiaomi MiMo 2.5 Pro
+#   xiaomi/mimo-v2.5              — OpenRouter Xiaomi MiMo 2.5
+#   kimi-k2.6                       — default Moonshot/Kimi model ID
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
+#   mimo-v2.5                       — Xiaomi MiMo V2.5 Omni model ID
+#   mimo-v2.5-tts                   — Xiaomi MiMo speech/TTS model ID
+#   mimo-v2.5-tts-voicedesign       — Xiaomi MiMo voice-design TTS model ID
+#   mimo-v2.5-tts-voiceclone        — Xiaomi MiMo voice-clone TTS model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
-#   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
-#   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
-#   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
-#   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
+#   deepseek-ai/DeepSeek-V4-Pro      — SiliconFlow hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash    — SiliconFlow hosted Flash model ID
+#   trinity-large-thinking           — default direct Arcee AI API model ID
+#   trinity-large-preview            — direct Arcee AI API model ID
+#   deepseek-ai/DeepSeek-V4-Pro      — SGLang self-hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash    — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -67,15 +79,28 @@ reasoning_effort = "max"
 cost_currency = "usd" # usd | cny
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Startup update check
+# ─────────────────────────────────────────────────────────────────────────────────
+# The TUI checks for newer CodeWhale releases in the background at startup.
+# Set check_for_updates = false in managed or air-gapped environments.
+# update_uri may point at a GitHub-compatible latest-release JSON endpoint.
+[update]
+check_for_updates = true
+# update_uri = "https://internal.mirror.example/codewhale/releases/latest"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────────
-skills_dir = "~/.deepseek/skills"
-mcp_config_path = "~/.deepseek/mcp.json"
-notes_path = "~/.deepseek/notes.txt"
+# New installs write product state under ~/.codewhale/. Existing ~/.deepseek/
+# files are still read as compatibility fallbacks when the .codewhale file is
+# absent.
+skills_dir = "~/.codewhale/skills"
+mcp_config_path = "~/.codewhale/mcp.json"
+notes_path = "~/.codewhale/notes.txt"
 
-memory_path = "~/.deepseek/memory.md"
+memory_path = "~/.codewhale/memory.md"
 
-# instructions = ["./AGENTS.md", "~/.deepseek/global.md"]
+# instructions = ["./AGENTS.md", "~/.codewhale/global.md"]
 #
 # Optional list of additional instruction files concatenated into the
 # system prompt in declared order (#454). Useful for layering
@@ -83,7 +108,7 @@ memory_path = "~/.deepseek/memory.md"
 # is expanded so `~` and env vars work; missing files are skipped with
 # a tracing warning. Files are capped at 100 KiB per entry.
 #
-# Project-level config (.deepseek/config.toml in the workspace) replaces
+# Project-level config (.codewhale/config.toml in the workspace) replaces
 # the user-level array wholesale rather than merging — list `~/global.md`
 # inside the project array if you want both. An explicit empty array
 # (`instructions = []`) clears the user list for the current repo.
@@ -102,6 +127,11 @@ memory_path = "~/.deepseek/memory.md"
 # Parsed but currently unused (reserved for future versions):
 # tools_file = "./tools.json"
 
+# Xiaomi MiMo speech/TTS defaults. Also configurable with
+# XIAOMI_MIMO_SPEECH_OUTPUT_DIR / MIMO_SPEECH_OUTPUT_DIR.
+[speech]
+# output_dir = "./speech"
+
 # Native tool catalog controls (#2076). By default only the core tool surface
 # is loaded into the model context; less common native tools are discoverable
 # through ToolSearch and loaded on first use.
@@ -114,6 +144,21 @@ memory_path = "~/.deepseek/memory.md"
 allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
+
+# Typed permission rules live in a sibling `permissions.toml` file, not in
+# config.toml. This schema slice is ask-only and is parsed for follow-up
+# approval-flow wiring; allow/deny records and UI persistence are intentionally
+# out of scope here.
+#
+# Example ~/.codewhale/permissions.toml:
+#
+# [[rules]]
+# tool = "exec_shell"
+# command = "cargo test"
+#
+# [[rules]]
+# tool = "read_file"
+# path = "secrets/api_key.txt"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # External Sandbox Backend (pluggable remote execution)
@@ -183,27 +228,41 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `--provider wanjie-ark` / `/provider fireworks` / `--provider siliconflow`
+# `--provider wanjie-ark` / `/provider volcengine` / `/provider fireworks` /
+# `--provider siliconflow` / `/provider arcee` / `/provider moonshot`
 # switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 #   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
+#   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL, VOLCENGINE_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
-#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
+#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
+#                Token Plan keys (`tp-...`) default to https://token-plan-sgp.xiaomimimo.com/v1.
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
+#   Arcee:      ARCEE_API_KEY, ARCEE_BASE_URL, ARCEE_MODEL
+#   Moonshot/Kimi: MOONSHOT_API_KEY (or KIMI_API_KEY), MOONSHOT_BASE_URL, MOONSHOT_MODEL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL, HUGGINGFACE_MODEL
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
 # set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
 # For generic OpenAI-compatible gateways, use `provider = "openai"` and the
 # [providers.openai] table below. Keep provider/api_key/base_url in user config
 # or environment variables; project overlays are not allowed to set them.
+#
+# Provider is the route/account/endpoint; model is the ID on that route.
+# Common DeepSeek routes:
+#   provider = "deepseek"     model = "deepseek-v4-pro"
+#   provider = "nvidia-nim"   model = "deepseek-ai/deepseek-v4-pro"
+#   provider = "openrouter"   model = "deepseek/deepseek-v4-pro"
+#   provider = "fireworks"    model = "accounts/fireworks/models/deepseek-v4-pro"
+#   provider = "siliconflow"  model = "deepseek-ai/DeepSeek-V4-Pro"
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
@@ -214,6 +273,7 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://your-provider.example/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
+# path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
 [providers.nvidia_nim]
@@ -255,13 +315,22 @@ max_subagents = 10 # optional (1-20)
 [providers.openrouter]
 # api_key = "YOUR_OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
-# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+# model = "deepseek/deepseek-v4-pro"
+# Recent large model IDs also accepted here include arcee-ai/trinity-large-thinking,
+# xiaomi/mimo-v2.5-pro, qwen/qwen3.6-flash, qwen/qwen3.6-35b-a3b,
+# qwen/qwen3.6-max-preview, qwen/qwen3.6-27b, qwen/qwen3.6-plus,
+# google/gemma-4-31b-it, z-ai/glm-5.1, moonshotai/kimi-k2.6, and
+# nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free.
 
 # Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
 [providers.xiaomi_mimo]
-# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
-# base_url = "https://api.xiaomimimo.com/v1"
-# model = "mimo-v2.5-pro"
+# api_key = "YOUR_XIAOMI_KEY"
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
+# # base_url = "https://api.xiaomimimo.com/v1"           # Pay-as-you-go / sk- keys
+# model = "mimo-v2.5-pro"              # chat/reasoning
+# Chat model IDs: mimo-v2.5-pro, mimo-v2.5
+# TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
+# TTS model IDs: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone, mimo-v2-tts
 
 # Novita AI-hosted inference (https://novita.ai)
 [providers.novita]
@@ -281,6 +350,22 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://api.siliconflow.com/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
+# Arcee AI direct OpenAI-compatible endpoint (https://docs.arcee.ai)
+[providers.arcee]
+# api_key = "YOUR_ARCEE_API_KEY"
+# base_url = "https://api.arcee.ai/api/v1"
+# model = "trinity-large-thinking"          # or trinity-large-preview
+
+# Moonshot/Kimi OpenAI-compatible endpoint (https://platform.moonshot.ai)
+[providers.moonshot]
+# api_key = "YOUR_MOONSHOT_API_KEY"           # or KIMI_API_KEY
+# base_url = "https://api.moonshot.ai/v1"      # or KIMI_BASE_URL
+# model = "kimi-k2.6"
+# # Kimi Code path:
+# # base_url = "https://api.kimi.com/coding/v1"
+# # model = "kimi-for-coding"
+# # auth_mode = "kimi_oauth"                   # reads Kimi CLI OAuth credentials
+
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]
 # api_key = "OPTIONAL_SGLANG_TOKEN"
@@ -298,6 +383,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+
+# Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
+[providers.huggingface]
+# api_key = "YOUR_HF_TOKEN"
+# base_url = "https://router.huggingface.co/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
@@ -350,7 +441,7 @@ max_subagents = 10 # optional (1-20)
 # default = "prompt"     # allow | deny | prompt
 # allow = ["api.deepseek.com", "github.com", ".githubusercontent.com"]
 # deny = []
-# audit = true            # one line per call to ~/.deepseek/audit.log
+# audit = true            # one line per call to ~/.codewhale/audit.log
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Skills (#140)
@@ -379,6 +470,14 @@ alternate_screen = "auto"   # auto/always use the TUI screen; never uses termina
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
+# Ordered footer chips shown in the TUI status line. Omit the key to use the
+# built-in default; set [] to hide all configurable chips. You can also edit
+# this interactively with `/statusline`.
+# Supported keys: mode, model, cost, balance (DeepSeek / DeepSeekCN only),
+# status, coherence, agents,
+# reasoning_replay, prefix_stability, cache, context_percent, git_branch,
+# last_tool_elapsed (placeholder), rate_limit (placeholder), tokens.
+# status_items = ["mode", "model", "status", "git_branch", "tokens", "cache"]
 # notification_condition = "always" # always | never — overrides [notifications].threshold_secs.
 #                                    "always" = notify on every successful turn (no threshold);
 #                                    "never"  = suppress all turn-completion notifications;
@@ -388,6 +487,7 @@ osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTer
 #                           # Override: `locale = "zh-Hans"` for Simplified Chinese regardless of OS locale.
 #                           # Also settable at runtime: /config locale zh-Hans
 #                           # Note: this only affects TUI labels/chrome — it does NOT change model output language.
+# mention_menu_behavior = "fuzzy" # fuzzy | browser; browser lists immediate directory children for @-mentions.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Feature Flags
@@ -414,8 +514,8 @@ exec_policy = true
 #
 # Xiaomi MiMo image understanding can be configured through the same tool:
 # model = "mimo-v2.5"
-# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
-# base_url = "https://api.xiaomimimo.com/v1"
+# api_key = "YOUR_XIAOMI_KEY"
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration
@@ -431,8 +531,10 @@ exponential_base = 2.0
 # Context Compaction
 # ─────────────────────────────────────────────────────────────────────────────────
 # Auto-compaction is a saved UI setting edited with `/config` (`auto_compact`).
-# There is no config-file `[compaction]` table yet; detailed thresholds are
-# chosen by the TUI from the active model/context budget.
+# The optional saved threshold setting is `auto_compact_threshold_percent`
+# (default 80). There is no config-file
+# `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
+# from the active model/context window.
 
 # Append-only Flash seams are experimental and opt-in while the v0.7.5
 # context/cache audit validates prefix-cache behavior.
@@ -444,9 +546,6 @@ verbatim_window_turns = 16
 l1_threshold = 192000
 l2_threshold = 384000
 l3_threshold = 576000
-# Hard cycle reserves the normal 262144-token internal turn budget plus 1024
-# safety tokens, separate from V4's official 384000 max-output metadata.
-cycle_threshold = 768000
 seam_model = "deepseek-v4-flash"
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -527,10 +626,12 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #                 off:  disable entirely
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
+# completion_sound = "beep" # off | beep | bell — sound on turn completion (✅ marker)
 [notifications]
 # method = "auto"
 # threshold_secs = 30
 # include_summary = false
+# completion_sound = "beep"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workspace Snapshots (#137)
@@ -538,7 +639,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # Each turn the TUI takes a `pre-turn:<seq>` and `post-turn:<seq>` snapshot of
 # your workspace into a side-git repo at:
 #
-#     ~/.deepseek/snapshots/<project_hash>/<worktree_hash>/.git
+#     ~/.codewhale/snapshots/<project_hash>/<worktree_hash>/.git
 #
 # Your own `.git` is never touched — `--git-dir` and `--work-tree` are always
 # set together when shelling out to git. Use `/restore N` (slash command) or
@@ -605,14 +706,15 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # Configure as `[[hooks.hooks]]` under a `[hooks]` table.
 #
 # Available events: session_start, session_end, message_submit,
-# tool_call_before, tool_call_after, mode_change, on_error, shell_env.
+# tool_call_before, tool_call_after, mode_change, on_error,
+# subagent_spawn, subagent_complete, shell_env.
 #
 # `shell_env` (#456) is special: the hook runs immediately before each
 # `exec_shell` invocation and its stdout is parsed as `KEY=VALUE\n` lines.
 # Those vars are merged into the spawned process environment (later hooks
 # override earlier ones). Use this for ephemeral credentials, per-skill
 # PATH adjustments, or short-lived tokens. The resolved KEY names (NEVER
-# values) are written to `~/.deepseek/audit.log` so each session can be
+# values) are written to `~/.codewhale/audit.log` so each session can be
 # reconciled later. Hook failure / timeout simply contributes no vars —
 # it does not abort the shell call.
 #
@@ -632,6 +734,15 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # command = "aws-vault export my-profile --format=env"
 # # Optionally limit to specific tool names / categories:
 # # condition = { type = "tool_category", category = "shell" }
+#
+# # Observe sub-agent lifecycle events. These hooks receive bounded JSON
+# # metadata on stdin and are warn-only: failures do not affect sub-agent
+# # scheduling, prompts, or results. continue_on_error has no effect for
+# # these observer events; later matching hooks always continue.
+# [[hooks.hooks]]
+# name = "subagent-audit"
+# event = "subagent_complete"
+# command = "~/.codewhale/hooks/subagent-audit.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Runtime API (`deepseek serve --http`) (#561)

@@ -48,9 +48,9 @@ const en = {
     ],
     tagline:
       "Open-model terminal-native coding agent. DeepSeek V4 is first-class. MIT licensed. Maintained from a small workshop in Texas. Pull requests welcome.",
-    crafted: "Made with care · 用心制作",
-    poweredBy: "本网站由 DeepSeek V4-Flash 协同维护",
-    mirrors: "镜像源 / Mirror",
+    crafted: "Made with care",
+    poweredBy: "Maintained with DeepSeek V4-Flash",
+    mirrors: "Mirrors",
   },
   localeSwitch: { en: "EN", zh: "中文" },
 };

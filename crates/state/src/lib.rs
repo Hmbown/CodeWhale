@@ -1,3 +1,14 @@
+//! Persistent state management for conversation threads, messages, and jobs.
+//!
+//! The [`StateStore`] is the primary entry point, backed by a SQLite database and an
+//! append-only JSONL session index file. It provides CRUD operations for:
+//!
+//! - **Threads** — conversation metadata, archival, and session indexing.
+//! - **Messages** — append-only message storage with tree-structured branching.
+//! - **Checkpoints** — named state snapshots for restoring conversation progress.
+//! - **Jobs** — background task tracking with status and progress.
+//! - **Dynamic tools** — per-thread tool registrations.
+
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -9,104 +20,187 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Lifecycle status of a conversation thread.
+///
+/// Serialized as lowercase snake_case strings (e.g. `"running"`, `"archived"`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadStatus {
+    /// Thread is actively being worked on.
     Running,
+    /// Thread exists but has no active work in progress.
     Idle,
+    /// Thread has finished its task successfully.
     Completed,
+    /// Thread encountered an unrecoverable error.
     Failed,
+    /// Thread has been temporarily paused by the user.
     Paused,
+    /// Thread has been archived and is hidden from default listings.
     Archived,
 }
 
+/// Indicates how a session was initiated.
+///
+/// Serialized as lowercase snake_case strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionSource {
+    /// Started by a user interacting with the CLI.
     Interactive,
+    /// Resumed from a previously persisted session.
     Resume,
+    /// Created by forking an existing conversation at a specific message.
     Fork,
+    /// Initiated programmatically via the API.
     Api,
+    /// Source is unknown or unspecified.
     Unknown,
 }
 
+/// Metadata for a persisted conversation thread.
+///
+/// Each thread represents a single conversation session and stores its
+/// configuration, git context, and current status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadMetadata {
+    /// Unique identifier for this thread.
     pub id: String,
+    /// Optional filesystem path to the rollout (JSONL transcript) file.
     pub rollout_path: Option<PathBuf>,
+    /// Short preview or summary of the thread content.
     pub preview: String,
+    /// Whether this thread is ephemeral (not persisted long-term).
     pub ephemeral: bool,
+    /// Identifier of the model provider used for this thread (e.g. `"openai"`).
     pub model_provider: String,
+    /// Unix timestamp (seconds) when the thread was created.
     pub created_at: i64,
+    /// Unix timestamp (seconds) of the most recent update to the thread.
     pub updated_at: i64,
+    /// Current lifecycle status of the thread.
     pub status: ThreadStatus,
+    /// Optional filesystem path associated with the thread working context.
     pub path: Option<PathBuf>,
+    /// Working directory that was active when the thread was created.
     pub cwd: PathBuf,
+    /// Version of the CLI that created this thread.
     pub cli_version: String,
+    /// How this session was initiated.
     pub source: SessionSource,
+    /// User-assigned display name for the thread.
     pub name: Option<String>,
+    /// Serialized sandbox policy applied to this thread, if any.
     pub sandbox_policy: Option<String>,
+    /// Approval mode configured for tool calls in this thread.
     pub approval_mode: Option<String>,
+    /// Whether the thread has been archived.
     pub archived: bool,
+    /// Unix timestamp (seconds) when the thread was archived, or `None` if not archived.
     pub archived_at: Option<i64>,
+    /// Git commit SHA of the working tree when the thread was created.
     pub git_sha: Option<String>,
+    /// Git branch checked out when the thread was created.
     pub git_branch: Option<String>,
+    /// URL of the git remote origin, if available.
     pub git_origin_url: Option<String>,
+    /// Memory mode configured for this thread (e.g. `"local"`, `"remote"`).
     pub memory_mode: Option<String>,
+    /// ID of the current leaf message in the conversation tree.
     pub current_leaf_id: Option<i64>,
 }
 
+/// A dynamically registered tool associated with a thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicToolRecord {
+    /// Ordinal position of this tool in the thread tool list.
     pub position: i64,
+    /// Unique name identifying the tool.
     pub name: String,
+    /// Human-readable description of what the tool does.
     pub description: Option<String>,
+    /// JSON Schema describing the tool input parameters.
     pub input_schema: Value,
 }
 
+/// A single message entry in a conversation thread.
+///
+/// Messages form a tree structure via [`parent_entry_id`](Self::parent_entry_id),
+/// enabling conversation branching and forking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageRecord {
+    /// Auto-incremented unique identifier for this message.
     pub id: i64,
+    /// ID of the thread this message belongs to.
     pub thread_id: String,
+    /// Role of the message sender (e.g. `"user"`, `"assistant"`, `"system"`).
     pub role: String,
+    /// Text content of the message.
     pub content: String,
+    /// Optional structured item payload (tool calls, tool results, etc.).
     pub item: Option<Value>,
+    /// Unix timestamp (seconds) when the message was created.
     pub created_at: i64,
+    /// ID of the parent message, forming a tree structure. `None` for root messages.
     pub parent_entry_id: Option<i64>,
 }
 
+/// A named checkpoint capturing the state of a thread at a point in time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointRecord {
+    /// ID of the thread this checkpoint belongs to.
     pub thread_id: String,
+    /// Unique identifier for this checkpoint within its thread.
     pub checkpoint_id: String,
+    /// Serialized state snapshot stored as a JSON value.
     pub state: Value,
+    /// Unix timestamp (seconds) when the checkpoint was created or last updated.
     pub created_at: i64,
 }
 
+/// Status of a background job.
+///
+/// Serialized as lowercase snake_case strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStateStatus {
+    /// Job is waiting to be executed.
     Queued,
+    /// Job is currently executing.
     Running,
+    /// Job has finished successfully.
     Completed,
+    /// Job has failed with an error.
     Failed,
+    /// Job was cancelled before completion.
     Cancelled,
 }
 
+/// Persisted state of a background job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobStateRecord {
+    /// Unique identifier for the job.
     pub id: String,
+    /// Human-readable name describing the job.
     pub name: String,
+    /// Current lifecycle status of the job.
     pub status: JobStateStatus,
+    /// Completion progress as a percentage (0--100), if available.
     pub progress: Option<u8>,
+    /// Optional detail message providing additional status information.
     pub detail: Option<String>,
+    /// Unix timestamp (seconds) when the job was created.
     pub created_at: i64,
+    /// Unix timestamp (seconds) of the most recent status update.
     pub updated_at: i64,
 }
 
+/// Filters for listing conversation threads.
 #[derive(Debug, Clone)]
 pub struct ThreadListFilters {
+    /// Whether to include archived threads in the results.
     pub include_archived: bool,
+    /// Maximum number of threads to return. Defaults to 50.
     pub limit: Option<usize>,
 }
 
@@ -127,6 +221,10 @@ struct SessionIndexEntry {
     rollout_path: Option<PathBuf>,
 }
 
+/// Persistent storage for conversation threads, messages, checkpoints, and jobs.
+///
+/// Backed by a SQLite database and an append-only JSONL session index file.
+/// The database schema is automatically initialized and migrated on [`open`](Self::open).
 #[derive(Debug, Clone)]
 pub struct StateStore {
     db_path: PathBuf,
@@ -134,6 +232,10 @@ pub struct StateStore {
 }
 
 impl StateStore {
+    /// Open (or create) a state store at the given database path.
+    ///
+    /// If `path` is `None`, the default location (`~/.deepseek/state.db`) is used.
+    /// The database schema is created automatically if it does not exist.
     pub fn open(path: Option<PathBuf>) -> Result<Self> {
         let db_path = path.unwrap_or_else(default_state_db_path);
         let session_index_path = db_path
@@ -153,6 +255,7 @@ impl StateStore {
         Ok(store)
     }
 
+    /// Returns the filesystem path of the underlying SQLite database.
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
@@ -244,8 +347,15 @@ impl StateStore {
                     SET parent_entry_id = (
                         SELECT m2.id
                         FROM messages m2
-                        WHERE m2.created_at < messages.created_at AND m2.thread_id = messages.thread_id
-                        ORDER BY m2.id DESC
+                        WHERE m2.thread_id = messages.thread_id
+                            AND (
+                                m2.created_at < messages.created_at
+                                OR (
+                                    m2.created_at = messages.created_at
+                                    AND m2.id < messages.id
+                                )
+                            )
+                        ORDER BY m2.created_at DESC, m2.id DESC
                         LIMIT 1
                     );
                 CREATE INDEX idx_messages_parent_entry_id ON messages(parent_entry_id);
@@ -270,7 +380,10 @@ impl StateStore {
         Ok(())
     }
 
-    /// Upsert thread metadata(will not set current_leaf_id)
+    /// Insert or update thread metadata.
+    ///
+    /// This does **not** update `current_leaf_id`; use [`append_message`](Self::append_message)
+    /// or [`set_current_leaf_id`](Self::set_current_leaf_id) for that.
     pub fn upsert_thread(&self, thread: &ThreadMetadata) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -341,6 +454,9 @@ impl StateStore {
         Ok(())
     }
 
+    /// Retrieve a single thread by its ID.
+    ///
+    /// Returns `None` if no thread with the given ID exists.
     pub fn get_thread(&self, id: &str) -> Result<Option<ThreadMetadata>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -358,6 +474,10 @@ impl StateStore {
         .context("failed to read thread")
     }
 
+    /// List threads ordered by most recently updated.
+    ///
+    /// Use [`ThreadListFilters`] to control whether archived threads are included
+    /// and the maximum number of results returned.
     pub fn list_threads(&self, filters: ThreadListFilters) -> Result<Vec<ThreadMetadata>> {
         let conn = self.conn()?;
         let sql = if filters.include_archived {
@@ -378,6 +498,8 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Archive a thread, setting its status to [`ThreadStatus::Archived`] and
+    /// recording the current timestamp.
     pub fn mark_archived(&self, id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -392,6 +514,7 @@ impl StateStore {
         Ok(())
     }
 
+    /// Unarchive a thread, removing the archived flag and clearing `archived_at`.
     pub fn mark_unarchived(&self, id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -402,6 +525,8 @@ impl StateStore {
         Ok(())
     }
 
+    /// Permanently delete a thread and all of its associated data
+    /// (messages, checkpoints, dynamic tools) via cascading foreign keys.
     pub fn delete_thread(&self, id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute("DELETE FROM threads WHERE id = ?1", params![id])
@@ -409,6 +534,9 @@ impl StateStore {
         Ok(())
     }
 
+    /// Set the memory mode for a thread.
+    ///
+    /// Pass `None` to clear the memory mode.
     pub fn set_thread_memory_mode(&self, id: &str, mode: Option<&str>) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -419,6 +547,9 @@ impl StateStore {
         Ok(())
     }
 
+    /// Get the memory mode configured for a thread.
+    ///
+    /// Returns `None` if the thread does not exist or has no memory mode set.
     pub fn get_thread_memory_mode(&self, id: &str) -> Result<Option<String>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -431,6 +562,10 @@ impl StateStore {
         .map(Option::flatten)
     }
 
+    /// List all leaf messages in a thread.
+    ///
+    /// A leaf message is one that has no other message referencing it as a parent.
+    /// In a branching conversation tree, there may be multiple leaf messages.
     pub fn list_leaf_messages(&self, thread_id: &str) -> Result<Vec<MessageRecord>> {
         let conn = self.conn()?;
         let mut stmt = conn
@@ -469,6 +604,10 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Update the current leaf message pointer for a thread.
+    ///
+    /// This controls which branch of the conversation tree is considered active
+    /// when listing messages via [`list_messages`](Self::list_messages).
     pub fn set_current_leaf_id(&self, thread_id: &str, current_leaf_id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -479,6 +618,10 @@ impl StateStore {
         Ok(())
     }
 
+    /// Replace the dynamic tools for a thread.
+    ///
+    /// All existing dynamic tools for the thread are deleted and replaced with the
+    /// provided list. The operation is performed within a transaction.
     pub fn persist_dynamic_tools(
         &self,
         thread_id: &str,
@@ -510,6 +653,7 @@ impl StateStore {
         Ok(())
     }
 
+    /// Retrieve all dynamic tools registered for a thread, ordered by position.
     pub fn get_dynamic_tools(&self, thread_id: &str) -> Result<Vec<DynamicToolRecord>> {
         let conn = self.conn()?;
         let mut stmt = conn
@@ -538,6 +682,11 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Append a new message to a thread.
+    ///
+    /// The message is linked to the thread's current leaf as its parent, and the
+    /// thread's `current_leaf_id` is updated to the new message. Returns the ID
+    /// of the newly created message.
     pub fn append_message(
         &self,
         thread_id: &str,
@@ -593,6 +742,11 @@ impl StateStore {
         Ok(next_leaf_id)
     }
 
+    /// List messages in the current conversation branch, walking backwards from
+    /// the thread's `current_leaf_id`.
+    ///
+    /// Messages are returned in chronological order (oldest first). The `limit`
+    /// parameter caps how many ancestor messages are traversed; it defaults to 500.
     pub fn list_messages(
         &self,
         thread_id: &str,
@@ -602,7 +756,7 @@ impl StateStore {
         let limit = i64::try_from(limit.unwrap_or(500)).unwrap_or(500);
         let mut stmt = conn
             .prepare(
-                r#"  
+                r#"
                 WITH RECURSIVE
                     leaf_id AS (
                         SELECT current_leaf_id FROM threads WHERE id = ?1
@@ -650,6 +804,11 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Fork the conversation at a specific message.
+    ///
+    /// Creates a new message whose parent is `message_id` and updates the thread's
+    /// `current_leaf_id` to the new message. Returns the ID of the new message.
+    /// This enables branching conversations from any point in the history.
     pub fn fork_at_message(
         &self,
         message_id: &str,
@@ -706,6 +865,9 @@ impl StateStore {
         Ok(next_leaf_id)
     }
 
+    /// Delete all messages belonging to a thread and reset its `current_leaf_id`.
+    ///
+    /// Returns the number of messages deleted.
     pub fn clear_messages(&self, thread_id: &str) -> Result<usize> {
         let mut conn = self.conn()?;
         let tx = conn
@@ -735,6 +897,10 @@ impl StateStore {
         Ok(result)
     }
 
+    /// Save (or update) a named checkpoint for a thread.
+    ///
+    /// If a checkpoint with the same `thread_id` and `checkpoint_id` already exists,
+    /// its state and timestamp are overwritten.
     pub fn save_checkpoint(
         &self,
         thread_id: &str,
@@ -760,6 +926,11 @@ impl StateStore {
         Ok(())
     }
 
+    /// Load a checkpoint for a thread.
+    ///
+    /// If `checkpoint_id` is provided, loads that specific checkpoint. Otherwise,
+    /// loads the most recently created checkpoint for the thread. Returns `None`
+    /// if no matching checkpoint exists.
     pub fn load_checkpoint(
         &self,
         thread_id: &str,
@@ -807,6 +978,9 @@ impl StateStore {
         .with_context(|| format!("failed to load latest checkpoint for thread {thread_id}"))
     }
 
+    /// List checkpoints for a thread, ordered by creation time (newest first).
+    ///
+    /// The `limit` parameter caps the number of results and defaults to 100.
     pub fn list_checkpoints(
         &self,
         thread_id: &str,
@@ -837,6 +1011,7 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Delete a specific checkpoint from a thread.
     pub fn delete_checkpoint(&self, thread_id: &str, checkpoint_id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -849,6 +1024,7 @@ impl StateStore {
         Ok(())
     }
 
+    /// Insert or update a background job record.
     pub fn upsert_job(&self, job: &JobStateRecord) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -877,6 +1053,9 @@ impl StateStore {
         Ok(())
     }
 
+    /// Retrieve a single job by its ID.
+    ///
+    /// Returns `None` if no job with the given ID exists.
     pub fn get_job(&self, id: &str) -> Result<Option<JobStateRecord>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -900,6 +1079,9 @@ impl StateStore {
         .with_context(|| format!("failed to read job {id}"))
     }
 
+    /// List jobs ordered by most recently updated.
+    ///
+    /// The `limit` parameter caps the number of results and defaults to 100.
     pub fn list_jobs(&self, limit: Option<usize>) -> Result<Vec<JobStateRecord>> {
         let conn = self.conn()?;
         let limit = i64::try_from(limit.unwrap_or(100)).unwrap_or(100);
@@ -928,6 +1110,7 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Permanently delete a job record.
     pub fn delete_job(&self, id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute("DELETE FROM jobs WHERE id = ?1", params![id])
@@ -935,6 +1118,7 @@ impl StateStore {
         Ok(())
     }
 
+    /// Look up the rollout file path for a thread by its ID.
     pub fn find_rollout_path_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -947,6 +1131,11 @@ impl StateStore {
         .map(|opt| opt.flatten().map(PathBuf::from))
     }
 
+    /// Append an entry to the JSONL session index file.
+    ///
+    /// The session index is an append-only log that maps thread IDs to their names,
+    /// update timestamps, and rollout paths. It is used for fast name-based lookups
+    /// without opening the SQLite database.
     pub fn append_thread_name(
         &self,
         thread_id: &str,
@@ -984,6 +1173,9 @@ impl StateStore {
         Ok(())
     }
 
+    /// Find the display name for a thread by its ID, using the session index.
+    ///
+    /// Returns `None` if the thread is not in the index or has no name.
     pub fn find_thread_name_by_id(&self, thread_id: &str) -> Result<Option<String>> {
         let map = self.session_index_map()?;
         Ok(map
@@ -991,6 +1183,9 @@ impl StateStore {
             .and_then(|entry| entry.thread_name.clone()))
     }
 
+    /// Look up display names for multiple thread IDs at once.
+    ///
+    /// Returns a map from thread ID to its name (which may be `None`).
     pub fn find_thread_names_by_ids(
         &self,
         ids: &[String],
@@ -1004,6 +1199,10 @@ impl StateStore {
         Ok(out)
     }
 
+    /// Find the rollout path for a thread by its display name (case-insensitive).
+    ///
+    /// If multiple threads share the same name, the most recently updated one is returned.
+    /// Returns `None` if no matching thread is found.
     pub fn find_thread_path_by_name_str(&self, name: &str) -> Result<Option<PathBuf>> {
         let map = self.session_index_map()?;
         let matched = map

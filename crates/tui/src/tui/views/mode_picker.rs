@@ -1,4 +1,4 @@
-//! `/mode` picker for Agent / Plan / YOLO / Pro Plan.
+//! `/mode` picker for Agent / Plan / YOLO.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -38,13 +38,7 @@ const MODE_ROWS: &[ModeRow] = &[
         mode: AppMode::Yolo,
         number: '3',
         name: "YOLO",
-        hint: "Shell + trust + auto-approve",
-    },
-    ModeRow {
-        mode: AppMode::ProPlan,
-        number: '4',
-        name: "Pro Plan",
-        hint: "Pro plan/review + Flash execution",
+        hint: "Auto-approve; shell enabled",
     },
 ];
 
@@ -205,7 +199,7 @@ mod tests {
     #[test]
     fn opens_on_current_pro_plan_mode() {
         let view = ModePickerView::new(AppMode::ProPlan);
-        assert_eq!(view.selected_mode(), AppMode::ProPlan);
+        assert_eq!(view.selected_mode(), AppMode::Agent);
     }
 
     #[test]
@@ -233,11 +227,6 @@ mod tests {
         }
 
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
-        match action {
-            ViewAction::EmitAndClose(ViewEvent::ModeSelected { mode }) => {
-                assert_eq!(mode, AppMode::ProPlan);
-            }
-            other => panic!("expected ModeSelected, got {other:?}"),
-        }
+        assert!(matches!(action, ViewAction::None));
     }
 }

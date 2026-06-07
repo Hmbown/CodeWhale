@@ -334,6 +334,16 @@ pub fn stop_title_animation() {
     play_completion_sound();
 }
 
+/// Stop the title animation without playing the completion sound.
+///
+/// Cancellation and failed turns should return the terminal title to rest
+/// without presenting them as completed work.
+pub fn stop_title_animation_quietly() {
+    TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
+    COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
+    set_terminal_title("CodeWhale");
+}
+
 /// Clear the ✅ completion marker from the title when the user interacts.
 ///
 /// Call this on every user input event (key press, mouse click) so the
@@ -498,7 +508,7 @@ fn macos_display_notification(msg: &str) {
 /// Examples:
 /// * `"45s"`, `"1m"`, `"1m 12s"`
 /// * `"1h"`, `"3h 12m"` (#447 — was previously `"192m"` form)
-/// * `"1d"`, `"2d 5h"` (#447 — multi-day sessions/cycles)
+/// * `"1d"`, `"2d 5h"` (#447 — multi-day sessions)
 /// * `"1w"`, `"3w 2d"` (#447 — long-running automations)
 ///
 /// The output drops the secondary unit when it's zero, so `"1h"`
@@ -689,6 +699,7 @@ pub fn latest_assistant_text(messages: &[Message]) -> Option<String> {
                     | ContentBlock::ServerToolUse { .. }
                     | ContentBlock::ToolSearchToolResult { .. }
                     | ContentBlock::CodeExecutionToolResult { .. } => None,
+                    ContentBlock::ImageUrl { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n");

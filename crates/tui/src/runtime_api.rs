@@ -904,6 +904,7 @@ fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
                     crate::models::ContentBlock::CodeExecutionToolResult { tool_use_id, content } => {
                         json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
                     }
+                    crate::models::ContentBlock::ImageUrl { .. } => serde_json::Value::Null,
                 })
                 .collect();
             json!({

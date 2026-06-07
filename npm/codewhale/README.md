@@ -4,8 +4,8 @@ Install and run CodeWhale, the agentic terminal for open-source and open-weight 
 models, from GitHub release artifacts.
 
 > Previously published as `deepseek-tui`. See `docs/REBRAND.md` in the upstream
-> repository for the migration notes; the legacy `deepseek-tui` npm package
-> remains a deprecation shim through the v0.8.x transition.
+> repository for the migration notes; the legacy `deepseek-tui` npm package is
+> deprecated and receives no further releases.
 
 ## Install
 
@@ -35,10 +35,12 @@ codewhale doctor
 codewhale
 ```
 
-The `codewhale` facade and `codewhale-tui` binary share `~/.deepseek/config.toml`
-for DeepSeek auth and default model settings. Common TUI commands are available
-directly through the facade, including `codewhale doctor`, `codewhale models`,
-`codewhale sessions`, and `codewhale resume --last`.
+The `codewhale` facade and `codewhale-tui` binary share
+`~/.codewhale/config.toml` for DeepSeek auth and default model settings. Legacy
+`~/.deepseek/config.toml` installs are still read as a compatibility fallback.
+Common TUI commands are available directly through the facade, including
+`codewhale doctor`, `codewhale models`, `codewhale sessions`, and
+`codewhale resume --last`.
 
 The app talks to DeepSeek's documented OpenAI-compatible Chat Completions API.
 Set `DEEPSEEK_BASE_URL` only if you need the China endpoint or DeepSeek beta

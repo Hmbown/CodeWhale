@@ -22,6 +22,10 @@ macOS workbench (or any local supervisor)
 The engine runs as a local-only process. All APIs bind to `localhost` by
 default. No hosted relay, no provider-token custody, no secret leakage.
 
+For a proposed read-only audit export over completed turns, see
+[`docs/RECEIPTS.md`](RECEIPTS.md). That document is a protocol note; the receipt
+CLI/API surfaces are not implemented yet.
+
 ## ACP stdio adapter: `codewhale serve --acp`
 
 `codewhale serve --acp` speaks JSON-RPC 2.0 over newline-delimited stdio for
@@ -68,7 +72,7 @@ codewhale doctor --json
 | `mcp.present` | bool | Whether MCP config exists |
 | `mcp.servers` | array | Per-server health: `{name, enabled, status, detail}` |
 | `skills.selected` | string | Resolved skills directory |
-| `skills.global.path` / `.present` / `.count` | — | DeepSeek global skills dir (`~/.deepseek/skills`) |
+| `skills.global.path` / `.present` / `.count` | — | CodeWhale global skills dir (`~/.codewhale/skills`, with legacy `~/.deepseek/skills` support) |
 | `skills.agents.path` / `.present` / `.count` | — | Workspace `.agents/skills/` dir |
 | `skills.agents_global.path` / `.present` / `.count` | — | agentskills.io global skills dir (`~/.agents/skills`) |
 | `skills.local.path` / `.present` / `.count` | — | `skills/` dir |
@@ -86,7 +90,7 @@ codewhale doctor --json
 ```json
 {
   "version": "0.8.9",
-  "config_path": "/Users/you/.deepseek/config.toml",
+  "config_path": "/Users/you/.codewhale/config.toml",
   "config_present": true,
   "workspace": "/Users/you/projects/codewhale-tui",
   "api_key": {
@@ -96,11 +100,11 @@ codewhale doctor --json
   "default_text_model": "deepseek-v4-pro",
   "memory": {
     "enabled": false,
-    "path": "/Users/you/.deepseek/memory.md",
+    "path": "/Users/you/.codewhale/memory.md",
     "file_present": true
   },
   "mcp": {
-    "config_path": "/Users/you/.deepseek/mcp.json",
+    "config_path": "/Users/you/.codewhale/mcp.json",
     "present": true,
     "servers": [
       {"name": "filesystem", "enabled": true, "status": "ok", "detail": "ready"}
@@ -214,6 +218,9 @@ accept an empty string to clear a previously-set value. Added in v0.8.10 (#562):
 
 **Events** (SSE replay + live stream)
 - `GET /v1/threads/{id}/events?since_seq=<u64>`
+
+**Receipts** (future read-only audit export)
+- Proposed only: `GET /v1/threads/{thread_id}/turns/{turn_id}/receipt`
 
 **Compatibility stream** (one-shot, backwards-compatible)
 - `POST /v1/stream`
@@ -377,7 +384,7 @@ when developing a UI on Vite's default `:5173`), use any of:
 
 - CLI flag (repeatable): `codewhale serve --http --cors-origin http://localhost:5173`
 - Env var (comma-separated): `DEEPSEEK_CORS_ORIGINS="http://localhost:5173,http://localhost:8080"`
-- Config (`~/.deepseek/config.toml`):
+- Config (`~/.codewhale/config.toml`):
   ```toml
   [runtime_api]
   cors_origins = ["http://localhost:5173"]

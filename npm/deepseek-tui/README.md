@@ -7,9 +7,10 @@ npm uninstall -g deepseek-tui
 npm install -g codewhale
 ```
 
-`codewhale` ships the same `codewhale` and `codewhale-tui` binaries plus
-deprecation shims under the old `deepseek` / `deepseek-tui` names so existing
-scripts keep working through the v0.8.x transition.
+This legacy npm package is deprecated and receives no further releases.
+`codewhale` ships the canonical `codewhale` and `codewhale-tui` binaries, plus
+compatibility-only deprecation shims under the old `deepseek` /
+`deepseek-tui` binary names for v0.8.x.
 
 See [docs/REBRAND.md](https://github.com/Hmbown/CodeWhale/blob/main/docs/REBRAND.md)
 for the full migration story.

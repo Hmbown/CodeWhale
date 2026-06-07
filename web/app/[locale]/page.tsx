@@ -15,9 +15,69 @@ const FALLBACK_STATS: RepoStats = {
   forks: 0,
   openIssues: 0,
   openPulls: 0,
-  contributors: 98,
+  contributors: 141,
   fetchedAt: new Date().toISOString(),
 };
+
+const RELEASE_CONTRIBUTORS = [
+  "@cy2311",
+  "@LING71671",
+  "@axobase001",
+  "@dzyuan",
+  "@mvanhorn",
+  "@malsony",
+  "@gaord",
+  "@yuanchenglu",
+  "@idling11",
+  "@h3c-hexin",
+  "@AdityaVG13",
+  "@Sskift",
+  "@cyq1017",
+  "@HUQIANTAO",
+  "@New2Niu",
+  "@AiurArtanis",
+  "@Lee-take",
+  "@nightt5879",
+  "@AresNing",
+  "@AccMoment",
+  "@reidliu41",
+  "@aboimpinto",
+  "@zhuangbiaowei",
+  "@donglovejava",
+  "@hongqitai",
+  "@zlh124",
+  "@encyc",
+  "@Implementist",
+  "@lihuan215",
+  "@LeoAlex0",
+  "@jimmyzhuu",
+  "@rockyzhang",
+  "@mo-vic",
+  "@hufanexplore",
+  "@hoclaptrinh33",
+  "@BryonGo",
+];
+
+const RELEASE_HELPERS = [
+  "@buko",
+  "@yyyCode",
+  "@gaslebinh-glitch",
+  "@Dr3259",
+  "@lpeng1711694086-lang",
+  "@VerrPower",
+  "@yan-zay",
+  "@jretz",
+  "@Neo-millunnium",
+  "@caeserchen",
+  "@T-Phuong-Nguyen",
+  "@zhyuzhyu",
+  "@0gl20shk0sbt36",
+  "@hatakes",
+  "@goodvecn-dev",
+  "@bevis-wong",
+  "@PurplePulse",
+  "@nbiish",
+];
 
 const FALLBACK_DISPATCH_EN: CuratedDispatch = {
   generatedAt: new Date().toISOString(),
@@ -413,6 +473,61 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             <Link href={isZh ? "/zh/feed" : "/feed"} className="font-mono text-xs uppercase tracking-wider text-indigo hover:underline">
               {isZh ? "全部活动 →" : "All activity →"}
             </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* RELEASE CREDITS */}
+      <section className="mx-auto max-w-[1400px] px-6 py-14">
+        <div className="flex items-baseline gap-4 mb-5 hairline-b pb-4">
+          <Seal char="谢" />
+          <div>
+            <div className="eyebrow mb-2">{isZh ? "v0.8.48 致谢" : "v0.8.48 credits"}</div>
+            <h2 className="font-display text-3xl">
+              {isZh ? "每个补丁和报告都算数" : "Every patch and report counts"}
+            </h2>
+          </div>
+        </div>
+        <div className="grid lg:grid-cols-12 gap-10">
+          <div className="lg:col-span-5">
+            <p className={`text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
+              {isZh
+                ? "这一版合并和吸收了来自社区的大量工作。完整条目在 CHANGELOG 中；这里保留最新发布的公开致谢入口。"
+                : "This release merged and harvested a large community tranche. The full notes live in the changelog; this keeps the latest public credit surface easy to find."}
+            </p>
+            <Link href="https://github.com/Hmbown/CodeWhale/blob/main/CHANGELOG.md#0848---2026-05-31" className="inline-block mt-4 font-mono text-xs uppercase tracking-wider text-indigo hover:underline">
+              {isZh ? "查看完整 changelog →" : "Full changelog →"}
+            </Link>
+          </div>
+          <div className="lg:col-span-7 grid gap-6">
+            <div>
+              <div className="eyebrow mb-3">{isZh ? "已合并 / 已吸收贡献" : "Merged and harvested contributions"}</div>
+              <div className="flex flex-wrap gap-2">
+                {RELEASE_CONTRIBUTORS.map((handle) => (
+                  <Link
+                    key={handle}
+                    href={`https://github.com/${handle.slice(1)}`}
+                    className="font-mono text-xs px-2 py-1 hairline-t hairline-b hairline-l hairline-r text-ink-soft hover:text-indigo hover:bg-paper-deep"
+                  >
+                    {handle}
+                  </Link>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="eyebrow mb-3">{isZh ? "报告、复现和验证" : "Reports, repros, and verification"}</div>
+              <div className="flex flex-wrap gap-2">
+                {RELEASE_HELPERS.map((handle) => (
+                  <Link
+                    key={handle}
+                    href={`https://github.com/${handle.slice(1)}`}
+                    className="font-mono text-xs px-2 py-1 hairline-t hairline-b hairline-l hairline-r text-ink-soft hover:text-indigo hover:bg-paper-deep"
+                  >
+                    {handle}
+                  </Link>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>

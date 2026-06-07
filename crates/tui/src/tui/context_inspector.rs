@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::compaction::estimate_input_tokens_conservative;
+use crate::localization::{Locale, MessageId, tr};
 use crate::models::{
     LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS, SystemPrompt, context_window_for_model,
 };
@@ -71,10 +72,10 @@ enum PromptLayerKind {
 }
 
 impl PromptLayerKind {
-    fn label(self) -> &'static str {
+    fn label(self, locale: Locale) -> &'static str {
         match self {
-            Self::Static => "cache-friendly",
-            Self::Dynamic => "changes by session/turn",
+            Self::Static => tr(locale, MessageId::CtxInspCacheFriendly),
+            Self::Dynamic => tr(locale, MessageId::CtxInspChangesByTurn),
         }
     }
 }
@@ -87,53 +88,74 @@ struct PromptTextLayer<'a> {
 }
 
 #[must_use]
-pub fn build_context_inspector_text(app: &App) -> String {
+pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let mut out = String::new();
     let usage = context_usage(app);
-    let status = context_status(usage.2);
+    let (used, max, percent) = usage;
 
-    let _ = writeln!(out, "Session Context");
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspSessionContext));
     let _ = writeln!(out, "---------------");
-    let _ = writeln!(out, "Model: {}", app.model);
     let _ = writeln!(
         out,
-        "Workspace: {}",
+        "{}: {}",
+        tr(locale, MessageId::CtxInspModel),
+        app.model
+    );
+    let _ = writeln!(
+        out,
+        "{}: {}",
+        tr(locale, MessageId::CtxInspWorkspace),
         crate::utils::display_path(&app.workspace)
     );
     if let Some(session_id) = app.current_session_id.as_deref() {
-        let _ = writeln!(out, "Session: {session_id}");
+        let _ = writeln!(
+            out,
+            "{}: {session_id}",
+            tr(locale, MessageId::CtxInspSession)
+        );
     }
-    let (used, max, percent) = usage;
+    let status_label = match context_status(percent) {
+        ContextPressure::Critical => tr(locale, MessageId::CtxInspCritical),
+        ContextPressure::High => tr(locale, MessageId::CtxInspHigh),
+        ContextPressure::Ok => tr(locale, MessageId::CtxInspOk),
+    };
+    let tokens_unit = tr(locale, MessageId::CtxInspTokens);
     let _ = writeln!(
         out,
-        "Context: {status} - ~{used}/{max} tokens ({percent:.1}%)"
+        "{ctx_label}: {status_label} - ~{used}/{max} {tokens_unit} ({percent:.1}%)",
+        ctx_label = tr(locale, MessageId::CtxInspContext),
     );
+    let cells = tr(locale, MessageId::CtxInspCells);
+    let api_msgs = tr(locale, MessageId::CtxInspApiMessages);
     let _ = writeln!(
         out,
-        "Transcript: {} cells, {} API messages",
+        "{label}: {} {cells}, {} {api_msgs}",
         app.history.len(),
-        app.api_messages.len()
+        app.api_messages.len(),
+        label = tr(locale, MessageId::CtxInspTranscript),
     );
     let _ = writeln!(
         out,
-        "Workspace status: {}",
+        "{}: {}",
+        tr(locale, MessageId::CtxInspWorkspaceStatus),
         app.workspace_context
             .as_deref()
-            .unwrap_or("not sampled yet")
+            .unwrap_or(tr(locale, MessageId::CtxInspNotSampledYet))
     );
 
     let _ = writeln!(out);
-    push_system_prompt_structure(&mut out, app);
+    push_system_prompt_structure(&mut out, app, locale);
     let _ = writeln!(out);
-    push_references(&mut out, &app.session_context_references);
+    push_references(&mut out, &app.session_context_references, locale);
     let _ = writeln!(out);
-    push_tools(&mut out, app);
+    push_tools(&mut out, app, locale);
 
     out
 }
 
 fn context_usage(app: &App) -> (usize, u32, f64) {
-    let max = context_window_for_model(&app.model).unwrap_or(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
+    let max = context_window_for_model(app.effective_model_for_budget())
+        .unwrap_or(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
     let estimated =
         estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
     let total_chars = estimate_message_chars(&app.api_messages);
@@ -142,20 +164,26 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
     (used, max, percent)
 }
 
-fn context_status(percent: f64) -> &'static str {
+enum ContextPressure {
+    Ok,
+    High,
+    Critical,
+}
+
+fn context_status(percent: f64) -> ContextPressure {
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
-        "critical"
+        ContextPressure::Critical
     } else if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
-        "high"
+        ContextPressure::High
     } else {
-        "ok"
+        ContextPressure::Ok
     }
 }
 
 /// Inspect the system prompt structure, split into cache-friendly stable
 /// prefix blocks and the volatile working-set tail block.
-fn push_system_prompt_structure(out: &mut String, app: &App) {
-    let _ = writeln!(out, "System Prompt Structure");
+fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspSystemPrompt));
     let _ = writeln!(out, "-----------------------");
 
     // Conservative token estimate: ~3 chars per token (consistent with
@@ -169,6 +197,22 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
         None => 0,
     };
 
+    let stable_lbl = tr(locale, MessageId::CtxInspStablePrefix);
+    let volatile_lbl = tr(locale, MessageId::CtxInspVolatileWorkingSet);
+    let first_line_lbl = tr(locale, MessageId::CtxInspFirstLine);
+    let total_lbl = tr(locale, MessageId::CtxInspTotal);
+    let text_prompt_lbl = tr(locale, MessageId::CtxInspTextPromptLayers);
+    let single_blob_lbl = tr(locale, MessageId::CtxInspSingleTextBlob);
+    let blocks_unit = tr(locale, MessageId::CtxInspBlocks);
+    let block_unit = tr(locale, MessageId::CtxInspBlock);
+    let tokens_unit = tr(locale, MessageId::CtxInspTokens);
+    let layers_unit = tr(locale, MessageId::CtxInspLayers);
+    let none_lbl = tr(locale, MessageId::CtxInspNone);
+    let empty_lbl = tr(locale, MessageId::CtxInspEmpty);
+    let cache_friendly = tr(locale, MessageId::CtxInspCacheFriendly);
+    let changes_by_turn = tr(locale, MessageId::CtxInspChangesByTurn);
+    let stable_only = tr(locale, MessageId::CtxInspStablePrefixOnly);
+    let no_system_prompt = tr(locale, MessageId::CtxInspNoSystemPrompt);
     match &app.system_prompt {
         Some(SystemPrompt::Blocks(blocks)) => {
             let working_set_idx = blocks
@@ -188,24 +232,24 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
 
             let _ = writeln!(
                 out,
-                "  Stable prefix: {stable_count} block(s), ~{stable_tokens} tokens  [cache-friendly]"
+                "  {stable_lbl}: {stable_count} {blocks_unit}, ~{stable_tokens} {tokens_unit}  [{cache_friendly}]"
             );
             if let Some(block) = working_block {
                 let _ = writeln!(
                     out,
-                    "  Volatile working set: 1 block, ~{working_tokens} tokens  [changes every turn]"
+                    "  {volatile_lbl}: 1 {block_unit}, ~{working_tokens} {tokens_unit}  [{changes_by_turn}]"
                 );
                 let _ = writeln!(
                     out,
-                    "    First line: {}",
-                    block.text.lines().next().unwrap_or("(empty)")
+                    "    {first_line_lbl}: {}",
+                    block.text.lines().next().unwrap_or(empty_lbl)
                 );
             } else {
-                let _ = writeln!(out, "  Volatile working set: none");
+                let _ = writeln!(out, "  {volatile_lbl}: {none_lbl}");
             }
             let _ = writeln!(
                 out,
-                "  Total: {} block(s), ~{total_est} tokens",
+                "  {total_lbl}: {} {blocks_unit}, ~{total_est} {tokens_unit}",
                 blocks.len()
             );
         }
@@ -218,37 +262,32 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
             {
                 let _ = writeln!(
                     out,
-                    "  Text prompt layers: {} layer(s), ~{total_est} tokens",
+                    "  {text_prompt_lbl}: {} {layers_unit}, ~{total_est} {tokens_unit}",
                     layers.len()
                 );
                 for layer in layers {
                     let tokens = text_tokens(layer.body);
+                    let kind_lbl = layer.kind.label(locale);
                     let _ = writeln!(
                         out,
-                        "  - {}: ~{} tokens [{}]",
+                        "  - {}: ~{tokens} {tokens_unit} [{kind_lbl}]",
                         layer.name,
-                        tokens,
-                        layer.kind.label()
                     );
                 }
             } else {
                 let _ = writeln!(
                     out,
-                    "  Single text blob (~{total_est} tokens) [stable prefix only]"
+                    "  {single_blob_lbl} (~{total_est} {tokens_unit}) [{stable_only}]"
                 );
             }
         }
         None => {
-            let _ = writeln!(out, "  No system prompt set.");
+            let _ = writeln!(out, "  {no_system_prompt}");
         }
     }
 
     // Cache-economics hint
-    let _ = writeln!(
-        out,
-        "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
-        Volatile working-set changes break the cache only for the tail."
-    );
+    let _ = writeln!(out, "  {}", tr(locale, MessageId::CtxInspCacheTip));
 }
 
 fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
@@ -287,8 +326,8 @@ fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
     layers
 }
 
-fn push_references(out: &mut String, references: &[SessionContextReference]) {
-    let _ = writeln!(out, "References");
+fn push_references(out: &mut String, references: &[SessionContextReference], locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspReferences));
     let _ = writeln!(out, "----------");
 
     let mut seen = HashSet::new();
@@ -305,7 +344,11 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         if rendered >= MAX_REFERENCE_ROWS {
             let remaining = references.len().saturating_sub(rendered);
             if remaining > 0 {
-                let _ = writeln!(out, "- ... {remaining} more reference(s)");
+                let _ = writeln!(
+                    out,
+                    "- ... {remaining} {}",
+                    tr(locale, MessageId::CtxInspMoreReferences)
+                );
             }
             break;
         }
@@ -316,12 +359,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         };
         let state = if reference.included {
             if reference.expanded {
-                "included"
+                tr(locale, MessageId::CtxInspIncluded)
             } else {
-                "attached"
+                tr(locale, MessageId::CtxInspAttached)
             }
         } else {
-            "not included"
+            tr(locale, MessageId::CtxInspNotIncluded)
         };
         let detail = reference
             .detail
@@ -338,15 +381,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
     }
 
     if rendered == 0 {
-        let _ = writeln!(
-            out,
-            "- No file, directory, or media references recorded yet."
-        );
+        let _ = writeln!(out, "- {}", tr(locale, MessageId::CtxInspNoReferences));
     }
 }
 
-fn push_tools(out: &mut String, app: &App) {
-    let _ = writeln!(out, "Recent Tools");
+fn push_tools(out: &mut String, app: &App, locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspRecentTools));
     let _ = writeln!(out, "------------");
 
     let mut rows: Vec<(usize, &ToolDetailRecord)> = app
@@ -358,7 +398,8 @@ fn push_tools(out: &mut String, app: &App) {
 
     let mut rendered = 0usize;
     for detail in app.active_tool_details.values() {
-        push_tool_row(out, "active", detail);
+        let location = tr(locale, MessageId::CtxInspActive);
+        push_tool_row(out, locale, location, detail);
         rendered += 1;
         if rendered >= MAX_TOOL_ROWS {
             return;
@@ -368,26 +409,23 @@ fn push_tools(out: &mut String, app: &App) {
         .into_iter()
         .take(MAX_TOOL_ROWS.saturating_sub(rendered))
     {
-        let location = format!("cell {cell_idx}");
-        push_tool_row(out, &location, detail);
+        let location = format!("{} {cell_idx}", tr(locale, MessageId::CtxInspCell));
+        push_tool_row(out, locale, &location, detail);
         rendered += 1;
     }
 
     if rendered == 0 {
-        let _ = writeln!(out, "- No tool activity recorded yet.");
+        let _ = writeln!(out, "- {}", tr(locale, MessageId::CtxInspNoToolActivity));
     } else {
-        let _ = writeln!(
-            out,
-            "- Open the matching card and press Alt+V for full details."
-        );
+        let _ = writeln!(out, "- {}", tr(locale, MessageId::CtxInspAltVHint));
     }
 }
 
-fn push_tool_row(out: &mut String, location: &str, detail: &ToolDetailRecord) {
+fn push_tool_row(out: &mut String, locale: Locale, location: &str, detail: &ToolDetailRecord) {
     let output_state = if detail.output.as_deref().is_some_and(|out| !out.is_empty()) {
-        "output captured"
+        tr(locale, MessageId::CtxInspOutputCaptured)
     } else {
-        "no output yet"
+        tr(locale, MessageId::CtxInspNoOutputYet)
     };
     let _ = writeln!(
         out,
@@ -419,6 +457,8 @@ mod tests {
     use crate::tui::history::HistoryCell;
     use std::path::PathBuf;
 
+    use crate::localization::Locale;
+
     fn test_app() -> App {
         App::new(
             TuiOptions {
@@ -449,7 +489,7 @@ mod tests {
     #[test]
     fn inspector_formats_empty_state() {
         let app = test_app();
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Session Context"));
         assert!(text.contains("No file, directory, or media references recorded yet."));
         assert!(text.contains("No tool activity recorded yet."));
@@ -476,7 +516,7 @@ mod tests {
                 },
             });
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("[file] @src/main.rs -> /tmp/project/src/main.rs"));
     }
 
@@ -491,14 +531,26 @@ mod tests {
             }],
         });
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Context: critical"), "{text}");
+    }
+
+    #[test]
+    fn inspector_uses_effective_auto_model_context_window() {
+        let mut app = test_app();
+        app.model = "auto".to_string();
+        app.auto_model = true;
+        app.last_effective_model = Some("deepseek-v4-pro".to_string());
+
+        let text = build_context_inspector_text(&app, Locale::En);
+        assert!(text.contains("Model: auto"), "{text}");
+        assert!(text.contains("/1000000 tokens"), "{text}");
     }
 
     #[test]
     fn inspector_no_system_prompt_shows_section() {
         let app = test_app();
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(text.contains("No system prompt set."));
     }
@@ -520,7 +572,7 @@ mod tests {
             },
         ]));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(
             text.contains("Stable prefix: 1 block"),
@@ -535,7 +587,7 @@ mod tests {
             "cache hint for stable: {text}"
         );
         assert!(
-            text.contains("[changes every turn]"),
+            text.contains("[changes by session/turn]"),
             "volatile marker: {text}"
         );
         assert!(
@@ -561,7 +613,7 @@ mod tests {
             },
         ]));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Stable prefix: 2 block(s)"));
         assert!(text.contains("Volatile working set: none"));
     }
@@ -573,7 +625,7 @@ mod tests {
             "You are CodeWhale.\n\n<project_instructions source=\"AGENTS.md\">\nRules\n</project_instructions>\n\n## Project Context Pack\n{}\n\n## Environment\n- lang: en\n\n## Skills\n- rust\n\n## Context Management\nKeep compact\n\n## Compact\nTemplate\n\n## Repo Working Set\nsrc/".to_string(),
         ));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(text.contains("Text prompt layers"));
         assert!(text.contains("Global system prefix"));
@@ -592,8 +644,60 @@ mod tests {
         let mut app = test_app();
         app.system_prompt = Some(SystemPrompt::Text("You are CodeWhale.".to_string()));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Single text blob"));
         assert!(text.contains("stable prefix only"));
+    }
+
+    #[test]
+    fn inspector_localizes_to_zh_hans() {
+        use crate::models::SystemBlock;
+        let mut app = test_app();
+        app.system_prompt = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                block_type: "text".to_string(),
+                text: "## Base\nYou are CodeWhale.".to_string(),
+                cache_control: None,
+            },
+            SystemBlock {
+                block_type: "text".to_string(),
+                text: format!("{WORKING_SET_MARKER}\nsrc/main.rs changed"),
+                cache_control: None,
+            },
+        ]));
+        let text = build_context_inspector_text(&app, Locale::ZhHans);
+
+        // Positive: key ZhHans labels present
+        assert!(text.contains("会话上下文"), "session header: {text}");
+        assert!(text.contains("模型"), "model label: {text}");
+        assert!(text.contains("工作区"), "workspace: {text}");
+        assert!(text.contains("系统提示结构"), "sysprompt section: {text}");
+        assert!(text.contains("稳定前缀"), "stable prefix: {text}");
+        assert!(text.contains("易变工作集"), "volatile ws: {text}");
+        assert!(text.contains("第一行"), "first line: {text}");
+        assert!(text.contains("总计"), "total line: {text}");
+        assert!(text.contains("引用"), "references: {text}");
+        assert!(text.contains("最近使用的工具"), "tools: {text}");
+        assert!(text.contains("个区块"), "blocks unit: {text}");
+        assert!(text.contains("个 token"), "tokens unit: {text}");
+        assert!(text.contains("缓存友好"), "cache-friendly: {text}");
+        assert!(text.contains("提示"), "cache tip: {text}");
+
+        // Negative: no English labels leak
+        assert!(!text.contains("Session Context"), "EN session leaked");
+        assert!(!text.contains("Model:"), "EN model leaked");
+        assert!(!text.contains("cells"), "EN cells leaked");
+        assert!(!text.contains("API messages"), "EN API msgs leaked");
+        assert!(!text.contains("Stable prefix"), "EN stable prefix leaked");
+        assert!(
+            !text.contains("Volatile working set"),
+            "EN volatile ws leaked"
+        );
+        assert!(!text.contains("First line"), "EN first line leaked");
+        assert!(!text.contains("Total:"), "EN total leaked");
+        assert!(!text.contains("Text prompt layers"), "EN layers leaked");
+        assert!(!text.contains("cache-friendly"), "EN cache-friendly leaked");
+        assert!(!text.contains("more reference"), "EN more refs leaked");
+        assert!(!text.contains("no output yet"), "EN no output leaked");
     }
 }

@@ -16,7 +16,7 @@ pub(crate) enum EscapeAction {
 pub(crate) fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeAction {
     if slash_menu_open {
         EscapeAction::CloseSlashMenu
-    } else if app.is_loading {
+    } else if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
         EscapeAction::CancelRequest
     } else if app.queued_draft.is_some() && app.input.is_empty() {
         EscapeAction::DiscardQueuedDraft
@@ -57,14 +57,19 @@ pub(crate) fn handle_composer_history_arrow(
     }
 
     // When `composer_arrows_scroll` is enabled, plain Up/Down scroll the
-    // transcript for single-line drafts. Multiline composers keep editor-like
-    // line navigation, with history fallback at the first/last line.
+    // transcript for single-line drafts. Multiline drafts keep editor-like
+    // line navigation. If the user holds Up/Down at the first/last line, do
+    // not replace their current draft with prompt history unless they are
+    // already navigating history.
     let scroll_transcript = app.composer_arrows_scroll && !app.input.contains('\n');
+    let protect_multiline_draft = app.input.contains('\n') && app.history_index.is_none();
 
     match key.code {
         KeyCode::Up => {
             if scroll_transcript {
                 app.scroll_up(COMPOSER_ARROW_SCROLL_LINES);
+            } else if protect_multiline_draft && !cursor_has_previous_logical_line(app) {
+                app.needs_redraw = true;
             } else {
                 app.vim_move_up();
             }
@@ -73,6 +78,8 @@ pub(crate) fn handle_composer_history_arrow(
         KeyCode::Down => {
             if scroll_transcript {
                 app.scroll_down(COMPOSER_ARROW_SCROLL_LINES);
+            } else if protect_multiline_draft && !cursor_has_next_logical_line(app) {
+                app.needs_redraw = true;
             } else {
                 app.vim_move_down();
             }
@@ -82,8 +89,48 @@ pub(crate) fn handle_composer_history_arrow(
     }
 }
 
+fn cursor_has_previous_logical_line(app: &App) -> bool {
+    let cursor_byte = byte_index_at_char(&app.input, app.cursor_position);
+    app.input[..cursor_byte].contains('\n')
+}
+
+fn cursor_has_next_logical_line(app: &App) -> bool {
+    let cursor_byte = byte_index_at_char(&app.input, app.cursor_position);
+    app.input[cursor_byte..].contains('\n')
+}
+
+fn byte_index_at_char(text: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
+}
+
 pub(crate) fn is_word_cursor_modifier(modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT)
+}
+
+pub(crate) fn handle_composer_alt_word_motion_key(app: &mut App, key: KeyEvent) -> bool {
+    if !key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            app.clear_selection();
+            app.move_cursor_word_forward();
+            true
+        }
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            app.clear_selection();
+            app.move_cursor_word_backward();
+            true
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn is_composer_newline_key(key: KeyEvent) -> bool {

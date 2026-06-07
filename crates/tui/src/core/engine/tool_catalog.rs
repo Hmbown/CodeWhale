@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::config::ApiProvider;
 use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, optional_u64, required_str};
 use crate::tui::app::AppMode;
@@ -34,6 +35,8 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
 }
 
 pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
+    "agent_close",
+    "agent_eval",
     "agent_open",
     "apply_patch",
     "checklist_write",
@@ -46,11 +49,14 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "fetch_url",
     "file_search",
     "git_diff",
+    "git_log",
+    "git_show",
     "git_status",
     "grep_files",
     "list_dir",
     "read_file",
     "run_tests",
+    "run_verifiers",
     "task_create",
     "task_list",
     "task_read",
@@ -89,6 +95,63 @@ pub(super) fn apply_native_tool_deferral(
     }
 }
 
+/// First-turn native tool surface for Arcee (Trinity).
+///
+/// Arcee's hosted API is fronted by Cloudflare, whose managed WAF returns
+/// HTTP 403 "Access Denied" when a request body contains injection-like text.
+/// CodeWhale's full agent catalog trips it: shell/patch/code-execution tool
+/// descriptions and schemas carry example payloads (`rm -rf`, `../../`,
+/// `<script>`, `DROP TABLE`, `eval(base64_decode(...))`) that match the
+/// ruleset. Keeping only this benign, read-only set active on the first turn
+/// lets the request clear the gateway; every other tool stays deferred in the
+/// catalog and remains discoverable through tool-search. Live-verified: a
+/// benign `list_dir` tool returns 200 while a risky shell description returns
+/// 403 from `api.arcee.ai`.
+pub(super) const ARCEE_FIRST_TURN_NATIVE_TOOLS: &[&str] = &[
+    "checklist_write",
+    "file_search",
+    "git_diff",
+    "git_status",
+    "grep_files",
+    "list_dir",
+    "read_file",
+    "update_plan",
+];
+
+/// Returns the provider-specific first-turn allow-list, or `None` when the
+/// provider should use the default deferral policy.
+fn provider_first_turn_native_tools(provider: ApiProvider) -> Option<&'static [&'static str]> {
+    match provider {
+        ApiProvider::Arcee => Some(ARCEE_FIRST_TURN_NATIVE_TOOLS),
+        _ => None,
+    }
+}
+
+/// Narrow the *active* tool surface for WAF-fronted providers on top of the
+/// default deferral flags. The full catalog is preserved (deferred tools stay
+/// present and discoverable via tool-search); only the first-turn `active`
+/// partition is reduced so the opening request clears the provider gateway.
+///
+/// Tool-search tools and any user-pinned `always_load` tools stay active so the
+/// model can still hydrate the deferred tail when it needs a tool outside the
+/// reduced set.
+pub(super) fn apply_provider_tool_policy(
+    catalog: &mut [Tool],
+    provider: ApiProvider,
+    always_load: &HashSet<String>,
+) {
+    let Some(active) = provider_first_turn_native_tools(provider) else {
+        return;
+    };
+    for tool in catalog {
+        if is_tool_search_tool(&tool.name) || always_load.contains(&tool.name) {
+            tool.defer_loading = Some(false);
+            continue;
+        }
+        tool.defer_loading = Some(!active.contains(&tool.name.as_str()));
+    }
+}
+
 fn should_keep_mcp_tool_loaded(name: &str) -> bool {
     matches!(
         name,
@@ -107,6 +170,15 @@ pub(super) fn apply_mcp_tool_deferral(catalog: &mut [Tool], mode: AppMode) {
     }
 }
 
+/// Build the model tool catalog from native and MCP tool lists.
+///
+/// **Catalog-head stability invariant.** The head of the catalog (all
+/// non-deferred tools) must remain byte-identical across mode toggles
+/// (Plan ↔ Agent ↔ YOLO) for tools that are common to both modes.
+/// Deferred tool activations append to the tail and never reorder the
+/// head. This invariant is critical for DeepSeek's KV prefix cache:
+/// the tools array is part of the immutable prefix, and any byte-level
+/// change in the head forces a full re-prefill on the next turn.
 pub(super) fn build_model_tool_catalog(
     mut native_tools: Vec<Tool>,
     mut mcp_tools: Vec<Tool>,
@@ -472,8 +544,9 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
 }
 
 fn shell_tool_allow_shell_hint() -> &'static str {
-    "Shell tools are gated by `allow_shell`; enable `allow_shell = true` for trusted workspaces, \
-     or switch to an auto-approve mode that permits shell access"
+    "Shell tools require top-level `allow_shell = true`. \
+     In Agent mode, run `/config allow_shell true` for this session or add `--save` \
+     for future sessions; the next turn will expose shell with approval gating"
 }
 
 fn is_shell_tool_name(tool_name: &str) -> bool {
@@ -701,6 +774,29 @@ fn likely_field_corrections(
             "Use checklist_write to replace the full list, or retry checklist_update with id and status."
                 .to_string(),
         );
+    }
+    // RLM source fields are easy to misname (#2659). rlm_open takes exactly one
+    // of file_path / content / url / session_object; nudge common wrong names
+    // toward those.
+    if tool_name == "rlm_open" {
+        for wrong in [
+            "prompt",
+            "resident_file",
+            "text",
+            "body",
+            "path",
+            "file",
+            "source",
+        ] {
+            if has_received(wrong)
+                && !has_received("file_path")
+                && !has_received("content")
+                && !has_received("url")
+                && !has_received("session_object")
+            {
+                corrections.push(format!("{wrong} -> file_path (local file), content (inline text), url, or session_object"));
+            }
+        }
     }
     corrections
 }

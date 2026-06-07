@@ -1,31 +1,36 @@
 //! Settings system - Persistent user preferences
 //!
-//! Settings are stored at ~/.config/deepseek/settings.toml
+//! Settings are stored at ~/.codewhale/settings.toml, with legacy fallbacks.
 //!
 //! TUI-specific preferences (theme, keybinds, font_size) that survive project
-//! switches are stored separately at ~/.deepseek/tui.toml. See [`TuiPrefs`].
+//! switches are stored separately in tui.toml. See [`TuiPrefs`].
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{expand_path, normalize_model_name};
+use crate::config::{ApiProvider, expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
 use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
 
+const SETTINGS_FILE_NAME: &str = "settings.toml";
+const TUI_PREFS_FILE_NAME: &str = "tui.toml";
+
 // ============================================================================
-// TuiPrefs — ~/.deepseek/tui.toml
+// TuiPrefs — ~/.codewhale/tui.toml
 // ============================================================================
 
 /// TUI-specific preferences that are decoupled from agent/project config so
 /// they survive project switches (issue #437).
 ///
-/// Stored at `~/.deepseek/tui.toml`. When the file is absent the values fall
-/// back to the `[tui]` section of the normal `config.toml` (via
-/// [`TuiPrefs::load`]), and then to the struct's own defaults.
+/// Stored at `~/.codewhale/tui.toml` on new installs, with
+/// `~/.deepseek/tui.toml` retained as a legacy read fallback. When the file is
+/// absent the values fall back to the `[tui]` section of the normal
+/// `config.toml` (via [`TuiPrefs::load`]), and then to the struct's own
+/// defaults.
 ///
-/// # Example `~/.deepseek/tui.toml`
+/// # Example `~/.codewhale/tui.toml`
 ///
 /// ```toml
 /// theme    = "dark"        # "system" | "dark" | "light" | "grayscale" | "catppuccin-mocha" | ...
@@ -89,7 +94,7 @@ pub struct KeybindPrefs {
 #[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
 impl TuiPrefs {
     /// Return the canonical path of the TUI preferences file:
-    /// `~/.deepseek/tui.toml`.
+    /// `~/.codewhale/tui.toml`, or legacy `~/.deepseek/tui.toml` when present.
     ///
     /// Tests may override the home directory through the
     /// `DEEPSEEK_CONFIG_PATH` environment variable (the parent directory of
@@ -107,16 +112,17 @@ impl TuiPrefs {
             }
         }
 
-        let home = dirs::home_dir()
-            .context("Failed to resolve home directory: cannot determine tui.toml path.")?;
-        let primary = home.join(".codewhale").join("tui.toml");
-        if primary.exists() {
-            return Ok(primary);
-        }
-        Ok(home.join(".deepseek").join("tui.toml"))
+        let primary = codewhale_config::codewhale_home()
+            .ok()
+            .map(|home| home.join(TUI_PREFS_FILE_NAME));
+        let legacy_home = codewhale_config::legacy_deepseek_home()
+            .ok()
+            .map(|home| home.join(TUI_PREFS_FILE_NAME));
+
+        resolve_tui_prefs_path_from_candidates(primary, legacy_home)
     }
 
-    /// Load TUI preferences from `~/.deepseek/tui.toml`.
+    /// Load TUI preferences from `~/.codewhale/tui.toml` or a legacy fallback.
     ///
     /// If the file does not exist the struct defaults are returned — no error
     /// is produced. Parse errors surface as `Err` so the caller can warn the
@@ -133,8 +139,8 @@ impl TuiPrefs {
         Ok(prefs)
     }
 
-    /// Save TUI preferences to `~/.deepseek/tui.toml`, creating the
-    /// `~/.deepseek` directory if needed.
+    /// Save TUI preferences to `~/.codewhale/tui.toml` (or a legacy file when
+    /// it already exists), creating the target directory if needed.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         if let Some(parent) = path.parent() {
@@ -165,12 +171,36 @@ impl TuiPrefs {
     }
 }
 
+fn resolve_tui_prefs_path_from_candidates(
+    primary: Option<PathBuf>,
+    legacy_home: Option<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = primary.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    if let Some(path) = legacy_home.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    primary.or(legacy_home).ok_or_else(|| {
+        anyhow::anyhow!("Failed to resolve tui preferences path: no home directory found.")
+    })
+}
+
 /// User settings with defaults
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Auto-compact conversations when they approach the model limit.
     pub auto_compact: bool,
+    /// Context-window percentage that triggers pre-send auto-compaction when
+    /// `auto_compact` is enabled. The hard token floor still applies.
+    pub auto_compact_threshold_percent: f64,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
     /// Streaming pacing mode. `true` pins the chunker to one-character-per-
@@ -193,6 +223,16 @@ pub struct Settings {
     /// Enable rapid-key paste-burst detection for terminals that do not emit
     /// bracketed-paste events. Independent from `bracketed_paste`.
     pub paste_burst_detection: bool,
+    /// Maximum number of file-mention popup candidates retained before the
+    /// composer renders its visible window. The widget paginates by terminal
+    /// height, so this is a data-side cap rather than a visible-row budget.
+    pub mention_menu_limit: usize,
+    /// Maximum workspace depth for `@`-mention completion walks. `0` means
+    /// unlimited depth; use with care in very large repositories.
+    pub mention_walk_depth: usize,
+    /// `@`-mention completion behavior: fuzzy workspace search or deterministic
+    /// directory browser.
+    pub mention_menu_behavior: String,
     /// Show thinking blocks from the model
     pub show_thinking: bool,
     /// Show detailed tool output
@@ -282,21 +322,21 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            // v0.8.11: default flipped to `false` to stop the engine from
-            // routinely rewriting the prompt prefix, which breaks DeepSeek
-            // V4's prefix cache (~90% discount on cached prefix tokens) and
-            // ends up costing more than the compaction itself saves. With
-            // V4's 1M-token window the user has plenty of headroom to run
-            // long sessions without auto-trimming, and the explicit
-            // `/compact` slash command + `auto_compact = on` opt-in remain
-            // available for users / agents that decide compaction is
-            // worth the cache hit on their workload (#664).
+            // Keep the persisted fallback `false`; startup code may enable
+            // auto-compaction by model window when the user has not saved an
+            // explicit preference. V4-class 1M-token models stay opt-in to
+            // preserve prefix-cache behavior, while 256K-class models default
+            // on at the configured percent threshold.
             auto_compact: false,
+            auto_compact_threshold_percent: 80.0,
             calm_mode: false,
             low_motion: false,
             fancy_animations: true,
             bracketed_paste: true,
             paste_burst_detection: true,
+            mention_menu_limit: 128,
+            mention_walk_depth: 10,
+            mention_menu_behavior: "fuzzy".to_string(),
             show_thinking: true,
             show_tool_details: true,
             locale: "auto".to_string(),
@@ -334,15 +374,21 @@ impl Settings {
             if !config_path.is_empty() {
                 let p = expand_path(config_path);
                 if let Some(parent) = p.parent() {
-                    return Ok(parent.join("settings.toml"));
+                    return Ok(parent.join(SETTINGS_FILE_NAME));
                 }
             }
         }
 
-        let config_dir = dirs::config_dir()
-            .context("Failed to resolve config directory: not found.")?
-            .join("deepseek");
-        Ok(config_dir.join("settings.toml"))
+        let primary = codewhale_config::codewhale_home()
+            .ok()
+            .map(|home| home.join(SETTINGS_FILE_NAME));
+        let legacy_home = codewhale_config::legacy_deepseek_home()
+            .ok()
+            .map(|home| home.join(SETTINGS_FILE_NAME));
+        let legacy_config_dir =
+            dirs::config_dir().map(|dir| dir.join("deepseek").join(SETTINGS_FILE_NAME));
+
+        resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
     }
 
     /// Load settings from disk, or return defaults if not found
@@ -376,6 +422,23 @@ impl Settings {
         };
         settings.apply_env_overrides();
         Ok(settings)
+    }
+
+    /// Whether the user explicitly persisted an `auto_compact` preference.
+    /// When absent, callers may choose a model-aware default.
+    pub fn auto_compact_explicitly_configured() -> bool {
+        let Ok(path) = Self::path() else {
+            return false;
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+            return false;
+        };
+        value
+            .as_table()
+            .is_some_and(|table| table.contains_key("auto_compact"))
     }
 
     /// Apply environment-driven overlays after disk load. Used for
@@ -458,8 +521,8 @@ impl Settings {
         //
         // Only flip `auto` to `off`; respect an explicit `"on"` so users
         // who upgrade Ptyxis or want to confirm the fix landed upstream
-        // can override the heuristic from `~/.config/deepseek/settings.toml`
-        // or `/set synchronized_output on`.
+        // can override the heuristic from the persisted settings.toml or
+        // `/set synchronized_output on`.
         if self.synchronized_output.eq_ignore_ascii_case("auto") && detected_ptyxis_terminal() {
             self.synchronized_output = "off".to_string();
         }
@@ -482,11 +545,21 @@ impl Settings {
         Ok(())
     }
 
+    /// Update and persist sidebar width percentage (10-50) — used by the
+    /// drag-to-resize handle in the TUI.
+    pub fn update_sidebar_width(&mut self, percent: u16) {
+        self.sidebar_width_percent = percent.clamp(10, 50);
+    }
+
     /// Set a single setting by key
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
             "auto_compact" | "compact" => {
                 self.auto_compact = parse_bool(value)?;
+            }
+            "auto_compact_threshold" | "auto_compact_threshold_percent" => {
+                self.auto_compact_threshold_percent =
+                    parse_percent_setting("auto_compact_threshold_percent", value)?;
             }
             "calm_mode" | "calm" => {
                 self.calm_mode = parse_bool(value)?;
@@ -502,6 +575,15 @@ impl Settings {
             }
             "paste_burst_detection" | "paste_burst" => {
                 self.paste_burst_detection = parse_bool(value)?;
+            }
+            "mention_menu_limit" | "mention_limit" => {
+                self.mention_menu_limit = parse_usize_setting("mention_menu_limit", value)?;
+            }
+            "mention_walk_depth" | "mention_depth" | "completions_walk_depth" => {
+                self.mention_walk_depth = parse_usize_setting("mention_walk_depth", value)?;
+            }
+            "mention_menu_behavior" | "mention_behavior" | "mention_menu" => {
+                self.mention_menu_behavior = normalize_mention_menu_behavior(value)?;
             }
             "show_thinking" | "thinking" => {
                 self.show_thinking = parse_bool(value)?;
@@ -686,6 +768,10 @@ impl Settings {
         lines.push(tr(locale, MessageId::SettingsTitle).to_string());
         lines.push("─────────────────────────────".to_string());
         lines.push(format!("  auto_compact:       {}", self.auto_compact));
+        lines.push(format!(
+            "  auto_compact_pct:   {:.0}",
+            self.auto_compact_threshold_percent
+        ));
         lines.push(format!("  calm_mode:          {}", self.calm_mode));
         lines.push(format!("  low_motion:         {}", self.low_motion));
         lines.push(format!("  fancy_animations:   {}", self.fancy_animations));
@@ -693,6 +779,12 @@ impl Settings {
         lines.push(format!(
             "  paste_burst_detect: {}",
             self.paste_burst_detection
+        ));
+        lines.push(format!("  mention_menu_limit: {}", self.mention_menu_limit));
+        lines.push(format!("  mention_walk_depth: {}", self.mention_walk_depth));
+        lines.push(format!(
+            "  mention_behavior:   {}",
+            self.mention_menu_behavior
         ));
         lines.push(format!("  show_thinking:      {}", self.show_thinking));
         lines.push(format!("  show_tool_details:  {}", self.show_tool_details));
@@ -751,6 +843,10 @@ impl Settings {
                 "auto_compact",
                 "Auto-compact near the hard context limit: on/off (default off)",
             ),
+            (
+                "auto_compact_threshold_percent",
+                "Auto-compact trigger threshold percent when auto_compact is on: 10-100 (default 80)",
+            ),
             ("calm_mode", "Calmer UI defaults: on/off"),
             (
                 "low_motion",
@@ -767,6 +863,18 @@ impl Settings {
             (
                 "paste_burst_detection",
                 "Fallback rapid-key paste detection: on/off",
+            ),
+            (
+                "mention_menu_limit",
+                "Maximum @-mention popup candidates retained before rendering (default 128)",
+            ),
+            (
+                "mention_walk_depth",
+                "Maximum @-mention workspace walk depth; 0 means unlimited (default 6)",
+            ),
+            (
+                "mention_menu_behavior",
+                "@-mention completion behavior: fuzzy/browser (default fuzzy)",
             ),
             ("show_thinking", "Show model thinking: on/off"),
             ("show_tool_details", "Show detailed tool output: on/off"),
@@ -841,6 +949,32 @@ impl Settings {
             .insert(provider.to_string(), model.to_string());
     }
 
+    /// Persist the active provider/model tuple that runtime selection UI and
+    /// slash commands should restore on the next startup.
+    pub fn set_provider_model_selection(
+        &mut self,
+        provider: ApiProvider,
+        model: &str,
+    ) -> Result<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            anyhow::bail!("model cannot be empty");
+        }
+        self.default_provider = Some(provider.as_str().to_string());
+        self.set_model_for_provider(provider.as_str(), model);
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+            self.set("default_model", model)?;
+        }
+        Ok(())
+    }
+
+    /// Load, update, and save the runtime provider/model selection.
+    pub fn persist_provider_model_selection(provider: ApiProvider, model: &str) -> Result<()> {
+        let mut settings = Self::load()?;
+        settings.set_provider_model_selection(provider, model)?;
+        settings.save()
+    }
+
     /// Resolved boolean for whether the renderer should wrap each frame in
     /// DEC mode 2026 synchronized output. `auto` and `on` enable; `off`
     /// disables. The `auto` → `off` flip for known-bad terminals happens
@@ -850,6 +984,34 @@ impl Settings {
     pub fn synchronized_output_enabled(&self) -> bool {
         !self.synchronized_output.eq_ignore_ascii_case("off")
     }
+}
+
+fn resolve_settings_path_from_candidates(
+    primary: Option<PathBuf>,
+    legacy_home: Option<PathBuf>,
+    legacy_config_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = primary.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    if let Some(path) = legacy_home
+        && path.exists()
+    {
+        return Ok(path);
+    }
+
+    if let Some(path) = legacy_config_dir.as_ref()
+        && path.exists()
+    {
+        return Ok(path.clone());
+    }
+
+    primary.or(legacy_config_dir).ok_or_else(|| {
+        anyhow::anyhow!("Failed to resolve settings path: no config directory found.")
+    })
 }
 
 fn normalize_default_model(value: &str) -> Option<String> {
@@ -895,6 +1057,41 @@ fn parse_bool(value: &str) -> Result<bool> {
         "off" | "false" | "no" | "0" | "disabled" => Ok(false),
         _ => {
             anyhow::bail!("Failed to parse boolean '{value}': expected on/off, true/false, yes/no.")
+        }
+    }
+}
+
+fn parse_usize_setting(key: &str, value: &str) -> Result<usize> {
+    value.trim().parse::<usize>().map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to update setting: invalid {key} '{value}'. Expected 0 or a positive integer."
+        )
+    })
+}
+
+fn parse_percent_setting(key: &str, value: &str) -> Result<f64> {
+    let trimmed = value.trim().trim_end_matches('%').trim();
+    let percent = trimmed.parse::<f64>().map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to update setting: invalid {key} '{value}'. Expected a number from 10 to 100."
+        )
+    })?;
+    if !(10.0..=100.0).contains(&percent) {
+        anyhow::bail!(
+            "Failed to update setting: invalid {key} '{value}'. Expected a number from 10 to 100."
+        );
+    }
+    Ok(percent)
+}
+
+fn normalize_mention_menu_behavior(value: &str) -> Result<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fuzzy" | "default" => Ok("fuzzy".to_string()),
+        "browser" | "browse" | "file-browser" | "file_browser" => Ok("browser".to_string()),
+        _ => {
+            anyhow::bail!(
+                "Failed to update setting: invalid mention_menu_behavior '{value}'. Expected: fuzzy, browser."
+            )
         }
     }
 }
@@ -1070,6 +1267,7 @@ mod tests {
         // flipped so the cache-friendly path is the one users get
         // without configuring anything (#664).
         assert!(!settings.auto_compact);
+        assert_eq!(settings.auto_compact_threshold_percent, 80.0);
     }
 
     #[test]
@@ -1079,6 +1277,17 @@ mod tests {
         assert!(settings.auto_compact);
         settings.set("auto_compact", "off").expect("disable");
         assert!(!settings.auto_compact);
+    }
+
+    #[test]
+    fn auto_compact_threshold_is_validated() {
+        let mut settings = Settings::default();
+        settings
+            .set("auto_compact_threshold", "65%")
+            .expect("threshold");
+        assert_eq!(settings.auto_compact_threshold_percent, 65.0);
+        assert!(settings.set("auto_compact_threshold", "9").is_err());
+        assert!(settings.set("auto_compact_threshold", "101").is_err());
     }
 
     #[test]
@@ -1117,6 +1326,38 @@ mod tests {
             .expect("disable bracketed paste");
         assert!(!settings.bracketed_paste);
         assert!(!settings.paste_burst_detection);
+    }
+
+    #[test]
+    fn mention_completion_caps_are_configurable() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.mention_menu_limit, 128);
+        assert_eq!(settings.mention_walk_depth, 10);
+        assert_eq!(settings.mention_menu_behavior, "fuzzy");
+
+        settings
+            .set("mention_menu_limit", "256")
+            .expect("set mention menu limit");
+        settings
+            .set("mention_walk_depth", "0")
+            .expect("allow unlimited walk depth");
+        settings
+            .set("mention_menu_behavior", "browser")
+            .expect("set mention menu behavior");
+
+        assert_eq!(settings.mention_menu_limit, 256);
+        assert_eq!(settings.mention_walk_depth, 0);
+        assert_eq!(settings.mention_menu_behavior, "browser");
+
+        let err = settings
+            .set("mention_walk_depth", "deep")
+            .expect_err("non-numeric depth should fail");
+        assert!(err.to_string().contains("invalid mention_walk_depth"));
+
+        let err = settings
+            .set("mention_menu_behavior", "random")
+            .expect_err("unknown mention behavior should fail");
+        assert!(err.to_string().contains("invalid mention_menu_behavior"));
     }
 
     #[test]
@@ -2037,6 +2278,151 @@ mod tests {
         crate::test_support::lock_test_env()
     }
 
+    struct EnvVarRestore {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            // SAFETY: tests using this helper hold config_path_test_guard.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn settings_path_defaults_to_codewhale_home_for_new_writes() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = Settings::path().expect("settings path");
+
+        assert_eq!(got, tmp.path().join(".codewhale").join("settings.toml"));
+    }
+
+    #[test]
+    fn settings_path_reads_legacy_deepseek_home_when_present() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
+        let legacy_dir = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        let legacy_home = legacy_dir.join("settings.toml");
+        std::fs::write(&legacy_home, "low_motion = true\n").expect("legacy settings");
+        let legacy_config_dir = tmp
+            .path()
+            .join("platform-config")
+            .join("deepseek")
+            .join("settings.toml");
+        std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
+            .expect("legacy config dir");
+        std::fs::write(&legacy_config_dir, "low_motion = false\n")
+            .expect("platform legacy settings");
+
+        let got = resolve_settings_path_from_candidates(
+            Some(primary),
+            Some(legacy_home.clone()),
+            Some(legacy_config_dir),
+        )
+        .expect("settings path");
+
+        assert_eq!(got, legacy_home);
+    }
+
+    #[test]
+    fn settings_path_keeps_platform_config_dir_as_last_legacy_fallback() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
+        let legacy_home = tmp.path().join(".deepseek").join("settings.toml");
+        let legacy_config_dir = tmp
+            .path()
+            .join("platform-config")
+            .join("deepseek")
+            .join("settings.toml");
+        std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
+            .expect("legacy config dir");
+        std::fs::write(&legacy_config_dir, "low_motion = true\n").expect("legacy settings");
+
+        let got = resolve_settings_path_from_candidates(
+            Some(primary),
+            Some(legacy_home),
+            Some(legacy_config_dir.clone()),
+        )
+        .expect("settings path");
+
+        assert_eq!(got, legacy_config_dir);
+    }
+
+    #[test]
+    fn settings_path_uses_primary_when_platform_config_dir_is_unavailable() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("settings.toml");
+
+        let got = resolve_settings_path_from_candidates(Some(primary.clone()), None, None)
+            .expect("settings path");
+
+        assert_eq!(got, primary);
+    }
+
+    #[test]
+    fn tui_prefs_path_defaults_to_codewhale_home_for_new_writes() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = TuiPrefs::path().expect("tui prefs path");
+
+        assert_eq!(got, tmp.path().join(".codewhale").join("tui.toml"));
+    }
+
+    #[test]
+    fn tui_prefs_path_reads_legacy_deepseek_home_when_present() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join(".codewhale").join("tui.toml");
+        let legacy_dir = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        let legacy_home = legacy_dir.join("tui.toml");
+        std::fs::write(&legacy_home, "theme = \"light\"\n").expect("legacy prefs");
+
+        let got = resolve_tui_prefs_path_from_candidates(Some(primary), Some(legacy_home.clone()))
+            .expect("tui prefs path");
+
+        assert_eq!(got, legacy_home);
+    }
+
     #[test]
     fn tui_prefs_defaults_are_dark_theme_zero_font() {
         let prefs = TuiPrefs::default();
@@ -2177,18 +2563,15 @@ mod tests {
     }
 
     #[test]
-    fn tui_prefs_path_uses_home_deepseek_subdir_by_default() {
+    fn tui_prefs_path_uses_home_codewhale_subdir_by_default() {
         let _g = config_path_test_guard();
-        // Without DEEPSEEK_CONFIG_PATH the path should end with
-        // .deepseek/tui.toml relative to the home directory.
-        // We skip this check if home_dir() is unavailable (CI without HOME).
-        if let Some(home) = dirs::home_dir() {
-            let expected = home.join(".deepseek").join("tui.toml");
-            // Only compare when no env override is active.
-            if std::env::var("DEEPSEEK_CONFIG_PATH").is_err() {
-                let got = TuiPrefs::path().expect("path should resolve");
-                assert_eq!(got, expected);
-            }
-        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = TuiPrefs::path().expect("path should resolve");
+
+        assert_eq!(got, tmp.path().join(".codewhale").join("tui.toml"));
     }
 }

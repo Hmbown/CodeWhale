@@ -79,7 +79,13 @@ fn artifact_sessions_root() -> Option<PathBuf> {
         return Some(root);
     }
 
-    Some(dirs::home_dir()?.join(".deepseek").join("sessions"))
+    let home = dirs::home_dir()?;
+    let primary = home.join(".codewhale").join("sessions");
+    let legacy = home.join(".deepseek").join("sessions");
+    if primary.exists() || !legacy.exists() {
+        return Some(primary);
+    }
+    Some(legacy)
 }
 
 #[cfg(test)]

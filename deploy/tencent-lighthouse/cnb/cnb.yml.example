@@ -39,8 +39,8 @@ main:
             fi
 
             LIGHTHOUSE_SSH_PORT="${LIGHTHOUSE_SSH_PORT:-22}"
-            DEEPSEEK_REPO_BRANCH="${DEEPSEEK_REPO_BRANCH:-main}"
-            DEEPSEEK_REPO_URL="${DEEPSEEK_REPO_URL:-https://cnb.cool/codewhale.net/codewhale.git}"
+            CODEWHALE_REPO_BRANCH="${CODEWHALE_REPO_BRANCH:-main}"
+            CODEWHALE_REPO_URL="${CODEWHALE_REPO_URL:-https://cnb.cool/codewhale.net/codewhale.git}"
 
             install -m 700 -d ~/.ssh
             printf '%s\n' "$LIGHTHOUSE_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
@@ -48,11 +48,11 @@ main:
             ssh-keyscan -p "$LIGHTHOUSE_SSH_PORT" -H "$LIGHTHOUSE_HOST" >> ~/.ssh/known_hosts
 
             ssh -p "$LIGHTHOUSE_SSH_PORT" "$LIGHTHOUSE_SSH_TARGET" \
-              "DEEPSEEK_REPO_BRANCH='$DEEPSEEK_REPO_BRANCH' DEEPSEEK_REPO_URL='$DEEPSEEK_REPO_URL' bash -s" <<'REMOTE'
+              "CODEWHALE_REPO_BRANCH='$CODEWHALE_REPO_BRANCH' CODEWHALE_REPO_URL='$CODEWHALE_REPO_URL' bash -s" <<'REMOTE'
             set -euo pipefail
 
             if [ ! -d /opt/whalebro/codewhale/.git ]; then
-              sudo -u codewhale git clone --branch "$DEEPSEEK_REPO_BRANCH" "$DEEPSEEK_REPO_URL" /opt/whalebro/codewhale
+              sudo -u codewhale git clone --branch "$CODEWHALE_REPO_BRANCH" "$CODEWHALE_REPO_URL" /opt/whalebro/codewhale
             fi
 
             cd /opt/whalebro/codewhale
@@ -63,12 +63,12 @@ main:
             fi
 
             sudo -u codewhale git fetch --all --tags
-            if sudo -u codewhale git rev-parse --verify --quiet "refs/remotes/origin/$DEEPSEEK_REPO_BRANCH" >/dev/null; then
-              sudo -u codewhale git checkout -B "$DEEPSEEK_REPO_BRANCH" "origin/$DEEPSEEK_REPO_BRANCH"
-            elif sudo -u codewhale git rev-parse --verify --quiet "refs/tags/$DEEPSEEK_REPO_BRANCH" >/dev/null; then
-              sudo -u codewhale git checkout --detach "$DEEPSEEK_REPO_BRANCH"
+            if sudo -u codewhale git rev-parse --verify --quiet "refs/remotes/origin/$CODEWHALE_REPO_BRANCH" >/dev/null; then
+              sudo -u codewhale git checkout -B "$CODEWHALE_REPO_BRANCH" "origin/$CODEWHALE_REPO_BRANCH"
+            elif sudo -u codewhale git rev-parse --verify --quiet "refs/tags/$CODEWHALE_REPO_BRANCH" >/dev/null; then
+              sudo -u codewhale git checkout --detach "$CODEWHALE_REPO_BRANCH"
             else
-              sudo -u codewhale git checkout "$DEEPSEEK_REPO_BRANCH"
+              sudo -u codewhale git checkout "$CODEWHALE_REPO_BRANCH"
               sudo -u codewhale git pull --ff-only
             fi
 

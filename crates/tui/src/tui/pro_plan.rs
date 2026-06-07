@@ -152,6 +152,7 @@ impl ProPlanRouter {
             ProPlanPhase::Review => {
                 if Self::review_rejected(&msg_lower) {
                     self.state.phase = ProPlanPhase::Execute;
+                    self.state.execute_auto_approve = false;
                     return ProPlanPhase::Execute;
                 }
                 if Self::review_approved(&msg_lower) {
@@ -340,6 +341,7 @@ mod tests {
 
         router.state.phase = ProPlanPhase::Review;
         router.state.has_generated_plan = true;
+        router.state.execute_auto_approve = true;
         router.state.execute_turns = 5;
 
         router.transition("not good, please replan");
@@ -348,6 +350,7 @@ mod tests {
         router.transition("<pro_plan review=\"changes_requested\">");
         assert_eq!(router.phase(), ProPlanPhase::Execute);
         assert!(router.state.has_generated_plan);
+        assert!(!router.execute_auto_approve());
     }
 
     #[test]

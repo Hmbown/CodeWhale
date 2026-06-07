@@ -186,6 +186,10 @@ impl ToolSpec for WebSearchTool {
         ApprovalRequirement::Auto
     }
 
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let query = extract_search_query(&input)?;
         if query.is_empty() {
@@ -740,6 +744,12 @@ impl WebSearchTool {
     /// Search via Volcengine Ark Responses API web_search tool.
     /// Uses strict JSON prompt constraints to extract structured results
     /// from the model's search-augmented response.
+    ///
+    /// Overrides the user-supplied timeout to a minimum of 90 s because the
+    /// Responses API pipeline (web search → model inference → JSON generation)
+    /// is inherently slower than simple search-API round-trips.  A separate
+    /// `connect_timeout` of 15 s lets DNS/TLS failures surface quickly.
+    /// Transient transport errors are retried twice with exponential backoff.
     async fn run_volcengine_search(
         &self,
         query: &str,
@@ -763,8 +773,18 @@ impl WebSearchTool {
                 )
             })?;
 
+        // Volcengine Responses API pipeline (search + model inference) is
+        // slow, so enforce a floor of 90 s. The caller's value is used only
+        // when it exceeds 90_000 ms.
+        let effective_timeout = timeout_ms.max(90_000);
+
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_millis(effective_timeout))
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            .http2_keep_alive_interval(Some(Duration::from_secs(15)))
+            .http2_keep_alive_timeout(Duration::from_secs(20))
+            .user_agent(USER_AGENT)
             .build()
             .map_err(|e| {
                 ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
@@ -772,47 +792,77 @@ impl WebSearchTool {
 
         let payload = volcengine_search_payload(query, max_results);
 
-        let resp = client
-            .post(VOLCENGINE_RESPONSES_ENDPOINT)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Volcengine search request failed: {e}"))
-            })?;
+        // Retry transient transport errors (DNS, connection reset, timeout)
+        // up to 2 times with exponential backoff: 1 s, 2 s.
+        let mut last_err: Option<ToolError> = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(1000 * (1 << (attempt - 1)))).await;
+            }
 
-        let status = resp.status();
-        let body = resp.text().await.map_err(|e| {
-            ToolError::execution_failed(format!("Failed to read Volcengine response: {e}"))
-        })?;
+            match client
+                .post(VOLCENGINE_RESPONSES_ENDPOINT)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .json(&payload)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.map_err(|e| {
+                        ToolError::execution_failed(format!(
+                            "Failed to read Volcengine response: {e}"
+                        ))
+                    })?;
 
-        if !status.is_success() {
-            let msg = match status.as_u16() {
-                401 | 403 => "Volcengine API key rejected — check VOLCENGINE_API_KEY or `[search] api_key` in config.toml".to_string(),
-                429 => "Volcengine API rate-limited — wait and retry, or check your quota".to_string(),
-                _ => {
-                    let truncated = truncate_error_body(&body);
-                    format!("Volcengine search failed: HTTP {} — {truncated}", status.as_u16())
+                    if !status.is_success() {
+                        let msg = match status.as_u16() {
+                            401 | 403 => "Volcengine API key rejected — check `[search] api_key` in config.toml or VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY".to_string(),
+                            429 => "Volcengine API rate-limited — wait and retry, or check your quota".to_string(),
+                            _ => {
+                                let truncated = truncate_error_body(&body);
+                                format!("Volcengine search failed: HTTP {} — {truncated}", status.as_u16())
+                            }
+                        };
+                        return Err(ToolError::execution_failed(msg));
+                    }
+
+                    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                        ToolError::execution_failed(format!(
+                            "Failed to parse Volcengine response: {e}"
+                        ))
+                    })?;
+
+                    if let Some(error) = volcengine_error_message(&parsed) {
+                        return Err(ToolError::execution_failed(error));
+                    }
+
+                    let response_text = volcengine_extract_text(&parsed).ok_or_else(|| {
+                        ToolError::execution_failed("Volcengine response contains no output text")
+                    })?;
+
+                    let results = parse_volcengine_results(&response_text, max_results);
+                    return search_tool_result(query.to_string(), "volcengine", results, None);
                 }
-            };
-            return Err(ToolError::execution_failed(msg));
+                Err(e) => {
+                    let is_transient = e.is_timeout() || e.is_connect();
+                    if !is_transient || attempt == 2 {
+                        return Err(ToolError::execution_failed(format!(
+                            "Volcengine search request failed: {e}"
+                        )));
+                    }
+                    last_err = Some(ToolError::execution_failed(format!(
+                        "Volcengine search request failed (attempt {}/3): {e}",
+                        attempt + 1
+                    )));
+                }
+            }
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-            ToolError::execution_failed(format!("Failed to parse Volcengine response: {e}"))
-        })?;
-
-        if let Some(error) = volcengine_error_message(&parsed) {
-            return Err(ToolError::execution_failed(error));
-        }
-
-        let response_text = volcengine_extract_text(&parsed).ok_or_else(|| {
-            ToolError::execution_failed("Volcengine response contains no output text")
-        })?;
-
-        let results = parse_volcengine_results(&response_text, max_results);
-        search_tool_result(query.to_string(), "volcengine", results, None)
+        // Unreachable — the final iteration always returns above.
+        Err(last_err.unwrap_or_else(|| {
+            ToolError::execution_failed("Volcengine search: unexpected retry exit")
+        }))
     }
 }
 
@@ -914,7 +964,7 @@ fn baidu_search_payload(query: &str, max_results: usize) -> Value {
 
 fn volcengine_search_payload(query: &str, max_results: usize) -> Value {
     json!({
-        "model": "doubao-seed-1-6-250615",
+        "model": "doubao-seed-2-0-lite-260428",
         "stream": false,
         "tools": [{"type": "web_search"}],
         "input": [{
@@ -1855,10 +1905,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn volcengine_provider_without_api_key_lists_supported_env_fallbacks() {
         use crate::config::SearchProvider;
         use crate::tools::spec::{ToolContext, ToolSpec};
 
+        // This test intentionally keeps the process-env lock through the
+        // awaited tool execution because the tool reads env fallbacks during
+        // that call. Dropping the lock before await would reintroduce races
+        // with other env-mutating tests.
+        let _guard = crate::test_support::lock_test_env();
         let prev_volc = std::env::var_os("VOLCENGINE_API_KEY");
         let prev_volc_ark = std::env::var_os("VOLCENGINE_ARK_API_KEY");
         let prev_ark = std::env::var_os("ARK_API_KEY");

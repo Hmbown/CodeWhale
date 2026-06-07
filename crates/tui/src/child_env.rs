@@ -169,6 +169,23 @@ fn is_allowed_parent_env_key(key: &OsStr) -> bool {
             | "EXTENSIONSDKDIR"
             | "DEVENVDIR"
             | "VISUALSTUDIOVERSION"
+            // Windows app-data + .NET/NuGet paths. `dotnet restore` (and npm,
+            // pip, etc.) resolve their package caches, HTTP cache, and config
+            // under %APPDATA% / %LOCALAPPDATA% / %ProgramData% / %ProgramFiles%.
+            // The sanitized child env dropped these, so restore failed through
+            // `exec_shell` even though it worked in the user's own shell, where
+            // the full environment is present (#1857). `DOTNET_*` (below) covers
+            // DOTNET_ROOT and the CLI flags.
+            | "APPDATA"
+            | "LOCALAPPDATA"
+            | "PROGRAMDATA"
+            | "ALLUSERSPROFILE"
+            | "PROGRAMFILES"
+            | "PROGRAMFILES(X86)"
+            | "PROGRAMW6432"
+            | "PROCESSOR_ARCHITECTURE"
+            | "NUGET_PACKAGES"
+            | "NUGET_HTTP_CACHE_PATH"
             // Standard proxy variables are needed by shell tasks in
             // corporate and WSL environments where direct internet egress is
             // blocked. They intentionally exclude token/API-key-shaped vars.
@@ -178,6 +195,10 @@ fn is_allowed_parent_env_key(key: &OsStr) -> bool {
             | "ALL_PROXY"
             | "FTP_PROXY"
     ) || normalized.starts_with("LC_")
+        // .NET CLI / SDK configuration (DOTNET_ROOT, DOTNET_CLI_*,
+        // DOTNET_NOLOGO, DOTNET_CLI_TELEMETRY_OPTOUT, …). Paths and flags
+        // only — no secret-shaped values (#1857).
+        || normalized.starts_with("DOTNET_")
 }
 
 /// Allowlist for MCP stdio launches. Strict superset of
@@ -352,6 +373,38 @@ mod tests {
                 "child env allowlist should include proxy key {key}"
             );
         }
+    }
+
+    #[test]
+    fn child_env_allowlist_includes_dotnet_and_windows_appdata_keys() {
+        // #1857: dotnet restore / NuGet need these to find caches and config.
+        for key in [
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "ALLUSERSPROFILE",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "PROGRAMW6432",
+            "PROCESSOR_ARCHITECTURE",
+            "NUGET_PACKAGES",
+            "DOTNET_ROOT",
+            "DOTNET_CLI_TELEMETRY_OPTOUT",
+            "DOTNET_NOLOGO",
+            // Case-insensitive: the real Windows var is `ProgramFiles`.
+            "ProgramFiles",
+            "dotnet_root",
+        ] {
+            assert!(
+                is_allowed_parent_env_key(OsStr::new(key)),
+                "child env allowlist should include {key}"
+            );
+        }
+        // Guard: NuGet credential env vars must still be dropped.
+        assert!(
+            !is_allowed_parent_env_key(OsStr::new("NuGetPackageSourceCredentials_feed")),
+            "NuGet credential vars must not be exported to child processes"
+        );
     }
 
     #[test]

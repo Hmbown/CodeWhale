@@ -221,34 +221,39 @@ pub fn flush_and_sync(writer: &mut std::io::BufWriter<std::fs::File>) -> std::io
 /// the codebase should use this instead of hardcoding `Command::new("open")`,
 /// `Command::new("xdg-open")`, or `Command::new("cmd")`.
 pub fn open_url(url: &str) -> Result<()> {
+    let mut command = browser_open_command(url)?;
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
+}
+
+fn browser_open_command(url: &str) -> Result<Command> {
+    if url.trim().is_empty() {
+        return Err(anyhow::anyhow!("browser URL cannot be empty"));
+    }
+
     #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
+    {
+        let mut command = Command::new("open");
+        command.arg(url);
+        Ok(command)
+    }
+
     #[cfg(target_os = "linux")]
-    let mut command = Command::new("xdg-open");
+    {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        Ok(command)
+    }
+
     #[cfg(target_os = "windows")]
-    let _command = {
+    {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "start", "", url]);
-        return match cmd
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow::anyhow!("failed to launch browser command: {e}")),
-        };
-    };
-
-    // macOS / Linux path
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        command.arg(url);
-        command
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
+        Ok(cmd)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -261,7 +266,7 @@ pub fn open_url(url: &str) -> Result<()> {
 ///
 /// Wraps the future in `AssertUnwindSafe` + `catch_unwind`. On panic:
 /// 1. Logs the panic with the task name and caller location via `tracing::error!`.
-/// 2. Writes a crash dump to `~/.deepseek/crashes/<timestamp>-<name>.log`.
+/// 2. Writes a crash dump to `~/.codewhale/crashes/<timestamp>-<name>.log`.
 ///
 /// The returned `JoinHandle` resolves to `()` — the panic is caught and
 /// handled internally so the parent process stays alive.
@@ -277,13 +282,7 @@ where
         use futures_util::FutureExt;
         let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
         if let Err(panic_info) = result {
-            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
+            let msg = panic_message(&*panic_info);
             tracing::error!(
                 target: "panic",
                 "Task '{name}' panicked at {}: {msg}",
@@ -295,7 +294,33 @@ where
     })
 }
 
-/// Write a panic dump file to `~/.deepseek/crashes/`.
+/// Extract a human-readable message from a caught panic payload (the `Err`
+/// value of `catch_unwind`). Mirrors how the panic hook formats `&str` and
+/// `String` payloads so crash dumps stay consistent across call sites.
+#[must_use]
+pub fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Record a panic that was caught at a call site (via `catch_unwind`) rather
+/// than by a task supervisor. Logs it on the `panic` target and writes a
+/// best-effort crash dump to `~/.codewhale/crashes/`, so diagnostics land in
+/// the same place `spawn_supervised` writes them even when the caller recovers
+/// and keeps running.
+#[track_caller]
+pub fn record_caught_panic(name: &'static str, message: &str) {
+    let location = std::panic::Location::caller();
+    tracing::error!(target: "panic", "Task '{name}' panicked at {location}: {message}");
+    let _ = write_panic_dump(name, location, message);
+}
+
+/// Write a panic dump file to `~/.codewhale/crashes/`.
 ///
 /// Creates the directory if needed and writes a timestamped log
 /// with the task name, caller location, and panic message.
@@ -346,7 +371,7 @@ fn write_panic_dump_to(
 /// CPU-bound or blocking-I/O task must run off the async runtime and its
 /// completion is *not* awaited — for example a post-turn disk snapshot or a
 /// file-tree build polled later via a shared data structure.  If the closure
-/// panics, a crash dump is written to `~/.deepseek/crashes/` and the panic
+/// panics, a crash dump is written to `~/.codewhale/crashes/` and the panic
 /// is logged at ERROR level rather than being silently swallowed.
 #[track_caller]
 pub fn spawn_blocking_supervised<F>(name: &'static str, f: F) -> tokio::task::JoinHandle<()>
@@ -357,13 +382,7 @@ where
     tokio::task::spawn_blocking(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         if let Err(panic_info) = result {
-            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
+            let msg = panic_message(&*panic_info);
             tracing::error!(
                 target: "panic",
                 "Blocking task '{name}' panicked at {location}: {msg}",
@@ -480,7 +499,8 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
                 ContentBlock::ToolResult { content, .. } => total += content.len(),
                 ContentBlock::ServerToolUse { .. }
                 | ContentBlock::ToolSearchToolResult { .. }
-                | ContentBlock::CodeExecutionToolResult { .. } => {}
+                | ContentBlock::CodeExecutionToolResult { .. }
+                | ContentBlock::ImageUrl { .. } => {}
             }
         }
     }
@@ -828,36 +848,56 @@ mod project_mapping_tests {
     // ===================================================================
 
     #[test]
-    fn open_url_does_not_panic_on_valid_url() {
-        // We can't open a browser in CI, but we can verify the function
-        // doesn't panic and returns a Result (either Ok or Err with a
-        // meaningful message).
-        let result = super::open_url("https://example.com");
-        match result {
-            Ok(()) => {} // browser opened — fine
-            Err(e) => {
-                let msg = e.to_string();
-                // The error must contain something about "browser" or
-                // "unsupported" — not a random panic message.
-                assert!(
-                    msg.contains("browser")
-                        || msg.contains("unsupported")
-                        || msg.contains("failed"),
-                    "unexpected error message: {msg}"
-                );
-            }
+    fn open_url_builds_platform_command_without_spawning() {
+        let command = super::browser_open_command("https://example.com").expect("command");
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(command.get_program(), "open");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["https://example.com"]
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(command.get_program(), "xdg-open");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["https://example.com"]
+            );
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(command.get_program(), "cmd");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["/C", "start", "", "https://example.com"]
+            );
         }
     }
 
     #[test]
     fn open_url_rejects_empty_url_gracefully() {
         // An empty URL should fail with a clear error, not panic.
-        let result = super::open_url("");
+        let result = super::browser_open_command("");
         match result {
-            Ok(()) => {} // some openers might accept empty string
+            Ok(_) => panic!("empty URL should not build an opener command"),
             Err(e) => {
                 let msg = e.to_string();
                 assert!(!msg.is_empty(), "error message must not be empty");
+                assert!(msg.contains("empty"), "unexpected error message: {msg}");
             }
         }
     }

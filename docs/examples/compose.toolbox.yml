@@ -24,7 +24,7 @@ services:
       - DEEPSEEK_BASE_URL
       - DEEPSEEK_NO_COLOR
     volumes:
-      - codewhale-home:/home/codewhale/.deepseek
+      - codewhale-home:/home/codewhale/.codewhale
       - ${CODEWHALE_WORKSPACE:?set CODEWHALE_WORKSPACE to the project directory}:/workspace
       # Mount SSH material only for projects that need it, and prefer read-only.
       # - ${HOME}/.ssh:/home/codewhale/.ssh:ro

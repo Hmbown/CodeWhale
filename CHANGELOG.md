@@ -7,55 +7,448 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.53] - 2026-06-03
+
 ### Added
 
-- **Composer text selection with copy/cut.** Mouse drag and Shift+Arrow
-  selection in the composer input box, with Ctrl+C copy and Ctrl+X cut
-  support. Home, End, Ctrl+A, and Ctrl+E now clear the selection (#2228).
-- **Copy transcript without visual-wrap newlines.** Transcript copy now
-  strips visual-wrap column line breaks from paragraphs, producing clean
-  text for pasting into editors or prompts (#1906).
-- **Configurable base URL in /config view.** The `/config` panel now
-  displays the effective DeepSeek base URL (#1967).
-- **CNB mirror support for China-friendly downloads.** Added
-  `CODEWHALE_RELEASE_BASE_URL` and `CODEWHALE_USE_CNB_MIRROR` to
-  both npm install scripts and Rust self-updater (#2222).
-- **[✓] completion markers.** Checklist, plan, and tool completion
-  markers now render as `[✓]` instead of `[x]` (#1935).
-
-### Changed
-
-- **Project context loading now logs the source file.** (#2227)
-- **macOS onboarding and empty-state layout pinned to top** instead
-  of vertically centered (#1837).
-- **State-root migration continues.** Migrated 15+ storage paths to
-  prefer `~/.codewhale` with `~/.deepseek` fallback (#2231).
-- **READMEs updated for the CodeWhale rename.** All three READMEs now
-  reference canonical `~/.codewhale` paths.
+- **Hugging Face Inference Providers.** Added `huggingface` as a native
+  provider route (`/provider huggingface`). Supports `HUGGINGFACE_API_KEY`
+  or `HF_TOKEN` for auth, `HUGGINGFACE_BASE_URL` and `HUGGINGFACE_MODEL`
+  for overrides, and `deepseek-ai/DeepSeek-V4-Pro` / `deepseek-ai/DeepSeek-V4-Flash`
+  as default models. Org-prefixed model IDs pass through.
 
 ### Fixed
 
-- **Deadlock when spawning multiple concurrent sub-agents.** Replaced
-  `RwLock`-based serialisation with a `Semaphore(1)` (#1856).
-- **Steered/queued messages now render in correct transcript order.**
-  `steer_user_message` now flushes the active cell before inserting (#2225).
-- **Session save test updated for managed sessions directory.** (#2223).
-- **Loop guard reports Failed on halt.** Turn outcome correctly reports
-  `Failed` instead of `Completed` when the loop guard trips (#1859).
-- **DEEPSEEK_YOLO env honoured on startup.** The `--yolo` flag is now
-  correctly merged with the `DEEPSEEK_YOLO` environment variable (#1870).
+- **Agent-mode shell error copy.** The missing-tool error for shell tools
+  now directs users to `allow_shell = true` instead of nudging toward YOLO
+  mode. `/config` surfaces `allow_shell` in the Permissions section.
+- **Provider description.** `/provider` command description is now neutral
+  instead of recommending specific providers.
 
 ### Community
 
-Thanks to contributors whose PRs landed in this release:
-**@Fire-dtx** (#1856),
-**@imkingjh999** (#2228),
-**@harvey2011888** (#1859),
-**@victorcheng2333** (#1870),
-**@IIzzaya** (#1935),
-**@PurplePulse** (#1837),
-**@cyq1017** (#1967),
-**@knqiufan** (#1906).
+Thanks to **@xyuai** for provider persistence, `/logout` scope clarification,
+provider picker key replacement, and MiMo auth cleanup work (#2714, #2715,
+#2717, #2718), and **@RefuseOdd** for configurable `path_suffix` support on
+OpenAI-compatible endpoints (#2558).
+
+## [0.8.52] - 2026-06-03
+
+### Added
+
+- **SiliconFlow China region provider.** Added the `siliconflow-CN` provider
+  variant for the China regional endpoint, sharing the existing
+  `[providers.siliconflow]` credentials and `SILICONFLOW_API_KEY` slot
+  instead of creating a second credential namespace; the provider picker and
+  registry docs now expose the regional route explicitly (#2588, #2615).
+- **Multimodal `/attach` image forwarding.** Attached images are now sent as
+  OpenAI-compatible `image_url` content blocks so multimodal providers can
+  actually see image attachments (#2584, #2587, #2607).
+- **Sub-agent lifecycle hooks and runtime metadata.** Sub-agent spawn/complete
+  hook events, mode-change runtime messages, mode metadata on turns, localized
+  context-inspector strings, and drag-to-resize sidebar width are included in
+  this release slice.
+
+### Fixed
+
+- **Sub-agents now auto-cancel after stale heartbeats.** Running sub-agents
+  track manager-visible progress and are auto-cancelled after the configurable
+  `[subagents] heartbeat_timeout_secs` window (default 300s), releasing their
+  concurrency slot and unblocking parent turns that would otherwise wait
+  forever (#2603, #2614, #2620).
+- **Work panel state survives transient lock misses.** The sidebar caches the
+  last successful Work summary so checklist and strategy progress no longer
+  disappear into "Work state updating..." while the engine briefly owns the
+  shared todo/plan locks (#2606, #2616).
+- **SiliconFlow-CN no longer breaks main.** Filled the missing CLI provider
+  exhaustiveness arms and removed the duplicate/unreachable TUI config arms
+  left by the #2615 landing; direct auth now stores the China-region variant in
+  the shared SiliconFlow provider table (#2616, #2618, #2619).
+- **v0.8.51 image-attach closure corrected.** The `/attach` multimodal fix
+  landed after the v0.8.51 tag, so this release is the first version that
+  actually contains it for users installing from the published release line
+  (#2584, #2607).
+- **Legacy SSE MCP reconnects are retryable again.** Closed or reset
+  `POST /messages` requests on stale legacy SSE sessions now trigger the same
+  reconnect-and-retry path as closed SSE streams, removing a release-gate flake
+  and matching the intended recovery behavior (#2597).
+- **Cache-hit cost accounting uses one telemetry source.** Mixed DeepSeek
+  `prompt_cache_hit_tokens` and OpenAI-style `cached_tokens` usage payloads no
+  longer infer cache misses from the wrong hit count, avoiding inflated TUI cost
+  estimates on cached DeepSeek turns (#2567, #2609).
+- **Cygwin/MSYS2 config paths honor exported `$HOME`.** CodeWhale and legacy
+  DeepSeek config roots now prefer a non-empty `$HOME` before falling back to the
+  platform home resolver, while `CODEWHALE_HOME` remains the strongest explicit
+  override (#2369, #2610).
+
+### Community
+
+Thanks to **@xyuai** (#2587), **@IcedOranges** (#2584), **@BH8GCJ** (#2588),
+**@shenjackyuanjie** (#2618, #2619), **@idling11** (#2606, #2616),
+**@AresNing** (#2578), **@caiyilian** (#2567), **@buko** (#2369),
+**@gordonlu**, **@encyc**, and **@simuusang** (#2603, #2620) for reports,
+patches, retesting, and release-stabilization signals that shaped this pass.
+
+## [0.8.51] - 2026-06-02
+
+### Added
+
+- **Arcee AI as a direct provider.** New `[providers.arcee]` config block and
+  `ARCEE_API_KEY` / `ARCEE_BASE_URL` / `ARCEE_MODEL` environment variables,
+  wired through CLI auth (`codewhale auth set --provider arcee`), the TUI
+  provider picker, and the model registry. The default direct-API model is
+  `trinity-large-thinking` (reasoning-capable, 262K context and 262K max
+  output); `trinity-large-preview` (262K context, non-reasoning) and
+  `trinity-mini` (128K context) are also selectable. OpenRouter's
+  `arcee-ai/trinity-large-thinking` route remains separate.
+- **Arcee Cloudflare-WAF compatibility.** The opening turn to the Arcee gateway
+  uses a benign read-only tool surface (`read_file`, `list_dir`, `file_search`,
+  `grep_files`, `git_status`, `git_diff`, `checklist_write`, `update_plan`) and
+  splits example payloads such as `python -c …` out of the system prompt, so the
+  WAF does not reject the first request; the full tool catalog stays reachable
+  through tool-search. `trinity-large-thinking`'s `reasoning_content` is
+  recognized and replayed on tool-call turns.
+- **Expanded model catalog.** Added context-window, max-output, and
+  reasoning-capability metadata for additional model IDs, including
+  `qwen/qwen3.6-flash`, `qwen/qwen3.6-plus`, `qwen/qwen3.6-max-preview`, and
+  Xiaomi MiMo v2.5 chat/ASR/TTS variants; `trinity-large-preview`'s context
+  window was corrected to 262K.
+- **Provider-aware model picker.** The picker groups models by provider, shows
+  per-model hints, and remembers a saved model per provider.
+
+### Changed
+
+- **Auto-compaction is now percentage- and model-aware.** The per-model
+  threshold helper is `compaction_threshold_for_model_at_percent(model,
+  percent)` (replacing the effort-based variant), and the default
+  `auto_compact_threshold_percent` is 80%. Auto-compaction defaults on for
+  models with a context window of 256K or smaller and stays opt-in for 1M-token
+  models (e.g. DeepSeek V4) to protect prefix-cache economics, unless the user
+  has explicitly set `auto_compact`.
+- **Clearer provider/gateway errors.** HTTP error bodies are sanitized before
+  display — HTML interstitials and Cloudflare "Access Denied" pages collapse to
+  a one-line reason (with the ray/error ID) instead of dumping raw markup into
+  the transcript — and 403s are split into authentication vs. authorization
+  (gateway/WAF block) categories.
+- The invalid-model error now names the active provider and lists Arcee among
+  the options.
+
+### Removed
+
+- **The session "cycle" / checkpoint-restart system.** Removed the `/cycles`,
+  `/cycle <n>`, and `/recall` commands, the `recall_archive` tool, the
+  cycle-handoff briefing prompt, the sidebar "cycles" lines, and the
+  `cycle_manager` engine plumbing (`EngineConfig.cycle`, `Event::CycleAdvanced`,
+  seam-manager cycle thresholds and flash briefings). Long sessions no longer
+  auto-reset their context at a fixed token boundary — reclaim budget with
+  `/compact` or model-aware auto-compaction instead. Existing on-disk cycle
+  archives are left untouched but are no longer read or written.
+
+### Fixed
+
+- Assistant turns no longer leave an orphaned role glyph (the stray "blue dot")
+  when a turn streams only whitespace between reasoning and a tool call.
+- Scrolling the mouse wheel over the right-hand sidebar no longer leaks into the
+  transcript scroll.
+- The sidebar hover tooltip now appears only for truncated lines, sits below the
+  cursor, and uses a neutral surface color instead of the warning-orange
+  highlight that overlapped neighbouring rows.
+- Corrected the README's description of the Constitution (Article VII is the
+  hierarchy itself; Article II's truth duty overrides even a user request) to
+  match `prompts/base.md`.
+- Repaired release-blocking unit and integration tests left failing by the
+  cycle-removal and compaction-threshold refactors (relay instruction,
+  model-reject message, compaction budget, mock-LLM threshold helper).
+- Fixed DEC private-mode CSI fragment leakage into composer text after
+  terminal resets, restoring clean prompt editing (#2592).
+- The engine now recovers from turn-level panics instead of killing the
+  main event loop, keeping the session alive through transient failures
+  (#2583, #1269).
+- Deeply nested files are now discoverable via @-mention and Ctrl+P file
+  picker; the default walk depth was relaxed to handle monorepo layouts (#2488).
+- Command-palette selection stays visible when scrolling through long lists
+  instead of scrolling off-screen (#2590).
+- exec_shell child processes now inherit .NET/NuGet and Windows app-data
+  environment variables, fixing toolchain resolution on Windows (#1857).
+- A warning is emitted when shell/sandbox config keys are nested under
+  unknown top-level sections instead of being silently ignored (#2589).
+- Diff-render now preserves leading whitespace in patch content lines,
+  fixing an extra-space regression in PR previews (#2591). Thanks @zlh124.
+- Model selection from the /model command now persists per-provider across
+  restarts, with a warning when persistence fails.
+
+### Community
+
+Thanks to **@zlh124** (#2591) and **@reidliu41** (#2601) for the fixes
+harvested into this release. Thanks also to **@idling11** (#2602),
+**@gordonlu** (#2585), **@cyq1017** (#2593), **@xyuai** (#2587, #2584),
+and **@IcedOranges** (#2584) for reports, drafts, and investigations
+that shaped this release cycle.
+
+## [0.8.50] - 2026-06-02
+
+### Added
+
+- Added a Windows NSIS installer release artifact and classroom/lab deployment
+  checklist, harvested from #2045 for #1987. The release workflow now builds
+  `CodeWhaleSetup.exe` from the canonical Windows binaries, and the installer
+  adds/removes only the exact current-user PATH entry.
+- Added deterministic session timestamps in session listings, receipt-export
+  boundary docs, and current-model turn metadata for routed/auto sessions.
+- Added exact AtlasCloud provider-hinted model ID pass-through for explicit
+  `vendor/model-id` selections, harvested from #2569 without freezing a
+  brittle provider catalog.
+- Added Xiaomi MiMo speech/TTS support with a `codewhale speech` CLI command,
+  `tts` tool alias, and config wiring for voice-design and voice-clone models,
+  harvested from #2560.
+- Added a three-zone immutable prefix diagnostic layer (FrozenPrefix Phase 2)
+  that logs cache-prefix drift at debug level without blocking requests,
+  harvested from #2514.
+- Added a Cache Guard CI integration test suite simulating prefix-cache
+  behaviour across nine scenarios, gated behind `CODEWHALE_CACHE_GUARD=1`,
+  harvested from #2503.
+- Added a plan-mode byte-stability invariant test verifying that the tool
+  catalog head remains byte-identical across mode toggles, harvested from
+  #2519.
+- Localized all 15 `/queue` command messages across 7 shipped locales,
+  harvested from #2568.
+- Added localized `FanoutCounts` MessageId for i18n of the aggregate worker
+  stats line in fanout cards, harvested from #2566.
+- Added contribution gate CI workflows (PR gate, issue gate, contributor
+  approval) with a dry-run mode, harvested from #2565.
+
+### Changed
+
+- Hardened theme repainting and sidebar color use so theme switches do not
+  leave stale Whale-dark panel colors behind.
+- Made legacy config migration visible when CodeWhale copies old DeepSeek-era
+  config into the CodeWhale config path.
+
+### Fixed
+
+- Fixed `/context` to use the effective routed model for context-window
+  budgeting, so DeepSeek V4 routes report the 1M-token window and legacy
+  DeepSeek routes keep the 128K fallback.
+- Fixed npm wrapper version output so `--version` prefers the installed binary
+  version instead of stale package metadata when both are available.
+- Fixed multiline composer arrow navigation so holding Up/Down at the first or
+  last line no longer replaces the current draft with prompt history.
+- Fixed foreground `exec_shell` output collection so timeout and inherited-pipe
+  cleanup cannot wedge later tool calls behind the global tool lock.
+- Clarified the English DeepSeek account-balance footer chip from `bal` to
+  `balance` so it is less likely to be mistaken for session spend.
+- Fixed truncated subagent tool calls and repeated truncated subagent responses
+  so they return model-visible errors instead of silently failing.
+- Moved Paste to the first position in the right-click context menu so users
+  copying text from the output area can paste with a single left-click instead
+  of navigating past cell-specific actions.
+
+### Community
+
+Thanks to **@ZhulongNT** (#2045), **@cyq1017** (#2521, #2536, #2537, #2559,
+#2562, #2563, #2564), **@HUQIANTAO** (#2527, #2519, #2503), **@lucaszhu-hue**
+(#2569), **@idling11** (#2573), **@encyc** (#2514), **@xyuai** (#2560),
+**@gordonlu** (#2568, #2566), and **@nightt5879** (#2565) for the work
+harvested into this release pass. Thanks
+also to issue reporters and verification helpers including **@New2Niu**
+(#2561), **@buko** (#2533, #2369), **@wywsoor** (#2494), **@ctxyao** (#2556),
+**@Dr3259** (#2380), **@caiyilian** (#2567), and **@chinaqy110** (#2571) for
+reports and acceptance details that shaped these fixes, plus the WeChat/Chinese
+UX reports relayed during the final triage pass.
+
+## [0.8.49] - 2026-06-01
+
+### Added
+
+- Added the missing `[providers.moonshot]` example block for Moonshot/Kimi,
+  documented `completion_sound`, and refreshed the tool-surface docs for the
+  current registry, including `finance`, `web.run`, git history tools, memory,
+  OCR, and other registered tools.
+
+### Changed
+
+- Hardened prefix-cache fingerprints to hash API-visible tool schema details,
+  not just tool names, so schema and description drift invalidates cached
+  prefixes before it can confuse model calls (#2264).
+- Kept `finance` registered independently from web-search tools and prevented
+  duplicate web/patch tool registration in agent and YOLO modes.
+
+### Fixed
+
+- Fixed the DeepSeek V4-Pro cost estimate after the 2026-05-31 pricing cutoff:
+  the post-promotion official rate remains one quarter of the original price,
+  so CodeWhale no longer shows roughly 4x too much after June 1 (#2489).
+- Fixed Kimi/Moonshot tool schema normalization by moving parent `type` fields
+  into `anyOf`/`oneOf` items, with regression coverage for nested schema shapes
+  that could otherwise still fail Kimi validation (#2438).
+- Fixed raw ANSI/SGR fragments leaking into footer, shell-label, and sidebar
+  activity text during active tool execution (#2481).
+- Fixed `[tui]` config parsing when `status_items` is omitted, restoring the
+  documented default footer order for older and hand-written configs (#2483).
+- Fixed a shell env-scrubbing test so it does not depend on the user's default
+  shell understanding POSIX parameter expansion.
+- Removed stale `qwen/qwen3.7-max` references left in `config.example.toml`
+  after the v0.8.48 preset removal.
+
+### Community
+
+Thanks to **@idling11** (#2480, #2485), **@reidliu41** (#2493),
+**@hongqitai** (#2495), and **@encyc** (#2477) for the fixes and reliability
+work harvested into this release.
+
+Thanks also to reporters and verification helpers whose issues shaped the
+release: **@A-Corner** (#2438), **@taiwan988** (#2483), **@AiurArtanis**
+(#2489), and **@Hmbown** (#2481).
+
+## [0.8.48] - 2026-05-31
+
+### Added
+
+- **Recent large OpenRouter model presets.** Added completions, aliases,
+  routing metadata, and docs for Arcee Trinity Large Thinking,
+  MiniMax M3, Xiaomi MiMo v2.5, Qwen 3.6 open-weight models, Kimi K2.6,
+  GLM 5.1, Tencent Hy3, Gemma 4, and Nemotron (#2461).
+- **Provider and web-search expansion.** Added Xiaomi MiMo provider support,
+  SiliconFlow, AtlasCloud static models, Volcengine Ark search, Baidu AI
+  Search, provider-picker coverage, and richer custom-provider docs
+  (#2246, #1868, #2421, #2429, #2371, #2394, #2287).
+- **Workflow and tool ergonomics.** Added the external-tool abstraction,
+  pluggable TUI tool registry, custom slash-command allowed-tools enforcement,
+  opt-in Unix socket hook sink, message-submit transform hooks, tool-cache
+  introspection, and cache warmup-key tracking (#2294, #2420, #2326, #2430,
+  #2434, #2423, #2424).
+- **TUI workflow features.** Added `/purge`, `/hunt`, thinking fold/unfold,
+  terminal-transparent/Solarized Light/Claude themes, footer branch display,
+  macOS notifications, intent summaries before approval prompts, and the
+  mobile runtime smoke/QR workflow (#2387, #2306, #2385, #2276, #2270, #2267,
+  #2347, #2260, #2389, #2403).
+- **Platform and localization coverage.** Added RISC-V prebuilt-binary
+  support, Vietnamese localization, Java/Vue language-server defaults, runtime
+  event envelopes, task migration/env isolation fixes, and state-message
+  parent IDs for future forks (#2383, #2358, #2367, #2252, #2272, #2308).
+
+### Removed
+
+- **Qwen 3.7 Max OpenRouter preset.** Removed from the model registry, docs,
+  and examples. Qwen 3.7 Max is a hosted model, not open-source; the preset
+  will return when an open-weight Qwen 3.7 release ships.
+
+### Changed
+
+- **Release hardening.** CI now runs clippy/docs checks, web frontend lint and
+  type checks, provider-registry drift checks, broader crate docs, and a large
+  unit-test pass across core, MCP, TUI core, app-server, and web helpers
+  (#2443, #2444, #2274, #2446-#2460, #2440, #2441, #2450, #2448, #2454).
+- **Prompt, context, and model routing behavior.** Stabilized project-context
+  pack ordering, exposed the auto route in turn metadata, allowed embedders to
+  override or inline constitutional instructions, moved volatile environment
+  context below the prompt boundary, and used the effective model for
+  compaction budgeting (#2418, #2410, #2356, #2311, #2314, #2437).
+- **Execution policy foundation.** Added typed ask-rule groundwork and kept
+  `task_shell_start` gated behind `allow_shell`, preparing the permission UI
+  path without broadening default shell access (#2404, #2384).
+
+### Fixed
+
+- **Windows and shell reliability.** Suppressed alt-screen logging on Windows,
+  added the Windows batch launcher path, kept task shell tools eagerly loaded,
+  loaded exec-shell companion tools consistently, covered controlling-terminal
+  behavior, and improved shell tool availability errors (#2259, #2295, #1861,
+  #2271, #2331, #2414, #2412).
+- **Session and transcript durability.** Fixed hidden-worktree discovery
+  saturation, stalled in-progress turn recovery, session persistence
+  truncation, cached-transcript user-message highlighting, large tool-output
+  receipting, session-detail block serialization, and deterministic composer
+  history flushing (#2273, #2329, #2283, #2395, #2386, #2297, #2265, #2375).
+- **Provider and UI polish.** Accepted custom model IDs in `/model` for
+  non-DeepSeek providers, fixed Feishu per-chat model switching, localized
+  context-menu labels, updated terminal tab naming, kept picker selections
+  visible, allowed slash-space composer messages, and improved PDF text
+  cleanup (#2280, #2149, #2320, #2319, #2324, #2316, #2266).
+- **Security and dependency hygiene.** Bumped `tar` and `qs`, trusted fake-IP
+  placeholder ranges only when explicitly configured, decoded Bing result URL
+  entities, fixed legacy MCP SSE connections, and replaced manual tool error
+  display code with `thiserror` derives (#2364, #2425, #2355, #2245, #2301,
+  #2442).
+
+### Community
+
+Thanks to contributors whose PRs landed or were harvested in this release:
+**@cy2311** (#1861),
+**@LING71671** (#1902, #2287, #2292),
+**@axobase001** (#1968, #2296, #2297, #2298),
+**@dzyuan** (#1993),
+**@mvanhorn** (#2107, #2236),
+**@malsony** (#2129),
+**@gaord** (#2133, #2265, #2285),
+**@yuanchenglu** (#2149),
+**@idling11** (#2161, #2266, #2306),
+**@h3c-hexin** (#2245, #2311, #2313, #2314, #2354, #2355, #2356),
+**@AdityaVG13** (#2246),
+**@Sskift** (#2248),
+**@cyq1017** (#2252, #2332, #2375),
+**@HUQIANTAO** (#2257, #2267, #2283, #2384, #2385, #2389, #2403, #2440-#2458, #2460),
+**@New2Niu** (#2260),
+**@AiurArtanis** (#2270),
+**@Lee-take** (#2272),
+**@nightt5879** (#2274, #2344, #2347, #2373),
+**@AresNing** (#2278, #2318/#2434),
+**@AccMoment** (#2281),
+**@reidliu41** (#2291, #2316, #2324, #2357, #2366, #2386, #2431),
+**@aboimpinto** (#2290, #2294, #2295, #2326, #2433),
+**@zhuangbiaowei** (#2301),
+**@donglovejava** (#2302, #2329, #2330, #2331),
+**@hongqitai** (#2308, #2432),
+**@zlh124** (#2319, #2320, #2325),
+**@encyc** (#2336, #2338),
+**@Implementist** (#2426/#2429, #2439),
+**@lihuan215** (#2333/#2430),
+**@LeoAlex0** (#2388, #2395),
+**@jimmyzhuu** (#2371),
+**@rockyzhang** (#2383),
+**@mo-vic** (#2387),
+**@hufanexplore** (#2367),
+**@hoclaptrinh33** (#2358),
+and **@BryonGo** (#2437).
+
+Thanks also to reporters and verification helpers whose issues, patches,
+screenshots, logs, or retest requests shaped this release: **@buko** (#2359,
+#2360, #2369, #2469), **@yyyCode**, **@gaslebinh-glitch**, **@Dr3259**,
+**@lpeng1711694086-lang**, **@VerrPower**, **@yan-zay**, **@jretz**,
+**@Neo-millunnium**, **@caeserchen**, **@T-Phuong-Nguyen**, **@zhyuzhyu**,
+**@0gl20shk0sbt36**, **@hatakes**, **@goodvecn-dev**, **@bevis-wong**,
+**@PurplePulse**, and **@nbiish**.
+
+## [0.8.47] - 2026-05-26
+
+### Added
+
+- **Closed-loop verification gate, runtime goal tools, DuckDuckGo default
+  web search, Xiaomi MiMo, global AGENTS.md fallback, `/new`, composer
+  selection, transcript copy cleanup, CNB mirror support, and Docker toolbox
+  docs** shipped in the published v0.8.47 release.
+
+### Changed
+
+- **DeepSeek-first release framing, project-context logging, state-root
+  migration, CodeWhale README paths, and reasoning-locale behavior** were
+  finalized for the v0.8.47 release.
+
+### Fixed
+
+- **Provider picker scrolling, auto model restore, cache-inspect hashing,
+  insecure LAN provider guard, large tool-output compaction, queued-message
+  ordering, shell/Yolo startup handling, Windows alt-screen logging, and
+  tooltip contrast** were fixed in the v0.8.47 release.
+
+### Community
+
+Thanks to contributors credited in the v0.8.47 GitHub Release, including
+**@Fire-dtx**, **@imkingjh999**, **@harvey2011888**, **@victorcheng2333**,
+**@IIzzaya**, **@PurplePulse**, **@cyq1017**, **@knqiufan**,
+**@Colorful-glassblock**, **@hongqitai**, **@EmiyaKiritsugu3**,
+**@aboimpinto**, **@HUQIANTAO**, **@mvanhorn**, **@LING71671**, and
+**@reidliu41**.
 
 ## [0.8.46] - 2026-05-26
 
@@ -5018,7 +5411,14 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.53...HEAD
+[0.8.53]: https://github.com/Hmbown/CodeWhale/compare/v0.8.52...v0.8.53
+[0.8.52]: https://github.com/Hmbown/CodeWhale/compare/v0.8.51...v0.8.52
+[0.8.51]: https://github.com/Hmbown/CodeWhale/compare/v0.8.50...v0.8.51
+[0.8.50]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...v0.8.50
+[0.8.49]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...v0.8.49
+[0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48
+[0.8.47]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...v0.8.47
 [0.8.46]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...v0.8.46
 [0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44

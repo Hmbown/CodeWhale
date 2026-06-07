@@ -7,83 +7,130 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Configuration for a single MCP server process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    /// Unique server identifier used for tool name qualification.
     pub name: String,
+    /// Path or name of the server executable.
     pub command: String,
+    /// Command-line arguments passed to the server process.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment variables set for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Whether this server should be started. Disabled servers are skipped.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
+/// Filter controlling which tools from an MCP server are exposed.
+///
+/// When `allow` is empty, all tools are permitted (unless denied).
+/// `deny` takes precedence over `allow`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolFilter {
+    /// Tool names to expose. Empty means expose all.
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Tool names to exclude. Takes precedence over `allow`.
     #[serde(default)]
     pub deny: Vec<String>,
 }
 
+/// A complete MCP server definition including config and tool filter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerDefinition {
+    /// Server process configuration.
     pub config: McpServerConfig,
+    /// Tool filter controlling which tools are exposed.
     #[serde(default)]
     pub filter: ToolFilter,
 }
 
+/// Status of an individual MCP server during startup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpStartupStatus {
+    /// Server process is starting.
     Starting,
+    /// Server is ready to accept tool calls.
     Ready,
+    /// Server failed to start.
     Failed { error: String },
+    /// Server startup was cancelled (e.g., disabled in config).
     Cancelled,
 }
 
+/// Status update for a single MCP server during startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupUpdateEvent {
+    /// Name of the server this update pertains to.
     pub server_name: String,
+    /// Current startup status.
     pub status: McpStartupStatus,
 }
 
+/// Record of an MCP server that failed to start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupFailure {
+    /// Name of the server that failed.
     pub server_name: String,
+    /// Error message describing the failure.
     pub error: String,
 }
 
+/// Summary emitted after all MCP servers have completed startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupCompleteEvent {
+    /// Names of servers that started successfully.
     pub ready: Vec<String>,
+    /// Servers that failed with error details.
     pub failed: Vec<McpStartupFailure>,
+    /// Names of servers that were skipped (disabled).
     pub cancelled: Vec<String>,
 }
 
+/// Describes a single tool provided by an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDescriptor {
+    /// Name of the server providing this tool.
     pub server_name: String,
+    /// Original tool name as reported by the server.
     pub tool_name: String,
+    /// Fully qualified name (e.g., `mcp__server__tool`).
     pub qualified_name: String,
+    /// Human-readable description of what the tool does.
     pub description: Option<String>,
 }
 
+/// Describes a resource provided by an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpResourceDescriptor {
+    /// Name of the server providing this resource.
     pub server_name: String,
+    /// URI identifying the resource.
     pub uri: String,
+    /// Human-readable description.
     pub description: Option<String>,
 }
 
+/// Trait abstracting an MCP client connection.
+///
+/// Implementations handle communication with a single MCP server process.
 pub trait McpManagedClient: Send + Sync {
+    /// List all tools provided by this server.
     fn list_tools(&self) -> Result<Vec<McpToolDescriptor>>;
+    /// Invoke a tool by name with the given arguments.
     fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<Value>;
+    /// List all resources provided by this server.
     fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>>;
+    /// Read a resource by URI.
     fn read_resource(&self, uri: &str) -> Result<Value>;
 }
 
+/// A simple in-memory MCP client for testing and default server stubs.
 #[derive(Debug, Default)]
 pub struct InMemoryMcpClient {
     tools: HashMap<String, Value>,
@@ -91,11 +138,13 @@ pub struct InMemoryMcpClient {
 }
 
 impl InMemoryMcpClient {
+    /// Register a tool with a fixed response value.
     pub fn with_tool(mut self, name: &str, sample_result: Value) -> Self {
         self.tools.insert(name.to_string(), sample_result);
         self
     }
 
+    /// Register a resource with a fixed data value.
     pub fn with_resource(mut self, uri: &str, data: Value) -> Self {
         self.resources.insert(uri.to_string(), data);
         self
@@ -143,6 +192,7 @@ impl McpManagedClient for InMemoryMcpClient {
     }
 }
 
+/// Manages multiple MCP server connections and their tool/resource registrations.
 #[derive(Default)]
 pub struct McpManager {
     configs: HashMap<String, (McpServerConfig, ToolFilter)>,
@@ -150,6 +200,7 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    /// Register an MCP server with its config, tool filter, and client implementation.
     pub fn register_server(
         &mut self,
         config: McpServerConfig,
@@ -160,6 +211,9 @@ impl McpManager {
         self.configs.insert(config.name.clone(), (config, filter));
     }
 
+    /// Start all registered servers, emitting status updates via the callback.
+    ///
+    /// Returns a summary of which servers are ready, failed, or cancelled.
     pub fn start_all<F>(&self, mut emit: F) -> McpStartupCompleteEvent
     where
         F: FnMut(McpStartupUpdateEvent),
@@ -207,6 +261,7 @@ impl McpManager {
         }
     }
 
+    /// Stop a running server by removing its client.
     pub fn stop_server(&mut self, server_name: &str) -> Result<()> {
         self.clients
             .remove(server_name)
@@ -214,6 +269,7 @@ impl McpManager {
         Ok(())
     }
 
+    /// Remove a server entirely (config and client).
     pub fn unregister_server(&mut self, server_name: &str) -> Result<()> {
         let had_config = self.configs.remove(server_name).is_some();
         self.clients.remove(server_name);
@@ -223,6 +279,7 @@ impl McpManager {
         Ok(())
     }
 
+    /// List all tools from all running servers, applying tool filters.
     pub fn list_tools(&self) -> Result<Vec<McpToolDescriptor>> {
         let mut out = Vec::new();
         for (server_name, (_, filter)) in &self.configs {
@@ -246,6 +303,7 @@ impl McpManager {
         Ok(out)
     }
 
+    /// Call a tool on a specific server by name.
     pub fn call_tool(&self, server_name: &str, tool_name: &str, arguments: Value) -> Result<Value> {
         let client = self
             .clients
@@ -254,16 +312,41 @@ impl McpManager {
         client.call_tool(tool_name, arguments)
     }
 
+    /// Call a tool using its fully qualified name (e.g., `mcp__server__tool`).
     pub fn call_qualified_tool(
         &self,
         qualified_tool_name: &str,
         arguments: Value,
     ) -> Result<Value> {
-        let (server_name, tool_name) = parse_qualified_tool_name(qualified_tool_name)
-            .with_context(|| format!("invalid qualified MCP tool name: {qualified_tool_name}"))?;
+        let parsed = parse_qualified_tool_name(qualified_tool_name)
+            .with_context(|| format!("invalid qualified MCP tool name: {qualified_tool_name}"));
+
+        if let Ok((server_name, tool_name)) = &parsed
+            && self.clients.contains_key(server_name)
+            && let Ok(result) = self.call_tool(server_name, tool_name, arguments.clone())
+        {
+            return Ok(result);
+        }
+
+        for (server_name, (_, filter)) in &self.configs {
+            let Some(client) = self.clients.get(server_name) else {
+                continue;
+            };
+            for tool in client.list_tools()? {
+                if !allowed_by_filter(&tool.tool_name, filter) {
+                    continue;
+                }
+                if qualify_tool_name(server_name, &tool.tool_name) == qualified_tool_name {
+                    return client.call_tool(&tool.tool_name, arguments);
+                }
+            }
+        }
+
+        let (server_name, tool_name) = parsed?;
         self.call_tool(&server_name, &tool_name, arguments)
     }
 
+    /// List all resources from all running servers.
     pub fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
         let mut out = Vec::new();
         for server_name in self.configs.keys() {
@@ -278,6 +361,7 @@ impl McpManager {
         Ok(out)
     }
 
+    /// Read a resource from a specific server.
     pub fn read_resource(&self, server_name: &str, uri: &str) -> Result<Value> {
         let client = self
             .clients
@@ -286,6 +370,7 @@ impl McpManager {
         client.read_resource(uri)
     }
 
+    /// Generate sandbox state update notices for all registered servers.
     pub fn update_sandbox_state(&self, sandbox_mode: &str, cwd: &str) -> Result<Vec<Value>> {
         let mut notices = Vec::new();
         for server_name in self.configs.keys() {
@@ -330,18 +415,29 @@ fn sanitize_component(value: &str) -> String {
 }
 
 fn qualify_tool_name(server: &str, tool: &str) -> String {
-    let mut name = format!(
-        "mcp__{}__{}",
-        sanitize_component(server),
-        sanitize_component(tool)
-    );
+    let server = sanitize_component(server);
+    let tool = sanitize_component(tool);
+    let mut name = format!("mcp__{server}__{tool}");
     if name.len() > 64 {
         let mut hasher = DefaultHasher::new();
         name.hash(&mut hasher);
         let hash = format!("{:x}", hasher.finish());
-        name.truncate(48);
-        name.push('_');
-        name.push_str(&hash[..12]);
+        let suffix = format!("_{}", &hash[..12]);
+        let component_budget = 64 - "mcp__".len() - "__".len() - suffix.len();
+        let mut server_len = server.len().min(component_budget / 2);
+        let mut tool_len = tool.len().min(component_budget - server_len);
+        let remaining = component_budget - server_len - tool_len;
+        if remaining > 0 {
+            let server_extra = (server.len() - server_len).min(remaining);
+            server_len += server_extra;
+            tool_len += (tool.len() - tool_len).min(remaining - server_extra);
+        }
+        name = format!(
+            "mcp__{}__{}{}",
+            &server[..server_len],
+            &tool[..tool_len],
+            suffix
+        );
     }
     name
 }
@@ -434,6 +530,10 @@ struct StdioMcpState {
     lifecycle_state: String,
 }
 
+/// Run an MCP stdio server that reads JSON-RPC requests from stdin and writes responses to stdout.
+///
+/// Returns the final server definitions after the session ends (useful for persisting
+/// runtime changes like server registrations).
 pub fn run_stdio_server(
     initial_definitions: Vec<McpServerDefinition>,
 ) -> Result<Vec<McpServerDefinition>> {
@@ -889,5 +989,418 @@ impl JsonRpcError {
             message: message.into(),
             data: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── InMemoryMcpClient ──────────────────────────────────────────────
+
+    #[test]
+    fn in_memory_client_list_tools_returns_registered() {
+        let client = InMemoryMcpClient::default()
+            .with_tool("echo", json!({"output": "hi"}))
+            .with_tool("greet", json!({"msg": "hello"}));
+        let tools = client.list_tools().unwrap();
+        assert_eq!(tools.len(), 2);
+        let names: Vec<&str> = tools.iter().map(|t| t.tool_name.as_str()).collect();
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"greet"));
+    }
+
+    #[test]
+    fn in_memory_client_call_tool_returns_value() {
+        let client = InMemoryMcpClient::default().with_tool("echo", json!({"output": "hi"}));
+        let result = client.call_tool("echo", json!({})).unwrap();
+        assert_eq!(result["output"], "hi");
+    }
+
+    #[test]
+    fn in_memory_client_call_tool_errors_on_missing() {
+        let client = InMemoryMcpClient::default();
+        let err = client.call_tool("nope", json!({})).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn in_memory_client_list_resources_returns_registered() {
+        let client = InMemoryMcpClient::default()
+            .with_resource("mcp://s/health", json!({"ok": true}))
+            .with_resource("mcp://s/caps", json!({"tools": []}));
+        let resources = client.list_resources().unwrap();
+        assert_eq!(resources.len(), 2);
+    }
+
+    #[test]
+    fn in_memory_client_read_resource_returns_value() {
+        let client =
+            InMemoryMcpClient::default().with_resource("mcp://s/health", json!({"ok": true}));
+        let result = client.read_resource("mcp://s/health").unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn in_memory_client_read_resource_errors_on_missing() {
+        let client = InMemoryMcpClient::default();
+        let err = client.read_resource("mcp://s/nope").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    // ── McpManager ─────────────────────────────────────────────────────
+
+    fn make_server_config(name: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_string(),
+            command: "test".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn manager_start_all_marks_ready_for_registered_clients() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default().with_tool("t", json!(null))),
+        );
+        let mut events = Vec::new();
+        let summary = manager.start_all(|e| events.push(e));
+        assert_eq!(summary.ready, vec!["s1"]);
+        assert!(summary.failed.is_empty());
+        assert!(events.iter().any(|event| {
+            event.server_name == "s1" && event.status == McpStartupStatus::Starting
+        }));
+        assert!(
+            events.iter().any(|event| {
+                event.server_name == "s1" && event.status == McpStartupStatus::Ready
+            })
+        );
+    }
+
+    #[test]
+    fn manager_start_all_marks_failed_when_client_missing() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
+        manager.stop_server("s1").unwrap();
+        let summary = manager.start_all(|_| {});
+        assert!(summary.ready.is_empty());
+        assert_eq!(summary.failed.len(), 1);
+        assert_eq!(summary.failed[0].server_name, "s1");
+    }
+
+    #[test]
+    fn manager_start_all_cancels_disabled_servers() {
+        let mut manager = McpManager::default();
+        let mut cfg = make_server_config("s1");
+        cfg.enabled = false;
+        manager.register_server(
+            cfg,
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
+        let summary = manager.start_all(|_| {});
+        assert!(summary.ready.is_empty());
+        assert_eq!(summary.cancelled, vec!["s1"]);
+    }
+
+    #[test]
+    fn manager_list_tools_applies_filter() {
+        let mut manager = McpManager::default();
+        let client = InMemoryMcpClient::default()
+            .with_tool("allowed", json!(null))
+            .with_tool("denied", json!(null));
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter {
+                allow: vec!["allowed".to_string()],
+                deny: vec![],
+            },
+            Box::new(client),
+        );
+        let tools = manager.list_tools().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_name, "allowed");
+    }
+
+    #[test]
+    fn manager_list_tools_deny_overrides_allow() {
+        let mut manager = McpManager::default();
+        let client = InMemoryMcpClient::default()
+            .with_tool("a", json!(null))
+            .with_tool("b", json!(null));
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter {
+                allow: vec!["a".to_string(), "b".to_string()],
+                deny: vec!["b".to_string()],
+            },
+            Box::new(client),
+        );
+        let tools = manager.list_tools().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_name, "a");
+    }
+
+    #[test]
+    fn manager_call_tool_delegates_to_client() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default().with_tool("t", json!({"v": 42}))),
+        );
+        let result = manager.call_tool("s1", "t", json!({})).unwrap();
+        assert_eq!(result["v"], 42);
+    }
+
+    #[test]
+    fn manager_call_tool_errors_on_missing_server() {
+        let manager = McpManager::default();
+        let err = manager.call_tool("nope", "t", json!({})).unwrap_err();
+        assert!(err.to_string().contains("not available"));
+    }
+
+    #[test]
+    fn manager_call_qualified_tool_parses_name() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("my_server"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default().with_tool("my_tool", json!({"ok": true}))),
+        );
+        let result = manager
+            .call_qualified_tool("mcp__my_server__my_tool", json!({}))
+            .unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_call_qualified_tool_handles_truncated_names() {
+        let long_server = "server".repeat(20);
+        let long_tool = "tool".repeat(20);
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config(&long_server),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default().with_tool(&long_tool, json!({"ok": true}))),
+        );
+        let tools = manager.list_tools().unwrap();
+        let qualified = &tools[0].qualified_name;
+        assert!(qualified.len() <= 64);
+        assert!(parse_qualified_tool_name(qualified).is_ok());
+
+        let result = manager.call_qualified_tool(qualified, json!({})).unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_unregister_removes_server() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
+        manager.unregister_server("s1").unwrap();
+        assert!(manager.configs.is_empty());
+    }
+
+    #[test]
+    fn manager_unregister_errors_on_unknown() {
+        let mut manager = McpManager::default();
+        let err = manager.unregister_server("nope").unwrap_err();
+        assert!(err.to_string().contains("not registered"));
+    }
+
+    #[test]
+    fn manager_stop_server_errors_on_unknown() {
+        let mut manager = McpManager::default();
+        let err = manager.stop_server("nope").unwrap_err();
+        assert!(err.to_string().contains("not running"));
+    }
+
+    #[test]
+    fn manager_list_resources_returns_from_clients() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(
+                InMemoryMcpClient::default().with_resource("mcp://s1/health", json!({"ok": true})),
+            ),
+        );
+        let resources = manager.list_resources().unwrap();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].server_name, "s1");
+    }
+
+    #[test]
+    fn manager_read_resource_delegates() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(
+                InMemoryMcpClient::default().with_resource("mcp://s1/health", json!({"ok": true})),
+            ),
+        );
+        let result = manager.read_resource("s1", "mcp://s1/health").unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_update_sandbox_state_returns_notices() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
+        let notices = manager.update_sandbox_state("strict", "/tmp").unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["server_name"], "s1");
+    }
+
+    // ── Tool filter ────────────────────────────────────────────────────
+
+    #[test]
+    fn allowed_by_filter_empty_allow_permits_all() {
+        let filter = ToolFilter {
+            allow: vec![],
+            deny: vec![],
+        };
+        assert!(allowed_by_filter("anything", &filter));
+    }
+
+    #[test]
+    fn allowed_by_filter_deny_blocks() {
+        let filter = ToolFilter {
+            allow: vec![],
+            deny: vec!["danger".to_string()],
+        };
+        assert!(!allowed_by_filter("danger", &filter));
+        assert!(allowed_by_filter("safe", &filter));
+    }
+
+    #[test]
+    fn allowed_by_filter_allow_only_permits_listed() {
+        let filter = ToolFilter {
+            allow: vec!["a".to_string()],
+            deny: vec![],
+        };
+        assert!(allowed_by_filter("a", &filter));
+        assert!(!allowed_by_filter("b", &filter));
+    }
+
+    // ── Helper functions ───────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_component_lowercases_and_replaces_specials() {
+        assert_eq!(sanitize_component("My-Server.Name"), "my_server_name");
+        assert_eq!(sanitize_component("ABC123"), "abc123");
+    }
+
+    #[test]
+    fn qualify_tool_name_produces_mcp_prefix() {
+        let name = qualify_tool_name("server", "tool");
+        assert!(name.starts_with("mcp__server__tool"));
+    }
+
+    #[test]
+    fn qualify_tool_name_truncates_long_names() {
+        let long_server = "a".repeat(100);
+        let name = qualify_tool_name(&long_server, "tool");
+        assert!(name.len() <= 64);
+        assert!(parse_qualified_tool_name(&name).is_ok());
+    }
+
+    #[test]
+    fn parse_qualified_tool_name_round_trip() {
+        let qualified = qualify_tool_name("my_server", "my_tool");
+        let (server, tool) = parse_qualified_tool_name(&qualified).unwrap();
+        assert_eq!(server, "my_server");
+        assert_eq!(tool, "my_tool");
+    }
+
+    #[test]
+    fn parse_qualified_tool_name_rejects_missing_prefix() {
+        let err = parse_qualified_tool_name("not_mcp__server__tool").unwrap_err();
+        assert!(err.to_string().contains("missing mcp__ prefix"));
+    }
+
+    #[test]
+    fn parse_qualified_tool_name_rejects_empty_segments() {
+        let err = parse_qualified_tool_name("mcp____tool").unwrap_err();
+        assert!(err.to_string().contains("missing server segment"));
+    }
+
+    #[test]
+    fn parse_server_from_uri_extracts_server() {
+        assert_eq!(
+            parse_server_from_uri("mcp://my-server/capabilities"),
+            Some("my-server".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_server_from_uri_returns_none_for_invalid() {
+        assert!(parse_server_from_uri("http://not-mcp").is_none());
+        assert!(parse_server_from_uri("mcp:///path").is_none());
+    }
+
+    // ── JsonRpcError ───────────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_error_codes_are_correct() {
+        assert_eq!(JsonRpcError::parse_error("").code, -32700);
+        assert_eq!(JsonRpcError::invalid_request("").code, -32600);
+        assert_eq!(JsonRpcError::method_not_found("x").code, -32601);
+        assert_eq!(JsonRpcError::invalid_params("").code, -32602);
+        assert_eq!(JsonRpcError::internal("").code, -32603);
+    }
+
+    #[test]
+    fn jsonrpc_result_produces_valid_envelope() {
+        let result = jsonrpc_result(Some(json!(1)), json!({"ok": true}));
+        assert_eq!(result["jsonrpc"], "2.0");
+        assert_eq!(result["id"], 1);
+        assert_eq!(result["result"]["ok"], true);
+    }
+
+    #[test]
+    fn jsonrpc_error_produces_valid_envelope() {
+        let err = jsonrpc_error(Some(json!(2)), JsonRpcError::invalid_params("bad"));
+        assert_eq!(err["jsonrpc"], "2.0");
+        assert_eq!(err["id"], 2);
+        assert_eq!(err["error"]["code"], -32602);
+    }
+
+    // ── McpServerConfig serialization ──────────────────────────────────
+
+    #[test]
+    fn mcp_server_config_defaults_enabled_to_true() {
+        let json = json!({"name": "s", "command": "cmd"});
+        let config: McpServerConfig = serde_json::from_value(json).unwrap();
+        assert!(config.enabled);
+        assert!(config.args.is_empty());
+        assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn mcp_startup_status_serializes_with_snake_case() {
+        let status = McpStartupStatus::Failed {
+            error: "oops".to_string(),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["failed"]["error"], "oops");
     }
 }

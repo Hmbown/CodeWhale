@@ -16,7 +16,7 @@ docker volume create codewhale-home
 
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
+  -v codewhale-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/hmbown/codewhale:latest
@@ -27,7 +27,7 @@ Use a pinned release tag for reproducible installs:
 ```bash
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
+  -v codewhale-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/hmbown/codewhale:vX.Y.Z
@@ -45,7 +45,7 @@ images:
 - the image does not grant passwordless `sudo`
 - the image is meant to run CodeWhale against mounted workspaces, not to mutate
   the base operating system at runtime
-- user state belongs in a volume mounted at `/home/codewhale/.deepseek`
+- user state belongs in a volume mounted at `/home/codewhale/.codewhale`
 
 That default is intentional. Keep using it for the smallest trust boundary. If a
 project needs `apt-get`, compiler toolchains, Node/Python package managers,
@@ -78,7 +78,7 @@ docker volume create codewhale-my-project-home
 
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-my-project-home:/home/codewhale/.deepseek \
+  -v codewhale-my-project-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   codewhale-toolbox:my-project
@@ -109,7 +109,7 @@ docker compose -f docs/examples/compose.toolbox.yml run --rm codewhale
 ```
 
 Use a different `CODEWHALE_TOOLBOX_IMAGE` and `CODEWHALE_HOME_VOLUME` for each
-project that needs an independent toolchain or independent `.deepseek` state.
+project that needs an independent toolchain or independent `.codewhale` state.
 The Compose file also shows opt-in, read-only mounts for SSH material and local
 CA certificates; keep those commented out unless the project needs them.
 
@@ -126,7 +126,7 @@ docker volume create "codewhale-${project}-home"
 docker run --rm -it \
   --name "codewhale-${project}" \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v "codewhale-${project}-home:/home/codewhale/.deepseek" \
+  -v "codewhale-${project}-home:/home/codewhale/.codewhale" \
   -v "$PWD:/workspace" \
   -w /workspace \
   "$image"
@@ -139,18 +139,17 @@ it is intentionally outside the core Docker image.
 
 ## Project bootstrap scripts
 
-CodeWhale does not automatically execute `.deepseek/setup.sh` or
-`.codewhale/setup.sh`. If you keep one of those files as a local project
-recipe, run it explicitly. For shared team setup, prefer a committed project
-script or the toolbox Dockerfile so the environment can be reviewed and
-rebuilt.
+CodeWhale does not automatically execute `.codewhale/setup.sh` or legacy
+`.deepseek/setup.sh`. If you keep one of those files as a local project recipe,
+run it explicitly. For shared team setup, prefer a committed project script or
+the toolbox Dockerfile so the environment can be reviewed and rebuilt.
 
 For example, to run a committed bootstrap script before starting CodeWhale:
 
 ```bash
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-my-project-home:/home/codewhale/.deepseek \
+  -v codewhale-my-project-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   --entrypoint bash \
@@ -182,7 +181,7 @@ container start:
 ```bash
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-my-project-home:/home/codewhale/.deepseek \
+  -v codewhale-my-project-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -v "$PWD/docker/certs:/usr/local/share/ca-certificates/local:ro" \
   -w /workspace \
@@ -207,7 +206,7 @@ Then run it with the same Docker-managed data volume:
 ```bash
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
+  -v codewhale-home:/home/codewhale/.codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   codewhale
@@ -226,13 +225,14 @@ registry.
 
 ## Volumes
 
-Mount `/home/codewhale/.deepseek` to persist sessions, config, skills, memory,
-and the offline queue across container restarts. A Docker-managed named volume
-is the safest default because Docker creates it with ownership the container can
-write:
+Mount `/home/codewhale/.codewhale` to persist sessions, config, skills, memory,
+and the offline queue across container restarts. The image also keeps
+`/home/codewhale/.deepseek` available for legacy compatibility. A
+Docker-managed named volume is the safest default because Docker creates it with
+ownership the container can write:
 
 ```bash
--v codewhale-home:/home/codewhale/.deepseek
+-v codewhale-home:/home/codewhale/.codewhale
 ```
 
 Without this mount the container starts fresh each time.
@@ -240,20 +240,20 @@ Without this mount the container starts fresh each time.
 If you bind-mount an existing host directory instead, the image runs as the
 non-root `codewhale` user with UID/GID `1000:1000`. The mounted directory must be
 writable by that user, or startup can fail while creating runtime directories
-under `.deepseek/tasks`. On Linux hosts, either use the named volume above or
+under `.codewhale/tasks`. On Linux hosts, either use the named volume above or
 prepare the bind mount explicitly:
 
 ```bash
-mkdir -p ~/.deepseek
-sudo chown -R 1000:1000 ~/.deepseek
+mkdir -p ~/.codewhale
+sudo chown -R 1000:1000 ~/.codewhale
 
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v ~/.deepseek:/home/codewhale/.deepseek \
+  -v ~/.codewhale:/home/codewhale/.codewhale \
   ghcr.io/hmbown/codewhale:latest
 ```
 
-That `chown` changes ownership of the host `~/.deepseek` directory. Skip it if
+That `chown` changes ownership of the host `~/.codewhale` directory. Skip it if
 you do not want the container UID to own your local config, and use a named
 volume instead.
 

@@ -33,7 +33,7 @@ fn render_skill_warnings(registry: &SkillRegistry) -> String {
 /// List all available skills. Pass `--remote` (or `remote`) to fetch the
 /// curated registry instead of scanning the local skills directory.
 /// Pass `sync` to pull the registry index and download all skills to the
-/// local cache (`~/.deepseek/cache/skills/`).
+/// local cache (`~/.codewhale/cache/skills/`).
 pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     let mut prefix: Option<String> = None;
     if let Some(arg) = arg {
@@ -401,7 +401,7 @@ pub fn list_remote_skills(app: &mut App) -> CommandResult {
 // ─── /skills sync ──────────────────────────────────────────────────────────
 
 /// Fetch the remote registry index and download every listed skill into the
-/// local cache (`~/.deepseek/cache/skills/<name>/`).
+/// local cache (`~/.codewhale/cache/skills/<name>/`).
 ///
 /// For each skill the sync checks the cached ETag / SHA-256 before
 /// downloading so unchanged skills are skipped in O(1) network round-trips.
@@ -495,9 +495,8 @@ where
     F: std::future::Future<Output = T>,
 {
     // We're on the TUI's thread, which is part of the multi-threaded runtime.
-    // `block_in_place` + `Handle::current().block_on` is the pattern used by
-    // `commands/cycle.rs` to bridge sync slash-command handlers back into the
-    // async ecosystem.
+    // `block_in_place` + `Handle::current().block_on` bridges sync
+    // slash-command handlers back into the async ecosystem.
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 
@@ -523,14 +522,14 @@ fn path_or_default(path: &std::path::Path) -> String {
 fn needs_approval_message(host: &str) -> String {
     format!(
         "Network policy requires approval for {host}.\n\
-         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.deepseek/config.toml), then retry."
+         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
     )
 }
 
 fn network_denied_message(host: &str) -> String {
     format!(
         "Network policy denied access to {host}.\n\
-         Remove the deny entry from ~/.deepseek/config.toml under [network] or contact your administrator."
+         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
     )
 }
 
@@ -547,7 +546,7 @@ fn registry_fetch_error_hint(err: &anyhow::Error) -> Option<&'static str> {
         || msg.contains("nodename nor servname")
     {
         Some(
-            "Hint: DNS lookup failed. Check internet/DNS connectivity, or override the registry URL in [skills] of ~/.deepseek/config.toml.",
+            "Hint: DNS lookup failed. Check internet/DNS connectivity, or override the registry URL in [skills] of ~/.codewhale/config.toml.",
         )
     } else if msg.contains("connection refused")
         || msg.contains("connection reset")
@@ -566,7 +565,7 @@ fn registry_fetch_error_hint(err: &anyhow::Error) -> Option<&'static str> {
         )
     } else if msg.contains(" 404") || msg.contains("not found") {
         Some(
-            "Hint: registry URL returned 404. Verify the registry URL in [skills] of ~/.deepseek/config.toml.",
+            "Hint: registry URL returned 404. Verify the registry URL in [skills] of ~/.codewhale/config.toml.",
         )
     } else if msg.contains(" 401") || msg.contains(" 403") || msg.contains("forbidden") {
         Some(

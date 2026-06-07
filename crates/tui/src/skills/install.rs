@@ -47,7 +47,7 @@ use crate::network_policy::{Decision, NetworkPolicy, host_from_url};
 
 /// Cache directory for registry-synced skills.
 ///
-/// Lives at `~/.deepseek/cache/skills/` so it's separate from user-installed
+/// Lives at `~/.codewhale/cache/skills/` so it's separate from user-installed
 /// skills and can be blown away without losing anything irreplaceable.
 pub fn default_cache_skills_dir() -> PathBuf {
     dirs::home_dir().map_or_else(

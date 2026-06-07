@@ -42,7 +42,7 @@ use crate::models::{SystemPrompt, Tool};
 pub struct PrefixFingerprint {
     /// SHA-256 of the system prompt text.
     pub system_sha256: String,
-    /// SHA-256 of the concatenated, sorted tool names.
+    /// SHA-256 of the full tool catalog JSON (names, descriptions, schemas).
     pub tools_sha256: String,
     /// SHA-256 of system_sha256 ++ tools_sha256 (combined).
     pub combined_sha256: String,
@@ -50,16 +50,21 @@ pub struct PrefixFingerprint {
 
 impl PrefixFingerprint {
     /// Compute a fingerprint from system prompt text and tool list.
+    ///
+    /// Tools are serialized to the same JSON shape the chat API receives
+    /// (`type`, `name`, `description`, `parameters`, `strict`), sorted
+    /// lexicographically by JSON text, then SHA-256 hashed. This catches
+    /// schema/description drift that actually affects the API prefix,
+    /// while ignoring internal-only fields like `allowed_callers` (#2264).
     pub fn compute(system_text: &str, tools: Option<&[Tool]>) -> Self {
         let system_sha256 = sha256_hex(system_text.as_bytes());
 
         let tools_sha256 = match tools {
             Some(tools) if !tools.is_empty() => {
-                // Sort tool names deterministically so the hash is
-                // stable regardless of registration order.
-                let mut tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-                tool_names.sort();
-                let joined = tool_names.join(",");
+                let mut serialized: Vec<String> =
+                    tools.iter().filter_map(tool_to_api_json).collect();
+                serialized.sort();
+                let joined = serialized.join("\n");
                 sha256_hex(joined.as_bytes())
             }
             _ => sha256_hex(b""),
@@ -305,6 +310,26 @@ impl PrefixStabilityManager {
     }
 }
 
+/// Serialize a tool to the same JSON shape the chat API receives,
+/// excluding internal-only fields like `allowed_callers`, `defer_loading`,
+/// `input_examples`, and `cache_control` that are never sent to DeepSeek.
+fn tool_to_api_json(tool: &Tool) -> Option<String> {
+    let mut value = serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.input_schema,
+        }
+    });
+    if let Some(strict) = tool.strict
+        && let Some(function) = value.get_mut("function")
+    {
+        function["strict"] = serde_json::json!(strict);
+    }
+    serde_json::to_string(&value).ok()
+}
+
 /// Compute the SHA-256 hex digest of a byte slice.
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -487,6 +512,19 @@ mod tests {
         assert!(mgr.check_and_update("hello", None).unwrap());
         assert!(mgr.pinned_fingerprint().is_some());
         assert_eq!(mgr.check_count(), 1);
+    }
+
+    #[test]
+    fn fingerprint_detects_schema_change_not_just_name_change() {
+        let tool_a = make_tool("my_tool");
+        let mut tool_a_v2 = make_tool("my_tool");
+        tool_a_v2.description = "updated description".to_string();
+
+        let a = PrefixFingerprint::compute("system", Some(&[tool_a]));
+        let b = PrefixFingerprint::compute("system", Some(&[tool_a_v2]));
+        // Same name, different description — must produce different hash.
+        assert_ne!(a.tools_sha256, b.tools_sha256);
+        assert_ne!(a.combined_sha256, b.combined_sha256);
     }
 
     #[test]

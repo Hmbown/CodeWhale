@@ -19,7 +19,6 @@ on:
     paths:
       - 'Cargo.toml'
       - 'npm/codewhale/package.json'
-      - 'npm/deepseek-tui/package.json'
   workflow_dispatch:
 
 permissions:

@@ -4,7 +4,8 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, normalize_custom_model_id, normalize_model_name_for_provider,
+    ApiProvider, COMMON_DEEPSEEK_MODELS, normalize_custom_model_id,
+    normalize_model_name_for_provider, provider_passes_model_through,
 };
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
@@ -133,10 +134,18 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 app.session.last_prompt_tokens = None;
                 app.session.last_completion_tokens = None;
             }
+            app.provider_models
+                .insert(app.api_provider.as_str().to_string(), "auto".to_string());
+            let persist_warning =
+                provider_model_selection_persist_warning(app.api_provider, "auto");
+            let mut message = tr(app.ui_locale, MessageId::ModelChanged)
+                .replace("{old}", &old_model)
+                .replace("{new}", "auto");
+            if let Some(warning) = persist_warning {
+                message.push_str(&warning);
+            }
             return CommandResult::with_message_and_action(
-                tr(app.ui_locale, MessageId::ModelChanged)
-                    .replace("{old}", &old_model)
-                    .replace("{new}", "auto"),
+                message,
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
@@ -149,8 +158,20 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             model_id
         } else {
             let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
+                if let Some((provider, model_id)) = saved_provider_model_match(app, name) {
+                    return CommandResult::with_message_and_action(
+                        format!(
+                            "Switching provider to {} for model {model_id}.",
+                            provider.as_str()
+                        ),
+                        AppAction::SwitchProvider {
+                            provider,
+                            model: Some(model_id),
+                        },
+                    );
+                }
                 return CommandResult::error(format!(
-                    "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
+                    "Invalid model '{name}'. Expected auto, a model for the active provider, or a saved provider model. Common DeepSeek models: {}",
                     COMMON_DEEPSEEK_MODELS.join(", ")
                 ));
             };
@@ -168,14 +189,64 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             app.session.last_prompt_tokens = None;
             app.session.last_completion_tokens = None;
         }
+        app.provider_models
+            .insert(app.api_provider.as_str().to_string(), model_id.clone());
+        let persist_warning = provider_model_selection_persist_warning(app.api_provider, &model_id);
+        let mut message = tr(app.ui_locale, MessageId::ModelChanged)
+            .replace("{old}", &old_model)
+            .replace("{new}", &model_id);
+        if let Some(warning) = persist_warning {
+            message.push_str(&warning);
+        }
         CommandResult::with_message_and_action(
-            tr(app.ui_locale, MessageId::ModelChanged)
-                .replace("{old}", &old_model)
-                .replace("{new}", &model_id),
+            message,
             AppAction::UpdateCompaction(app.compaction_config()),
         )
     } else {
         CommandResult::action(AppAction::OpenModelPicker)
+    }
+}
+
+fn provider_model_selection_persist_warning(provider: ApiProvider, model: &str) -> Option<String> {
+    crate::settings::Settings::persist_provider_model_selection(provider, model)
+        .err()
+        .map(|err| format!(" (not persisted: {err})"))
+}
+
+fn saved_provider_model_match(app: &App, name: &str) -> Option<(ApiProvider, String)> {
+    let requested = normalize_custom_model_id(name)?;
+    let mut saved = app
+        .provider_models
+        .iter()
+        .filter_map(|(provider_name, model)| {
+            let provider = ApiProvider::parse(provider_name)?;
+            (provider != app.api_provider).then_some((provider, model.as_str()))
+        })
+        .collect::<Vec<_>>();
+    saved.sort_by_key(|(provider, _)| provider.as_str());
+
+    for (provider, saved_model) in saved {
+        let Some(saved_model) = normalize_model_for_provider_selection(provider, saved_model)
+        else {
+            continue;
+        };
+        let requested_model = normalize_model_for_provider_selection(provider, &requested)
+            .unwrap_or_else(|| requested.clone());
+        if saved_model.eq_ignore_ascii_case(&requested_model)
+            || saved_model.eq_ignore_ascii_case(&requested)
+        {
+            return Some((provider, saved_model));
+        }
+    }
+
+    None
+}
+
+fn normalize_model_for_provider_selection(provider: ApiProvider, model: &str) -> Option<String> {
+    if provider_passes_model_through(provider) {
+        normalize_custom_model_id(model)
+    } else {
+        normalize_model_name_for_provider(provider, model)
     }
 }
 
@@ -200,7 +271,7 @@ pub fn profile_switch(_app: &mut App, arg: Option<&str>) -> CommandResult {
         Some(name) if !name.trim().is_empty() => name.trim().to_string(),
         _ => {
             return CommandResult::error(
-                "Usage: /profile <name>\n\nSwitch to a named config profile. Profiles are defined in ~/.deepseek/config.toml under [profiles] sections.",
+                "Usage: /profile <name>\n\nSwitch to a named config profile. Profiles are defined in ~/.codewhale/config.toml under [profiles] sections.",
             );
         }
     };
@@ -413,9 +484,49 @@ mod tests {
     use crate::models::Message;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
+    use std::ffi::OsString;
     use std::path::PathBuf;
     use std::time::Instant;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
+
+    struct SettingsPathGuard {
+        _tmp: TempDir,
+        previous: Option<OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl SettingsPathGuard {
+        fn new() -> Self {
+            let lock = crate::test_support::lock_test_env();
+            let tmp = TempDir::new().expect("settings tempdir");
+            let config_path = tmp.path().join(".deepseek").join("config.toml");
+            std::fs::create_dir_all(config_path.parent().expect("config parent"))
+                .expect("config dir");
+            let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+            }
+            Self {
+                _tmp: tmp,
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for SettingsPathGuard {
+        fn drop(&mut self) {
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+                } else {
+                    std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+                }
+            }
+        }
+    }
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -442,6 +553,9 @@ mod tests {
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
         app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+        app.model_ids_passthrough = false;
         app
     }
 
@@ -674,6 +788,7 @@ mod tests {
 
     #[test]
     fn test_model_change_updates_state() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         let old_model = app.model.clone();
         let result = model(&mut app, Some("deepseek-v4-flash"));
@@ -691,7 +806,33 @@ mod tests {
     }
 
     #[test]
+    fn model_command_persists_active_provider_model() {
+        let _settings = SettingsPathGuard::new();
+        let mut app = create_test_app();
+
+        let result = model(&mut app, Some("deepseek-v4-flash"));
+
+        assert!(result.message.is_some());
+        assert_eq!(
+            app.provider_models.get("deepseek").map(String::as_str),
+            Some("deepseek-v4-flash")
+        );
+        let settings = crate::settings::Settings::load().expect("load settings");
+        assert_eq!(settings.default_provider.as_deref(), Some("deepseek"));
+        assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(
+            settings
+                .provider_models
+                .as_ref()
+                .and_then(|models| models.get("deepseek"))
+                .map(String::as_str),
+            Some("deepseek-v4-flash")
+        );
+    }
+
+    #[test]
     fn model_switch_clears_turn_cache_history() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         // Keep the assertion independent of the developer's saved default model.
         app.auto_model = false;
@@ -713,6 +854,7 @@ mod tests {
 
     #[test]
     fn model_reset_same_model_keeps_turn_cache_history() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         app.auto_model = false;
         app.model = "deepseek-v4-pro".to_string();
@@ -733,6 +875,7 @@ mod tests {
 
     #[test]
     fn test_model_auto_enables_auto_thinking() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         app.reasoning_effort = ReasoningEffort::Off;
 
@@ -748,6 +891,7 @@ mod tests {
 
     #[test]
     fn test_model_change_accepts_future_deepseek_model() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         let result = model(&mut app, Some("deepseek-v4"));
         assert!(result.message.is_some());
@@ -762,6 +906,7 @@ mod tests {
 
     #[test]
     fn test_model_change_accepts_custom_id_for_openai_compatible_provider() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::Openai;
         app.model_ids_passthrough = true;
@@ -779,6 +924,7 @@ mod tests {
 
     #[test]
     fn test_model_change_accepts_custom_id_for_custom_base_url() {
+        let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
         app.model_ids_passthrough = true;
 
@@ -799,10 +945,30 @@ mod tests {
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("Invalid model"));
-        assert!(msg.contains("DeepSeek model ID"));
+        assert!(msg.contains("active provider"));
         assert!(msg.contains("deepseek-v4-pro"));
         assert!(msg.contains("deepseek-v4-flash"));
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn model_command_switches_to_saved_provider_model() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.provider_models
+            .insert("moonshot".to_string(), "kimi-k2.6".to_string());
+
+        let result = model(&mut app, Some("kimi-k2.6"));
+
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, crate::config::ApiProvider::Moonshot);
+                assert_eq!(model.as_deref(), Some("kimi-k2.6"));
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
+        assert_eq!(app.api_provider, crate::config::ApiProvider::Deepseek);
+        assert_eq!(app.model, "deepseek-v4-pro");
     }
 
     #[test]

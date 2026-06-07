@@ -15,7 +15,7 @@ use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
 use crate::tui::markdown_render;
-use crate::tui::ui_text::CopyLineSeparator;
+use crate::tui::ui_text::{CopyLineSeparator, truncate_line_to_width};
 
 // === Constants ===
 
@@ -266,7 +266,17 @@ impl HistoryCell {
         folded: bool,
     ) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::Thinking { .. } if !options.show_thinking => Vec::new(),
+            HistoryCell::Thinking {
+                streaming,
+                duration_secs,
+                ..
+            } if !options.show_thinking => {
+                if *streaming {
+                    render_hidden_thinking_activity(width, *duration_secs, options.low_motion)
+                } else {
+                    Vec::new()
+                }
+            }
             HistoryCell::Thinking {
                 content,
                 streaming,
@@ -1279,6 +1289,16 @@ pub struct GenericToolCell {
     pub is_diff: bool,
 }
 
+fn should_show_raw_tool_name(
+    name: &str,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+    mode: RenderMode,
+) -> bool {
+    matches!(mode, RenderMode::Transcript)
+        || matches!(family, crate::tui::widgets::tool_card::ToolFamily::Generic)
+        || name.starts_with("mcp_")
+}
+
 impl GenericToolCell {
     /// Render the generic tool cell into lines.
     ///
@@ -1329,12 +1349,14 @@ impl GenericToolCell {
             None,
             low_motion,
         ));
-        lines.extend(render_compact_kv(
-            "name",
-            &self.name,
-            tool_value_style(),
-            width,
-        ));
+        if should_show_raw_tool_name(&self.name, family, mode) {
+            lines.extend(render_compact_kv(
+                "name",
+                &self.name,
+                tool_value_style(),
+                width,
+            ));
+        }
 
         // Prefer per-prompt rows over the generic args summary when the tool
         // exposes a list of child prompts. One row per child with a `[i]`
@@ -1878,6 +1900,18 @@ pub fn summarize_tool_args(input: &Value) -> Option<String> {
             summarize_inline_value(value, 40, false)
         ));
     }
+    if let Some(value) = obj.get("profile") {
+        parts.push(format!(
+            "profile: {}",
+            summarize_inline_value(value, 40, false)
+        ));
+    }
+    if let Some(value) = obj.get("level") {
+        parts.push(format!(
+            "level: {}",
+            summarize_inline_value(value, 40, false)
+        ));
+    }
     if let Some(value) = obj.get("file_id") {
         parts.push(format!(
             "file_id: {}",
@@ -2247,6 +2281,46 @@ fn render_thinking(
     lines
 }
 
+fn render_hidden_thinking_activity(
+    width: u16,
+    duration_secs: Option<f32>,
+    low_motion: bool,
+) -> Vec<Line<'static>> {
+    let state = ThinkingVisualState::Live;
+    let rail_style = Style::default().fg(thinking_state_accent(state));
+    let body_style = thinking_style().italic();
+    let content_width = width.saturating_sub(3).max(1) as usize;
+
+    let mut header_spans = vec![
+        Span::styled(
+            format!("{REASONING_OPENER} "),
+            Style::default().fg(thinking_state_accent(state)),
+        ),
+        Span::styled("thinking", thinking_title_style()),
+        Span::styled(" ", Style::default()),
+        Span::styled(thinking_status_label(state), thinking_status_style(state)),
+    ];
+    if let Some(dur) = duration_secs {
+        header_spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
+        header_spans.push(Span::styled(format!("{dur:.1}s"), thinking_meta_style()));
+    }
+
+    let mut body =
+        truncate_line_to_width("reasoning hidden; model is still working", content_width);
+    if !low_motion {
+        body.push(' ');
+        body.push_str(REASONING_CURSOR);
+    }
+
+    vec![
+        Line::from(header_spans),
+        Line::from(vec![
+            Span::styled(REASONING_RAIL.to_string(), rail_style),
+            Span::styled(body, body_style),
+        ]),
+    ]
+}
+
 fn render_message(
     prefix: &str,
     label_style: Style,
@@ -2267,6 +2341,15 @@ fn render_message_with_copy_metadata(
     content: &str,
     width: u16,
 ) -> Vec<RenderedTranscriptLine> {
+    // An assistant cell whose content is entirely whitespace (e.g. a stray
+    // newline streamed between reasoning and a tool call) would otherwise
+    // render as a bare, orphaned role glyph floating on its own line — the
+    // "blue dots with nothing after them" artifact. Render nothing so the
+    // transcript doesn't accumulate empty markers. Real prose, including
+    // messages that merely start with blank lines, still renders normally.
+    if prefix == ASSISTANT_GLYPH && content.trim().is_empty() {
+        return Vec::new();
+    }
     let prefix_width = UnicodeWidthStr::width(prefix);
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
@@ -3880,6 +3963,56 @@ mod tests {
     }
 
     #[test]
+    fn render_hidden_streaming_thinking_shows_activity_without_content() {
+        let cell = HistoryCell::Thinking {
+            content: "private chain of thought that must not be shown".to_string(),
+            streaming: true,
+            duration_secs: None,
+        };
+
+        let lines = cell.lines_with_options(
+            80,
+            TranscriptRenderOptions {
+                show_thinking: false,
+                low_motion: true,
+                ..TranscriptRenderOptions::default()
+            },
+        );
+        let text = lines_text(&lines);
+
+        assert!(
+            text.contains("reasoning hidden"),
+            "hidden live thinking should still show progress: {text}"
+        );
+        assert!(
+            !text.contains("private chain of thought"),
+            "hidden live thinking must not reveal content: {text}"
+        );
+    }
+
+    #[test]
+    fn render_hidden_completed_thinking_stays_hidden() {
+        let cell = HistoryCell::Thinking {
+            content: "completed hidden reasoning".to_string(),
+            streaming: false,
+            duration_secs: Some(1.0),
+        };
+
+        let lines = cell.lines_with_options(
+            80,
+            TranscriptRenderOptions {
+                show_thinking: false,
+                ..TranscriptRenderOptions::default()
+            },
+        );
+
+        assert!(
+            lines.is_empty(),
+            "completed hidden thinking should stay out of the transcript"
+        );
+    }
+
+    #[test]
     fn render_thinking_streaming_truncated_shows_continues_affordance() {
         // #861 RC4: when a streaming thinking block exceeds the line cap,
         // surface a live affordance pointing at Ctrl+O. The earlier code
@@ -4058,6 +4191,38 @@ mod tests {
         );
         assert!(visible.contains("ready"));
         assert_ne!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+    }
+
+    #[test]
+    fn whitespace_only_assistant_cell_renders_nothing() {
+        // Regression: a stray newline/space streamed between reasoning and a
+        // tool call produced a whitespace-only Assistant cell that rendered as
+        // a bare, orphaned role glyph — the "blue dot with nothing after it"
+        // artifact. It must collapse to zero lines instead.
+        for content in ["", "   ", "\n", "\n\n", " \t \n"] {
+            for streaming in [false, true] {
+                let cell = HistoryCell::Assistant {
+                    content: content.to_string(),
+                    streaming,
+                };
+                assert!(
+                    cell.lines(80).is_empty(),
+                    "whitespace-only assistant content {content:?} (streaming={streaming}) \
+                     must render no lines",
+                );
+            }
+        }
+
+        // Sanity: real prose still renders the role glyph as its first span.
+        let cell = HistoryCell::Assistant {
+            content: "hi".to_string(),
+            streaming: false,
+        };
+        assert_eq!(
+            cell.lines(80)[0].spans[0].content.as_ref(),
+            ASSISTANT_GLYPH,
+            "non-empty assistant content must still render the role glyph",
+        );
     }
 
     #[test]
@@ -4790,6 +4955,73 @@ mod tests {
         }));
         let text = lines_text(&cell.lines(80));
         assert!(text.contains("query: foo"));
+    }
+
+    #[test]
+    fn known_generic_tool_hides_raw_name_in_live_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "run_verifiers".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("profile: auto, level: quick".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.lines(80));
+        assert!(text.contains("verify running"), "{text}");
+        assert!(text.contains("profile: auto"), "{text}");
+        assert!(
+            !text.contains("name: run_verifiers"),
+            "live card should not spend a row on internal tool id: {text}"
+        );
+        assert!(
+            !text.contains("run_verifiers"),
+            "known tool id should not leak into compact live card: {text}"
+        );
+    }
+
+    #[test]
+    fn known_generic_tool_keeps_raw_name_in_transcript_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "run_verifiers".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("profile: auto, level: quick".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.transcript_lines(80));
+        assert!(text.contains("verify running"), "{text}");
+        assert!(
+            text.contains("name: run_verifiers"),
+            "transcript replay should preserve exact tool id: {text}"
+        );
+    }
+
+    #[test]
+    fn unknown_generic_tool_keeps_raw_name_in_live_mode() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "future_private_tool".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("query: foo".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let text = lines_text(&cell.lines(80));
+        assert!(
+            text.contains("name: future_private_tool"),
+            "unknown tools should remain identifiable: {text}"
+        );
     }
 
     #[test]

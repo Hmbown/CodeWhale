@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::utils::{flush_and_sync, open_append};
 
-/// Append an audit event to `~/.deepseek/audit.log`.
+/// Append an audit event to `~/.codewhale/audit.log`.
 ///
 /// This helper is best-effort by design: callers should not fail critical flows
 /// if audit persistence fails.

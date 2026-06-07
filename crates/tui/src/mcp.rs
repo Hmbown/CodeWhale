@@ -196,6 +196,22 @@ async fn bounded_body_excerpt(response: reqwest::Response, max_bytes: usize) -> 
     format!("{}{}", redact_body_preview(&one_line), suffix)
 }
 
+fn invalid_json_preview(bytes: &[u8]) -> String {
+    let body_text = String::from_utf8_lossy(bytes);
+    if body_text.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let trimmed: String = body_text.chars().take(ERROR_BODY_PREVIEW_BYTES).collect();
+    let suffix = if body_text.chars().count() > ERROR_BODY_PREVIEW_BYTES {
+        "…"
+    } else {
+        ""
+    };
+    let one_line = trimmed.replace(['\n', '\r'], " ");
+    format!("{}{}", redact_body_preview(&one_line), suffix)
+}
+
 // === Configuration Types ===
 
 /// Full MCP configuration from mcp.json
@@ -1097,10 +1113,19 @@ fn is_mcp_stale_session_body(body: &str) -> bool {
 
 fn is_mcp_stale_session_error(err: &anyhow::Error) -> bool {
     let err = format!("{err:#}");
+    let lower_err = err.to_ascii_lowercase();
     err.contains("MCP Streamable HTTP session expired")
         || err.contains("MCP session expired")
         || err.contains("SSE transport closed")
+        || (err.contains("MCP SSE POST send failed") && is_connection_closed_error_text(&lower_err))
         || is_mcp_stale_session_body(&err)
+}
+
+fn is_connection_closed_error_text(err: &str) -> bool {
+    err.contains("connection closed")
+        || err.contains("connection reset")
+        || err.contains("broken pipe")
+        || err.contains("unexpected eof")
 }
 
 fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
@@ -1189,7 +1214,13 @@ impl McpTransport for SseTransport {
         )
         .body(msg)
         .send()
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "MCP SSE POST send failed (transport=sse endpoint={})",
+                mask_url_secrets(endpoint)
+            )
+        })?;
         let status = response.status();
         if !status.is_success() {
             let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
@@ -1824,7 +1855,11 @@ impl McpConnection {
                 self.state = ConnectionState::Disconnected;
             })?;
             let value: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| {
-                format!("Invalid MCP JSON-RPC message from server '{}'", self.name)
+                format!(
+                    "Invalid MCP JSON-RPC message from server '{}': {}",
+                    self.name,
+                    invalid_json_preview(&bytes)
+                )
             })?;
 
             // Check if this is a response with the expected id. We emit
@@ -3380,6 +3415,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_method_invalid_json_includes_server_output_preview() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([b"Allow Burp MCP connection? [y/N]".to_vec()]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+
+        let err = conn
+            .call_method("tools/call", serde_json::json!({"name": "burp"}), 1)
+            .await
+            .expect_err("non-json MCP stdout should fail");
+        let msg = err.to_string();
+
+        assert!(msg.contains("Invalid MCP JSON-RPC message from server 'mock'"));
+        assert!(msg.contains("Allow Burp MCP connection"));
+    }
+
+    #[tokio::test]
     async fn call_method_times_out_while_waiting_for_response() {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let mut conn = test_connection(Box::new(HangingValueTransport {
@@ -3617,6 +3671,25 @@ mod tests {
         assert!(
             is_mcp_stale_session_error(&err),
             "closed SSE stream should force reconnect before retry"
+        );
+    }
+
+    #[test]
+    fn legacy_sse_post_disconnect_is_retryable() {
+        let err = anyhow::anyhow!(
+            "MCP SSE POST send failed (transport=sse endpoint=http://127.0.0.1:123/messages): connection closed before message completed"
+        );
+        assert!(
+            is_mcp_stale_session_error(&err),
+            "closed legacy SSE POST should force reconnect before retry"
+        );
+
+        let err = anyhow::anyhow!(
+            "MCP SSE POST send failed (transport=sse endpoint=http://127.0.0.1:123/messages): connection reset by peer"
+        );
+        assert!(
+            is_mcp_stale_session_error(&err),
+            "reset legacy SSE POST should force reconnect before retry"
         );
     }
 
@@ -3971,6 +4044,26 @@ mod tests {
         assert!(
             redacted.contains("other=val"),
             "non-secret preserved: {redacted}"
+        );
+    }
+
+    #[test]
+    fn invalid_json_preview_collapses_lines_and_redacts_secrets() {
+        let preview = invalid_json_preview(
+            b"Authorization: Bearer PLACEHOLDER_TOKEN\nAllow connection? api_key=PLACEHOLDER_KEY",
+        );
+
+        assert!(
+            preview.contains("Authorization: Bearer *** Allow connection? api_key=***"),
+            "preview: {preview}"
+        );
+        assert!(
+            !preview.contains('\n'),
+            "preview should be single-line: {preview}"
+        );
+        assert!(
+            !preview.contains("PLACEHOLDER_TOKEN") && !preview.contains("PLACEHOLDER_KEY"),
+            "secret leaked: {preview}"
         );
     }
 
@@ -4460,6 +4553,12 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        async fn write_response(socket: &mut tokio::net::TcpStream, response: &[u8]) {
+            socket.write_all(response).await.unwrap();
+            socket.flush().await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+
         let _lock = lock_mcp_loopback_tests().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -4521,7 +4620,7 @@ mod tests {
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nMcp-Session-Id: {session}\r\nContent-Length: 0\r\n\r\n"
                         );
-                        socket.write_all(response.as_bytes()).await.unwrap();
+                        write_response(&mut socket, response.as_bytes()).await;
                         return;
                     }
 
@@ -4537,12 +4636,11 @@ mod tests {
 
                     if method == "tools/call" && session_header.as_deref() == Some("sess-old") {
                         stale_seen.store(true, AtomicOrdering::SeqCst);
-                        socket
-                            .write_all(
-                                b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
-                            )
-                            .await
-                            .unwrap();
+                        write_response(
+                            &mut socket,
+                            b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
+                        )
+                        .await;
                         return;
                     }
 
@@ -4567,10 +4665,11 @@ mod tests {
                             serde_json::json!({ "content": [{ "type": "text", "text": "ok" }] })
                         }
                         _ => {
-                            socket
-                                .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
-                                .await
-                                .unwrap();
+                            write_response(
+                                &mut socket,
+                                b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n",
+                            )
+                            .await;
                             return;
                         }
                     };
@@ -4585,7 +4684,7 @@ mod tests {
                         response_body.len(),
                         response_body
                     );
-                    socket.write_all(response.as_bytes()).await.unwrap();
+                    write_response(&mut socket, response.as_bytes()).await;
                 });
             }
         });
@@ -4837,7 +4936,24 @@ mod tests {
                         "result": result
                     })
                     .to_string();
-                    if let Some(tx) = active_sse.lock().unwrap().as_ref() {
+                    // Deliver the response over the *current* SSE channel. The
+                    // retry tool call can race ahead of the reconnecting GET
+                    // /sse that re-stores the sender; under parallel load those
+                    // two server tasks are scheduled in either order, so wait
+                    // briefly for the channel instead of dropping the response
+                    // (which left the client hanging until timeout) (#2597).
+                    let send_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    let tx = loop {
+                        if let Some(tx) = active_sse.lock().unwrap().as_ref().cloned() {
+                            break Some(tx);
+                        }
+                        if std::time::Instant::now() >= send_deadline {
+                            break None;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    };
+                    if let Some(tx) = tx {
                         let _ = tx.send(Some(response));
                     }
                 });

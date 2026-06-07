@@ -72,7 +72,9 @@ pub(crate) fn concise_shell_command_label(command: &str, max_width: usize) -> St
 }
 
 fn normalize_shell_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut cleaned = String::with_capacity(text.len());
+    crate::tui::osc8::strip_ansi_into(text, &mut cleaned);
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn actionable_shell_segment(command: &str) -> Option<String> {
@@ -283,5 +285,15 @@ mod tests {
     fn concise_shell_command_label_falls_back_to_actionable_segment() {
         let label = concise_shell_command_label("cd /tmp/repo && cargo test --workspace", 80);
         assert_eq!(label, "cargo test --workspace");
+    }
+
+    #[test]
+    fn concise_shell_command_label_strips_ansi_before_collapsing_text() {
+        let label = concise_shell_command_label(
+            "cd /repo && \x1b[38;2;6;174;242mcargo test\x1b[0m --workspace",
+            80,
+        );
+        assert_eq!(label, "cargo test --workspace");
+        assert!(!label.contains("38;2"));
     }
 }

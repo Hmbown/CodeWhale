@@ -522,6 +522,72 @@ fn entry_match_score(entry: &CommandPaletteEntry, terms: &[&str]) -> Option<usiz
     Some(total_score)
 }
 
+/// Number of rendered rows the entry loop consumes for the window
+/// `sections[start..end]`: one row per entry, plus one section-label row each
+/// time the section changes, plus a separator blank before every section group
+/// after the first.
+fn rendered_entry_rows(sections: &[PaletteSection], start: usize, end: usize) -> usize {
+    let end = end.min(sections.len());
+    if start >= end {
+        return 0;
+    }
+    let mut rows = 0usize;
+    let mut active: Option<PaletteSection> = None;
+    for (slot, sec) in sections[start..end].iter().enumerate() {
+        if active != Some(*sec) {
+            if slot > 0 {
+                rows += 1; // separator blank
+            }
+            rows += 1; // section label
+            active = Some(*sec);
+        }
+        rows += 1; // the entry itself
+    }
+    rows
+}
+
+/// Compute the `[start, end)` window of filtered entries to render so that the
+/// selected entry is always visible and the rendered rows — entries plus the
+/// per-section labels and separators inserted between them — fit within
+/// `available` rows.
+///
+/// The previous logic sized the window purely by entry count (`popup_height -
+/// 7`) while the same fixed-height area also held the header, section labels,
+/// and separators. Those uncounted rows pushed the selection past the bottom
+/// clip line, so it vanished and the list appeared frozen until the index
+/// finally exceeded the (overlarge) entry budget (#2590).
+fn visible_entry_window(
+    sections: &[PaletteSection],
+    selected: usize,
+    available: usize,
+) -> (usize, usize) {
+    let total = sections.len();
+    if total == 0 || available == 0 {
+        return (0, 0);
+    }
+    let selected = selected.min(total - 1);
+    // Always include the selected row, then greedily grow downward and upward
+    // while the fully-rendered window still fits. Growth only ever adds rows,
+    // so the greedy expansion terminates at the largest fitting window.
+    let mut start = selected;
+    let mut end = selected + 1;
+    loop {
+        let mut progressed = false;
+        if end < total && rendered_entry_rows(sections, start, end + 1) <= available {
+            end += 1;
+            progressed = true;
+        }
+        if start > 0 && rendered_entry_rows(sections, start - 1, end) <= available {
+            start -= 1;
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    (start, end)
+}
+
 impl CommandPaletteView {
     pub fn new(entries: Vec<CommandPaletteEntry>) -> Self {
         let mut view = Self {
@@ -728,7 +794,14 @@ impl ModalView for CommandPaletteView {
         lines.extend(Self::scope_examples());
         lines.push(Line::from(""));
 
-        let visible = popup_height.saturating_sub(7) as usize;
+        // Rows the bordered popup can show for the list, minus the header that
+        // was already pushed above. The entry loop additionally emits section
+        // labels and separators, so the scroll window is sized against the real
+        // rendered cost rather than a flat entry count (#2590).
+        let header_lines = lines.len();
+        let available = (popup_height as usize)
+            .saturating_sub(2) // top + bottom border
+            .saturating_sub(header_lines);
         let mut action_count = 0usize;
         let mut command_count = 0usize;
         let mut skill_count = 0usize;
@@ -750,8 +823,12 @@ impl ModalView for CommandPaletteView {
             )));
         } else {
             let label_width = 24.min(popup_width.saturating_sub(26) as usize);
-            let start = self.selected.saturating_sub(visible.saturating_sub(1));
-            let end = (start + visible).min(self.filtered.len());
+            let sections: Vec<PaletteSection> = self
+                .filtered
+                .iter()
+                .map(|idx| self.entries[*idx].section)
+                .collect();
+            let (start, end) = visible_entry_window(&sections, self.selected, available);
             let mut active_section = None;
             for (slot, idx) in self.filtered[start..end].iter().enumerate() {
                 let absolute = start + slot;
@@ -824,6 +901,64 @@ mod tests {
     use super::*;
     use std::path::Path;
     use tempfile::TempDir;
+
+    #[test]
+    fn visible_window_keeps_selection_in_view_and_fits() {
+        // Single large section, small budget: every selection must stay visible
+        // and the rendered window must fit the available rows (#2590).
+        let sections = vec![PaletteSection::Command; 30];
+        let available = 10;
+        for selected in 0..sections.len() {
+            let (start, end) = visible_entry_window(&sections, selected, available);
+            assert!(
+                start <= selected && selected < end,
+                "selected {selected} must lie within [{start}, {end})"
+            );
+            assert!(
+                rendered_entry_rows(&sections, start, end) <= available,
+                "window [{start}, {end}) must fit within {available} rows"
+            );
+        }
+    }
+
+    #[test]
+    fn visible_window_scrolls_as_selection_advances() {
+        let sections = vec![PaletteSection::Command; 30];
+        let available = 8;
+        let (start_near, _) = visible_entry_window(&sections, 0, available);
+        assert_eq!(start_near, 0);
+        // A far-down selection must advance the window start — the old code
+        // left it pinned at 0 so the selection scrolled off-screen.
+        let (start_far, end_far) = visible_entry_window(&sections, 25, available);
+        assert!(start_far > 0, "window should scroll for a far selection");
+        assert!(start_far <= 25 && 25 < end_far);
+    }
+
+    #[test]
+    fn visible_window_accounts_for_section_overhead() {
+        // Each entry is its own section, so each costs a label (plus a
+        // separator after the first) on top of the entry row. Far fewer than
+        // `available` entries fit, and the window must still respect the budget.
+        let sections = vec![
+            PaletteSection::Action,
+            PaletteSection::Command,
+            PaletteSection::Skill,
+            PaletteSection::Tool,
+            PaletteSection::Mcp,
+        ];
+        let available = 6;
+        let (start, end) = visible_entry_window(&sections, 0, available);
+        assert_eq!(start, 0);
+        assert!(end >= 1, "at least the selected entry must render");
+        assert!(rendered_entry_rows(&sections, start, end) <= available);
+    }
+
+    #[test]
+    fn visible_window_handles_empty_and_zero_budget() {
+        assert_eq!(visible_entry_window(&[], 0, 10), (0, 0));
+        let sections = vec![PaletteSection::Command; 5];
+        assert_eq!(visible_entry_window(&sections, 2, 0), (0, 0));
+    }
 
     fn palette_entry(
         section: PaletteSection,

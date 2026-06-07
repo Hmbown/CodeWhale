@@ -1,7 +1,9 @@
-# Pro Plan Mode
+# Pro Plan Profile
 
-Pro Plan is a model-routing mode that keeps planning and review on the
-stronger model while using the faster model for the implementation pass:
+Pro Plan is an explicit `/mode pro-plan` routing profile, not part of the
+default `Tab` mode cycle or `/mode` picker. The user chooses the profile; then
+CodeWhale chooses the model route for each phase. Planning and review stay on
+the stronger model while implementation uses the faster model when available:
 
 - Plan phase: use `deepseek-v4-pro` with the existing Plan mode prompt and
   read-only tool policy.
@@ -58,7 +60,9 @@ Normal Pro Plan turns are resolved before dispatch:
 - `Plan`, `Review`, and `Done` use `AppMode::Plan`.
 - `Execute` uses `AppMode::Agent`.
 - `Execute` after "Accept plan (YOLO)" uses `AppMode::Yolo` for that Pro Plan
-  execution pipeline, but the visible mode stays Pro Plan so review still runs.
+  execution pass, but the visible mode stays Pro Plan so review still runs. If
+  review requests follow-up changes, the next Execute pass returns to
+  Agent-style approvals unless the user explicitly accepts with YOLO again.
 
 After `Done`, the next user turn resets the router to a fresh Plan phase.
 

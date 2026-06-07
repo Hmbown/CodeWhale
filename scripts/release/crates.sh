@@ -3,6 +3,7 @@
 # Crates published for each codewhale release, in dependency order.
 release_crates=(
   codewhale-secrets
+  codewhale-release
   codewhale-config
   codewhale-protocol
   codewhale-state

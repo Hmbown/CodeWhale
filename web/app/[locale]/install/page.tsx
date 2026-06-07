@@ -9,12 +9,13 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   return {
     title: isZh ? "安装 · CodeWhale" : "Install · CodeWhale",
     description: isZh
-      ? "通过 Cargo 安装 codewhale-cli。其他方式：npm、Homebrew、预编译二进制、Docker、国内镜像。"
-      : "Install codewhale-cli via Cargo. Other ways: npm, Homebrew, prebuilt binary, Docker, source.",
+      ? "安装 CodeWhale 的 codewhale / codewhale-tui 二进制对。其他方式：npm、Homebrew、预编译二进制、Docker、国内镜像。"
+      : "Install the matched codewhale / codewhale-tui binary pair. Other ways: npm, Homebrew, prebuilt binary, Docker, source.",
   };
 }
 
-const CARGO_INSTALL = `cargo install codewhale-cli --locked`;
+const CARGO_INSTALL = `cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked`;
 const FIRST_RUN = `codewhale`;
 const VERIFY = `codewhale --version
 codewhale doctor`;
@@ -32,22 +33,20 @@ replace-with = "tuna"
 
 [source.tuna]
 registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`;
-const TUNA_INSTALL = `cargo install codewhale-cli --locked`;
+const TUNA_INSTALL = `cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked`;
 const NPMMIRROR = `npm config set registry https://registry.npmmirror.com
 npm install -g codewhale`;
 
 const BREW = `brew tap Hmbown/deepseek-tui
 brew install deepseek-tui`;
 
-const DOCKER = `git clone https://github.com/Hmbown/CodeWhale
-cd codewhale
-docker build -t codewhale .
-
+const DOCKER = `docker volume create codewhale-home
 docker run --rm -it \\
   -e DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY \\
-  -v ~/.deepseek:/home/codewhale/.deepseek \\
-  -v "$PWD:/work" -w /work \\
-  codewhale`;
+  -v codewhale-home:/home/codewhale/.codewhale \\
+  -v "$PWD:/workspace" -w /workspace \\
+  ghcr.io/hmbown/codewhale:latest`;
 
 const FROM_SOURCE = `git clone https://github.com/Hmbown/CodeWhale
 cd codewhale
@@ -57,7 +56,7 @@ cargo build --release --locked
 cargo install --path crates/cli --locked   # codewhale
 cargo install --path crates/tui --locked   # codewhale-tui`;
 
-const CONFIG_TREE = `~/.deepseek/
+const CONFIG_TREE = `~/.codewhale/
 ├── config.toml      api keys, model, hooks, profiles
 ├── mcp.json         MCP server definitions
 ├── skills/          user skills (each with SKILL.md)
@@ -65,9 +64,9 @@ const CONFIG_TREE = `~/.deepseek/
 ├── tasks/           background task store
 └── audit.log        credential / approval / elevation audit trail
 
-./.deepseek/         project-scoped config (optional, per-repo)`;
+./.codewhale/        project-scoped config (optional, per-repo)`;
 
-const CONFIG_TREE_ZH = `~/.deepseek/
+const CONFIG_TREE_ZH = `~/.codewhale/
 ├── config.toml      API 密钥、模型、钩子、配置集
 ├── mcp.json         MCP 服务器定义
 ├── skills/          用户技能（每个含 SKILL.md）
@@ -75,7 +74,7 @@ const CONFIG_TREE_ZH = `~/.deepseek/
 ├── tasks/           后台任务存储
 └── audit.log        凭证 / 审批 / 提权审计日志
 
-./.deepseek/         项目级配置（可选，每个仓库）`;
+./.codewhale/        项目级配置（可选，每个仓库）`;
 
 export default async function InstallPage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
@@ -108,14 +107,15 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              编译并安装 <code className="inline">codewhale</code> 到 <code className="inline">~/.cargo/bin</code>。
+              编译并安装 <code className="inline">codewhale</code> 和 <code className="inline">codewhale-tui</code> 到 <code className="inline">~/.cargo/bin</code>。
               需要 Rust 1.88+——如未安装可访问{" "}
               <a href="https://rustup.rs" className="body-link">rustup.rs</a>。
               下方「其他安装方式」列出了不用 Rust 工具链、国内镜像、Homebrew、预编译二进制等替代选项。
             </>
           ) : (
             <>
-              Compiles and installs <code className="inline">codewhale</code> to{" "}
+              Compiles and installs <code className="inline">codewhale</code> and{" "}
+              <code className="inline">codewhale-tui</code> to{" "}
               <code className="inline">~/.cargo/bin</code>. Requires Rust 1.88+ — install via{" "}
               <a href="https://rustup.rs" className="body-link">rustup.rs</a> if you don&apos;t have it.
               See <a href="#other-ways" className="body-link">Other ways to install</a> below for
@@ -139,13 +139,13 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
             <>
               <code className="inline">codewhale doctor</code> 检查 API 密钥、网络、沙箱可用性、
               MCP 服务器，并将完整报告写入{" "}
-              <code className="inline">~/.deepseek/doctor.log</code>。
+              <code className="inline">~/.codewhale/doctor.log</code>。
             </>
           ) : (
             <>
               <code className="inline">codewhale doctor</code> checks your API key, network,
               sandbox availability, and MCP servers. Full report is written to{" "}
-              <code className="inline">~/.deepseek/doctor.log</code>.
+              <code className="inline">~/.codewhale/doctor.log</code>.
             </>
           )}
         </p>
@@ -167,16 +167,15 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
               通过 Homebrew 或 npm 安装的话，使用包管理器升级更稳：
               <code className="inline">brew upgrade deepseek-tui</code> 或{" "}
               <code className="inline">npm update -g codewhale</code>。
-              Cargo 安装的可以重跑{" "}
-              <code className="inline">cargo install codewhale-cli --locked --force</code>。
+              Cargo 安装的可以重跑两个 <code className="inline">cargo install</code> 命令并加 <code className="inline">--force</code>。
             </>
           ) : (
             <>
               Checks GitHub Releases for a newer version and replaces the binary in place. If you
               installed via Homebrew or npm, prefer the package manager instead:{" "}
               <code className="inline">brew upgrade deepseek-tui</code> or{" "}
-              <code className="inline">npm update -g codewhale</code>. Cargo users can re-run{" "}
-              <code className="inline">cargo install codewhale-cli --locked --force</code>.
+              <code className="inline">npm update -g codewhale</code>. Cargo users can re-run both{" "}
+              <code className="inline">cargo install</code> commands with <code className="inline">--force</code>.
             </>
           )}
         </p>
@@ -222,7 +221,7 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
             <div className="space-y-2">
               <InstallCodeBlock cmd={SET_KEY_BASH} copyLabel={copyLabel} copiedLabel={copiedLabel} />
               <p className="text-xs text-ink-mute">
-                {isZh ? "或保存到 ~/.deepseek/config.toml：" : "Or persist it to ~/.deepseek/config.toml:"}
+                {isZh ? "或保存到 ~/.codewhale/config.toml：" : "Or persist it to ~/.codewhale/config.toml:"}
               </p>
               <InstallCodeBlock cmd={SET_KEY_AUTH} copyLabel={copyLabel} copiedLabel={copiedLabel} />
             </div>
@@ -265,8 +264,8 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
           </h2>
           <p className="text-sm text-ink-soft max-w-2xl mb-10">
             {isZh
-              ? "如果上面的 Cargo 路径不适合你，从下面找到匹配你情况的一条。每条都安装同一个 codewhale 二进制。"
-              : "If the Cargo path above doesn't fit your setup, pick the row that matches your situation. Every path installs the same codewhale binary."}
+              ? "如果上面的 Cargo 路径不适合你，从下面找到匹配你情况的一条。每条都安装同一组 codewhale / codewhale-tui 二进制。"
+              : "If the Cargo path above doesn't fit your setup, pick the row that matches your situation. Every path installs the same codewhale / codewhale-tui binary pair."}
           </p>
 
           <div className="space-y-10">
@@ -372,8 +371,8 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
               <InstallCodeBlock cmd={DOCKER} copyLabel={copyLabel} copiedLabel={copiedLabel} />
               <p className="mt-3 text-sm text-ink-soft leading-relaxed max-w-2xl">
                 {isZh
-                  ? "支持 multi-arch buildx。目前没有发布到镜像仓库，需要本地构建。"
-                  : "Multi-arch buildx is supported. No image is published to a registry yet, so you build locally."}
+                  ? "发布镜像位于 GHCR。需要固定版本时，把 latest 替换成具体的发布标签。"
+                  : "The release image is published to GHCR. Replace latest with a release tag when you need a pinned version."}
               </p>
             </div>
 
@@ -403,16 +402,17 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              项目级 <code className="inline">./.deepseek/</code> 目录是可选的——每个仓库可有独立的 MCP 服务器、钩子、
+              项目级 <code className="inline">./.codewhale/</code> 目录是可选的——每个仓库可有独立的 MCP 服务器、钩子、
               技能和配置覆盖（例如提供商密钥）。
-              首次运行时，如果缺少配置文件，系统会询问是否交互式创建。
+              首次运行时，如果缺少配置文件，系统会询问是否交互式创建。旧版 <code className="inline">~/.deepseek</code> 和 <code className="inline">./.deepseek</code> 路径仍会作为兼容回退读取。
             </>
           ) : (
             <>
-              The project-scoped <code className="inline">./.deepseek/</code> directory is optional —
+              The project-scoped <code className="inline">./.codewhale/</code> directory is optional —
               each repo can carry its own MCP servers, hooks, skills, and config overrides (e.g.
               provider keys). On first run the app asks whether to interactively create a config
-              file if one is missing.
+              file if one is missing. Legacy <code className="inline">~/.deepseek</code> and{" "}
+              <code className="inline">./.deepseek</code> paths are still read as compatibility fallbacks.
             </>
           )}
         </p>

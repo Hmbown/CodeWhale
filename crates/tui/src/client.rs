@@ -8,14 +8,16 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::config::{ApiProvider, Config, RetryPolicy};
+use crate::config::{ApiProvider, Config, RetryPolicy, wire_model_for_provider};
 use crate::llm_client::{
-    LlmClient, LlmError, RetryConfig as LlmRetryConfig, extract_retry_after, with_retry,
+    LlmClient, LlmError, RetryConfig as LlmRetryConfig, extract_retry_after,
+    sanitize_http_error_body, with_retry,
 };
 use crate::logging;
 use crate::models::{MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage};
@@ -119,6 +121,31 @@ pub struct AvailableModel {
     pub created: Option<u64>,
 }
 
+/// Request payload for Xiaomi MiMo speech synthesis models.
+///
+/// MiMo-V2.5-TTS / MiMo-V2-TTS use the OpenAI-compatible
+/// `/v1/chat/completions` endpoint: the optional style/voice instruction is
+/// sent as a `user` message, while the text to synthesize is sent as an
+/// `assistant` message.
+#[derive(Debug, Clone)]
+pub struct SpeechSynthesisRequest {
+    pub model: String,
+    pub text: String,
+    pub instruction: Option<String>,
+    pub audio_format: String,
+    pub voice: Option<String>,
+}
+
+/// Decoded speech synthesis result.
+#[derive(Debug, Clone)]
+pub struct SpeechSynthesisResponse {
+    pub model: String,
+    pub audio_format: String,
+    pub audio_bytes: Vec<u8>,
+    pub transcript: Option<String>,
+    pub voice: Option<String>,
+}
+
 /// Client for DeepSeek's OpenAI-compatible APIs.
 #[must_use]
 pub struct DeepSeekClient {
@@ -130,6 +157,7 @@ pub struct DeepSeekClient {
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
+    path_suffix: Option<String>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -296,6 +324,7 @@ impl Clone for DeepSeekClient {
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            path_suffix: self.path_suffix.clone(),
         }
     }
 }
@@ -391,9 +420,20 @@ fn is_version_segment(segment: &str) -> bool {
 }
 
 pub(super) fn api_url(base_url: &str, path: &str) -> String {
+    api_url_with_suffix(base_url, path, None)
+}
+
+pub(super) fn api_url_with_suffix(base_url: &str, path: &str, path_suffix: Option<&str>) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
+    }
+    if let ("chat/completions", Some(suffix)) = (path, path_suffix) {
+        return format!(
+            "{}/{}",
+            unversioned_base_url(base_url),
+            suffix.trim_start_matches('/')
+        );
     }
     let mut versioned = versioned_base_url(base_url);
     // The /beta suffix is not a real API version — it is an
@@ -405,6 +445,74 @@ pub(super) fn api_url(base_url: &str, path: &str) -> String {
         versioned = format!("{}/v1", unversioned_base_url(base_url));
     }
     format!("{}/{}", versioned.trim_end_matches('/'), path)
+}
+
+fn normalize_audio_format(format: &str) -> String {
+    let normalized = format.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        "wav".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn parse_speech_audio_response(payload: &Value) -> Result<(Vec<u8>, Option<String>)> {
+    let audio = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("audio"))
+                .or_else(|| choice.get("delta").and_then(|delta| delta.get("audio")))
+        })
+        .or_else(|| payload.get("audio"))
+        .context("Speech synthesis response did not include choices[0].message.audio")?;
+
+    let data = audio
+        .get("data")
+        .and_then(Value::as_str)
+        .context("Speech synthesis response did not include audio.data")?
+        .trim();
+    let data = data
+        .split_once(',')
+        .map(|(_, base64)| base64.trim())
+        .unwrap_or(data);
+    let audio_bytes = general_purpose::STANDARD
+        .decode(data)
+        .context("Failed to decode speech audio base64 data")?;
+    let transcript = audio
+        .get("transcript")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    Ok((audio_bytes, transcript))
+}
+
+fn build_speech_synthesis_body(
+    model: &str,
+    text: &str,
+    instruction: Option<&str>,
+    audio: Value,
+) -> Value {
+    let mut messages = Vec::new();
+    if let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) {
+        messages.push(json!({
+            "role": "user",
+            "content": instruction,
+        }));
+    }
+    messages.push(json!({
+        "role": "assistant",
+        "content": text,
+    }));
+
+    json!({
+        "model": model,
+        "messages": messages,
+        "audio": audio,
+    })
 }
 
 // === DeepSeekClient ===
@@ -474,9 +582,15 @@ impl DeepSeekClient {
         let retry = config.retry_policy();
         let default_model = config.default_model();
         let http_headers = config.http_headers();
+        let path_suffix = config
+            .provider_config_for(api_provider)
+            .and_then(|p| p.path_suffix.clone());
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!("API base URL: {base_url}"));
+        if let Some(suffix) = &path_suffix {
+            logging::info(format!("API path suffix override: {suffix}"));
+        }
         if !http_headers.is_empty() {
             logging::info(format!(
                 "{} custom HTTP header(s) configured",
@@ -499,6 +613,7 @@ impl DeepSeekClient {
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
+            path_suffix,
         })
     }
 
@@ -573,6 +688,13 @@ impl DeepSeekClient {
         &self.base_url
     }
 
+    /// Returns the active API provider for this client. Used by the turn loop
+    /// to apply provider-specific request policies (e.g. Arcee's reduced
+    /// first-turn tool surface that clears the Cloudflare WAF).
+    pub fn api_provider(&self) -> ApiProvider {
+        self.api_provider
+    }
+
     /// Translate text to the requested target language using a focused
     /// non-streaming chat completion call on the supplied model.
     ///
@@ -585,7 +707,12 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url_with_suffix(
+            &self.base_url,
+            "chat/completions",
+            self.path_suffix.as_deref(),
+        );
+        let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
@@ -636,12 +763,107 @@ impl DeepSeekClient {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("Failed to list models: HTTP {status}: {error_text}");
         }
         let response_text = response.text().await.unwrap_or_default();
 
         parse_models_response(&response_text)
+    }
+
+    /// Generate speech with Xiaomi MiMo TTS models.
+    ///
+    /// The spoken text is placed in an `assistant` message because Xiaomi
+    /// MiMo's TTS chat-completions surface expects that shape. The optional
+    /// `instruction` is a `user` message that controls style, voice design, or
+    /// voice-clone performance and is not spoken verbatim.
+    pub async fn synthesize_speech(
+        &self,
+        request: SpeechSynthesisRequest,
+    ) -> Result<SpeechSynthesisResponse> {
+        if self.api_provider != crate::config::ApiProvider::XiaomiMimo {
+            anyhow::bail!(
+                "speech synthesis requires provider 'xiaomi-mimo' (current: {})",
+                self.api_provider.as_str()
+            );
+        }
+
+        let model = request.model.trim().to_string();
+        if model.is_empty() {
+            anyhow::bail!("Speech model cannot be empty");
+        }
+        let text = request.text.trim().to_string();
+        if text.is_empty() {
+            anyhow::bail!("Speech text cannot be empty");
+        }
+
+        let audio_format = normalize_audio_format(&request.audio_format);
+        let model = wire_model_for_provider(self.api_provider, &model);
+        let model_lower = model.to_ascii_lowercase();
+        let instruction = request
+            .instruction
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let voice = request
+            .voice
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if model_lower.contains("voicedesign") && instruction.is_none() {
+            anyhow::bail!(
+                "Model '{model}' requires a voice design prompt. Pass --voice-prompt or --instruction."
+            );
+        }
+        if model_lower.contains("voiceclone") && voice.is_none() {
+            anyhow::bail!(
+                "Model '{model}' requires cloned voice data. Pass --clone-voice <mp3|wav> or --voice <data-uri>."
+            );
+        }
+
+        let mut audio = json!({
+            "format": audio_format.clone(),
+        });
+        if let Some(voice) = voice.as_deref() {
+            audio["voice"] = json!(voice);
+        }
+
+        let body = build_speech_synthesis_body(&model, &text, instruction, audio);
+
+        let url = api_url(&self.base_url, "chat/completions");
+        let response = self
+            .send_with_retry(|| self.http_client.post(&url).json(&body))
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
+            anyhow::bail!("Speech synthesis failed: HTTP {status}: {error_text}");
+        }
+
+        let response_text = response.text().await.unwrap_or_default();
+        let payload: Value = serde_json::from_str(&response_text)
+            .context("Failed to parse speech synthesis response JSON")?;
+        let (audio_bytes, transcript) = parse_speech_audio_response(&payload)?;
+
+        Ok(SpeechSynthesisResponse {
+            model,
+            audio_format,
+            audio_bytes,
+            transcript,
+            voice,
+        })
     }
 
     async fn wait_for_rate_limit(&self) {
@@ -717,6 +939,11 @@ impl DeepSeekClient {
                     }
                     let retry_after = extract_retry_after(response.headers());
                     let body = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+                    let body = sanitize_http_error_body(
+                        Some(self.api_provider.display_name()),
+                        status.as_u16(),
+                        &body,
+                    );
                     Err(LlmError::from_http_response_with_retry_after(
                         status.as_u16(),
                         &body,
@@ -890,6 +1117,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["thinking"] = json!({ "type": "disabled" });
@@ -912,6 +1140,8 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Arcee
+            | ApiProvider::Huggingface
             | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
@@ -925,6 +1155,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("high");
@@ -944,6 +1175,15 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Arcee | ApiProvider::Huggingface => {
+                let value = match normalized.as_str() {
+                    "minimal" => "minimal",
+                    "low" => "low",
+                    "medium" | "mid" => "medium",
+                    _ => "high",
+                };
+                body["reasoning_effort"] = json!(value);
             }
             ApiProvider::Fireworks => {
                 body["reasoning_effort"] = json!("high");
@@ -977,6 +1217,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine => {
                 body["reasoning_effort"] = json!("max");
@@ -988,6 +1229,9 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Arcee | ApiProvider::Huggingface => {
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Fireworks => {
                 body["reasoning_effort"] = json!("max");
@@ -1056,7 +1300,7 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
     let prompt_cache_miss_tokens = usage
         .and_then(|u| u.get("prompt_cache_miss_tokens"))
         .and_then(Value::as_u64)
-        .or_else(|| cached_tokens.map(|cached| input_tokens.saturating_sub(cached)))
+        .or_else(|| prompt_cache_hit_tokens.map(|hit| input_tokens.saturating_sub(u64::from(hit))))
         .map(|v| v as u32);
     let reasoning_tokens = reasoning_tokens_raw.map(|v| v as u32);
 
@@ -1095,7 +1339,8 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = api_url_with_suffix(&self.base_url, "beta/completions", None);
+        let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
             "prompt": prompt,
@@ -1107,7 +1352,12 @@ impl DeepSeekClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            let error_text = sanitize_http_error_body(
+                Some(self.api_provider.display_name()),
+                status.as_u16(),
+                &raw_error_text,
+            );
             anyhow::bail!("FIM API error: HTTP {status}: {error_text}");
         }
         let response_text = response.text().await.unwrap_or_default();
@@ -1162,6 +1412,86 @@ mod tests {
             strict: Some(true),
             cache_control: None,
         }
+    }
+
+    #[test]
+    fn parse_speech_audio_response_accepts_message_audio() {
+        let encoded = general_purpose::STANDARD.encode(b"hi");
+        let payload = json!({
+            "choices": [{
+                "message": {
+                    "audio": {
+                        "data": encoded,
+                        "transcript": "hi"
+                    }
+                }
+            }]
+        });
+
+        let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
+        assert_eq!(audio, b"hi");
+        assert_eq!(transcript.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn parse_speech_audio_response_accepts_data_uri() {
+        let encoded = general_purpose::STANDARD.encode(b"wav");
+        let payload = json!({
+            "audio": {
+                "data": format!("data:audio/wav;base64,{encoded}")
+            }
+        });
+
+        let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
+        assert_eq!(audio, b"wav");
+        assert_eq!(transcript, None);
+    }
+
+    #[test]
+    fn speech_synthesis_body_omits_user_message_without_instruction() {
+        let body =
+            build_speech_synthesis_body("mimo-v2.5-tts", "hello", None, json!({"format": "wav"}));
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "hello");
+        assert!(
+            messages
+                .iter()
+                .all(|message| message["content"].as_str() != Some(""))
+        );
+    }
+
+    #[test]
+    fn speech_synthesis_body_ignores_blank_instruction() {
+        let body = build_speech_synthesis_body(
+            "mimo-v2.5-tts",
+            "hello",
+            Some("  \t\n  "),
+            json!({"format": "wav"}),
+        );
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+    }
+
+    #[test]
+    fn speech_synthesis_body_includes_non_empty_instruction_first() {
+        let body = build_speech_synthesis_body(
+            "mimo-v2.5-tts-voicedesign",
+            "hello",
+            Some("warm and calm"),
+            json!({"format": "wav"}),
+        );
+        let messages = body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "warm and calm");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "hello");
     }
 
     #[test]
@@ -2041,6 +2371,30 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_uses_arcee_reasoning_effort_without_thinking_object() {
+        for (input, expected) in [
+            ("minimal", "minimal"),
+            ("low", "low"),
+            ("mid", "medium"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("max", "high"),
+        ] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(input), ApiProvider::Arcee);
+
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                Some(expected)
+            );
+            assert!(
+                body.get("thinking").is_none(),
+                "Arcee documents reasoning_effort rather than a DeepSeek thinking object"
+            );
+        }
+    }
+
+    #[test]
     fn reasoning_effort_maps_openrouter_scale_without_deepseek_max_label() {
         for (input, expected) in [
             ("low", "low"),
@@ -2750,6 +3104,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_usage_infers_cache_miss_from_selected_hit_source() {
+        let usage = parse_usage(Some(&json!({
+            "prompt_tokens": 4000,
+            "completion_tokens": 20,
+            "prompt_cache_hit_tokens": 3000,
+            "prompt_tokens_details": {
+                "cached_tokens": 1000
+            }
+        })));
+
+        assert_eq!(usage.input_tokens, 4000);
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
+    }
+
+    #[test]
     fn sanitize_thinking_mode_counts_reasoning_replay_across_assistant_turns() {
         // Multi-turn body that mimics two prior tool-calling rounds: each
         // assistant message carries its `reasoning_content`. The sanitizer
@@ -3115,8 +3485,72 @@ mod tests {
             unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
             assert!(
                 !force_http1_from_env(),
-                "{value:?} should NOT be parsed as truthy",
+                "{value:?} should NOT be parsed as truthy"
             );
         }
+    }
+
+    #[test]
+    fn api_url_with_suffix_strips_version_before_chat_suffix() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/beta",
+                "chat/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_handles_leading_slash() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "chat/completions",
+                Some("chat/completions")
+            ),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_ignores_suffix_for_models() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "models",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_ignores_suffix_for_beta_paths() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.example.com/v1",
+                "beta/completions",
+                Some("/chat/completions")
+            ),
+            "https://api.example.com/beta/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_default_behavior_without_suffix() {
+        assert_eq!(
+            api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
     }
 }

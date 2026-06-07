@@ -38,6 +38,7 @@ impl EngineHandle {
             Ok(token) => token.cancel(),
             Err(poisoned) => poisoned.into_inner().cancel(),
         }
+        crate::retry_status::clear();
     }
 
     /// Check if a request is currently cancelled

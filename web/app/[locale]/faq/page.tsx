@@ -39,6 +39,7 @@ npm install -g codewhale
 
 # Cargo (needs Rust 1.88+)
 cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked
 
 # Homebrew (macOS)
 brew tap Hmbown/deepseek-tui && brew install deepseek-tui
@@ -47,7 +48,7 @@ brew tap Hmbown/deepseek-tui && brew install deepseek-tui
 # https://github.com/Hmbown/CodeWhale/releases`}
         </pre>
         <p>
-          Run <code className="inline">codewhale</code> to start. First run creates <code className="inline">~/.deepseek/</code> automatically.
+          Run <code className="inline">codewhale</code> to start. First run creates <code className="inline">~/.codewhale/</code> automatically. Legacy <code className="inline">~/.deepseek/</code> is still read as a compatibility fallback.
           See the <Link href="/install" className="body-link">full install guide</Link> for China mirrors, Docker, and troubleshooting.
         </p>
       </>
@@ -72,7 +73,7 @@ brew tap Hmbown/deepseek-tui && brew install deepseek-tui
       <>
         Yes. CodeWhale is the new name for what was previously called DeepSeek TUI.
         The canonical command is now <code className="inline">codewhale</code>. Legacy <code className="inline">deepseek</code> and <code className="inline">deepseek-tui</code> commands remain as compatibility shims — they still work.
-        Config lives at <code className="inline">~/.deepseek/</code>. <code className="inline">DEEPSEEK_*</code> env vars continue to work.
+        Config lives at <code className="inline">~/.codewhale/</code>. Legacy <code className="inline">~/.deepseek/</code> config is still read as a compatibility fallback, and <code className="inline">DEEPSEEK_*</code> env vars continue to work.
         DeepSeek is not deprecated. The rename reflects CodeWhale's broader mission as the agentic terminal for open models across providers, not a narrowing away from DeepSeek.
       </>
     ),
@@ -90,7 +91,7 @@ export DEEPSEEK_API_KEY=sk-...
 codewhale auth set --provider deepseek --api-key sk-...
 
 # Method 3: config.toml
-# Add to ~/.deepseek/config.toml:
+# Add to ~/.codewhale/config.toml:
 api_key = "sk-..."
 
 # Check what's active:
@@ -113,11 +114,11 @@ codewhale doctor         # full connectivity check`}
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft mb-3">
           <li><strong>DeepSeek</strong> — first-class, native API. Reasoning streaming, cache metrics, thinking effort control.</li>
           <li><strong>OpenRouter</strong> — unified API for DeepSeek models and more.</li>
-          <li><strong>OpenAI</strong>, <strong>NVIDIA NIM</strong>, <strong>Novita</strong>, <strong>Fireworks</strong>, <strong>sglang</strong>, <strong>vLLM</strong>, <strong>Ollama</strong></li>
+          <li><strong>OpenAI</strong>, <strong>NVIDIA NIM</strong>, <strong>Volcengine Ark</strong>, <strong>Xiaomi MiMo</strong>, <strong>SiliconFlow</strong>, <strong>Novita</strong>, <strong>Fireworks</strong>, <strong>sglang</strong>, <strong>vLLM</strong>, <strong>Ollama</strong></li>
         </ul>
         <p>
-          Set the corresponding env var (e.g. <code className="inline">OPENROUTER_API_KEY</code>) and your provider in <code className="inline">~/.deepseek/config.toml</code>.
-          Hugging Face, ZenMux, and self-hosted OpenAI-compatible endpoints are on the roadmap.
+          Set the corresponding env var (e.g. <code className="inline">OPENROUTER_API_KEY</code>) and your provider in <code className="inline">~/.codewhale/config.toml</code>.
+          Self-hosted OpenAI-compatible endpoints are supported through the provider config.
         </p>
       </>
     ),
@@ -131,7 +132,7 @@ codewhale doctor         # full connectivity check`}
 {`# 1. Set your OpenRouter key
 export OPENROUTER_API_KEY=sk-or-v1-...
 
-# 2. In ~/.deepseek/config.toml:
+# 2. In ~/.codewhale/config.toml:
 [providers.openrouter]
 api_key = "sk-or-v1-..."
 
@@ -213,7 +214,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
         CodeWhale runs entirely on your machine. No telemetry, no cloud processing of your code.
         Sandbox backends: <strong>seatbelt</strong> (macOS), <strong>landlock</strong> (Linux), restricted tokens (Windows).
         Workspace boundaries default to <code className="inline">--workspace</code>. <code className="inline">/trust</code> lifts them.
-        Approval mode is configurable per session. All credential/approval/elevation events are written to <code className="inline">~/.deepseek/audit.log</code>.
+        Approval mode is configurable per session. All credential/approval/elevation events are written to <code className="inline">~/.codewhale/audit.log</code>.
       </>
     ),
     sources: ["SECURITY.md", "docs/ARCHITECTURE.md"],
@@ -222,7 +223,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
     q: "How do MCP servers work?",
     a: (
       <>
-        CodeWhale is a bidirectional MCP client and server. Define servers in <code className="inline">~/.deepseek/mcp.json</code>.
+        CodeWhale is a bidirectional MCP client and server. Define servers in <code className="inline">~/.codewhale/mcp.json</code>.
         Tools appear as <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code>. You can also expose CodeWhale as an MCP server with <code className="inline">codewhale mcp</code>.
         See the <Link href="/docs#mcp" className="body-link">docs page</Link> for configuration examples.
       </>
@@ -269,7 +270,7 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
     q: "My API key was rejected or I get auth errors on first run.",
     a: (
       <>
-        <p className="mb-2">Run <code className="inline">codewhale doctor</code> — it checks API key, network, sandbox, and MCP servers. Full report is written to <code className="inline">~/.deepseek/doctor.log</code>.</p>
+        <p className="mb-2">Run <code className="inline">codewhale doctor</code> — it checks API key, network, sandbox, and MCP servers. Full report is written to <code className="inline">~/.codewhale/doctor.log</code>.</p>
         <p className="mb-2">Common causes:</p>
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft">
           <li>Stale <code className="inline">DEEPSEEK_API_KEY</code> in shell startup file — open a fresh shell or use <code className="inline">codewhale auth set</code></li>
@@ -352,6 +353,7 @@ npm install -g codewhale
 
 # Cargo（需要 Rust 1.88+）
 cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked
 
 # Homebrew（macOS）
 brew tap Hmbown/deepseek-tui && brew install deepseek-tui
@@ -360,7 +362,7 @@ brew tap Hmbown/deepseek-tui && brew install deepseek-tui
 # https://github.com/Hmbown/CodeWhale/releases`}
         </pre>
         <p>
-          输入 <code className="inline">codewhale</code> 即可启动。首次运行会自动创建 <code className="inline">~/.deepseek/</code>。
+          输入 <code className="inline">codewhale</code> 即可启动。首次运行会自动创建 <code className="inline">~/.codewhale/</code>。旧版 <code className="inline">~/.deepseek/</code> 仍会作为兼容回退读取。
           查看 <Link href="/zh/install" className="body-link">完整安装指南</Link> 了解国内镜像、Docker 和故障排除。
         </p>
       </>
@@ -384,7 +386,7 @@ brew tap Hmbown/deepseek-tui && brew install deepseek-tui
     a: (
       <>
         CodeWhale 是 DeepSeek TUI 的新名称。当前的主命令是 <code className="inline">codewhale</code>。旧的 <code className="inline">deepseek</code> 和 <code className="inline">deepseek-tui</code> 命令作为兼容垫片继续有效。
-        配置仍然存放在 <code className="inline">~/.deepseek/</code>。<code className="inline">DEEPSEEK_*</code> 环境变量继续有效。
+        配置存放在 <code className="inline">~/.codewhale/</code>。旧版 <code className="inline">~/.deepseek/</code> 配置仍会作为兼容回退读取，<code className="inline">DEEPSEEK_*</code> 环境变量继续有效。
         DeepSeek 并未被弃用。改名是为了体现 CodeWhale 更广泛的使命——成为面向所有提供商的开放模型智能体终端，而非弱化 DeepSeek 的地位。
       </>
     ),
@@ -402,7 +404,7 @@ export DEEPSEEK_API_KEY=sk-...
 codewhale auth set --provider deepseek --api-key sk-...
 
 # 方法 3：config.toml
-# 在 ~/.deepseek/config.toml 中添加：
+# 在 ~/.codewhale/config.toml 中添加：
 api_key = "sk-..."
 
 # 查看当前状态：
@@ -425,11 +427,11 @@ codewhale doctor         # 完整连接检查`}
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft mb-3">
           <li><strong>DeepSeek</strong> — 一级支持，原生 API。推理流、缓存指标、思考力度控制。</li>
           <li><strong>OpenRouter</strong> — 统一 API，可访问 DeepSeek 等模型。</li>
-          <li><strong>OpenAI</strong>、<strong>NVIDIA NIM</strong>、<strong>Novita</strong>、<strong>Fireworks</strong>、<strong>sglang</strong>、<strong>vLLM</strong>、<strong>Ollama</strong></li>
+          <li><strong>OpenAI</strong>、<strong>NVIDIA NIM</strong>、<strong>Volcengine Ark</strong>、<strong>Xiaomi MiMo</strong>、<strong>SiliconFlow</strong>、<strong>Novita</strong>、<strong>Fireworks</strong>、<strong>sglang</strong>、<strong>vLLM</strong>、<strong>Ollama</strong></li>
         </ul>
         <p>
-          设置对应的环境变量（如 <code className="inline">OPENROUTER_API_KEY</code>）并在 <code className="inline">~/.deepseek/config.toml</code> 中配置你的提供商。
-          Hugging Face、ZenMux 和自托管 OpenAI 兼容端点正在路线图中。
+          设置对应的环境变量（如 <code className="inline">OPENROUTER_API_KEY</code>）并在 <code className="inline">~/.codewhale/config.toml</code> 中配置你的提供商。
+          自托管 OpenAI 兼容端点可通过 provider 配置接入。
         </p>
       </>
     ),
@@ -443,7 +445,7 @@ codewhale doctor         # 完整连接检查`}
 {`# 1. 设置 OpenRouter 密钥
 export OPENROUTER_API_KEY=sk-or-v1-...
 
-# 2. 在 ~/.deepseek/config.toml 中：
+# 2. 在 ~/.codewhale/config.toml 中：
 [providers.openrouter]
 api_key = "sk-or-v1-..."
 
@@ -525,7 +527,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
         CodeWhale 完全在你的机器上运行。无遥测，不会将你的代码上传到云端处理。
         沙箱后端：<strong>seatbelt</strong>（macOS）、<strong>landlock</strong>（Linux）、受限令牌（Windows）。
         工作区边界默认为 <code className="inline">--workspace</code>。<code className="inline">/trust</code> 可解除边界。
-        审批模式可按会话配置。所有凭证/审批/提权事件写入 <code className="inline">~/.deepseek/audit.log</code>。
+        审批模式可按会话配置。所有凭证/审批/提权事件写入 <code className="inline">~/.codewhale/audit.log</code>。
       </>
     ),
     sources: ["SECURITY.md", "docs/ARCHITECTURE.md"],
@@ -534,7 +536,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
     q: "MCP 服务器如何工作？",
     a: (
       <>
-        CodeWhale 是双向 MCP 客户端和服务器。在 <code className="inline">~/.deepseek/mcp.json</code> 中定义服务器。
+        CodeWhale 是双向 MCP 客户端和服务器。在 <code className="inline">~/.codewhale/mcp.json</code> 中定义服务器。
         工具以 <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code> 形式呈现。你也可以通过 <code className="inline">codewhale mcp</code> 将 CodeWhale 暴露为 MCP 服务器。
         查看 <Link href="/zh/docs#mcp" className="body-link">文档页面</Link> 了解配置示例。
       </>
@@ -581,7 +583,7 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
     q: "首次运行时提示 API 密钥被拒绝或认证错误？",
     a: (
       <>
-        <p className="mb-2">运行 <code className="inline">codewhale doctor</code>——它会检查 API 密钥、网络、沙箱和 MCP 服务器。完整报告写入 <code className="inline">~/.deepseek/doctor.log</code>。</p>
+        <p className="mb-2">运行 <code className="inline">codewhale doctor</code>——它会检查 API 密钥、网络、沙箱和 MCP 服务器。完整报告写入 <code className="inline">~/.codewhale/doctor.log</code>。</p>
         <p className="mb-2">常见原因：</p>
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft">
           <li>Shell 启动文件中的 <code className="inline">DEEPSEEK_API_KEY</code> 已过期——打开新 Shell 或使用 <code className="inline">codewhale auth set</code></li>

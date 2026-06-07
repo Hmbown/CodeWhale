@@ -25,6 +25,8 @@ use crate::tui::ui::{
     open_details_pager_for_cell, open_pager_for_selection,
 };
 
+const COMPOSER_MOUSE_SCROLL_LINES: usize = 3;
+
 pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> bool {
     if !app.is_loading {
         return false;
@@ -35,6 +37,47 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
         MouseEventKind::Drag(_) => {
             !app.viewport.transcript_selection.dragging
                 && !app.viewport.transcript_scrollbar_dragging
+        }
+        _ => false,
+    }
+}
+
+/// Handle mouse events on the sidebar resize handle (the 1-col vertical bar
+/// between the chat area and the sidebar). Returns true when the event was
+/// consumed so other handlers skip it.
+fn handle_sidebar_resize_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let Some(handle) = app.last_sidebar_handle_area else {
+        return false;
+    };
+
+    let hit = mouse.column == handle.x
+        && mouse.row >= handle.y
+        && mouse.row < handle.y.saturating_add(handle.height);
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if hit => {
+            app.sidebar_resizing = true;
+            app.sidebar_resize_anchor_x = mouse.column;
+            app.sidebar_resize_anchor_width = app.last_sidebar_area.map(|a| a.width).unwrap_or(28);
+            app.needs_redraw = true;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.sidebar_resizing => {
+            let delta = app.sidebar_resize_anchor_x as i32 - mouse.column as i32;
+            let new_width = (app.sidebar_resize_anchor_width as i32 + delta).max(24) as u16;
+            let total = app.sidebar_resize_total_width.max(1);
+            let new_pct = ((new_width as u32 * 100) / total as u32).clamp(10, 50) as u16;
+            if new_pct != app.sidebar_width_percent {
+                app.sidebar_width_percent = new_pct;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.sidebar_resizing => {
+            app.sidebar_resizing = false;
+            app.sidebar_width_dirty = true;
+            app.needs_redraw = true;
+            true
         }
         _ => false,
     }
@@ -79,6 +122,68 @@ fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, inner: Rect) -> Option
     Some(line_start + char_offset)
 }
 
+fn composer_wrapped_cursor_row_col(
+    input: &str,
+    cursor: usize,
+    wrapped: &[(usize, String)],
+) -> (usize, usize) {
+    let total = input.chars().count();
+    let cursor = cursor.min(total);
+
+    for (idx, (line_start, line_text)) in wrapped.iter().enumerate() {
+        let next_start = wrapped
+            .get(idx + 1)
+            .map(|(start, _)| *start)
+            .unwrap_or_else(|| total.saturating_add(1));
+
+        if cursor >= *line_start && cursor < next_start {
+            let line_len = line_text.chars().count();
+            return (idx, cursor.saturating_sub(*line_start).min(line_len));
+        }
+    }
+
+    let row = wrapped.len().saturating_sub(1);
+    let col = wrapped
+        .get(row)
+        .map(|(_, line_text)| line_text.chars().count())
+        .unwrap_or(0);
+    (row, col)
+}
+
+fn move_composer_cursor_by_wrapped_rows(app: &mut App, inner: Rect, rows: isize) {
+    if app.input.is_empty() || rows == 0 {
+        return;
+    }
+
+    let width = inner.width.max(1) as usize;
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+    if wrapped.len() <= 1 {
+        return;
+    }
+
+    let (current_row, current_col) =
+        composer_wrapped_cursor_row_col(&app.input, app.cursor_position, &wrapped);
+    let max_row = wrapped.len().saturating_sub(1);
+    let target_row = if rows.is_negative() {
+        current_row.saturating_sub(rows.unsigned_abs())
+    } else {
+        current_row.saturating_add(rows as usize).min(max_row)
+    };
+
+    if target_row == current_row {
+        return;
+    }
+
+    let (target_start, target_text) = &wrapped[target_row];
+    let target_len = target_text.chars().count();
+    let total = app.input.chars().count();
+    app.clear_selection();
+    app.cursor_position = target_start
+        .saturating_add(current_col.min(target_len))
+        .min(total);
+    app.needs_redraw = true;
+}
+
 /// Handle mouse events within the composer area.
 /// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
@@ -97,6 +202,18 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     let inner = app.viewport.last_composer_content.unwrap_or(area);
 
     match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            move_composer_cursor_by_wrapped_rows(
+                app,
+                inner,
+                -(COMPOSER_MOUSE_SCROLL_LINES as isize),
+            );
+            true
+        }
+        MouseEventKind::ScrollDown => {
+            move_composer_cursor_by_wrapped_rows(app, inner, COMPOSER_MOUSE_SCROLL_LINES as isize);
+            true
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, inner) {
                 app.cursor_position = pos;
@@ -140,8 +257,30 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         return app.view_stack.handle_mouse(mouse);
     }
 
+    // Sidebar resize handle — check before composer so it doesn't compete
+    // with text selection / scrolling.
+    if handle_sidebar_resize_mouse(app, mouse) {
+        return Vec::new();
+    }
+
     // Composer mouse events take priority over transcript.
     if handle_composer_mouse(app, mouse) {
+        return Vec::new();
+    }
+
+    // Scroll events while the cursor is over the right-hand sidebar must not
+    // drive the transcript scroll. The sidebar is a fixed dashboard with no
+    // scroll state of its own, so consume the wheel event instead of leaking
+    // it into the transcript viewport behind it.
+    if matches!(
+        mouse.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && app.viewport.last_sidebar_area.is_some_and(|area| {
+        mouse.column >= area.x
+            && mouse.column < area.x.saturating_add(area.width)
+            && mouse.row >= area.y
+            && mouse.row < area.y.saturating_add(area.height)
+    }) {
         return Vec::new();
     }
 
@@ -150,7 +289,11 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             // Update last mouse position for tooltip rendering.
             app.last_mouse_pos = Some((mouse.column, mouse.row));
 
-            // Check sidebar sections for hover tooltip.
+            // Check sidebar sections for hover tooltip. Only surface a tooltip
+            // when the hovered line was actually truncated to fit the panel
+            // width — otherwise it just paints a redundant copy of
+            // already-visible text over the neighbouring row, which reads as
+            // visual corruption.
             let mut found = false;
             for section in &app.sidebar_hover.sections {
                 if mouse.column >= section.content_area.x
@@ -167,10 +310,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                             .saturating_add(section.content_area.height)
                 {
                     let line_idx = (mouse.row.saturating_sub(section.content_area.y)) as usize;
-                    if line_idx < section.lines.len() {
-                        let new_tooltip = section.lines[line_idx].clone();
-                        if app.sidebar_hover_tooltip.as_deref() != Some(&new_tooltip) {
-                            app.sidebar_hover_tooltip = Some(new_tooltip);
+                    if let Some(full) = section.lines.get(line_idx) {
+                        let truncated = UnicodeWidthStr::width(full.as_str())
+                            > section.content_area.width as usize;
+                        let desired = truncated.then(|| full.clone());
+                        if app.sidebar_hover_tooltip != desired {
+                            app.sidebar_hover_tooltip = desired;
                             app.needs_redraw = true;
                         }
                         found = true;
@@ -448,6 +593,14 @@ pub(crate) fn open_context_menu(app: &mut App, mouse: MouseEvent) {
 pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEntry> {
     let mut entries = Vec::new();
 
+    // Paste first — the most common action when right-clicking in the
+    // composer after copying text from the output area.
+    entries.push(ContextMenuEntry {
+        label: app.tr(MessageId::CtxMenuPaste).to_string(),
+        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
+        action: ContextMenuAction::Paste,
+    });
+
     if selection_has_content(app) {
         entries.push(ContextMenuEntry {
             label: app.tr(MessageId::CtxMenuCopySelection).to_string(),
@@ -521,11 +674,6 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
-    entries.push(ContextMenuEntry {
-        label: app.tr(MessageId::CtxMenuPaste).to_string(),
-        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
-        action: ContextMenuAction::Paste,
-    });
     entries.push(ContextMenuEntry {
         label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
         description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),

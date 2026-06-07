@@ -86,10 +86,11 @@ The model can spell each role multiple ways:
 |---------------|------------------------------------------------------------------|
 | `general`     | `worker`, `default`, `general-purpose`                           |
 | `explore`     | `explorer`, `exploration`                                        |
-| `plan`        | `planning`, `awaiter`                                            |
-| `review`      | `reviewer`, `code-review`                                        |
+| `plan`        | `planning`, `planner`, `awaiter`                                 |
+| `review`      | `reviewer`, `code-review`, `code_review`                         |
 | `implementer` | `implement`, `implementation`, `builder`                         |
 | `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
+| `tool_agent`  | `tool-agent`, `toolagent`, `executor`, `execution`, `fin`        |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
 All matching is case-insensitive. Unknown values produce a typed
@@ -99,7 +100,7 @@ the next turn.
 ## Concurrency cap
 
 The dispatcher caps concurrent sub-agents at 10 by default
-(configurable via `[subagents].max_concurrent` in `~/.deepseek/config.toml`,
+(configurable via `[subagents].max_concurrent` in `~/.codewhale/config.toml`,
 hard ceiling 20). When the parent hits the cap, `agent_open` returns
 an error with the cap value; the parent should use `agent_eval` to wait for a
 running agent to complete, or `agent_close` to cancel a running agent, before
@@ -117,7 +118,7 @@ per-step timeout so a single stuck request can't pin the parent's
 completion wakeup channel indefinitely. The default is `120` seconds,
 which matches the legacy hardcoded value. Long-thinking children that
 legitimately exceed that, for example heavy plan or review work behind
-`agent_open`, can extend the timeout in `~/.deepseek/config.toml`:
+`agent_open`, can extend the timeout in `~/.codewhale/config.toml`:
 
 ```toml
 [subagents]
@@ -126,6 +127,22 @@ api_timeout_secs = 900  # 15 minutes; clamped to 1..=1800
 
 Values are clamped to `1..=1800`. `0` and `unset` keep the legacy
 `120` second default, so existing installs see no behavior change.
+
+## Stale-agent heartbeat (#2614)
+
+Running agents also track manager-visible progress. If a child stops emitting
+progress for the heartbeat window, the manager auto-cancels it, releases its
+sub-agent slot, and keeps the cancelled record inspectable via `agent_eval` /
+`agent_list`. The default is 5 minutes:
+
+```toml
+[subagents]
+heartbeat_timeout_secs = 300  # clamped to 30..=3600
+```
+
+The effective heartbeat is kept at least 30 seconds above
+`api_timeout_secs`, so a configured long model request is not cancelled before
+its own request timeout can fire.
 
 ## Lifecycle
 
@@ -137,7 +154,7 @@ Pending → Running → (Completed | Failed(reason) | Cancelled | Interrupted(re
 
 `Interrupted` fires when the manager detects a `Running` agent whose task
 handle is gone — typically after a process restart that loaded the workspace's
-persisted state from `.deepseek/state/subagents.v1.json`. The parent can open a
+persisted state from `.codewhale/state/subagents.v1.json`. The parent can open a
 replacement session with the same assignment or treat it as a terminal state.
 
 ### Session boundaries (#405)
@@ -185,7 +202,7 @@ don't go through the standard write-approval flow.
 ## Implementation notes
 
 - Source: `crates/tui/src/tools/subagent/mod.rs`.
-- Persisted state: `<workspace>/.deepseek/state/subagents.v1.json`. Schema
+- Persisted state: `<workspace>/.codewhale/state/subagents.v1.json`. Schema
   version `1` (forward-compatible — new optional fields use
   `#[serde(default)]`).
 - `SubAgentRuntime::background_runtime()` starts from `child_runtime()` but
