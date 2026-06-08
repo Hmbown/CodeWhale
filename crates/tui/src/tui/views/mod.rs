@@ -2207,7 +2207,7 @@ fn pad_to_display_width(text: &str, width: usize) -> String {
         text.to_string()
     } else {
         let mut s = text.to_string();
-        s.extend(std::iter::repeat(' ').take(width - text_width));
+        s.extend(std::iter::repeat_n(' ', width - text_width));
         s
     }
 }
