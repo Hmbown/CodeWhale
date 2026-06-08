@@ -4367,7 +4367,8 @@ async fn run_event_loop(
                                         .filter(|s| !s.trim().is_empty())
                                 })
                                 .unwrap_or_else(|| "vi".to_string());
-                            app.status_message = Some(format!("{}{editor}{}", tr(app.ui_locale, MessageId::StatusEditedIn), tr(app.ui_locale, MessageId::StatusEditedInSuffix)));
+                            let template = tr(app.ui_locale, MessageId::StatusEditedIn);
+                            app.status_message = Some(template.replace("{editor}", &editor));
                         }
                         Ok(super::external_editor::EditorOutcome::Unchanged) => {
                             app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorClosedNoChanges).to_string());
@@ -5208,8 +5209,9 @@ fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
     };
     app.queue_message(queued);
     app.status_message = Some(format!(
-        "{} 个已排队 — ↑ 编辑, /queue list",
-        app.queued_message_count()
+        "{}{}",
+        app.queued_message_count(),
+        tr(app.ui_locale, MessageId::StatusQueuedCountHint)
     ));
     true
 }
@@ -6922,8 +6924,10 @@ async fn submit_or_steer_message(
             let count = app.queued_message_count().saturating_add(1);
             app.queue_message(message);
             if app.offline_mode {
-                app.status_message =
-                    Some(format!("离线: {count} 个已排队 — ↑ 编辑, /queue list"));
+                app.status_message = Some(format!(
+                    "Offline: {count}{}",
+                    tr(app.ui_locale, MessageId::StatusQueuedCountHint)
+                ));
             } else {
                 app.status_message = Some(format!("{count}{}", tr(app.ui_locale, MessageId::StatusQueuedCountHint)));
             }
@@ -6935,8 +6939,9 @@ async fn submit_or_steer_message(
             if let Err(err) = steer_user_message(app, engine_handle, message.clone()).await {
                 app.queue_message(message);
                 app.status_message = Some(format!(
-                    "引导失败 ({err}); {} 个已排队 — ↑ 编辑, /queue list",
-                    app.queued_message_count()
+                    "Steer failed ({err}); {}{}",
+                    app.queued_message_count(),
+                    tr(app.ui_locale, MessageId::StatusQueuedCountHint)
                 ));
             } else {
                 app.push_status_toast(
@@ -7708,13 +7713,14 @@ async fn handle_view_events(
                 open_text_pager(app, title, content);
             }
             ViewEvent::CopyToClipboard { text, label } => {
-                if text.is_empty() {
-                    app.status_message = Some(format!("{label}{}", tr(app.ui_locale, MessageId::StatusLabelEmpty)));
+                let template = if text.is_empty() {
+                    tr(app.ui_locale, MessageId::StatusLabelEmpty)
                 } else if app.clipboard.write_text(&text).is_ok() {
-                    app.status_message = Some(format!("{}{label}", tr(app.ui_locale, MessageId::StatusCopiedLabel)));
+                    tr(app.ui_locale, MessageId::StatusCopiedLabel)
                 } else {
-                    app.status_message = Some(format!("{}{label})", tr(app.ui_locale, MessageId::StatusCopyFailedLabel)));
-                }
+                    tr(app.ui_locale, MessageId::StatusCopyFailedLabel)
+                };
+                app.status_message = Some(template.replace("{label}", &label));
             }
             ViewEvent::ApprovalDecision {
                 tool_id,
@@ -7944,7 +7950,7 @@ async fn handle_view_events(
                 insertion.push_str(&path);
                 insertion.push(' ');
                 app.insert_str(&insertion);
-                app.status_message = Some(format!("{}{path}", tr(app.ui_locale, MessageId::StatusAttachedFileAt)));
+                app.status_message = Some(format!("{}{path}", tr(app.ui_locale, MessageId::StatusFileAttached)));
             }
             ViewEvent::ModelPickerApplied {
                 model,
