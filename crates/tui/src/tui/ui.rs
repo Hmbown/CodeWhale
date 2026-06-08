@@ -4367,7 +4367,7 @@ async fn run_event_loop(
                                         .filter(|s| !s.trim().is_empty())
                                 })
                                 .unwrap_or_else(|| "vi".to_string());
-                            app.status_message = Some(format!("{}{editor} 中编辑", tr(app.ui_locale, MessageId::StatusEditedIn)));
+                            app.status_message = Some(format!("{}{editor}{}", tr(app.ui_locale, MessageId::StatusEditedIn), tr(app.ui_locale, MessageId::StatusEditedInSuffix)));
                         }
                         Ok(super::external_editor::EditorOutcome::Unchanged) => {
                             app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorClosedNoChanges).to_string());
@@ -4433,7 +4433,7 @@ async fn run_event_loop(
                                 Some(2_000),
                             );
                         } else {
-                            app.status_message = Some("没有可复制的对话单元格".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoCopyableCells).to_string());
                         }
                     } else {
                         app.yank();
@@ -4528,21 +4528,21 @@ async fn run_event_loop(
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
     app.set_sidebar_focus(SidebarFocus::Agents);
-    app.status_message = Some("侧边栏焦点: 代理".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.sidebar_focus == SidebarFocus::Hidden {
             app.set_sidebar_focus(SidebarFocus::Auto);
-            app.status_message = Some("侧边栏焦点: 自动".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
         } else {
             app.set_sidebar_focus(SidebarFocus::Hidden);
-            app.status_message = Some("侧边栏已隐藏".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarHidden).to_string());
         }
     } else {
         app.set_sidebar_focus(SidebarFocus::Auto);
-        app.status_message = Some("侧边栏焦点: 自动".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
     }
 }
 
@@ -6100,10 +6100,10 @@ async fn apply_command_result(
                 return Ok(true);
             }
             AppAction::SaveSession(path) => {
-                app.status_message = Some(format!("会话已保存到 {}", path.display()));
+                app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusSessionSavedTo), path.display()));
             }
             AppAction::LoadSession(path) => {
-                app.status_message = Some(format!("会话已从 {} 加载", path.display()));
+                app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusSessionLoadedFrom), path.display()));
             }
             AppAction::SyncSession {
                 session_id,
@@ -6173,7 +6173,7 @@ async fn apply_command_result(
                 }
             }
             AppAction::CacheWarmup => {
-                app.status_message = Some("正在预热 DeepSeek 缓存...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusWarmingCache).to_string());
                 match run_cache_warmup(app, config).await {
                     Ok((usage, base_url, inspection)) => {
                         app.session.last_base_url = Some(base_url.clone());
@@ -6205,13 +6205,13 @@ async fn apply_command_result(
                             }
                         }
                         app.add_message(HistoryCell::System { content: message });
-                        app.status_message = Some("缓存预热完成".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusCacheWarmupDone).to_string());
                     }
                     Err(error) => {
                         app.add_message(HistoryCell::System {
                             content: format!("Cache warmup failed: {error}"),
                         });
-                        app.status_message = Some("缓存预热失败".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusCacheWarmupFailed).to_string());
                     }
                 }
             }
@@ -6305,7 +6305,7 @@ async fn apply_command_result(
                                 content: format!("Failed to open browser automatically: {err}"),
                             });
                         }
-                        app.status_message = Some(format!("Web UI 监听: {url}"));
+                        app.status_message = Some(format!("{}{url}", tr(app.ui_locale, MessageId::StatusWebUiListening)));
                         *web_config_session = Some(session);
                     }
                     #[cfg(not(feature = "web"))]
@@ -6372,7 +6372,7 @@ async fn apply_command_result(
             }
             AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
                 Ok(()) => {
-                    app.status_message = Some(format!("已在浏览器中打开 {label}"));
+                    app.status_message = Some(format!("{}{label}", tr(app.ui_locale, MessageId::StatusOpenedInBrowser)));
                 }
                 Err(err) => {
                     app.add_message(HistoryCell::System {
@@ -6386,7 +6386,7 @@ async fn apply_command_result(
                 open_context_inspector(app);
             }
             AppAction::CompactContext => {
-                app.status_message = Some("正在压缩上下文...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusCompactingContext2).to_string());
                 let _ = engine_handle.send(Op::CompactContext).await;
             }
             AppAction::PurgeContext => {
@@ -6412,7 +6412,7 @@ async fn apply_command_result(
                                 summarize_tool_output(&task.prompt)
                             ),
                         });
-                        app.status_message = Some(format!("已排队 {}", task.id));
+                        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusQueuedTask), task.id));
                     }
                     Err(err) => {
                         app.add_message(HistoryCell::System {
@@ -6494,7 +6494,7 @@ async fn apply_command_result(
                                 config.api_provider().as_str()
                             ),
                         });
-                        app.status_message = Some(format!("配置文件: {profile}"));
+                        app.status_message = Some(format!("{}{profile}", tr(app.ui_locale, MessageId::StatusConfigProfile)));
                     }
                     Err(err) => {
                         app.config_profile = None;
@@ -6586,7 +6586,7 @@ async fn switch_workspace(
     }
 
     if app.workspace == workspace {
-        app.status_message = Some(format!("工作区未改变: {}", workspace.display()));
+        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusWorkspaceUnchanged), workspace.display()));
         return;
     }
 
@@ -6612,7 +6612,7 @@ async fn switch_workspace(
     app.add_message(HistoryCell::System {
         content: format!("Switched workspace to {}", workspace.display()),
     });
-    app.status_message = Some(format!("工作区: {}", workspace.display()));
+    app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusWorkspaceNow), workspace.display()));
 }
 
 async fn handle_mcp_ui_action(
@@ -6890,7 +6890,7 @@ async fn steer_user_message(
         }],
     });
 
-    app.status_message = Some("正在引导当前回合...".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSteeringTurn2).to_string());
     Ok(())
 }
 
@@ -6925,7 +6925,7 @@ async fn submit_or_steer_message(
                 app.status_message =
                     Some(format!("离线: {count} 个已排队 — ↑ 编辑, /queue list"));
             } else {
-                app.status_message = Some(format!("{count} 个已排队 — ↑ 编辑, /queue list"));
+                app.status_message = Some(format!("{count}{}", tr(app.ui_locale, MessageId::StatusQueuedCountHint)));
             }
             Ok(())
         }
@@ -7059,7 +7059,7 @@ async fn apply_plan_choice(
             let prompt = "Revise the plan: ";
             app.input = prompt.to_string();
             app.cursor_position = prompt.chars().count();
-            app.status_message = Some("请修订计划后按回车".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusRevisePlanHint).to_string());
         }
         PlanChoice::ExitPlan => {
             apply_mode_update(app, engine_handle, AppMode::Agent).await;
@@ -7661,7 +7661,7 @@ fn toggle_live_transcript_overlay(app: &mut App) {
     let mut overlay = LiveTranscriptOverlay::new();
     overlay.refresh_from_app(app);
     app.view_stack.push(overlay);
-    app.status_message = Some("实时对话: 跟踪中 (按 Esc 关闭)".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusLiveOverlayTracking).to_string());
     app.needs_redraw = true;
 }
 
@@ -7709,11 +7709,11 @@ async fn handle_view_events(
             }
             ViewEvent::CopyToClipboard { text, label } => {
                 if text.is_empty() {
-                    app.status_message = Some(format!("{label} 为空"));
+                    app.status_message = Some(format!("{label}{}", tr(app.ui_locale, MessageId::StatusLabelEmpty)));
                 } else if app.clipboard.write_text(&text).is_ok() {
-                    app.status_message = Some(format!("已复制 {label}"));
+                    app.status_message = Some(format!("{}{label}", tr(app.ui_locale, MessageId::StatusCopiedLabel)));
                 } else {
-                    app.status_message = Some(format!("复制失败 ({label})"));
+                    app.status_message = Some(format!("{}{label})", tr(app.ui_locale, MessageId::StatusCopyFailedLabel)));
                 }
             }
             ViewEvent::ApprovalDecision {
@@ -7796,7 +7796,7 @@ async fn handle_view_events(
                         && let Err(err) =
                             apply_plan_choice(app, config, engine_handle, choice).await
                     {
-                        app.status_message = Some(format!("应用计划选择失败: {err}"));
+                        app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusApplyPlanChoiceFailed)));
                     }
                 }
             }
@@ -7923,7 +7923,7 @@ async fn handle_view_events(
                 }
             }
             ViewEvent::SubAgentsRefresh => {
-                app.status_message = Some("正在刷新子代理...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRefreshingSubagents).to_string());
                 let _ = engine_handle.send(Op::ListSubAgents).await;
             }
             ViewEvent::FilePickerSelected { path } => {
@@ -7944,7 +7944,7 @@ async fn handle_view_events(
                 insertion.push_str(&path);
                 insertion.push(' ');
                 app.insert_str(&insertion);
-                app.status_message = Some(format!("已附加 @{path}"));
+                app.status_message = Some(format!("{}{path}", tr(app.ui_locale, MessageId::StatusAttachedFileAt)));
             }
             ViewEvent::ModelPickerApplied {
                 model,
@@ -8014,7 +8014,7 @@ async fn handle_view_events(
             }
             ViewEvent::BacktrackCancel => {
                 app.backtrack.reset();
-                app.status_message = Some("回退已取消".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackCancelled).to_string());
                 app.needs_redraw = true;
             }
             ViewEvent::ContextMenuSelected { action } => {
@@ -8027,7 +8027,7 @@ async fn handle_view_events(
                 app.backtrack.reset();
                 engine_handle.cancel();
                 mark_active_turn_cancelled_locally(app);
-                app.status_message = Some("请求已取消".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRequestCancelled).to_string());
             }
             ViewEvent::TabSwitch { index } => {
                 if app.tab_manager.switch_to(index) {
@@ -8255,7 +8255,7 @@ fn find_user_cell_index_from_tail(app: &App, depth: usize) -> Option<usize> {
 /// re-synced via `Op::SyncSession` so the next turn starts fresh.
 fn apply_backtrack(app: &mut App, depth: usize) {
     let Some(history_idx) = find_user_cell_index_from_tail(app, depth) else {
-        app.status_message = Some("回退目标已不存在".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackTargetGone).to_string());
         return;
     };
 
@@ -8916,32 +8916,32 @@ fn render_toast_stack_overlay(
 
 pub(crate) fn open_shell_control(app: &mut App) {
     if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("没有前台 shell 命令可控制".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoForegroundShell).to_string());
         return;
     }
 
     app.view_stack.push(ShellControlView::new());
-    app.status_message = Some("Shell 控制已打开".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellControlOpened).to_string());
 }
 
 pub(crate) fn request_foreground_shell_background(app: &mut App) {
     if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("没有可后台运行的前台 shell 命令".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoBgShell).to_string());
         return;
     }
 
     let Some(shell_manager) = app.runtime_services.shell_manager.clone() else {
-        app.status_message = Some("Shell 管理器未连接".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellManagerDisconnected).to_string());
         return;
     };
 
     match shell_manager.lock() {
         Ok(mut manager) => {
             manager.request_foreground_background();
-            app.status_message = Some("正在将当前 shell 命令放到后台...".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusBackgroundingShell).to_string());
         }
         Err(_) => {
-            app.status_message = Some("Shell 管理器锁已损坏".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellLockCorrupt).to_string());
         }
     }
 }
@@ -9245,7 +9245,7 @@ fn open_thinking_pager(app: &mut App) -> bool {
 /// surface.
 fn open_activity_detail_pager(app: &mut App) -> bool {
     let Some(idx) = activity_target_cell_index(app) else {
-        app.status_message = Some("没有可用的活动详情".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoActivityDetails).to_string());
         return true;
     };
 
@@ -9255,7 +9255,7 @@ fn open_activity_detail_pager(app: &mut App) -> bool {
         .map(|area| area.width)
         .unwrap_or(80);
     let Some(text) = activity_detail_text(app, idx, width) else {
-        app.status_message = Some("没有可用的活动详情".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoActivityDetails).to_string());
         return true;
     };
     let title = if matches!(
@@ -9780,7 +9780,7 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
     }
 
     let Some(cell) = app.cell_at_virtual_index(cell_index) else {
-        app.status_message = Some("所选行没有可用详情".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoDetailsForLine).to_string());
         return false;
     };
     let title = match cell {
@@ -9821,7 +9821,7 @@ fn copy_focused_cell(app: &mut App) -> bool {
 
 pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
     let Some(cell) = app.cell_at_virtual_index(cell_index) else {
-        app.status_message = Some("该位置没有消息".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoMessageAtPos).to_string());
         return false;
     };
     let width = app
@@ -9831,14 +9831,14 @@ pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
         .unwrap_or(80);
     let text = history_cell_to_text(cell, width);
     if text.trim().is_empty() {
-        app.status_message = Some("消息为空".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageEmpty).to_string());
         return false;
     }
     if app.clipboard.write_text(&text).is_ok() {
-        app.status_message = Some("消息已复制".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageCopied).to_string());
         true
     } else {
-        app.status_message = Some("复制失败".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageCopyFailed).to_string());
         false
     }
 }

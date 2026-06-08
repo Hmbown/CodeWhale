@@ -834,7 +834,8 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
         ContextMenuAction::ShowAllHidden => {
             let count = app.collapsed_cells.len();
             app.collapsed_cells.clear();
-            app.status_message = Some(format!("{}{count} 个隐藏单元格", tr(app.ui_locale, MessageId::StatusCellsRestored)));
+            let template = tr(app.ui_locale, MessageId::StatusCellsRestoredWithCount);
+            app.status_message = Some(template.replace("{count}", &count.to_string()));
         }
         ContextMenuAction::OpenTabPicker(kind) => {
             app.view_stack
