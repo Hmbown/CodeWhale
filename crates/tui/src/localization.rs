@@ -548,6 +548,26 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    // SubAgents — /subagents modal status panel.
+    SubAgentsTitle,
+    SubAgentsEmpty,
+    SubAgentsHeader,
+    SubAgentsEscClose,
+    SubAgentsRRefresh,
+    SubAgentsGroupRunning,
+    SubAgentsGroupCompleted,
+    SubAgentsGroupInterrupted,
+    SubAgentsGroupFailed,
+    SubAgentsGroupCancelled,
+    SubAgentsStatusRunning,
+    SubAgentsStatusCompleted,
+    SubAgentsStatusInterrupted,
+    SubAgentsStatusFailed,
+    SubAgentsStatusCancelled,
+    SubAgentsDetailReason,
+    SubAgentsDetailRole,
+    SubAgentsDetailObjective,
+    SubAgentsDetailResult,
 }
 
 #[allow(dead_code)]
@@ -870,6 +890,25 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::SubAgentsTitle,
+    MessageId::SubAgentsEmpty,
+    MessageId::SubAgentsHeader,
+    MessageId::SubAgentsEscClose,
+    MessageId::SubAgentsRRefresh,
+    MessageId::SubAgentsGroupRunning,
+    MessageId::SubAgentsGroupCompleted,
+    MessageId::SubAgentsGroupInterrupted,
+    MessageId::SubAgentsGroupFailed,
+    MessageId::SubAgentsGroupCancelled,
+    MessageId::SubAgentsStatusRunning,
+    MessageId::SubAgentsStatusCompleted,
+    MessageId::SubAgentsStatusInterrupted,
+    MessageId::SubAgentsStatusFailed,
+    MessageId::SubAgentsStatusCancelled,
+    MessageId::SubAgentsDetailReason,
+    MessageId::SubAgentsDetailRole,
+    MessageId::SubAgentsDetailObjective,
+    MessageId::SubAgentsDetailResult,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1503,6 +1542,25 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::SubAgentsTitle => " Sub-agents ",
+        MessageId::SubAgentsEmpty => "No agents running.",
+        MessageId::SubAgentsHeader => "Sub-agents",
+        MessageId::SubAgentsEscClose => " Esc to close ",
+        MessageId::SubAgentsRRefresh => " R to refresh ",
+        MessageId::SubAgentsGroupRunning => "Running",
+        MessageId::SubAgentsGroupCompleted => "Completed",
+        MessageId::SubAgentsGroupInterrupted => "Interrupted",
+        MessageId::SubAgentsGroupFailed => "Failed",
+        MessageId::SubAgentsGroupCancelled => "Cancelled",
+        MessageId::SubAgentsStatusRunning => "running",
+        MessageId::SubAgentsStatusCompleted => "completed",
+        MessageId::SubAgentsStatusInterrupted => "interrupted",
+        MessageId::SubAgentsStatusFailed => "failed",
+        MessageId::SubAgentsStatusCancelled => "cancelled",
+        MessageId::SubAgentsDetailReason => "reason: ",
+        MessageId::SubAgentsDetailRole => "role: ",
+        MessageId::SubAgentsDetailObjective => "objective: ",
+        MessageId::SubAgentsDetailResult => "result: ",
     }
 }
 
@@ -2001,6 +2059,25 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+        MessageId::SubAgentsTitle => " Tiểu đại lý ",
+        MessageId::SubAgentsEmpty => "Không có tiểu đại lý nào đang chạy.",
+        MessageId::SubAgentsHeader => "Tiểu đại lý",
+        MessageId::SubAgentsEscClose => " Esc đóng ",
+        MessageId::SubAgentsRRefresh => " R làm mới ",
+        MessageId::SubAgentsGroupRunning => "Đang chạy",
+        MessageId::SubAgentsGroupCompleted => "Hoàn thành",
+        MessageId::SubAgentsGroupInterrupted => "Gián đoạn",
+        MessageId::SubAgentsGroupFailed => "Thất bại",
+        MessageId::SubAgentsGroupCancelled => "Đã huỷ",
+        MessageId::SubAgentsStatusRunning => "đang chạy",
+        MessageId::SubAgentsStatusCompleted => "hoàn thành",
+        MessageId::SubAgentsStatusInterrupted => "gián đoạn",
+        MessageId::SubAgentsStatusFailed => "thất bại",
+        MessageId::SubAgentsStatusCancelled => "đã huỷ",
+        MessageId::SubAgentsDetailReason => "lý do: ",
+        MessageId::SubAgentsDetailRole => "vai trò: ",
+        MessageId::SubAgentsDetailObjective => "mục tiêu: ",
+        MessageId::SubAgentsDetailResult => "kết quả: ",
     })
 }
 
@@ -2065,6 +2142,25 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::SubAgentsTitle => " 子代理 ",
+        MessageId::SubAgentsEmpty => "沒有子代理正在運行。",
+        MessageId::SubAgentsHeader => "子代理",
+        MessageId::SubAgentsEscClose => " Esc 關閉 ",
+        MessageId::SubAgentsRRefresh => " R 重新整理 ",
+        MessageId::SubAgentsGroupRunning => "運行中",
+        MessageId::SubAgentsGroupCompleted => "已完成",
+        MessageId::SubAgentsGroupInterrupted => "中斷",
+        MessageId::SubAgentsGroupFailed => "失敗",
+        MessageId::SubAgentsGroupCancelled => "已取消",
+        MessageId::SubAgentsStatusRunning => "運行中",
+        MessageId::SubAgentsStatusCompleted => "已完成",
+        MessageId::SubAgentsStatusInterrupted => "中斷",
+        MessageId::SubAgentsStatusFailed => "失敗",
+        MessageId::SubAgentsStatusCancelled => "已取消",
+        MessageId::SubAgentsDetailReason => "原因: ",
+        MessageId::SubAgentsDetailRole => "角色: ",
+        MessageId::SubAgentsDetailObjective => "目標: ",
+        MessageId::SubAgentsDetailResult => "結果: ",
         other => chinese_simplified(other)?,
     })
 }
@@ -2526,6 +2622,25 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+        MessageId::SubAgentsTitle => " サブエージェント ",
+        MessageId::SubAgentsEmpty => "実行中のサブエージェントはありません。",
+        MessageId::SubAgentsHeader => "サブエージェント",
+        MessageId::SubAgentsEscClose => " Esc 閉じる ",
+        MessageId::SubAgentsRRefresh => " R 更新 ",
+        MessageId::SubAgentsGroupRunning => "実行中",
+        MessageId::SubAgentsGroupCompleted => "完了",
+        MessageId::SubAgentsGroupInterrupted => "中断",
+        MessageId::SubAgentsGroupFailed => "失敗",
+        MessageId::SubAgentsGroupCancelled => "キャンセル",
+        MessageId::SubAgentsStatusRunning => "実行中",
+        MessageId::SubAgentsStatusCompleted => "完了",
+        MessageId::SubAgentsStatusInterrupted => "中断",
+        MessageId::SubAgentsStatusFailed => "失敗",
+        MessageId::SubAgentsStatusCancelled => "キャンセル",
+        MessageId::SubAgentsDetailReason => "理由: ",
+        MessageId::SubAgentsDetailRole => "役割: ",
+        MessageId::SubAgentsDetailObjective => "目的: ",
+        MessageId::SubAgentsDetailResult => "結果: ",
     })
 }
 
@@ -2928,6 +3043,25 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::SubAgentsTitle => " 子代理 ",
+        MessageId::SubAgentsEmpty => "没有子代理正在运行。",
+        MessageId::SubAgentsHeader => "子代理",
+        MessageId::SubAgentsEscClose => " Esc 关闭 ",
+        MessageId::SubAgentsRRefresh => " R 刷新 ",
+        MessageId::SubAgentsGroupRunning => "运行中",
+        MessageId::SubAgentsGroupCompleted => "已完成",
+        MessageId::SubAgentsGroupInterrupted => "中断",
+        MessageId::SubAgentsGroupFailed => "失败",
+        MessageId::SubAgentsGroupCancelled => "已取消",
+        MessageId::SubAgentsStatusRunning => "运行中",
+        MessageId::SubAgentsStatusCompleted => "已完成",
+        MessageId::SubAgentsStatusInterrupted => "中断",
+        MessageId::SubAgentsStatusFailed => "失败",
+        MessageId::SubAgentsStatusCancelled => "已取消",
+        MessageId::SubAgentsDetailReason => "原因: ",
+        MessageId::SubAgentsDetailRole => "角色: ",
+        MessageId::SubAgentsDetailObjective => "目标: ",
+        MessageId::SubAgentsDetailResult => "结果: ",
     })
 }
 
@@ -3412,6 +3546,25 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+        MessageId::SubAgentsTitle => " Subagentes ",
+        MessageId::SubAgentsEmpty => "Nenhum subagente em execução.",
+        MessageId::SubAgentsHeader => "Subagentes",
+        MessageId::SubAgentsEscClose => " Esc fechar ",
+        MessageId::SubAgentsRRefresh => " R atualizar ",
+        MessageId::SubAgentsGroupRunning => "Executando",
+        MessageId::SubAgentsGroupCompleted => "Concluído",
+        MessageId::SubAgentsGroupInterrupted => "Interrompido",
+        MessageId::SubAgentsGroupFailed => "Falhou",
+        MessageId::SubAgentsGroupCancelled => "Cancelado",
+        MessageId::SubAgentsStatusRunning => "executando",
+        MessageId::SubAgentsStatusCompleted => "concluído",
+        MessageId::SubAgentsStatusInterrupted => "interrompido",
+        MessageId::SubAgentsStatusFailed => "falhou",
+        MessageId::SubAgentsStatusCancelled => "cancelado",
+        MessageId::SubAgentsDetailReason => "motivo: ",
+        MessageId::SubAgentsDetailRole => "função: ",
+        MessageId::SubAgentsDetailObjective => "objetivo: ",
+        MessageId::SubAgentsDetailResult => "resultado: ",
     })
 }
 
@@ -3906,6 +4059,25 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+        MessageId::SubAgentsTitle => " Subagentes ",
+        MessageId::SubAgentsEmpty => "No hay subagentes en ejecución.",
+        MessageId::SubAgentsHeader => "Subagentes",
+        MessageId::SubAgentsEscClose => " Esc cerrar ",
+        MessageId::SubAgentsRRefresh => " R refrescar ",
+        MessageId::SubAgentsGroupRunning => "Ejecutando",
+        MessageId::SubAgentsGroupCompleted => "Completado",
+        MessageId::SubAgentsGroupInterrupted => "Interrumpido",
+        MessageId::SubAgentsGroupFailed => "Fallido",
+        MessageId::SubAgentsGroupCancelled => "Cancelado",
+        MessageId::SubAgentsStatusRunning => "ejecutando",
+        MessageId::SubAgentsStatusCompleted => "completado",
+        MessageId::SubAgentsStatusInterrupted => "interrumpido",
+        MessageId::SubAgentsStatusFailed => "fallido",
+        MessageId::SubAgentsStatusCancelled => "cancelado",
+        MessageId::SubAgentsDetailReason => "motivo: ",
+        MessageId::SubAgentsDetailRole => "rol: ",
+        MessageId::SubAgentsDetailObjective => "objetivo: ",
+        MessageId::SubAgentsDetailResult => "resultado: ",
     })
 }
 
