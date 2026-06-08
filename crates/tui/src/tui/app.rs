@@ -2413,7 +2413,8 @@ impl App {
         let entering_yolo = mode == AppMode::Yolo && previous_mode != AppMode::Yolo;
         let leaving_yolo = previous_mode == AppMode::Yolo && mode != AppMode::Yolo;
         self.mode = mode;
-        self.status_message = Some(format!("{}{} 模式", tr(self.ui_locale, MessageId::StatusModeSwitched), mode.label()));
+        let template = tr(self.ui_locale, MessageId::StatusModeSwitched);
+        self.status_message = Some(template.replace("{mode}", mode.label()));
 
         if entering_yolo {
             self.yolo_restore = Some(YoloRestoreState {
