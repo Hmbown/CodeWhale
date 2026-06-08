@@ -2063,7 +2063,7 @@ fn append_subagent_group(
                 Style::default().fg(palette::TEXT_MUTED),
             ),
             Span::raw("  "),
-            Span::styled(format!("{status:<10}"), status_style),
+            Span::styled(pad_to_display_width(status, 10), status_style),
             Span::raw("  "),
             Span::styled(
                 format!("{:>4}✦", agent.steps_taken),
@@ -2077,11 +2077,17 @@ fn append_subagent_group(
         ]));
 
         if let Some(detail) = status_detail {
-            let max_len = content_width.saturating_sub(10);
+            let max_len = content_width.saturating_sub(
+                4 + unicode_width::UnicodeWidthStr::width(tr(
+                    locale,
+                    MessageId::SubAgentsDetailReason,
+                )),
+            );
             let detail = truncate_view_text(detail, max_len);
             lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::styled(
-                    format!("    {}", tr(locale, MessageId::SubAgentsDetailReason)),
+                    tr(locale, MessageId::SubAgentsDetailReason),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(detail, Style::default().fg(palette::DEEPSEEK_RED)),
@@ -2089,33 +2095,48 @@ fn append_subagent_group(
         }
 
         if let Some(role) = agent.assignment.role.as_deref() {
-            let max_len = content_width.saturating_sub(14);
+            let label_width = 4 + unicode_width::UnicodeWidthStr::width(tr(
+                locale,
+                MessageId::SubAgentsDetailRole,
+            ));
+            let max_len = content_width.saturating_sub(label_width);
             let role = truncate_view_text(role, max_len);
             lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::styled(
-                    format!("    {}", tr(locale, MessageId::SubAgentsDetailRole)),
+                    tr(locale, MessageId::SubAgentsDetailRole),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(role, Style::default().fg(palette::DEEPSEEK_SKY)),
             ]));
         }
 
-        let max_len = content_width.saturating_sub(18);
+        let label_width = 4 + unicode_width::UnicodeWidthStr::width(tr(
+            locale,
+            MessageId::SubAgentsDetailObjective,
+        ));
+        let max_len = content_width.saturating_sub(label_width);
         let objective = truncate_view_text(&agent.assignment.objective, max_len);
         lines.push(Line::from(vec![
+            Span::styled("    ", Style::default().fg(palette::TEXT_MUTED)),
             Span::styled(
-                format!("    {}", tr(locale, MessageId::SubAgentsDetailObjective)),
+                tr(locale, MessageId::SubAgentsDetailObjective),
                 Style::default().fg(palette::TEXT_MUTED),
             ),
             Span::styled(objective, Style::default().fg(palette::TEXT_DIM)),
         ]));
 
         if let Some(result) = agent.result.as_ref() {
-            let max_len = content_width.saturating_sub(16);
+            let label_width = 4 + unicode_width::UnicodeWidthStr::width(tr(
+                locale,
+                MessageId::SubAgentsDetailResult,
+            ));
+            let max_len = content_width.saturating_sub(label_width);
             let preview = truncate_view_text(result, max_len);
             lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::styled(
-                    format!("    {}", tr(locale, MessageId::SubAgentsDetailResult)),
+                    tr(locale, MessageId::SubAgentsDetailResult),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(preview, Style::default().fg(palette::TEXT_DIM)),
@@ -2148,35 +2169,46 @@ fn format_agent_type(agent_type: &SubAgentType) -> &'static str {
 fn format_agent_status(
     status: &SubAgentStatus,
     locale: Locale,
-) -> (String, ratatui::style::Style, Option<&str>) {
+) -> (&'static str, ratatui::style::Style, Option<&str>) {
     use ratatui::style::Style;
 
     match status {
         SubAgentStatus::Running => (
-            tr(locale, MessageId::SubAgentsStatusRunning).to_string(),
+            tr(locale, MessageId::SubAgentsStatusRunning),
             Style::default().fg(palette::DEEPSEEK_SKY),
             None,
         ),
         SubAgentStatus::Completed => (
-            tr(locale, MessageId::SubAgentsStatusCompleted).to_string(),
+            tr(locale, MessageId::SubAgentsStatusCompleted),
             Style::default().fg(palette::DEEPSEEK_BLUE),
             None,
         ),
         SubAgentStatus::Interrupted(reason) => (
-            tr(locale, MessageId::SubAgentsStatusInterrupted).to_string(),
+            tr(locale, MessageId::SubAgentsStatusInterrupted),
             Style::default().fg(palette::STATUS_WARNING),
             Some(reason.as_str()),
         ),
         SubAgentStatus::Cancelled => (
-            tr(locale, MessageId::SubAgentsStatusCancelled).to_string(),
+            tr(locale, MessageId::SubAgentsStatusCancelled),
             Style::default().fg(palette::TEXT_MUTED),
             None,
         ),
         SubAgentStatus::Failed(reason) => (
-            tr(locale, MessageId::SubAgentsStatusFailed).to_string(),
+            tr(locale, MessageId::SubAgentsStatusFailed),
             Style::default().fg(palette::DEEPSEEK_RED),
             Some(reason.as_str()),
         ),
+    }
+}
+
+fn pad_to_display_width(text: &str, width: usize) -> String {
+    let text_width = unicode_width::UnicodeWidthStr::width(text);
+    if text_width >= width {
+        text.to_string()
+    } else {
+        let mut s = text.to_string();
+        s.extend(std::iter::repeat(' ').take(width - text_width));
+        s
     }
 }
 
