@@ -508,8 +508,6 @@ pub(crate) fn render_footer_from(
     // active, regardless of user-configured status items.
     let shell_chip = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
 
-    // Locale chip: shows the active UI language as a clickable target.
-    // Hidden in English to keep the bar uncluttered for the default locale.
     let locale_chip = crate::tui::widgets::footer_locale_chip(app.ui_locale);
 
     // Right-cluster extension chips: append in `items` order so user

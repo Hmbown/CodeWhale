@@ -910,23 +910,23 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// `/locale [code]` — with no argument, print the current locale plus the
-/// list of available codes. With an argument, route through
-/// `set_config_value("locale", ...)` so the apply + save flow is shared with
-/// `/config`. Recognized codes: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi,
-/// plus `auto` to defer to the system environment.
+/// `/locale [code]` — list current + available codes, or switch by
+/// routing through `set_config_value("locale", ...)`.
 pub fn locale(app: &mut App, arg: Option<&str>) -> CommandResult {
     let locale = app.ui_locale;
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => {
-            let current = tr(locale, MessageId::LocaleCurrentLabel).to_string()
-                + locale.tag()
-                + " ("
-                + locale.translation_target_name()
-                + ")";
-            let available = tr(locale, MessageId::LocaleAvailableLabel).to_string()
-                + "en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto";
-            let usage = tr(locale, MessageId::LocaleUsageLabel).to_string();
+            let current = format!(
+                "{}{} ({})",
+                tr(locale, MessageId::LocaleCurrentLabel),
+                locale.tag(),
+                locale.translation_target_name(),
+            );
+            let available = format!(
+                "{}en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto",
+                tr(locale, MessageId::LocaleAvailableLabel),
+            );
+            let usage = tr(locale, MessageId::LocaleUsageLabel);
             CommandResult::message(format!("{current}\n{available}\n{usage}"))
         }
         Some(name) => set_config_value(app, "locale", name, true),

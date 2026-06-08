@@ -301,7 +301,11 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         find_file_mention_completions(&ws, &partial, FILE_MENTION_COMPLETION_LIMIT)
     };
     if candidates.is_empty() {
-        app.status_message = Some(format!("{}{partial}", tr(app.ui_locale, MessageId::StatusNoFileMatch)));
+        app.status_message = Some(no_file_mention_matches_status(
+            app.ui_locale,
+            &partial,
+            app.mention_walk_depth,
+        ));
         return true;
     }
     if candidates.len() == 1 {
@@ -328,13 +332,18 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
     true
 }
 
-fn no_file_mention_matches_status(partial: &str, walk_depth: usize) -> String {
+fn no_file_mention_matches_status(
+    locale: crate::localization::Locale,
+    partial: &str,
+    walk_depth: usize,
+) -> String {
+    let prefix = tr(locale, MessageId::StatusNoFileMatch);
     if path_partial_reaches_walk_depth(partial, walk_depth) {
         format!(
-            "No files match @{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
+            "{prefix}{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
         )
     } else {
-        format!("No files match @{partial}")
+        format!("{prefix}{partial}")
     }
 }
 

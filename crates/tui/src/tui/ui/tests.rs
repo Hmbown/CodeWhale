@@ -3108,6 +3108,7 @@ fn spans_text(spans: &[Span<'_>]) -> String {
 #[test]
 fn alt_4_focuses_agents_sidebar_without_switching_modes() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Agent;
     app.sidebar_focus = SidebarFocus::Auto;
 
@@ -3121,6 +3122,7 @@ fn alt_4_focuses_agents_sidebar_without_switching_modes() {
 #[test]
 fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Agent;
     app.sidebar_focus = SidebarFocus::Auto;
 
@@ -3134,6 +3136,7 @@ fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
 #[test]
 fn alt_0_restores_auto_sidebar_focus() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Hidden;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT);
@@ -3145,6 +3148,7 @@ fn alt_0_restores_auto_sidebar_focus() {
 #[test]
 fn ctrl_alt_0_hides_sidebar() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Tasks;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
@@ -3156,6 +3160,7 @@ fn ctrl_alt_0_hides_sidebar() {
 #[test]
 fn ctrl_alt_0_restores_auto_sidebar_when_already_hidden() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Hidden;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
@@ -5780,6 +5785,7 @@ fn try_autocomplete_file_mention_no_match_reports_status() {
     std::fs::write(tmpdir.path().join("README.md"), "x").unwrap();
 
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.workspace = tmpdir.path().to_path_buf();
     app.input = "@nonexistent_xyz".to_string();
     app.cursor_position = app.input.chars().count();
