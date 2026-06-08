@@ -573,9 +573,24 @@ impl Renderable for ComposerWidget<'_> {
                 ]))
             } else if !self.slash_menu_entries.is_empty() {
                 Some(Line::from(vec![
-                    Span::styled(" Up/Down move  ", Style::default().fg(palette::TEXT_MUTED)),
-                    Span::styled("Tab accept  ", Style::default().fg(palette::TEXT_MUTED)),
-                    Span::styled("Esc close", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(
+                        format!(
+                            " {}",
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerSlashHintMove)
+                        ),
+                        Style::default().fg(palette::TEXT_MUTED),
+                    ),
+                    Span::styled(
+                        self.app
+                            .tr(crate::localization::MessageId::ComposerSlashHintAccept),
+                        Style::default().fg(palette::TEXT_MUTED),
+                    ),
+                    Span::styled(
+                        self.app
+                            .tr(crate::localization::MessageId::ComposerSlashHintClose),
+                        Style::default().fg(palette::TEXT_MUTED),
+                    ),
                 ]))
             } else if !input_text.trim().is_empty() {
                 // Live disambiguation for #345: when there's content in the
@@ -589,7 +604,11 @@ impl Renderable for ComposerWidget<'_> {
                     SubmitDisposition::Immediate => {
                         if queue_count > 0 {
                             (
-                                Some(format!("↵ send ({queue_count} queued)")),
+                                Some(
+                                    self.app
+                                        .tr(crate::localization::MessageId::ComposerSubmitSend)
+                                        .replace("{count}", &queue_count.to_string()),
+                                ),
                                 palette::DEEPSEEK_SKY,
                             )
                         } else {
@@ -598,23 +617,42 @@ impl Renderable for ComposerWidget<'_> {
                     }
                     SubmitDisposition::Queue => {
                         if self.app.offline_mode {
-                            (Some("↵ offline queue".to_string()), palette::STATUS_WARNING)
+                            (
+                                Some(
+                                    self.app
+                                        .tr(crate::localization::MessageId::ComposerSubmitOffline)
+                                        .to_string(),
+                                ),
+                                palette::STATUS_WARNING,
+                            )
                         } else {
                             let label = if queue_count > 0 {
-                                format!("↵ queue ({} waiting)", queue_count.saturating_add(1))
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerSubmitQueueWait)
+                                    .replace("{count}", &queue_count.saturating_add(1).to_string())
                             } else {
-                                "↵ queue for next turn".to_string()
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerSubmitQueueNext)
+                                    .to_string()
                             };
                             (Some(label), palette::TEXT_MUTED)
                         }
                     }
                     // Steer and QueueFollowUp are now only reached via Ctrl+Enter override.
                     SubmitDisposition::Steer => (
-                        Some("↵ steering (Ctrl+Enter)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerSubmitSteering)
+                                .to_string(),
+                        ),
                         palette::DEEPSEEK_SKY,
                     ),
                     SubmitDisposition::QueueFollowUp => (
-                        Some("↵ queued (Ctrl+Enter to steer)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerSubmitQueued)
+                                .to_string(),
+                        ),
                         palette::TEXT_MUTED,
                     ),
                 };
@@ -634,9 +672,10 @@ impl Renderable for ComposerWidget<'_> {
                         self.app
                             .tr(crate::localization::MessageId::HistorySearchTitle)
                     } else if is_draft_mode {
-                        "Draft"
+                        self.app
+                            .tr(crate::localization::MessageId::ComposerTitleDraft)
                     } else {
-                        "Composer"
+                        self.app.tr(crate::localization::MessageId::ComposerTitle)
                     },
                     Style::default().fg(palette::TEXT_MUTED),
                 )))
@@ -1978,16 +2017,37 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 
     let body = vec![
         Line::from(Span::styled(
-            format!("{inset}>_ codewhale (v{})", env!("CARGO_PKG_VERSION")),
+            format!(
+                "{inset}{}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::ComposerEmptyHeader
+                )
+                .replace("{version}", env!("CARGO_PKG_VERSION"))
+            ),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            format!("{inset}model: {}  /model to switch", app.model),
+            format!(
+                "{inset}{}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::ComposerEmptyModel
+                )
+                .replace("{name}", &app.model)
+            ),
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(Span::styled(
-            format!("{inset}directory: {workspace}"),
+            format!(
+                "{inset}{}",
+                crate::localization::tr(
+                    app.ui_locale,
+                    crate::localization::MessageId::ComposerEmptyDir
+                )
+                .replace("{workspace}", &workspace)
+            ),
             Style::default().fg(palette::TEXT_MUTED),
         )),
     ];
@@ -2251,7 +2311,11 @@ pub(crate) fn slash_completion_hints(
         for model_name in model_completion_names_for_provider(api_provider) {
             entries.push(SlashMenuEntry {
                 name: format!("/model {model_name}"),
-                description: String::from("Switch to this model"),
+                description: crate::localization::tr(
+                    locale,
+                    crate::localization::MessageId::ComposerModelDesc,
+                )
+                .to_string(),
                 is_skill: false,
                 alias_hint: None,
             });
@@ -2351,7 +2415,9 @@ fn push_command_entry(
         };
         (desc, hint)
     } else {
-        let mut description = String::from("User-defined command");
+        let mut description =
+            crate::localization::tr(locale, crate::localization::MessageId::ComposerUserCmdDesc)
+                .to_string();
         let mut argument_hint = None;
         if let Some((_, content)) = user_commands.iter().find(|(key, _)| key == command_key) {
             let (metadata, _) = commands::user_commands::parse_frontmatter(content);
@@ -3196,6 +3262,7 @@ mod tests {
     #[test]
     fn composer_border_renders_session_title() {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         app.composer_density = ComposerDensity::Comfortable;
         app.session_title = Some("my-session".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -3219,6 +3286,7 @@ mod tests {
     #[test]
     fn composer_border_renders_active_turn_receipt() {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         app.composer_density = ComposerDensity::Comfortable;
         app.set_receipt_text("✓ turn completed · 2 tool(s) used");
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -3362,6 +3430,7 @@ mod tests {
     #[test]
     fn empty_state_shows_startup_context() {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
@@ -4038,5 +4107,87 @@ mod tests {
                 elapsed.as_millis()
             );
         }
+    }
+
+    #[test]
+    fn composer_no_english_leak_with_zh_hans_locale() {
+        let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::ZhHans;
+        app.composer_density = ComposerDensity::Comfortable;
+        let slash_menu_entries = vec![SlashMenuEntry {
+            name: "/test".to_string(),
+            description: "test command".to_string(),
+            is_skill: false,
+            alias_hint: None,
+        }];
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 20, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 8,
+        };
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        // Positive: Chinese translations are present in block title
+        assert!(rendered.contains("编"), "expected ZhHans title");
+        assert!(rendered.contains("辑"), "expected ZhHans title");
+        assert!(rendered.contains("器"), "expected ZhHans title");
+
+        // Positive: Chinese slash hints are present (menu is open)
+        // (ratatui spaces CJK characters in the buffer)
+        assert!(rendered.contains("上"), "expected ZhHans slash hint 'move'");
+        assert!(rendered.contains("移"), "expected ZhHans slash hint 'move'");
+        assert!(rendered.contains("动"), "expected ZhHans slash hint 'move'");
+        assert!(
+            rendered.contains("Tab 接 受"),
+            "expected ZhHans slash hint 'accept'"
+        );
+        assert!(
+            rendered.contains("Esc 关 闭"),
+            "expected ZhHans slash hint 'close'"
+        );
+
+        // Negative: English strings must not leak in composer
+        assert!(!rendered.contains("Composer"), "English 'Composer' leaked");
+        assert!(
+            !rendered.contains("Up/Down move"),
+            "English 'Up/Down move' leaked"
+        );
+        assert!(
+            !rendered.contains("Tab accept"),
+            "English 'Tab accept' leaked"
+        );
+        assert!(
+            !rendered.contains("Esc close"),
+            "English 'Esc close' leaked"
+        );
+
+        // Also exercise the empty-state path where "directory:" leak would appear
+        let empty_lines = build_empty_state_lines(&app, Rect::new(0, 0, 100, 20));
+        let empty_rendered = empty_lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect::<String>();
+        assert!(
+            !empty_rendered.contains("directory:"),
+            "English 'directory:' leaked in empty state"
+        );
+        assert!(
+            empty_rendered.contains("目"),
+            "expected ZhHans directory label"
+        );
+        assert!(
+            empty_rendered.contains("切换"),
+            "expected ZhHans 'switch' label"
+        );
+        assert!(
+            empty_rendered.contains("model:"),
+            "expected 'model:' (technical term kept in English)"
+        );
     }
 }

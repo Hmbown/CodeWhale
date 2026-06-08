@@ -57,6 +57,10 @@ fn spawn_minimal(
         // the box. 127.0.0.1:1 will refuse instantly.
         .env("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")
         .env("RUST_LOG", "warn")
+        // Pin locale to English so PTY assertions that check English UI
+        // strings (e.g. "Composer") are deterministic regardless of the
+        // developer's system language.
+        .env("LANG", "C")
         .args([
             "--workspace",
             ws.workspace().to_str().expect("utf-8 workspace path"),
@@ -183,6 +187,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
         .env("DEEPSEEK_API_KEY", "ci-test-key-not-real")
         .env("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")
         .env("RUST_LOG", "warn")
+        .env("LANG", "C")
         .args([
             "--workspace",
             ws.workspace().to_str().expect("utf-8 workspace path"),
