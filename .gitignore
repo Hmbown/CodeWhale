@@ -119,3 +119,4 @@ docs/*_PLAN.md
 .envrc
 .direnv
 scripts/run_deep_swe.py
+.claude/
