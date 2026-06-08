@@ -189,6 +189,15 @@ The allowlist is scoped:
 - `issue:username` allows issues.
 - `all:username` allows both.
 
+The implementation lives in a few reviewable pieces:
+
+| Gate piece | Source |
+| --- | --- |
+| Pull request gate | `.github/workflows/pr-gate.yml` |
+| Issue gate | `.github/workflows/issue-gate.yml` |
+| Maintainer approval flow | `.github/workflows/approve-contributor.yml` |
+| Scoped allowlist | `.github/APPROVED_CONTRIBUTORS` |
+
 A maintainer can approve someone by commenting `/lgtm` on a pull request for PR
 access, or `/lgtmi` on an issue for issue access. The exact bare commands
 `lgtm` and `lgtmi` are also accepted for compatibility, but the prefixed forms
