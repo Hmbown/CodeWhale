@@ -722,13 +722,8 @@ pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
 
 /// Auto-select a model based on request complexity.
 pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
-    config::auto_model_heuristic(input, current_model)
+    crate::model_routing::auto_model_heuristic(input, current_model)
 }
-
-pub use config::{
-    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
-    parse_auto_route_recommendation, resolve_auto_route_with_flash,
-};
 
 /// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
 /// Zhang et al. (arXiv:2512.24601).
