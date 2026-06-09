@@ -6925,7 +6925,8 @@ async fn submit_or_steer_message(
             app.queue_message(message);
             if app.offline_mode {
                 app.status_message = Some(format!(
-                    "Offline: {count}{}",
+                    "{}{count}{}",
+                    tr(app.ui_locale, MessageId::StatusOfflinePrefix),
                     tr(app.ui_locale, MessageId::StatusQueuedCountHint)
                 ));
             } else {
@@ -9507,16 +9508,17 @@ fn thinking_chunk_preview(app: &App, cell_index: usize) -> String {
 
 fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> String {
     match cell {
-        HistoryCell::Thinking { .. } => "thinking".to_string(),
-        HistoryCell::Error { .. } => "error".to_string(),
-        HistoryCell::SubAgent(_) => "sub-agent".to_string(),
+        HistoryCell::Thinking { .. } => tr(app.ui_locale, MessageId::StatusActivityLabelThinking).to_string(),
+        HistoryCell::Error { .. } => tr(app.ui_locale, MessageId::StatusActivityLabelError).to_string(),
+        HistoryCell::SubAgent(_) => tr(app.ui_locale, MessageId::StatusActivityLabelSubagent).to_string(),
         HistoryCell::Tool(ToolCell::Generic(generic)) => {
             crate::tui::widgets::tool_card::tool_activity_label_for_name(&generic.name)
         }
         HistoryCell::Tool(_) => {
-            detail_target_label(app, cell_index).unwrap_or_else(|| "tool activity".to_string())
+            detail_target_label(app, cell_index)
+                .unwrap_or_else(|| tr(app.ui_locale, MessageId::StatusActivityLabelTool).to_string())
         }
-        _ => "message".to_string(),
+        _ => tr(app.ui_locale, MessageId::StatusActivityLabelMessage).to_string(),
     }
 }
 
@@ -9886,8 +9888,9 @@ pub(crate) fn selected_detail_footer_label(app: &App) -> Option<String> {
         String::new()
     };
     Some(format!(
-        "{} Activity: {label}{detail_hint}",
-        key_shortcuts::activity_shortcut_label()
+        "{} {}{label}{detail_hint}",
+        key_shortcuts::activity_shortcut_label(),
+        tr(app.ui_locale, MessageId::StatusFooterActivity),
     ))
 }
 
