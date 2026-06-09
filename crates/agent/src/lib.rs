@@ -287,6 +287,13 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "qwen/qwen3.7-max".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.7-max".to_string(), "qwen-3.7-max".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "moonshotai/kimi-k2.6".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec!["openrouter-kimi-k2.6".to_string()],

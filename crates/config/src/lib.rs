@@ -47,6 +47,7 @@ const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
 const OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL: &str = "qwen/qwen3.6-max-preview";
 const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
 const OPENROUTER_QWEN_3_6_PLUS_MODEL: &str = "qwen/qwen3.6-plus";
+const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
 const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
@@ -2341,6 +2342,9 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         }
         OPENROUTER_QWEN_3_6_PLUS_MODEL | "qwen3.6-plus" | "qwen-3.6-plus" => {
             Some(OPENROUTER_QWEN_3_6_PLUS_MODEL)
+        }
+        OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" | "qwen3-7-max" => {
+            Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
         }
         OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
             Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
@@ -5896,6 +5900,7 @@ mode = "token-plan-usa"
             ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
             ("qwen3.6-max-preview", OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL),
             ("qwen3.6-plus", OPENROUTER_QWEN_3_6_PLUS_MODEL),
+            ("qwen3.7-max", OPENROUTER_QWEN_3_7_MAX_MODEL),
             ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
             ("kimi-k2.6", OPENROUTER_KIMI_K2_6_MODEL),
             ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),
