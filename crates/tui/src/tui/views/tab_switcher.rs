@@ -152,7 +152,7 @@ impl TabSwitcherView {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(ratatui::style::Color::Cyan))
-            .title(" Tabs ");
+            .title(" Open Tabs (Ctrl+PageDown/Up to switch) ");
         block.render(area, buf);
 
         // Draw tabs

@@ -45,7 +45,7 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
 
     if app.tab_manager.is_empty() {
         let hint = Span::styled(
-            " [Ctrl+T] Create your first tab  |  Ctrl+`: Switcher ",
+            " [Ctrl+T] New tab  |  Ctrl+`: Switcher  |  Ctrl+PageDown/Up: next/prev tab ",
             Style::default().fg(ratatui::style::Color::Yellow),
         );
         buf.set_span(area.x, area.y, &hint, area.width);
@@ -110,8 +110,8 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
     // Show help on the right
     if x < area.x + area.width {
         let remaining = area.x + area.width - x;
-        if remaining > 20 {
-            let hint = " Ctrl+`: Switch";
+        if remaining > 30 {
+            let hint = " PgDn/PgUp: switch tabs";
             let style = Style::default().fg(ratatui::style::Color::DarkGray);
             buf.set_string(x, area.y, hint, style);
         }
