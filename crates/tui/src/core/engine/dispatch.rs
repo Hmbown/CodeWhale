@@ -119,15 +119,24 @@ pub(super) fn format_tool_error(err: &ToolError, tool_name: &str) -> String {
             let lower = message.to_ascii_lowercase();
             if lower.contains("current tool catalog") || lower.contains("did you mean:") {
                 message.clone()
+            } else if lower.contains("mode") || lower.contains("allow_shell") || lower.contains("feature flag") {
+                message.clone()
             } else {
                 format!(
                     "Tool '{tool_name}' is not available: {message}. Check mode, feature flags, or tool name."
                 )
             }
         }
-        ToolError::PermissionDenied { message } => format!(
-            "Tool '{tool_name}' was denied: {message}. Adjust approval mode or request permission."
-        ),
+        ToolError::PermissionDenied { message } => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("mode") || lower.contains("allow_shell") || lower.contains("denied by user") {
+                message.clone()
+            } else {
+                format!(
+                    "Tool '{tool_name}' was denied: {message}. Adjust approval mode or request permission."
+                )
+            }
+        }
     }
 }
 
