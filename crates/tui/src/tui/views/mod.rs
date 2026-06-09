@@ -623,10 +623,8 @@ impl ConfigView {
                 value: settings
                     .default_model
                     .as_deref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| {
-                        tr(app.ui_locale, MessageId::ConfigDefaultValue).to_string()
-                    }),
+                    .unwrap_or(tr(app.ui_locale, MessageId::ConfigDefaultValue))
+                    .to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -636,10 +634,8 @@ impl ConfigView {
                 value: settings
                     .reasoning_effort
                     .as_deref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| {
-                        tr(app.ui_locale, MessageId::ConfigDefaultReasoning).to_string()
-                    }),
+                    .unwrap_or(tr(app.ui_locale, MessageId::ConfigDefaultReasoning))
+                    .to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -691,6 +687,13 @@ impl ConfigView {
                 value: settings.background_color.clone().unwrap_or_else(|| {
                     tr(app.ui_locale, MessageId::ConfigDefaultValue).to_string()
                 }),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
+                key: "fancy_animations".to_string(),
+                value: settings.fancy_animations.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -1300,7 +1303,7 @@ fn render_config_editor_value_line(
 
     let mut spans = Vec::new();
     spans.push(Span::styled(
-        crate::localization::tr(locale, MessageId::ConfigEditNewLabel),
+        tr(locale, MessageId::ConfigEditNewLabel),
         Style::default().fg(palette::TEXT_MUTED),
     ));
     let cursor_style = Style::default()
