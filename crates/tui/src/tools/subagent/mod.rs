@@ -1496,8 +1496,15 @@ impl SubAgentManager {
                 .values()
                 .find(|existing| existing.session_name == name)
             {
+                let elapsed_secs = existing.started_at.elapsed().as_secs();
+                let since = if elapsed_secs < 120 {
+                    format!("{elapsed_secs}s ago")
+                } else {
+                    format!("{}m{}s ago", elapsed_secs / 60, elapsed_secs % 60)
+                };
                 return Err(anyhow!(
-                    "Sub-agent session name '{name}' is already in use by agent_id '{}' (status: {}). \
+                    "Sub-agent session name '{name}' is already in use by agent_id '{}' \
+                     (status: {}, started {since}). \
                      Reuse that agent_id with agent_eval/agent_close, or open with a different name.",
                     existing.id,
                     subagent_status_name(&existing.status)
