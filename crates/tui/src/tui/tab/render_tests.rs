@@ -62,8 +62,9 @@ mod tests {
             render_tab_bar(area, buf, &app);
         });
         // Should show the discoverability hint for the multi-tab system
-        assert!(output.contains("Create your first tab"));
+        assert!(output.contains("New tab"));
         assert!(output.contains("Ctrl"));
+        assert!(output.contains("PageDown"));
     }
 
     #[test]
