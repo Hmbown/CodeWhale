@@ -89,7 +89,7 @@ impl ToolSpec for MemorizeTool {
             None
         };
 
-        let session_id = context.session_id.as_deref();
+        let session_id = Some(context.state_namespace.as_str());
         store
             .insert_fact(entity_id.as_deref(), &content, "memorize", importance, session_id)
             .map_err(|e| ToolError::execution_failed(format!("failed to store fact: {e}")))?;

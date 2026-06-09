@@ -52,7 +52,7 @@ impl ToolSpec for RecallTool {
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
-        vec![ToolCapability::ReadsFiles]
+        vec![ToolCapability::ReadOnly]
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
@@ -69,7 +69,7 @@ impl ToolSpec for RecallTool {
                 ToolError::missing_field("query")
             })?;
 
-        let limit = optional_u64(&input, "limit").unwrap_or(5).min(20) as usize;
+        let limit = optional_u64(&input, "limit", 5).min(20) as usize;
         let include_graph = input
             .get("include_graph")
             .and_then(|v| v.as_bool())

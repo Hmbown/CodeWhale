@@ -152,7 +152,7 @@ pub struct ToolContext {
     pub memory_path: Option<PathBuf>,
     /// Hippocampal memory store for cross-session recall. `None` when the
     /// feature is not available. `memorize` and `recall` tools check this.
-    pub memory_store: Option<std::sync::Arc<crate::memory::MemoryStore>>,
+    pub memory_store: Option<std::sync::Arc<codewhale_memory::MemoryStore>>,
     /// LSP manager for post-edit diagnostics injection (#428). `None` when
     /// LSP is disabled or the context is constructed in a test that does not
     /// need diagnostics. Edit tools append a `<diagnostics>` block to their

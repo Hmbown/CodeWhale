@@ -44,8 +44,11 @@ pub struct Fact {
 }
 
 /// The central memory store — backed by a single SQLite file.
+///
+/// Thread-safe via `std::sync::Mutex` so the store can be shared
+/// across `Arc` boundaries (engine → tool context).
 pub struct MemoryStore {
-    conn: Connection,
+    conn: std::sync::Mutex<Connection>,
 }
 
 impl MemoryStore {
@@ -57,26 +60,31 @@ impl MemoryStore {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         schema::migrate(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: std::sync::Mutex::new(conn),
+        })
     }
 
     // ── Entities ──────────────────────────────────────────────────────
 
     /// Ensure an entity exists. If it does, update the description/updated_at.
     pub fn upsert_entity(&self, kind: &str, name: &str, description: &str) -> Result<Entity> {
+        let conn = self.conn.lock().unwrap();
         let id = entity_id(kind, name);
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO entities (id, kind, name, description) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
                description = CASE WHEN ?4 != '' THEN ?4 ELSE description END,
                updated_at = datetime('now')",
             params![id, kind, name, description],
         )?;
+        drop(conn);
         Ok(self.get_entity(&id)?.expect("just upserted"))
     }
 
     pub fn get_entity(&self, id: &str) -> Result<Option<Entity>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, kind, name, description, created_at, updated_at FROM entities WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -91,7 +99,8 @@ impl MemoryStore {
     }
 
     pub fn search_entities(&self, query: &str, limit: usize) -> Result<Vec<Entity>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, kind, name, description, created_at, updated_at
              FROM entities
              WHERE name LIKE ?1 OR description LIKE ?1
@@ -122,8 +131,9 @@ impl MemoryStore {
         strength: f64,
         session_id: Option<&str>,
     ) -> Result<Relation> {
+        let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO relations (id, source_id, target_id, kind, strength, session_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(source_id, target_id, kind) DO UPDATE SET
@@ -132,29 +142,29 @@ impl MemoryStore {
                created_at = datetime('now')",
             params![id, source_id, target_id, kind, strength, session_id],
         )?;
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id, source_id, target_id, kind, strength, created_at, session_id
-                 FROM relations WHERE id = ?1",
-                params![id],
-                |r| {
-                    Ok(Relation {
-                        id: r.get(0)?,
-                        source_id: r.get(1)?,
-                        target_id: r.get(2)?,
-                        kind: r.get(3)?,
-                        strength: r.get(4)?,
-                        created_at: r.get(5)?,
-                        session_id: r.get(6)?,
-                    })
-                },
-            )?)
+        let rel = conn.query_row(
+            "SELECT id, source_id, target_id, kind, strength, created_at, session_id
+             FROM relations WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(Relation {
+                    id: r.get(0)?,
+                    source_id: r.get(1)?,
+                    target_id: r.get(2)?,
+                    kind: r.get(3)?,
+                    strength: r.get(4)?,
+                    created_at: r.get(5)?,
+                    session_id: r.get(6)?,
+                })
+            },
+        )?;
+        Ok(rel)
     }
 
     /// Find all relations connected to an entity (either as source or target).
     pub fn relations_for_entity(&self, entity_id: &str, limit: usize) -> Result<Vec<Relation>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, kind, strength, created_at, session_id
              FROM relations
              WHERE source_id = ?1 OR target_id = ?1
@@ -176,13 +186,9 @@ impl MemoryStore {
     }
 
     /// Walk the graph: given an entity, find entities reachable via relations of `kind`.
-    pub fn graph_walk(&self, start_id: &str, relation_kind: &str, depth: usize) -> Result<Vec<Entity>> {
-        if depth == 0 || depth > 5 {
-            bail!("graph walk depth must be 1–5");
-        }
-
-        // Simple 1-hop walker — we expand this to n-hops with a recursive CTE later.
-        let mut stmt = self.conn.prepare(
+    pub fn graph_walk(&self, start_id: &str, relation_kind: &str, _depth: usize) -> Result<Vec<Entity>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT e.id, e.kind, e.name, e.description, e.created_at, e.updated_at
              FROM relations r
              JOIN entities e ON e.id = r.target_id
@@ -217,37 +223,39 @@ impl MemoryStore {
         importance: f64,
         session_id: Option<&str>,
     ) -> Result<Fact> {
+        let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
         let importance = importance.clamp(0.0, 1.0);
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO facts (id, entity_id, content, source, importance, session_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![id, entity_id, content, source, importance, session_id],
         )?;
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id, entity_id, content, source, importance, created_at, session_id
-                 FROM facts WHERE id = ?1",
-                params![id],
-                |r| {
-                    Ok(Fact {
-                        id: r.get(0)?,
-                        entity_id: r.get(1)?,
-                        content: r.get(2)?,
-                        source: r.get(3)?,
-                        importance: r.get(4)?,
-                        created_at: r.get(5)?,
-                        session_id: r.get(6)?,
-                    })
-                },
-            )?)
+        let fact = conn.query_row(
+            "SELECT id, entity_id, content, source, importance, created_at, session_id
+             FROM facts WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(Fact {
+                    id: r.get(0)?,
+                    entity_id: r.get(1)?,
+                    content: r.get(2)?,
+                    source: r.get(3)?,
+                    importance: r.get(4)?,
+                    created_at: r.get(5)?,
+                    session_id: r.get(6)?,
+                })
+            },
+        )?;
+        Ok(fact)
     }
 
     /// Full-text search over facts (uses FTS5 for pattern-completion-like queries).
     pub fn search_facts(&self, query: &str, limit: usize) -> Result<Vec<Fact>> {
-        // Escape FTS5 special characters and use prefix matching
-        let safe = query.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect::<String>();
+        let safe = query
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>();
         let fts_query = safe
             .split_whitespace()
             .map(|w| format!("{w}*"))
@@ -258,7 +266,8 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
 
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT f.id, f.entity_id, f.content, f.source, f.importance, f.created_at, f.session_id
              FROM facts f
              JOIN facts_fts ON facts_fts.rowid = f.rowid
@@ -282,7 +291,8 @@ impl MemoryStore {
 
     /// Get the most important facts (no query = general overview).
     pub fn important_facts(&self, limit: usize) -> Result<Vec<Fact>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, entity_id, content, source, importance, created_at, session_id
              FROM facts
              ORDER BY importance DESC, created_at DESC
@@ -302,13 +312,19 @@ impl MemoryStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Delete old/low-importance facts (active forgetting).
+    /// Delete low-importance facts (active forgetting).
+    /// When `older_than_days > 0`, only deletes facts older than that threshold.
     pub fn prune_low_importance_facts(&self, threshold: f64, older_than_days: i64) -> Result<usize> {
-        let count = self.conn.execute(
-            "DELETE FROM facts WHERE importance < ?1
-             AND datetime(created_at) < datetime('now', ?2)",
-            params![threshold, format!("-{older_than_days} days")],
-        )?;
+        let conn = self.conn.lock().unwrap();
+        let count = if older_than_days > 0 {
+            conn.execute(
+                "DELETE FROM facts WHERE importance < ?1
+                 AND datetime(created_at) < datetime('now', ?2)",
+                params![threshold, format!("-{older_than_days} days")],
+            )?
+        } else {
+            conn.execute("DELETE FROM facts WHERE importance < ?1", params![threshold])?
+        };
         Ok(count)
     }
 }
@@ -360,15 +376,16 @@ mod tests {
         let store = test_store();
         let e = store.upsert_entity("file", "dispatch.rs", "").unwrap();
 
-        store.insert_fact(
-            Some(&e.id),
-            "format_tool_error had misleading generic suffix. Fixed by removing it.",
-            "code review",
-            0.9,
-            None,
-        ).unwrap();
+        store
+            .insert_fact(
+                Some(&e.id),
+                "format_tool_error had misleading generic suffix. Fixed by removing it.",
+                "code review",
+                0.9,
+                None,
+            )
+            .unwrap();
 
-        // FTS5 search via pattern completion
         let results = store.search_facts("format tool error", 10).unwrap();
         assert!(!results.is_empty());
         assert!(results[0].content.contains("format_tool_error"));
@@ -378,7 +395,9 @@ mod tests {
     fn test_prune_low_importance() {
         let store = test_store();
         store.insert_fact(None, "transient debug note", "debug", 0.1, None).unwrap();
-        store.insert_fact(None, "important architecture decision", "design", 0.9, None).unwrap();
+        store
+            .insert_fact(None, "important architecture decision", "design", 0.9, None)
+            .unwrap();
 
         let pruned = store.prune_low_importance_facts(0.3, 0).unwrap();
         assert_eq!(pruned, 1);

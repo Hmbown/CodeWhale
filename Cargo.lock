@@ -898,6 +898,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-memory"
+version = "0.8.54"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "codewhale-protocol"
 version = "0.8.54"
 dependencies = [
@@ -970,6 +984,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-config",
+ "codewhale-memory",
  "codewhale-protocol",
  "codewhale-release",
  "codewhale-secrets",

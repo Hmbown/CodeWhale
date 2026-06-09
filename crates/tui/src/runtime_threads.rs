@@ -2092,6 +2092,7 @@ impl RuntimeThreadManager {
             search_base_url: self.config.search.as_ref().and_then(|s| s.base_url.clone()),
             tools_always_load: self.config.tools_always_load(),
             tools: self.config.tools.clone(),
+            memory_db_path: None,
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

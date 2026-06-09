@@ -2691,11 +2691,11 @@ pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
     if let Some(db_path) = engine.config.memory_db_path.as_ref() {
         match codewhale_memory::MemoryStore::open(db_path) {
             Ok(store) => {
-                tracing::info!("Hippocampal memory store opened at {db_path}");
+                tracing::info!("Hippocampal memory store opened at {}", db_path.display());
                 engine.memory_store = Some(std::sync::Arc::new(store));
             }
             Err(e) => {
-                tracing::warn!("Failed to open hippocampal memory store at {db_path}: {e}");
+                tracing::warn!("Failed to open hippocampal memory store at {}: {e}", db_path.display());
             }
         }
     }
