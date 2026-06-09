@@ -101,7 +101,7 @@ impl PendingInputPreview {
                 &mut lines,
                 Line::from(vec![
                     Span::raw("• "),
-                    Span::raw(tr(self.locale, MessageId::PendingContextHeader).to_string()),
+                    Span::raw(tr(self.locale, MessageId::PendingContextHeader)),
                 ]),
             );
             for item in &self.context_items {
@@ -117,7 +117,7 @@ impl PendingInputPreview {
                 &mut lines,
                 Line::from(vec![
                     Span::raw("• "),
-                    Span::raw(tr(self.locale, MessageId::PendingInputHeader).to_string()),
+                    Span::raw(tr(self.locale, MessageId::PendingInputHeader)),
                 ]),
             );
             let pending_steer_prefix = self.pending_steer_prefix();
@@ -155,10 +155,10 @@ impl PendingInputPreview {
                     &editing_prefix,
                     &editing_indent,
                 );
-                lines.push(Line::from(vec![Span::styled(
-                    format!("    {}", tr(self.locale, MessageId::PendingRestoreHint)),
-                    dim,
-                )]));
+                lines.push(Line::from(vec![
+                    Span::styled("    ", dim),
+                    Span::styled(tr(self.locale, MessageId::PendingRestoreHint), dim),
+                ]));
             }
             let queued_message_prefix = self.queued_message_prefix();
             let queued_message_indent = continuation_indent(&queued_message_prefix);
@@ -173,14 +173,14 @@ impl PendingInputPreview {
                 );
             }
             if !self.queued_messages.is_empty() {
-                lines.push(Line::from(vec![Span::styled(
-                    format!(
-                        "    {}",
+                lines.push(Line::from(vec![
+                    Span::styled("    ", dim),
+                    Span::styled(
                         tr(self.locale, MessageId::PendingEditHint)
-                            .replace("{key}", self.edit_binding.label)
+                            .replace("{key}", self.edit_binding.label),
+                        dim,
                     ),
-                    dim,
-                )]));
+                ]));
             }
         }
 
@@ -251,14 +251,18 @@ fn push_context_item(
         .filter(|detail| !detail.trim().is_empty())
         .map(|detail| format!(" · {detail}"))
         .unwrap_or_default();
-    let action = if item.selected {
-        format!(" · {}", tr(locale, MessageId::PendingDeleteHint))
+    let action_label = if item.selected {
+        Some(tr(locale, MessageId::PendingDeleteHint))
     } else if item.removable {
-        format!(" · {}", tr(locale, MessageId::PendingRemovable))
+        Some(tr(locale, MessageId::PendingRemovable))
     } else {
-        String::new()
+        None
     };
-    let body = format!("[{}] {}{}{}", item.kind, item.label, detail, action);
+    let body = if let Some(label) = action_label {
+        format!("[{}] {}{} · {}", item.kind, item.label, detail, label)
+    } else {
+        format!("[{}] {}{}", item.kind, item.label, detail)
+    };
     let body_width = width.saturating_sub(4).max(1) as usize;
     for (idx, segment) in wrap_to_width(&body, body_width).into_iter().enumerate() {
         let prefix = if idx == 0 {
