@@ -3925,6 +3925,30 @@ async fn run_event_loop(
                 {
                     let _ = app.select_next_composer_attachment();
                 }
+                // Ctrl+PageDown / Ctrl+PageUp: cycle tabs (same as Ctrl+Tab /
+                // Ctrl+Shift+Tab, but not intercepted by Windows Terminal).
+                KeyCode::PageDown
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_next() {
+                        app.status_message = Some("Switched to next tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::PageUp
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_prev() {
+                        app.status_message = Some("Switched to previous tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::PageUp => {
                     let page = app.viewport.last_transcript_visible.max(1);
                     app.scroll_up(page);
