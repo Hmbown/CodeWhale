@@ -18,10 +18,10 @@ mod tests {
     /// Simulate the sequence of key events the user would press
     /// to: create a new tab, switch to it, type a message, and submit.
     fn simulate_create_and_switch(manager: &mut TabManager) {
-        // Ctrl+Shift+N: create new tab
+        // Ctrl+T: create new tab
         manager
             .create_tab(format!("Tab {}", manager.len() + 1), TabType::Chat)
-            .expect("Ctrl+Shift+N should create tab");
+            .expect("Ctrl+T should create tab");
 
         // The new tab is automatically active after creation,
         // simulating the key handler that updates active_tab.
@@ -233,7 +233,7 @@ mod tests {
         // Switch to B (index 1)
         manager.switch_to(1);
 
-        // Ctrl+Shift+W: close current
+        // Ctrl+W: close current
         manager.close_tab(1);
         assert_eq!(manager.len(), 2);
         // Active should now be C (index 1) since B was removed.
