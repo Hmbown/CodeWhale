@@ -911,15 +911,19 @@ impl ConfigView {
         }
 
         let section = row.section.label(self.locale).to_lowercase();
+        let section_en = row.section.label(Locale::En).to_lowercase();
         let key = row.key.to_lowercase();
         let value = self.row_display_value(row).to_lowercase();
         let scope = row.scope.label(self.locale).to_lowercase();
+        let scope_en = row.scope.label(Locale::En).to_lowercase();
 
         filter.split_whitespace().all(|term| {
             section.contains(term)
+                || section_en.contains(term)
                 || key.contains(term)
                 || value.contains(term)
                 || scope.contains(term)
+                || scope_en.contains(term)
         })
     }
 
