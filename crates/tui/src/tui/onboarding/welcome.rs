@@ -1,11 +1,12 @@
-//! Welcome screen content for onboarding.
-
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 
-pub fn lines() -> Vec<Line<'static>> {
+pub fn lines(locale: Locale) -> Vec<Line<'static>> {
+    let version = tr(locale, MessageId::OnboardWelcomeVersion)
+        .replace("{version}", env!("CARGO_PKG_VERSION"));
     vec![
         Line::from(Span::styled(
             "codewhale",
@@ -14,29 +15,25 @@ pub fn lines() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            version,
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "A focused terminal workspace for longer model sessions.",
+            tr(locale, MessageId::OnboardWelcomeDesc).to_string(),
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            "You'll add an API key, review trust for this directory, and then land in the chat.",
-            Style::default().fg(palette::TEXT_MUTED),
-        )),
-        Line::from(Span::styled(
-            "The main composer is multi-line, so you can write full prompts instead of squeezing everything into one line.",
+            tr(locale, MessageId::OnboardWelcomeDesc2).to_string(),
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Press Enter to continue.",
+            tr(locale, MessageId::OnboardWelcomeEnter).to_string(),
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            "Ctrl+C exits at any point.",
+            tr(locale, MessageId::OnboardWelcomeExit).to_string(),
             Style::default().fg(palette::TEXT_MUTED),
         )),
     ]

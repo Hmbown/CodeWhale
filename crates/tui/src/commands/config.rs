@@ -12,7 +12,7 @@ use crate::config_persistence::{
     persist_tui_integer_key,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
-use crate::localization::resolve_locale;
+use crate::localization::{MessageId, resolve_locale, tr};
 use crate::settings::Settings;
 use crate::tui::app::{
     App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
@@ -867,14 +867,15 @@ pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
 }
 
 fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
+    let locale = app.ui_locale;
     if app.set_mode(mode) {
         (
-            format!("Switched to {} mode.", mode_display_name(mode)),
+            tr(locale, MessageId::AppModeSwitched).replace("{mode}", mode_display_name(mode)),
             true,
         )
     } else {
         (
-            format!("Already in {} mode.", mode_display_name(mode)),
+            tr(locale, MessageId::AppModeAlreadyIn).replace("{mode}", mode_display_name(mode)),
             false,
         )
     }
@@ -1251,6 +1252,7 @@ mod tests {
         app.auto_model = false;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
+        app.ui_locale = crate::localization::Locale::En;
         app
     }
 

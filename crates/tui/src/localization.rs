@@ -550,6 +550,16 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    // Onboarding screens — welcome screen.
+    OnboardWelcomeVersion,
+    OnboardWelcomeDesc,
+    OnboardWelcomeDesc2,
+    OnboardWelcomeDesc3,
+    OnboardWelcomeEnter,
+    OnboardWelcomeExit,
+    // App mode status messages.
+    AppModeSwitched,
+    AppModeAlreadyIn,
 }
 
 #[allow(dead_code)]
@@ -874,6 +884,14 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::OnboardWelcomeVersion,
+    MessageId::OnboardWelcomeDesc,
+    MessageId::OnboardWelcomeDesc2,
+    MessageId::OnboardWelcomeDesc3,
+    MessageId::OnboardWelcomeEnter,
+    MessageId::OnboardWelcomeExit,
+    MessageId::AppModeSwitched,
+    MessageId::AppModeAlreadyIn,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1509,6 +1527,18 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::OnboardWelcomeVersion => "Version {version}",
+        MessageId::OnboardWelcomeDesc => "A focused terminal workspace for longer model sessions.",
+        MessageId::OnboardWelcomeDesc2 => {
+            "You'll add an API key, review trust for this directory, and then land in the chat."
+        }
+        MessageId::OnboardWelcomeDesc3 => {
+            "The main composer is multi-line, so you can write full prompts instead of squeezing everything into one line."
+        }
+        MessageId::OnboardWelcomeEnter => "Press Enter to continue.",
+        MessageId::OnboardWelcomeExit => "Ctrl+C exits at any point.",
+        MessageId::AppModeSwitched => "Switched to {mode} mode",
+        MessageId::AppModeAlreadyIn => "Already in {mode} mode",
     }
 }
 
@@ -2009,6 +2039,20 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+        MessageId::OnboardWelcomeVersion => "Phiên bản {version}",
+        MessageId::OnboardWelcomeDesc => {
+            "Một không gian làm việc đầu cuối tập trung cho các phiên làm việc với mô hình dài hơn."
+        }
+        MessageId::OnboardWelcomeDesc2 => {
+            "Bạn sẽ thêm khóa API, xem xét quyền truy cập cho thư mục này, và sau đó vào cuộc trò chuyện."
+        }
+        MessageId::OnboardWelcomeDesc3 => {
+            "Trình soạn thảo chính hỗ trợ nhiều dòng, vì vậy bạn có thể viết đầy đủ nội dung thay vì nhồi nhét mọi thứ vào một dòng."
+        }
+        MessageId::OnboardWelcomeEnter => "Nhấn Enter để tiếp tục.",
+        MessageId::OnboardWelcomeExit => "Ctrl+C thoát bất kỳ lúc nào.",
+        MessageId::AppModeSwitched => "Đã chuyển sang chế độ {mode}",
+        MessageId::AppModeAlreadyIn => "Đã ở chế độ {mode} rồi",
     })
 }
 
@@ -2073,6 +2117,16 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::OnboardWelcomeVersion => "版本 {version}",
+        MessageId::OnboardWelcomeDesc => "專注於更長模型會話的終端工作區。",
+        MessageId::OnboardWelcomeDesc2 => "您將添加 API 金鑰、審閱此目錄的信任設定，然後進入對話。",
+        MessageId::OnboardWelcomeDesc3 => {
+            "主編輯器支援多行輸入，因此您可以撰寫完整的提示，而不是將所有內容擠在一行中。"
+        }
+        MessageId::OnboardWelcomeEnter => "按 Enter 繼續。",
+        MessageId::OnboardWelcomeExit => "Ctrl+C 隨時退出。",
+        MessageId::AppModeSwitched => "已切換至 {mode} 模式",
+        MessageId::AppModeAlreadyIn => "已在 {mode} 模式",
         other => chinese_simplified(other)?,
     })
 }
@@ -2536,6 +2590,20 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+        MessageId::OnboardWelcomeVersion => "バージョン {version}",
+        MessageId::OnboardWelcomeDesc => {
+            "長時間のモデルセッションに最適化された端末ワークスペース。"
+        }
+        MessageId::OnboardWelcomeDesc2 => {
+            "APIキーを追加し、このディレクトリの信頼設定を確認してから、チャットを開始します。"
+        }
+        MessageId::OnboardWelcomeDesc3 => {
+            "メインコンポーザーはマルチライン対応なので、すべてを1行に詰め込む代わりに完全なプロンプトを記述できます。"
+        }
+        MessageId::OnboardWelcomeEnter => "Enter を押して続行。",
+        MessageId::OnboardWelcomeExit => "Ctrl+C でいつでも終了。",
+        MessageId::AppModeSwitched => "{mode} モードに切り替えました",
+        MessageId::AppModeAlreadyIn => "既に {mode} モードです",
     })
 }
 
@@ -2940,6 +3008,16 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::OnboardWelcomeVersion => "版本 {version}",
+        MessageId::OnboardWelcomeDesc => "专注于更长模型会话的终端工作区。",
+        MessageId::OnboardWelcomeDesc2 => "您将添加 API 密钥、审阅此目录的信任设置，然后进入对话。",
+        MessageId::OnboardWelcomeDesc3 => {
+            "主编辑器支持多行输入，因此您可以编写完整的提示，而不是将所有内容挤在一行中。"
+        }
+        MessageId::OnboardWelcomeEnter => "按 Enter 继续。",
+        MessageId::OnboardWelcomeExit => "Ctrl+C 随时退出。",
+        MessageId::AppModeSwitched => "已切换至 {mode} 模式",
+        MessageId::AppModeAlreadyIn => "已在 {mode} 模式",
     })
 }
 
@@ -3426,6 +3504,20 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+        MessageId::OnboardWelcomeVersion => "Versão {version}",
+        MessageId::OnboardWelcomeDesc => {
+            "Um espaço de trabalho terminal focado para sessões de modelo mais longas."
+        }
+        MessageId::OnboardWelcomeDesc2 => {
+            "Você adicionará uma chave de API, revisará a confiança para este diretório e então entrará no chat."
+        }
+        MessageId::OnboardWelcomeDesc3 => {
+            "O compositor principal é multi-linha, permitindo prompts completos em vez de comprimir tudo em uma única linha."
+        }
+        MessageId::OnboardWelcomeEnter => "Pressione Enter para continuar.",
+        MessageId::OnboardWelcomeExit => "Ctrl+C sai a qualquer momento.",
+        MessageId::AppModeSwitched => "Alternado para o modo {mode}",
+        MessageId::AppModeAlreadyIn => "Já está no modo {mode}",
     })
 }
 
@@ -3922,6 +4014,20 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+        MessageId::OnboardWelcomeVersion => "Versión {version}",
+        MessageId::OnboardWelcomeDesc => {
+            "Un espacio de trabajo terminal enfocado para sesiones de modelo más largas."
+        }
+        MessageId::OnboardWelcomeDesc2 => {
+            "Agregarás una clave de API, revisarás la confianza para este directorio y luego ingresarás al chat."
+        }
+        MessageId::OnboardWelcomeDesc3 => {
+            "El compositor principal es multilínea, permitiendo prompts completos en lugar de comprimir todo en una línea."
+        }
+        MessageId::OnboardWelcomeEnter => "Presiona Enter para continuar.",
+        MessageId::OnboardWelcomeExit => "Ctrl+C sale en cualquier momento.",
+        MessageId::AppModeSwitched => "Cambiado al modo {mode}",
+        MessageId::AppModeAlreadyIn => "Ya está en modo {mode}",
     })
 }
 

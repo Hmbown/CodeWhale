@@ -377,11 +377,17 @@ pub enum StatusToastLevel {
 }
 
 #[derive(Debug, Clone)]
+pub enum StatusToastKind {
+    ModeSwitch,
+}
+
+#[derive(Debug, Clone)]
 pub struct StatusToast {
     pub text: String,
     pub level: StatusToastLevel,
     pub created_at: Instant,
     pub ttl_ms: Option<u64>,
+    pub is_mode_switch: bool,
 }
 
 impl StatusToast {
@@ -392,6 +398,7 @@ impl StatusToast {
             level,
             created_at: Instant::now(),
             ttl_ms,
+            is_mode_switch: false,
         }
     }
 
@@ -1282,6 +1289,10 @@ pub struct App {
     pub sticky_status: Option<StatusToast>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
+    /// When the next status message is promoted, it will be tagged with this
+    /// variant so downstream checks (mode-switch dedup) work regardless of
+    /// locale.
+    pub last_status_toast_kind: Option<StatusToastKind>,
     pub model: String,
     /// Persisted model selections by provider name. Loaded from settings so
     /// `/model` and the picker can surface saved provider-specific choices.
@@ -2106,6 +2117,7 @@ impl App {
             status_toasts: VecDeque::new(),
             sticky_status: None,
             last_status_message_seen: None,
+            last_status_toast_kind: None,
             model,
             provider_models,
             auto_model,
@@ -2381,7 +2393,9 @@ impl App {
         let entering_yolo = mode == AppMode::Yolo && previous_mode != AppMode::Yolo;
         let leaving_yolo = previous_mode == AppMode::Yolo && mode != AppMode::Yolo;
         self.mode = mode;
-        self.status_message = Some(format!("Switched to {} mode", mode.label()));
+        self.status_message =
+            Some(tr(self.ui_locale, MessageId::AppModeSwitched).replace("{mode}", mode.label()));
+        self.last_status_toast_kind = Some(StatusToastKind::ModeSwitch);
 
         if entering_yolo {
             self.yolo_restore = Some(YoloRestoreState {
@@ -3179,7 +3193,23 @@ impl App {
         level: StatusToastLevel,
         ttl_ms: Option<u64>,
     ) {
-        let toast = StatusToast::new(text, level, ttl_ms);
+        self.push_status_toast_with_flags(text, level, ttl_ms, false);
+    }
+
+    fn push_status_toast_with_flags(
+        &mut self,
+        text: impl Into<String>,
+        level: StatusToastLevel,
+        ttl_ms: Option<u64>,
+        is_mode_switch: bool,
+    ) {
+        let toast = StatusToast {
+            text: text.into(),
+            level,
+            created_at: Instant::now(),
+            ttl_ms,
+            is_mode_switch,
+        };
         self.status_toasts.push_back(toast);
         while self.status_toasts.len() > 24 {
             self.status_toasts.pop_front();
@@ -3317,10 +3347,6 @@ impl App {
         (StatusToastLevel::Info, Some(4_000), false)
     }
 
-    fn is_mode_switch_status_message(message: &str) -> bool {
-        message.starts_with("Switched to ") && message.ends_with(" mode")
-    }
-
     pub fn sync_status_message_to_toasts(&mut self) {
         let current = self.status_message.clone();
         if self.last_status_message_seen == current {
@@ -3335,6 +3361,12 @@ impl App {
             return;
         }
 
+        let is_mode_switch = matches!(
+            self.last_status_toast_kind,
+            Some(StatusToastKind::ModeSwitch)
+        );
+        self.last_status_toast_kind = None;
+
         let (level, ttl_ms, sticky) = Self::classify_status_text(&message);
         if sticky {
             self.set_sticky_status(message, level, ttl_ms);
@@ -3347,11 +3379,10 @@ impl App {
             {
                 self.clear_sticky_status();
             }
-            if Self::is_mode_switch_status_message(&message) {
-                self.status_toasts
-                    .retain(|toast| !Self::is_mode_switch_status_message(&toast.text));
+            if is_mode_switch {
+                self.status_toasts.retain(|toast| !toast.is_mode_switch);
             }
-            self.push_status_toast(message, level, ttl_ms);
+            self.push_status_toast_with_flags(message, level, ttl_ms, is_mode_switch);
         }
     }
 
@@ -6135,6 +6166,7 @@ mod tests {
     #[test]
     fn test_mode_switch_toasts_replace_previous_mode_switch_toast() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.ui_locale = Locale::En;
         let first_mode = match app.mode {
             AppMode::Plan => AppMode::Agent,
             AppMode::Agent => AppMode::Yolo,
@@ -6179,6 +6211,7 @@ mod tests {
     #[test]
     fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.ui_locale = Locale::En;
         app.status_message = Some("Task queued".to_string());
         app.sync_status_message_to_toasts();
 
