@@ -30,6 +30,7 @@ use super::app::{
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::subagent_routing::active_fanout_counts;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
+use crate::localization::{Locale, MessageId, tr};
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
 /// Must be large enough that accumulated f64 error across hundreds of turns
@@ -307,6 +308,7 @@ fn work_panel_lines(
     max_rows: usize,
     palette_mode: palette::PaletteMode,
     ui_theme: &palette::UiTheme,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let theme = Theme::for_palette_mode(palette_mode);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
@@ -315,17 +317,17 @@ fn work_panel_lines(
 
     if summary.state_updating && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
-            "Work state updating...",
+            tr(locale, MessageId::SidebarWorkStateUpdating),
             Style::default().fg(ui_theme.text_muted),
         )));
     }
 
     push_work_checklist_lines(summary, content_width, max_rows, &mut lines, ui_theme);
-    push_work_strategy_lines(summary, content_width, max_rows, &mut lines, &theme);
+    push_work_strategy_lines(summary, content_width, max_rows, &mut lines, &theme, locale);
 
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
-            work_panel_empty_hint(content_width),
+            work_panel_empty_hint(content_width, locale),
             Style::default().fg(ui_theme.text_muted).italic(),
         )));
     }
@@ -337,6 +339,7 @@ fn work_panel_hover_texts(
     summary: &SidebarWorkSummary,
     content_width: usize,
     max_rows: usize,
+    locale: Locale,
 ) -> Vec<String> {
     let mut texts = Vec::with_capacity(max_rows.max(4));
 
@@ -383,7 +386,7 @@ fn work_panel_hover_texts(
     }
 
     if summary.state_updating && texts.len() < max_rows {
-        texts.push("Work state updating...".to_string());
+        texts.push(tr(locale, MessageId::SidebarWorkStateUpdating).to_string());
     }
 
     if !summary.checklist_items.is_empty() && texts.len() < max_rows {
@@ -444,7 +447,7 @@ fn work_panel_hover_texts(
                 summary.strategy_progress_percent()
             ));
         } else {
-            texts.push("Strategy metadata".to_string());
+            texts.push(tr(locale, MessageId::SidebarStrategyMetadata).to_string());
         }
 
         if let Some(explanation) = summary.strategy_explanation.as_deref()
@@ -476,7 +479,7 @@ fn work_panel_hover_texts(
     }
 
     if texts.is_empty() {
-        texts.push("No active work".to_string());
+        texts.push(tr(locale, MessageId::SidebarNoActiveWork).to_string());
     }
 
     texts
@@ -651,6 +654,7 @@ fn push_work_strategy_lines(
     max_rows: usize,
     lines: &mut Vec<Line<'static>>,
     theme: &Theme,
+    locale: Locale,
 ) {
     if !summary.has_strategy() || lines.len() >= max_rows {
         return;
@@ -675,7 +679,7 @@ fn push_work_strategy_lines(
         ]));
     } else {
         lines.push(Line::from(Span::styled(
-            "Strategy metadata",
+            tr(locale, MessageId::SidebarStrategyMetadata),
             Style::default().fg(theme.plan_summary_color).bold(),
         )));
     }
@@ -718,8 +722,8 @@ fn push_work_strategy_lines(
 }
 
 #[must_use]
-fn work_panel_empty_hint(content_width: usize) -> String {
-    truncate_line_to_width("No active work", content_width)
+fn work_panel_empty_hint(content_width: usize, locale: Locale) -> String {
+    truncate_line_to_width(tr(locale, MessageId::SidebarNoActiveWork), content_width)
 }
 
 fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
@@ -736,10 +740,19 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
         usable_rows,
         app.ui_theme.mode,
         &app.ui_theme,
+        app.ui_locale,
     );
 
-    let full_texts = work_panel_hover_texts(&summary, content_width.max(1), usable_rows);
-    render_sidebar_section(f, area, "Work", lines, full_texts, app);
+    let full_texts =
+        work_panel_hover_texts(&summary, content_width.max(1), usable_rows, app.ui_locale);
+    render_sidebar_section(
+        f,
+        area,
+        tr(app.ui_locale, MessageId::SidebarWork),
+        lines,
+        full_texts,
+        app,
+    );
 }
 
 fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
@@ -752,7 +765,14 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
     let lines = task_panel_lines(app, content_width.max(1), usable_rows.max(1));
 
     let full_texts = task_panel_hover_texts(app, usable_rows.max(1));
-    render_sidebar_section(f, area, "Tasks", lines, full_texts, app);
+    render_sidebar_section(
+        f,
+        area,
+        tr(app.ui_locale, MessageId::SidebarTasks),
+        lines,
+        full_texts,
+        app,
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -779,7 +799,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
         let turn_prefix = truncate_line_to_width(turn_id, 16);
         lines.push(Line::from(Span::styled(
             truncate_line_to_width(
-                &format!("turn {turn_prefix} ({status})",),
+                &format!("turn {turn_prefix} ({status})"),
                 content_width.max(1),
             ),
             Style::default().fg(theme.accent_primary),
@@ -788,7 +808,11 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
 
     let active_rows = active_tool_rows(app);
     if !active_rows.is_empty() && lines.len() < max_rows {
-        push_sidebar_label_theme(&mut lines, "Live tools", theme);
+        push_sidebar_label_theme(
+            &mut lines,
+            tr(app.ui_locale, MessageId::SidebarLiveTools),
+            theme,
+        );
         push_tool_rows(&mut lines, &active_rows, content_width, max_rows, theme);
     }
 
@@ -799,12 +823,13 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             .filter(|task| task.status == "running")
             .count();
         let done = background_rows.len().saturating_sub(running);
+        let bg_label = tr(app.ui_locale, MessageId::SidebarBackgroundCommands);
         let label = if running == 0 {
-            format!("Background commands: {done} completed")
+            format!("{bg_label}: {done} completed")
         } else if done == 0 {
-            format!("Background commands: {running} running")
+            format!("{bg_label}: {running} running")
         } else {
-            format!("Background commands: {running} running, {done} completed")
+            format!("{bg_label}: {running} running, {done} completed")
         };
         lines.push(Line::from(Span::styled(
             label,
@@ -856,7 +881,11 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
     if lines.len() < max_rows {
         let recent_rows = recent_tool_rows(app, 4);
         if !recent_rows.is_empty() {
-            push_sidebar_label_theme(&mut lines, "Recent tools", theme);
+            push_sidebar_label_theme(
+                &mut lines,
+                tr(app.ui_locale, MessageId::SidebarRecentTools),
+                theme,
+            );
             push_tool_rows(&mut lines, &recent_rows, content_width, max_rows, theme);
         }
     }
@@ -881,7 +910,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             && background_rows.is_empty())
     {
         lines.push(Line::from(Span::styled(
-            "No live tools or background jobs",
+            tr(app.ui_locale, MessageId::SidebarNoLiveTools),
             Style::default().fg(theme.text_muted),
         )));
     }
@@ -899,7 +928,7 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
 
     let active_rows = active_tool_rows(app);
     if !active_rows.is_empty() && texts.len() < max_rows {
-        texts.push("Live tools".to_string());
+        texts.push(tr(app.ui_locale, MessageId::SidebarLiveTools).to_string());
         push_tool_row_hover_texts(&mut texts, &active_rows, max_rows);
     }
 
@@ -910,12 +939,13 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
             .filter(|task| task.status == "running")
             .count();
         let done = background_rows.len().saturating_sub(running);
+        let bg_label = tr(app.ui_locale, MessageId::SidebarBackgroundCommands);
         let label = if running == 0 {
-            format!("Background commands: {done} completed")
+            format!("{bg_label}: {done} completed")
         } else if done == 0 {
-            format!("Background commands: {running} running")
+            format!("{bg_label}: {running} running")
         } else {
-            format!("Background commands: {running} running, {done} completed")
+            format!("{bg_label}: {running} running, {done} completed")
         };
         texts.push(label);
 
@@ -945,7 +975,7 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
     if texts.len() < max_rows {
         let recent_rows = recent_tool_rows(app, 4);
         if !recent_rows.is_empty() {
-            texts.push("Recent tools".to_string());
+            texts.push(tr(app.ui_locale, MessageId::SidebarRecentTools).to_string());
             push_tool_row_hover_texts(&mut texts, &recent_rows, max_rows);
         }
     }
@@ -963,7 +993,7 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
             && active_rows.is_empty()
             && background_rows.is_empty())
     {
-        texts.push("No live tools or background jobs".to_string());
+        texts.push(tr(app.ui_locale, MessageId::SidebarNoLiveTools).to_string());
     }
 
     texts
@@ -1771,8 +1801,9 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
         content_width,
         usable_rows.max(1),
         &app.ui_theme,
+        app.ui_locale,
     );
-    let full_texts = subagent_panel_hover_texts(&summary, &rows, usable_rows.max(1));
+    let full_texts = subagent_panel_hover_texts(&summary, &rows, usable_rows.max(1), app.ui_locale);
 
     render_sidebar_section(f, area, "Agents", lines, full_texts, app);
 }
@@ -1891,6 +1922,7 @@ pub fn subagent_panel_lines(
     content_width: usize,
     max_rows: usize,
     theme: &palette::UiTheme,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
 
@@ -1901,7 +1933,7 @@ pub fn subagent_panel_lines(
         && !summary.foreground_rlm_running
     {
         lines.push(Line::from(Span::styled(
-            "No agents",
+            tr(locale, MessageId::SidebarNoAgents),
             Style::default().fg(theme.text_muted),
         )));
         return lines;
@@ -2010,6 +2042,7 @@ fn subagent_panel_hover_texts(
     summary: &SidebarSubagentSummary,
     rows: &[SidebarAgentRow],
     max_rows: usize,
+    locale: Locale,
 ) -> Vec<String> {
     let mut texts = Vec::with_capacity(max_rows.max(4));
 
@@ -2019,7 +2052,7 @@ fn subagent_panel_hover_texts(
         && fanout_total == 0
         && !summary.foreground_rlm_running
     {
-        texts.push("No agents".to_string());
+        texts.push(tr(locale, MessageId::SidebarNoAgents).to_string());
         return texts;
     }
 
@@ -2225,7 +2258,14 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, Vec::new(), app);
+    render_sidebar_section(
+        f,
+        area,
+        tr(app.ui_locale, MessageId::SidebarSession),
+        lines,
+        Vec::new(),
+        app,
+    );
 }
 
 fn spans_to_text(spans: &[Span<'_>]) -> String {
@@ -2351,10 +2391,10 @@ fn sidebar_hover_rows(
 mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
-        AutoSidebarState, SidebarAgentRow, SidebarHoverRow, SidebarHoverSection, SidebarHoverState,
-        SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
-        normalize_activity_text, sidebar_hover_rows, sidebar_work_summary,
+        AutoSidebarState, Locale, SidebarAgentRow, SidebarHoverRow, SidebarHoverSection,
+        SidebarHoverState, SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem,
+        SidebarWorkStrategyStep, SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels,
+        editorial_tool_rows, normalize_activity_text, sidebar_hover_rows, sidebar_work_summary,
         subagent_panel_hover_texts, subagent_panel_lines, task_panel_lines, work_panel_empty_hint,
         work_panel_hover_texts, work_panel_lines,
     };
@@ -2394,7 +2434,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = Locale::En;
+        app
     }
 
     fn sidebar_tool_row(name: &str, status: ToolStatus) -> SidebarToolRow {
@@ -2507,7 +2549,7 @@ mod tests {
 
     #[test]
     fn work_panel_empty_hint_stays_quiet_and_truncates() {
-        let hint = work_panel_empty_hint(10);
+        let hint = work_panel_empty_hint(10, Locale::En);
         assert!(
             hint.chars().count() <= 10,
             "hint width {} > 10: {hint:?}",
@@ -2562,6 +2604,7 @@ mod tests {
             16,
             PaletteMode::Dark,
             &palette::UI_THEME,
+            Locale::En,
         ));
 
         assert!(
@@ -2604,6 +2647,7 @@ mod tests {
             6,
             PaletteMode::Dark,
             &palette::UI_THEME,
+            Locale::En,
         ));
 
         assert!(
@@ -2626,6 +2670,7 @@ mod tests {
             16,
             PaletteMode::Dark,
             &palette::UI_THEME,
+            Locale::En,
         ));
         assert!(
             !empty_text.iter().any(|line| line.contains("Strategy")),
@@ -2642,6 +2687,7 @@ mod tests {
             16,
             PaletteMode::Dark,
             &palette::UI_THEME,
+            Locale::En,
         ));
         assert!(
             text.iter().any(|line| line == "Strategy metadata"),
@@ -3209,7 +3255,7 @@ mod tests {
     #[test]
     fn navigator_empty_state_says_no_agents() {
         let summary = SidebarSubagentSummary::default();
-        let lines = subagent_panel_lines(&summary, &[], 32, 8, &palette::UI_THEME);
+        let lines = subagent_panel_lines(&summary, &[], 32, 8, &palette::UI_THEME, Locale::En);
         let text = lines_to_text(&lines);
         assert_eq!(text, vec!["No agents".to_string()]);
     }
@@ -3257,6 +3303,7 @@ mod tests {
             64,
             12,
             &palette::UI_THEME,
+            Locale::En,
         ));
         assert!(text[0].contains("2 running"), "header: {:?}", text[0]);
         assert!(text[0].contains("/ 3"), "total in header: {:?}", text[0]);
@@ -3280,6 +3327,7 @@ mod tests {
             96,
             12,
             &palette::UI_THEME,
+            Locale::En,
         ));
         assert!(
             wide_text.iter().any(|l| l.contains("branch feature/docs")),
@@ -3305,6 +3353,7 @@ mod tests {
             64,
             8,
             &palette::UI_THEME,
+            Locale::En,
         ));
 
         assert!(text[0].contains("1 running"), "header: {:?}", text[0]);
@@ -3330,6 +3379,7 @@ mod tests {
             32,
             8,
             &palette::UI_THEME,
+            Locale::En,
         ));
         assert!(text[0].contains("1 done"), "settled header: {:?}", text[0]);
     }
@@ -3350,7 +3400,7 @@ mod tests {
             foreground_rlm_running: false,
             role_counts,
         };
-        let lines = subagent_panel_lines(&summary, &[], 16, 8, &palette::UI_THEME);
+        let lines = subagent_panel_lines(&summary, &[], 16, 8, &palette::UI_THEME, Locale::En);
         let role_line: &str = lines[1]
             .spans
             .first()
@@ -3374,8 +3424,8 @@ mod tests {
             64,
             8,
             &palette::UI_THEME,
+            Locale::En,
         ));
-
         assert!(!text[0].contains("No agents"), "header: {text:?}");
         assert!(
             text.iter()
@@ -3450,8 +3500,9 @@ mod tests {
             4,
             PaletteMode::Dark,
             &palette::UI_THEME,
+            Locale::En,
         ));
-        let hover = work_panel_hover_texts(&summary, 18, 4);
+        let hover = work_panel_hover_texts(&summary, 18, 4, Locale::En);
 
         assert!(
             display.iter().any(|line| line.contains("...")),
@@ -3504,7 +3555,7 @@ mod tests {
             duration_ms: Some(12_345),
         }];
 
-        let hover = subagent_panel_hover_texts(&summary, &rows, 5);
+        let hover = subagent_panel_hover_texts(&summary, &rows, 5, Locale::En);
         assert!(
             hover.iter().any(|line| line.contains(long_id)),
             "hover text should include the full agent id: {hover:?}"

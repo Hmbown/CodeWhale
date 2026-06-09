@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
+use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, SidebarFocus};
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
@@ -234,10 +235,12 @@ impl HotbarAction for AppHotbarAction {
             AppHotbarKind::SidebarToggle => {
                 if app.sidebar_focus == SidebarFocus::Hidden {
                     app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusAuto).to_string());
                 } else {
                     app.set_sidebar_focus(SidebarFocus::Hidden);
-                    app.status_message = Some("Sidebar hidden".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarHidden).to_string());
                 }
                 Ok(HotbarDispatch::Handled)
             }

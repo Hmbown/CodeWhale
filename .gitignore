@@ -82,6 +82,7 @@ npm/*/bin/downloads/
 apps/
 
 # Claude Code runtime artifacts
+.claude/settings.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .worktrees/

@@ -3531,7 +3531,8 @@ async fn run_event_loop(
                 KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Work);
-                        app.status_message = Some("Sidebar focus: work".to_string());
+                        app.status_message =
+                            Some(tr(app.ui_locale, MessageId::SidebarFocusWork).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     }
@@ -3540,7 +3541,8 @@ async fn run_event_loop(
                 KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Tasks);
-                        app.status_message = Some("Sidebar focus: tasks".to_string());
+                        app.status_message =
+                            Some(tr(app.ui_locale, MessageId::SidebarFocusTasks).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     }
@@ -3549,7 +3551,8 @@ async fn run_event_loop(
                 KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Agents);
-                        app.status_message = Some("Sidebar focus: agents".to_string());
+                        app.status_message =
+                            Some(tr(app.ui_locale, MessageId::SidebarFocusAgents).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     }
@@ -3570,7 +3573,8 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Work);
-                    app.status_message = Some("Sidebar focus: work".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusWork).to_string());
                     continue;
                 }
                 KeyCode::Char('@')
@@ -3578,7 +3582,8 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: tasks".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusTasks).to_string());
                     continue;
                 }
                 KeyCode::Char('#')
@@ -3586,7 +3591,8 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusAgents).to_string());
                     continue;
                 }
                 KeyCode::Char('$') | KeyCode::Char('%')
@@ -3594,7 +3600,8 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Context);
-                    app.status_message = Some("Sidebar focus: context".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusContext).to_string());
                     continue;
                 }
                 KeyCode::Char(')')
@@ -3602,7 +3609,8 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
+                    app.status_message =
+                        Some(tr(app.ui_locale, MessageId::SidebarFocusAuto).to_string());
                     continue;
                 }
                 KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -4441,21 +4449,21 @@ async fn run_event_loop(
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
     app.set_sidebar_focus(SidebarFocus::Agents);
-    app.status_message = Some("Sidebar focus: agents".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::SidebarFocusAgents).to_string());
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.sidebar_focus == SidebarFocus::Hidden {
             app.set_sidebar_focus(SidebarFocus::Auto);
-            app.status_message = Some("Sidebar focus: auto".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::SidebarFocusAuto).to_string());
         } else {
             app.set_sidebar_focus(SidebarFocus::Hidden);
-            app.status_message = Some("Sidebar hidden".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::SidebarHidden).to_string());
         }
     } else {
         app.set_sidebar_focus(SidebarFocus::Auto);
-        app.status_message = Some("Sidebar focus: auto".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::SidebarFocusAuto).to_string());
     }
 }
 
