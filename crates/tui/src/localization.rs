@@ -238,6 +238,17 @@ pub enum MessageId {
     ConfigFooterDefault,
     ConfigFooterScrollable,
     ConfigFooterFiltered,
+    ConfigSectionProvider,
+    ConfigSectionModel,
+    ConfigSectionPermissions,
+    ConfigSectionNetwork,
+    ConfigSectionDisplay,
+    ConfigSectionComposer,
+    ConfigSectionSidebar,
+    ConfigSectionHistory,
+    ConfigSectionMcp,
+    ConfigScopeSession,
+    ConfigScopeSaved,
     HelpTitle,
     HelpFilterPlaceholder,
     HelpFilterPrefix,
@@ -571,6 +582,17 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ConfigFooterDefault,
     MessageId::ConfigFooterScrollable,
     MessageId::ConfigFooterFiltered,
+    MessageId::ConfigSectionProvider,
+    MessageId::ConfigSectionModel,
+    MessageId::ConfigSectionPermissions,
+    MessageId::ConfigSectionNetwork,
+    MessageId::ConfigSectionDisplay,
+    MessageId::ConfigSectionComposer,
+    MessageId::ConfigSectionSidebar,
+    MessageId::ConfigSectionHistory,
+    MessageId::ConfigSectionMcp,
+    MessageId::ConfigScopeSession,
+    MessageId::ConfigScopeSaved,
     MessageId::HelpTitle,
     MessageId::HelpFilterPlaceholder,
     MessageId::HelpFilterPrefix,
@@ -1081,6 +1103,17 @@ fn english(id: MessageId) -> &'static str {
         MessageId::ConfigFooterFiltered => {
             " type=filter, Backspace=delete, Ctrl+U/Esc=clear, Enter=edit "
         }
+        MessageId::ConfigSectionProvider => "Provider",
+        MessageId::ConfigSectionModel => "Model",
+        MessageId::ConfigSectionPermissions => "Permissions",
+        MessageId::ConfigSectionNetwork => "Network",
+        MessageId::ConfigSectionDisplay => "Display",
+        MessageId::ConfigSectionComposer => "Composer",
+        MessageId::ConfigSectionSidebar => "Sidebar",
+        MessageId::ConfigSectionHistory => "History",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "SESSION",
+        MessageId::ConfigScopeSaved => "SAVED",
         MessageId::HelpTitle => "Help",
         MessageId::HelpFilterPlaceholder => "Type to filter",
         MessageId::HelpFilterPrefix => "Filter: ",
@@ -1547,6 +1580,17 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " gõ=lọc, Backspace=xóa, Ctrl+U/Esc=xóa sạch, Enter=sửa "
         }
+        MessageId::ConfigSectionProvider => "Nhà cung cấp",
+        MessageId::ConfigSectionModel => "Mô hình",
+        MessageId::ConfigSectionPermissions => "Quyền hạn",
+        MessageId::ConfigSectionNetwork => "Mạng",
+        MessageId::ConfigSectionDisplay => "Hiển thị",
+        MessageId::ConfigSectionComposer => "Soạn thảo",
+        MessageId::ConfigSectionSidebar => "Thanh bên",
+        MessageId::ConfigSectionHistory => "Lịch sử",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "PHIÊN",
+        MessageId::ConfigScopeSaved => "ĐÃ LƯU",
         MessageId::HelpTitle => "Trợ giúp",
         MessageId::HelpFilterPlaceholder => "Nhập để lọc",
         MessageId::HelpFilterPrefix => "Bộ lọc: ",
@@ -2073,6 +2117,17 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::ConfigSectionProvider => "提供商",
+        MessageId::ConfigSectionModel => "模型",
+        MessageId::ConfigSectionPermissions => "權限",
+        MessageId::ConfigSectionNetwork => "網路",
+        MessageId::ConfigSectionDisplay => "顯示",
+        MessageId::ConfigSectionComposer => "編輯器",
+        MessageId::ConfigSectionSidebar => "側邊欄",
+        MessageId::ConfigSectionHistory => "歷史",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "會話",
+        MessageId::ConfigScopeSaved => "已儲存",
         other => chinese_simplified(other)?,
     })
 }
@@ -2102,6 +2157,17 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " 入力=絞り込み, Backspace=削除, Ctrl+U/Esc=クリア, Enter=編集 "
         }
+        MessageId::ConfigSectionProvider => "プロバイダ",
+        MessageId::ConfigSectionModel => "モデル",
+        MessageId::ConfigSectionPermissions => "権限",
+        MessageId::ConfigSectionNetwork => "ネットワーク",
+        MessageId::ConfigSectionDisplay => "表示",
+        MessageId::ConfigSectionComposer => "コンポーザー",
+        MessageId::ConfigSectionSidebar => "サイドバー",
+        MessageId::ConfigSectionHistory => "履歴",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "セッション",
+        MessageId::ConfigScopeSaved => "保存済み",
         MessageId::HelpTitle => "ヘルプ",
         MessageId::HelpFilterPlaceholder => "入力して絞り込み",
         MessageId::HelpFilterPrefix => "絞り込み: ",
@@ -2562,6 +2628,17 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " 输入=筛选, Backspace=删除, Ctrl+U/Esc=清除, Enter=编辑 "
         }
+        MessageId::ConfigSectionProvider => "提供商",
+        MessageId::ConfigSectionModel => "模型",
+        MessageId::ConfigSectionPermissions => "权限",
+        MessageId::ConfigSectionNetwork => "网络",
+        MessageId::ConfigSectionDisplay => "显示",
+        MessageId::ConfigSectionComposer => "编辑器",
+        MessageId::ConfigSectionSidebar => "侧边栏",
+        MessageId::ConfigSectionHistory => "历史",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "会话",
+        MessageId::ConfigScopeSaved => "已保存",
         MessageId::HelpTitle => "帮助",
         MessageId::HelpFilterPlaceholder => "输入以筛选",
         MessageId::HelpFilterPrefix => "筛选: ",
@@ -2968,6 +3045,17 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " digite=filtrar, Backspace=apagar, Ctrl+U/Esc=limpar, Enter=editar "
         }
+        MessageId::ConfigSectionProvider => "Provedor",
+        MessageId::ConfigSectionModel => "Modelo",
+        MessageId::ConfigSectionPermissions => "Permissões",
+        MessageId::ConfigSectionNetwork => "Rede",
+        MessageId::ConfigSectionDisplay => "Exibição",
+        MessageId::ConfigSectionComposer => "Compositor",
+        MessageId::ConfigSectionSidebar => "Barra lateral",
+        MessageId::ConfigSectionHistory => "Histórico",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "SESSÃO",
+        MessageId::ConfigScopeSaved => "SALVO",
         MessageId::HelpTitle => "Ajuda",
         MessageId::HelpFilterPlaceholder => "Digite para filtrar",
         MessageId::HelpFilterPrefix => "Filtro: ",
@@ -3454,6 +3542,17 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " escribir=filtrar, Backspace=borrar, Ctrl+U/Esc=limpiar, Enter=editar "
         }
+        MessageId::ConfigSectionProvider => "Proveedor",
+        MessageId::ConfigSectionModel => "Modelo",
+        MessageId::ConfigSectionPermissions => "Permisos",
+        MessageId::ConfigSectionNetwork => "Red",
+        MessageId::ConfigSectionDisplay => "Pantalla",
+        MessageId::ConfigSectionComposer => "Compositor",
+        MessageId::ConfigSectionSidebar => "Barra lateral",
+        MessageId::ConfigSectionHistory => "Historial",
+        MessageId::ConfigSectionMcp => "MCP",
+        MessageId::ConfigScopeSession => "SESIÓN",
+        MessageId::ConfigScopeSaved => "GUARDADO",
         MessageId::HelpTitle => "Ayuda",
         MessageId::HelpFilterPlaceholder => "Escribe para filtrar",
         MessageId::HelpFilterPrefix => "Filtro: ",
