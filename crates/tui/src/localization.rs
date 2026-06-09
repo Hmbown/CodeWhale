@@ -2519,7 +2519,6 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
-        other => chinese_simplified(other)?,
         MessageId::ClearConversation => "Conversation cleared",
         MessageId::ClearConversationBusy => {
             "Conversation cleared (plan state busy; run /clear again if needed)"
@@ -3011,6 +3010,8 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::StatusActivityLabelSubagent => "sub-agent",
         MessageId::StatusActivityLabelTool => "tool activity",
         MessageId::StatusActivityLabelMessage => "message",
+        MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
+        MessageId::CmdForkDescription => "Fork the active conversation into a sibling session",
 
     })
 }
@@ -5434,4 +5435,6 @@ mod tests {
         }
         out
     }
+
+
 }
