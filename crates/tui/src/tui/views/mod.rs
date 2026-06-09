@@ -623,8 +623,10 @@ impl ConfigView {
                 value: settings
                     .default_model
                     .as_deref()
-                    .unwrap_or("(default)")
-                    .to_string(),
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| {
+                        tr(app.ui_locale, MessageId::ConfigDefaultValue).to_string()
+                    }),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -634,8 +636,10 @@ impl ConfigView {
                 value: settings
                     .reasoning_effort
                     .as_deref()
-                    .unwrap_or("(config/default)")
-                    .to_string(),
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| {
+                        tr(app.ui_locale, MessageId::ConfigDefaultReasoning).to_string()
+                    }),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -684,10 +688,9 @@ impl ConfigView {
             ConfigRow {
                 section: ConfigSection::Display,
                 key: "background_color".to_string(),
-                value: settings
-                    .background_color
-                    .clone()
-                    .unwrap_or_else(|| "(default)".to_string()),
+                value: settings.background_color.clone().unwrap_or_else(|| {
+                    tr(app.ui_locale, MessageId::ConfigDefaultValue).to_string()
+                }),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -1061,7 +1064,7 @@ impl ConfigView {
         match key.code {
             KeyCode::Esc => {
                 self.editing = None;
-                self.status = Some("Edit cancelled".to_string());
+                self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
                 ViewAction::None
             }
             KeyCode::Enter => {
@@ -1213,7 +1216,12 @@ impl ConfigView {
             let effective_cost_currency =
                 crate::pricing::CostCurrency::from_setting(&self.effective_cost_currency);
             if saved_cost_currency != effective_cost_currency {
-                return format!("{} (effective {})", row.value, self.effective_cost_currency);
+                return format!(
+                    "{}{}",
+                    row.value,
+                    self.tr(MessageId::ConfigRowEffective)
+                        .replace("{currency}", &self.effective_cost_currency)
+                );
             }
         }
 
@@ -1235,7 +1243,7 @@ fn config_base_url_row_value(app: &App) -> String {
             config.provider = Some(app.api_provider.as_str().to_string());
             config.deepseek_base_url()
         })
-        .unwrap_or_else(|_| "(unavailable)".to_string())
+        .unwrap_or_else(|_| tr(app.ui_locale, MessageId::ConfigUnavailable).to_string())
 }
 
 fn cost_currency_config_value(app: &App) -> String {
@@ -1281,7 +1289,10 @@ fn config_hint_for_key(key: &str) -> &'static str {
     }
 }
 
-fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'static> {
+fn render_config_editor_value_line(
+    edit: &ConfigEdit,
+    locale: Locale,
+) -> ratatui::text::Line<'static> {
     use ratatui::{
         style::Style,
         text::{Line, Span},
@@ -1289,10 +1300,9 @@ fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'st
 
     let mut spans = Vec::new();
     spans.push(Span::styled(
-        "New: ",
+        crate::localization::tr(locale, MessageId::ConfigEditNewLabel),
         Style::default().fg(palette::TEXT_MUTED),
     ));
-
     let cursor_style = Style::default()
         .fg(palette::DEEPSEEK_INK)
         .bg(palette::DEEPSEEK_SKY)
@@ -1478,33 +1488,38 @@ impl ModalView for ConfigView {
         let (lines, footer) = if let Some(edit) = self.editing.as_ref() {
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(vec![Span::styled(
-                format!("Edit {}", edit.key),
+                format!("{}{}", self.tr(MessageId::ConfigEditTitlePrefix), edit.key),
                 Style::default().fg(palette::DEEPSEEK_SKY).bold(),
             )]));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Scope: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    self.tr(MessageId::ConfigEditScopeLabel),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::raw(edit.scope.label()),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Current: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    self.tr(MessageId::ConfigEditCurrentLabel),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::raw(truncate_view_text(&edit.original_value, 60)),
             ]));
             lines.push(Line::from(""));
-            lines.push(render_config_editor_value_line(edit));
+            lines.push(render_config_editor_value_line(edit, self.locale));
             lines.push(Line::from(""));
             let hint = config_hint_for_key(&edit.key);
             if !hint.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("Hint: ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(
+                        self.tr(MessageId::ConfigEditHintLabel),
+                        Style::default().fg(palette::TEXT_MUTED),
+                    ),
                     Span::raw(hint),
                 ]));
             }
-            (
-                lines,
-                " Enter=apply, Esc=cancel, Ctrl+U=clear, Ctrl+A=all, \u{2190}/\u{2192}=move "
-                    .to_string(),
-            )
+            (lines, self.tr(MessageId::ConfigEditFooter).to_string())
         } else {
             let content_height = usize::from(inner.height);
             let header_lines = 5usize;
@@ -2522,7 +2537,7 @@ base_url = "https://api.xiaomimimo.com/v1"
             .expect("cost_currency row");
 
         assert_eq!(row.value, "usd");
-        assert_eq!(view.row_display_value(row), "usd (effective cny)");
+        assert_eq!(view.row_display_value(row), "usd (实际 cny)");
         assert_eq!(Settings::load().expect("settings").cost_currency, "usd");
     }
 
@@ -2800,7 +2815,8 @@ base_url = "https://api.xiaomimimo.com/v1"
 
     #[test]
     fn config_view_escape_cancels_editing() {
-        let app = create_test_app();
+        let mut app = create_test_app();
+        app.ui_locale = Locale::En;
         let mut view = ConfigView::new_for_app(&app);
         let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(view.editing.is_some());

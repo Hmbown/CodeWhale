@@ -238,6 +238,17 @@ pub enum MessageId {
     ConfigFooterDefault,
     ConfigFooterScrollable,
     ConfigFooterFiltered,
+    ConfigEditCancelled,
+    ConfigEditTitlePrefix,
+    ConfigEditScopeLabel,
+    ConfigEditCurrentLabel,
+    ConfigEditHintLabel,
+    ConfigEditNewLabel,
+    ConfigEditFooter,
+    ConfigRowEffective,
+    ConfigDefaultValue,
+    ConfigDefaultReasoning,
+    ConfigUnavailable,
     HelpTitle,
     HelpFilterPlaceholder,
     HelpFilterPrefix,
@@ -571,6 +582,17 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ConfigFooterDefault,
     MessageId::ConfigFooterScrollable,
     MessageId::ConfigFooterFiltered,
+    MessageId::ConfigEditCancelled,
+    MessageId::ConfigEditTitlePrefix,
+    MessageId::ConfigEditScopeLabel,
+    MessageId::ConfigEditCurrentLabel,
+    MessageId::ConfigEditHintLabel,
+    MessageId::ConfigEditNewLabel,
+    MessageId::ConfigEditFooter,
+    MessageId::ConfigRowEffective,
+    MessageId::ConfigDefaultValue,
+    MessageId::ConfigDefaultReasoning,
+    MessageId::ConfigUnavailable,
     MessageId::HelpTitle,
     MessageId::HelpFilterPlaceholder,
     MessageId::HelpFilterPrefix,
@@ -1081,6 +1103,19 @@ fn english(id: MessageId) -> &'static str {
         MessageId::ConfigFooterFiltered => {
             " type=filter, Backspace=delete, Ctrl+U/Esc=clear, Enter=edit "
         }
+        MessageId::ConfigEditCancelled => "Edit cancelled",
+        MessageId::ConfigEditTitlePrefix => "Edit ",
+        MessageId::ConfigEditScopeLabel => "Scope: ",
+        MessageId::ConfigEditCurrentLabel => "Current: ",
+        MessageId::ConfigEditHintLabel => "Hint: ",
+        MessageId::ConfigEditNewLabel => "New: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=apply, Esc=cancel, Ctrl+U=clear, Ctrl+A=all, \u{2190}/\u{2192}=move "
+        }
+        MessageId::ConfigRowEffective => " (effective {currency})",
+        MessageId::ConfigDefaultValue => "(default)",
+        MessageId::ConfigDefaultReasoning => "(config/default)",
+        MessageId::ConfigUnavailable => "(unavailable)",
         MessageId::HelpTitle => "Help",
         MessageId::HelpFilterPlaceholder => "Type to filter",
         MessageId::HelpFilterPrefix => "Filter: ",
@@ -1547,6 +1582,19 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " gõ=lọc, Backspace=xóa, Ctrl+U/Esc=xóa sạch, Enter=sửa "
         }
+        MessageId::ConfigEditCancelled => "Đã hủy chỉnh sửa",
+        MessageId::ConfigEditTitlePrefix => "Sửa ",
+        MessageId::ConfigEditScopeLabel => "Phạm vi: ",
+        MessageId::ConfigEditCurrentLabel => "Hiện tại: ",
+        MessageId::ConfigEditHintLabel => "Gợi ý: ",
+        MessageId::ConfigEditNewLabel => "Mới: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=áp dụng, Esc=hủy, Ctrl+U=xóa, Ctrl+A=tất cả, \u{2190}/\u{2192}=di chuyển "
+        }
+        MessageId::ConfigRowEffective => " (hiệu lực {currency})",
+        MessageId::ConfigDefaultValue => "(mặc định)",
+        MessageId::ConfigDefaultReasoning => "(cấu hình/mặc định)",
+        MessageId::ConfigUnavailable => "(không khả dụng)",
         MessageId::HelpTitle => "Trợ giúp",
         MessageId::HelpFilterPlaceholder => "Nhập để lọc",
         MessageId::HelpFilterPrefix => "Bộ lọc: ",
@@ -2073,6 +2121,19 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::ConfigEditCancelled => "編輯已取消",
+        MessageId::ConfigEditTitlePrefix => "編輯 ",
+        MessageId::ConfigEditScopeLabel => "範圍: ",
+        MessageId::ConfigEditCurrentLabel => "目前: ",
+        MessageId::ConfigEditHintLabel => "提示: ",
+        MessageId::ConfigEditNewLabel => "新值: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=套用, Esc=取消, Ctrl+U=清除, Ctrl+A=全選, \u{2190}/\u{2192}=移動 "
+        }
+        MessageId::ConfigRowEffective => " (實際 {currency})",
+        MessageId::ConfigDefaultValue => "(預設)",
+        MessageId::ConfigDefaultReasoning => "(設定/預設)",
+        MessageId::ConfigUnavailable => "(無法使用)",
         other => chinese_simplified(other)?,
     })
 }
@@ -2102,6 +2163,19 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " 入力=絞り込み, Backspace=削除, Ctrl+U/Esc=クリア, Enter=編集 "
         }
+        MessageId::ConfigEditCancelled => "編集をキャンセルしました",
+        MessageId::ConfigEditTitlePrefix => "編集 ",
+        MessageId::ConfigEditScopeLabel => "スコープ: ",
+        MessageId::ConfigEditCurrentLabel => "現在: ",
+        MessageId::ConfigEditHintLabel => "ヒント: ",
+        MessageId::ConfigEditNewLabel => "新規: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=適用, Esc=キャンセル, Ctrl+U=クリア, Ctrl+A=全選択, \u{2190}/\u{2192}=移動 "
+        }
+        MessageId::ConfigRowEffective => " (実効 {currency})",
+        MessageId::ConfigDefaultValue => "(デフォルト)",
+        MessageId::ConfigDefaultReasoning => "(設定/デフォルト)",
+        MessageId::ConfigUnavailable => "(利用不可)",
         MessageId::HelpTitle => "ヘルプ",
         MessageId::HelpFilterPlaceholder => "入力して絞り込み",
         MessageId::HelpFilterPrefix => "絞り込み: ",
@@ -2562,6 +2636,19 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " 输入=筛选, Backspace=删除, Ctrl+U/Esc=清除, Enter=编辑 "
         }
+        MessageId::ConfigEditCancelled => "编辑已取消",
+        MessageId::ConfigEditTitlePrefix => "编辑 ",
+        MessageId::ConfigEditScopeLabel => "范围: ",
+        MessageId::ConfigEditCurrentLabel => "当前: ",
+        MessageId::ConfigEditHintLabel => "提示: ",
+        MessageId::ConfigEditNewLabel => "新值: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=应用, Esc=取消, Ctrl+U=清除, Ctrl+A=全选, \u{2190}/\u{2192}=移动 "
+        }
+        MessageId::ConfigRowEffective => " (实际 {currency})",
+        MessageId::ConfigDefaultValue => "(默认)",
+        MessageId::ConfigDefaultReasoning => "(配置/默认)",
+        MessageId::ConfigUnavailable => "(不可用)",
         MessageId::HelpTitle => "帮助",
         MessageId::HelpFilterPlaceholder => "输入以筛选",
         MessageId::HelpFilterPrefix => "筛选: ",
@@ -2968,6 +3055,19 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " digite=filtrar, Backspace=apagar, Ctrl+U/Esc=limpar, Enter=editar "
         }
+        MessageId::ConfigEditCancelled => "Edição cancelada",
+        MessageId::ConfigEditTitlePrefix => "Editar ",
+        MessageId::ConfigEditScopeLabel => "Escopo: ",
+        MessageId::ConfigEditCurrentLabel => "Atual: ",
+        MessageId::ConfigEditHintLabel => "Dica: ",
+        MessageId::ConfigEditNewLabel => "Novo: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=aplicar, Esc=cancelar, Ctrl+U=limpar, Ctrl+A=tudo, \u{2190}/\u{2192}=mover "
+        }
+        MessageId::ConfigRowEffective => " (efetivo {currency})",
+        MessageId::ConfigDefaultValue => "(padrão)",
+        MessageId::ConfigDefaultReasoning => "(config/padrão)",
+        MessageId::ConfigUnavailable => "(indisponível)",
         MessageId::HelpTitle => "Ajuda",
         MessageId::HelpFilterPlaceholder => "Digite para filtrar",
         MessageId::HelpFilterPrefix => "Filtro: ",
@@ -3454,6 +3554,19 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigFooterFiltered => {
             " escribir=filtrar, Backspace=borrar, Ctrl+U/Esc=limpiar, Enter=editar "
         }
+        MessageId::ConfigEditCancelled => "Edición cancelada",
+        MessageId::ConfigEditTitlePrefix => "Editar ",
+        MessageId::ConfigEditScopeLabel => "Ámbito: ",
+        MessageId::ConfigEditCurrentLabel => "Actual: ",
+        MessageId::ConfigEditHintLabel => "Pista: ",
+        MessageId::ConfigEditNewLabel => "Nuevo: ",
+        MessageId::ConfigEditFooter => {
+            " Enter=aplicar, Esc=cancelar, Ctrl+U=limpiar, Ctrl+A=todo, \u{2190}/\u{2192}=mover "
+        }
+        MessageId::ConfigRowEffective => " (efectivo {currency})",
+        MessageId::ConfigDefaultValue => "(predeterminado)",
+        MessageId::ConfigDefaultReasoning => "(config/predeterminado)",
+        MessageId::ConfigUnavailable => "(no disponible)",
         MessageId::HelpTitle => "Ayuda",
         MessageId::HelpFilterPlaceholder => "Escribe para filtrar",
         MessageId::HelpFilterPrefix => "Filtro: ",
