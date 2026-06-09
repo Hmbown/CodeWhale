@@ -20,20 +20,24 @@ pub fn lines(locale: Locale) -> Vec<Line<'static>> {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            tr(locale, MessageId::OnboardWelcomeDesc).to_string(),
+            tr(locale, MessageId::OnboardWelcomeDesc),
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            tr(locale, MessageId::OnboardWelcomeDesc2).to_string(),
+            tr(locale, MessageId::OnboardWelcomeDesc2),
+            Style::default().fg(palette::TEXT_MUTED),
+        )),
+        Line::from(Span::styled(
+            tr(locale, MessageId::OnboardWelcomeDesc3),
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            tr(locale, MessageId::OnboardWelcomeEnter).to_string(),
+            tr(locale, MessageId::OnboardWelcomeEnter),
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            tr(locale, MessageId::OnboardWelcomeExit).to_string(),
+            tr(locale, MessageId::OnboardWelcomeExit),
             Style::default().fg(palette::TEXT_MUTED),
         )),
     ]
