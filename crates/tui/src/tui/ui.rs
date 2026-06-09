@@ -3560,9 +3560,13 @@ async fn run_event_loop(
                     app.needs_redraw = true;
                     continue;
                 }
-                KeyCode::Char('n') | KeyCode::Char('N')
+                // Ctrl+T: create a new tab (standard browser/VS Code convention).
+                // Key chosen to avoid Windows Terminal defaults (Ctrl+Shift+N opens
+                // a new PowerShell window on Windows).
+                KeyCode::Char('t') | KeyCode::Char('T')
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.modifiers.contains(KeyModifiers::SHIFT) =>
+                        && !key.modifiers.contains(KeyModifiers::SHIFT)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     if app.tab_manager.create_default_chat_tab().is_some() {
                         app.status_message = Some("Created new tab".to_string());
@@ -3572,9 +3576,14 @@ async fn run_event_loop(
                     app.needs_redraw = true;
                     continue;
                 }
+                // Ctrl+W: close the active tab (standard browser convention).
+                // Guarded by !tab_manager.is_empty() so composing users typing
+                // Ctrl+W in the composer don't accidentally close a tab.
                 KeyCode::Char('w') | KeyCode::Char('W')
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.modifiers.contains(KeyModifiers::SHIFT) =>
+                        && !key.modifiers.contains(KeyModifiers::SHIFT)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                        && !app.tab_manager.is_empty() =>
                 {
                     if let Some(idx) = app.tab_manager.active_index() {
                         app.tab_manager.close_tab(idx);
@@ -7197,7 +7206,7 @@ fn render(f: &mut Frame, app: &mut App) {
     };
 
     // Tab bar — always 1 row (when height allows). Shows the open tabs
-    // when present, or a "Press Ctrl+Shift+N" hint when empty so the
+    // when present, or a "Press Ctrl+T" hint when empty so the
     // multi-tab system is discoverable from a fresh launch. Sits
     // between the header and the chat.
     let mut tab_bar_area: Option<Rect> = None;

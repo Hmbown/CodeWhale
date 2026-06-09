@@ -45,7 +45,7 @@ pub fn render_tab_bar(area: Rect, buf: &mut Buffer, app: &App) {
 
     if app.tab_manager.is_empty() {
         let hint = Span::styled(
-            " [Ctrl+Shift+N] Create your first tab  |  Ctrl+`: Switcher ",
+            " [Ctrl+T] Create your first tab  |  Ctrl+`: Switcher ",
             Style::default().fg(ratatui::style::Color::Yellow),
         );
         buf.set_span(area.x, area.y, &hint, area.width);
