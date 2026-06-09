@@ -550,6 +550,17 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    // Pending input preview.
+    PendingContextHeader,
+    PendingInputHeader,
+    PendingSteerLabel,
+    PendingRejectedLabel,
+    PendingQueuedLabel,
+    PendingEditingLabel,
+    PendingRestoreHint,
+    PendingEditHint,
+    PendingDeleteHint,
+    PendingRemovable,
 }
 
 #[allow(dead_code)]
@@ -874,6 +885,16 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::PendingContextHeader,
+    MessageId::PendingInputHeader,
+    MessageId::PendingSteerLabel,
+    MessageId::PendingRejectedLabel,
+    MessageId::PendingQueuedLabel,
+    MessageId::PendingEditingLabel,
+    MessageId::PendingRestoreHint,
+    MessageId::PendingEditHint,
+    MessageId::PendingDeleteHint,
+    MessageId::PendingRemovable,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1509,6 +1530,16 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::PendingContextHeader => "Context for next send",
+        MessageId::PendingInputHeader => "Pending inputs",
+        MessageId::PendingSteerLabel => "Steer pending: ",
+        MessageId::PendingRejectedLabel => "Rejected steer: ",
+        MessageId::PendingQueuedLabel => "Queued follow-up: ",
+        MessageId::PendingEditingLabel => "Editing queued follow-up: ",
+        MessageId::PendingRestoreHint => "Esc restores queued follow-up",
+        MessageId::PendingEditHint => "{key} edit last queued message",
+        MessageId::PendingDeleteHint => "Backspace/Delete removes",
+        MessageId::PendingRemovable => "removable",
     }
 }
 
@@ -2009,6 +2040,16 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+        MessageId::PendingContextHeader => "Ngữ cảnh cho lần gửi tiếp theo",
+        MessageId::PendingInputHeader => "Đầu vào đang chờ",
+        MessageId::PendingSteerLabel => "Đang chờ chỉ đạo: ",
+        MessageId::PendingRejectedLabel => "Chỉ đạo bị từ chối: ",
+        MessageId::PendingQueuedLabel => "Tin nhắn tiếp theo đã xếp hàng: ",
+        MessageId::PendingEditingLabel => "Đang chỉnh sửa tin nhắn tiếp theo đã xếp hàng: ",
+        MessageId::PendingRestoreHint => "Esc khôi phục tin nhắn tiếp theo đã xếp hàng",
+        MessageId::PendingEditHint => "{key} chỉnh sửa tin nhắn cuối cùng đã xếp hàng",
+        MessageId::PendingDeleteHint => "Backspace/Delete xóa",
+        MessageId::PendingRemovable => "có thể xóa",
     })
 }
 
@@ -2073,6 +2114,16 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::PendingContextHeader => "本次發送的上下文",
+        MessageId::PendingInputHeader => "待處理輸入",
+        MessageId::PendingSteerLabel => "待引導：",
+        MessageId::PendingRejectedLabel => "已拒絕引導：",
+        MessageId::PendingQueuedLabel => "已排隊後續消息：",
+        MessageId::PendingEditingLabel => "正在編輯已排隊的後續消息：",
+        MessageId::PendingRestoreHint => "Esc 恢復已排隊的後續消息",
+        MessageId::PendingEditHint => "{key} 編輯最後一條已排隊消息",
+        MessageId::PendingDeleteHint => "Backspace/Delete 刪除",
+        MessageId::PendingRemovable => "可刪除",
         other => chinese_simplified(other)?,
     })
 }
@@ -2536,6 +2587,16 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+        MessageId::PendingContextHeader => "次回送信のコンテキスト",
+        MessageId::PendingInputHeader => "保留中の入力",
+        MessageId::PendingSteerLabel => "保留中のステア: ",
+        MessageId::PendingRejectedLabel => "拒否されたステア: ",
+        MessageId::PendingQueuedLabel => "キューされたフォローアップ: ",
+        MessageId::PendingEditingLabel => "キューされたフォローアップを編集中: ",
+        MessageId::PendingRestoreHint => "Esc でキューされたフォローアップを復元",
+        MessageId::PendingEditHint => "{key} 最後のキューされたメッセージを編集",
+        MessageId::PendingDeleteHint => "Backspace/Delete で削除",
+        MessageId::PendingRemovable => "削除可能",
     })
 }
 
@@ -2940,6 +3001,16 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::PendingContextHeader => "本次发送的上下文",
+        MessageId::PendingInputHeader => "待处理输入",
+        MessageId::PendingSteerLabel => "待引导：",
+        MessageId::PendingRejectedLabel => "已拒绝引导：",
+        MessageId::PendingQueuedLabel => "已排队后续消息：",
+        MessageId::PendingEditingLabel => "正在编辑已排队的后续消息：",
+        MessageId::PendingRestoreHint => "Esc 恢复已排队的后续消息",
+        MessageId::PendingEditHint => "{key} 编辑最后一条已排队消息",
+        MessageId::PendingDeleteHint => "Backspace/Delete 删除",
+        MessageId::PendingRemovable => "可删除",
     })
 }
 
@@ -3426,6 +3497,16 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+        MessageId::PendingContextHeader => "Contexto para o próximo envio",
+        MessageId::PendingInputHeader => "Entradas pendentes",
+        MessageId::PendingSteerLabel => "Direção pendente: ",
+        MessageId::PendingRejectedLabel => "Direção rejeitada: ",
+        MessageId::PendingQueuedLabel => "Acompanhamento na fila: ",
+        MessageId::PendingEditingLabel => "Editando acompanhamento na fila: ",
+        MessageId::PendingRestoreHint => "Esc restaura acompanhamento na fila",
+        MessageId::PendingEditHint => "{key} editar última mensagem na fila",
+        MessageId::PendingDeleteHint => "Backspace/Delete remove",
+        MessageId::PendingRemovable => "removível",
     })
 }
 
@@ -3922,6 +4003,16 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+        MessageId::PendingContextHeader => "Contexto para el próximo envío",
+        MessageId::PendingInputHeader => "Entradas pendientes",
+        MessageId::PendingSteerLabel => "Dirección pendiente: ",
+        MessageId::PendingRejectedLabel => "Dirección rechazada: ",
+        MessageId::PendingQueuedLabel => "Seguimiento en cola: ",
+        MessageId::PendingEditingLabel => "Editando seguimiento en cola: ",
+        MessageId::PendingRestoreHint => "Esc restaura seguimiento en cola",
+        MessageId::PendingEditHint => "{key} editar último mensaje en cola",
+        MessageId::PendingDeleteHint => "Backspace/Delete elimina",
+        MessageId::PendingRemovable => "removible",
     })
 }
 

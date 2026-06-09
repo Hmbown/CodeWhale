@@ -1,17 +1,3 @@
-//! Pending-input preview widget for the composer area.
-//!
-//! Port of `codex-rs/tui/src/bottom_pane/pending_input_preview.rs` for
-//! issue #85. Renders queued/steered messages above the composer when a
-//! turn is in flight, so user input typed during a running turn doesn't
-//! disappear silently. The backing state still distinguishes queue/steer
-//! origins, but the UI renders one coherent pending-input list.
-//!
-//! Empty state renders zero rows so the composer doesn't gain wasted height
-//! when there's nothing to show.
-//!
-//! Wired into `ui.rs::render` between the chat area and the composer; the user
-//! can see when typed input has been captured for later delivery.
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -19,15 +5,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthChar;
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::widgets::Renderable;
 
 /// Per-item line cap before we collapse the rest into a `…` overflow row.
 const PREVIEW_LINE_LIMIT: usize = 3;
-const PENDING_STEER_PREFIX: &str = "  ↳ Steer pending: ";
-const REJECTED_STEER_PREFIX: &str = "  ↳ Rejected steer: ";
-const QUEUED_MESSAGE_PREFIX: &str = "  ↳ Queued follow-up: ";
-const EDITING_QUEUED_PREFIX: &str = "  ↳ Editing queued follow-up: ";
 
 /// Description of the keybinding the hint line at the bottom should advertise
 /// for the "edit last queued message" action.
@@ -43,6 +26,7 @@ impl EditBinding {
 /// Widget showing pending input while a turn is in progress.
 #[derive(Debug, Clone)]
 pub struct PendingInputPreview {
+    pub locale: Locale,
     pub context_items: Vec<ContextPreviewItem>,
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
@@ -65,8 +49,9 @@ pub struct ContextPreviewItem {
 }
 
 impl PendingInputPreview {
-    pub fn new() -> Self {
+    pub fn new(locale: Locale) -> Self {
         Self {
+            locale,
             context_items: Vec::new(),
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
@@ -76,6 +61,22 @@ impl PendingInputPreview {
         }
     }
 
+    fn pending_steer_prefix(&self) -> String {
+        format!("  ↳ {}", tr(self.locale, MessageId::PendingSteerLabel))
+    }
+
+    fn rejected_steer_prefix(&self) -> String {
+        format!("  ↳ {}", tr(self.locale, MessageId::PendingRejectedLabel))
+    }
+
+    fn queued_message_prefix(&self) -> String {
+        format!("  ↳ {}", tr(self.locale, MessageId::PendingQueuedLabel))
+    }
+
+    fn editing_queued_prefix(&self) -> String {
+        format!("  ↳ {}", tr(self.locale, MessageId::PendingEditingLabel))
+    }
+
     fn has_pending_inputs(&self) -> bool {
         !self.pending_steers.is_empty()
             || !self.rejected_steers.is_empty()
@@ -83,9 +84,6 @@ impl PendingInputPreview {
             || self.editing_queued_message.is_some()
     }
 
-    /// Build the (possibly empty) ordered line list this widget would render
-    /// at `width`. Pulled out so `desired_height` can ask the same renderer
-    /// without duplicating wrapping logic.
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         if (self.context_items.is_empty() && !self.has_pending_inputs()) || width < 4 {
             return Vec::new();
@@ -101,10 +99,13 @@ impl PendingInputPreview {
         if !self.context_items.is_empty() {
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Context for next send")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(tr(self.locale, MessageId::PendingContextHeader).to_string()),
+                ]),
             );
             for item in &self.context_items {
-                push_context_item(&mut lines, item, width);
+                push_context_item(&mut lines, item, width, self.locale);
             }
         }
 
@@ -114,59 +115,70 @@ impl PendingInputPreview {
             }
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Pending inputs")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(tr(self.locale, MessageId::PendingInputHeader).to_string()),
+                ]),
             );
-            let pending_steer_indent = continuation_indent(PENDING_STEER_PREFIX);
+            let pending_steer_prefix = self.pending_steer_prefix();
+            let pending_steer_indent = continuation_indent(&pending_steer_prefix);
             for steer in &self.pending_steers {
                 push_truncated_item(
                     &mut lines,
                     steer,
                     width,
                     dim,
-                    PENDING_STEER_PREFIX,
+                    &pending_steer_prefix,
                     &pending_steer_indent,
                 );
             }
-            let rejected_steer_indent = continuation_indent(REJECTED_STEER_PREFIX);
+            let rejected_steer_prefix = self.rejected_steer_prefix();
+            let rejected_steer_indent = continuation_indent(&rejected_steer_prefix);
             for steer in &self.rejected_steers {
                 push_truncated_item(
                     &mut lines,
                     steer,
                     width,
                     dim,
-                    REJECTED_STEER_PREFIX,
+                    &rejected_steer_prefix,
                     &rejected_steer_indent,
                 );
             }
             if let Some(draft) = self.editing_queued_message.as_deref() {
-                let editing_indent = continuation_indent(EDITING_QUEUED_PREFIX);
+                let editing_prefix = self.editing_queued_prefix();
+                let editing_indent = continuation_indent(&editing_prefix);
                 push_truncated_item(
                     &mut lines,
                     draft,
                     width,
                     dim_italic,
-                    EDITING_QUEUED_PREFIX,
+                    &editing_prefix,
                     &editing_indent,
                 );
                 lines.push(Line::from(vec![Span::styled(
-                    "    Esc restores queued follow-up".to_string(),
+                    format!("    {}", tr(self.locale, MessageId::PendingRestoreHint)),
                     dim,
                 )]));
             }
-            let queued_message_indent = continuation_indent(QUEUED_MESSAGE_PREFIX);
+            let queued_message_prefix = self.queued_message_prefix();
+            let queued_message_indent = continuation_indent(&queued_message_prefix);
             for message in &self.queued_messages {
                 push_truncated_item(
                     &mut lines,
                     message,
                     width,
                     dim_italic,
-                    QUEUED_MESSAGE_PREFIX,
+                    &queued_message_prefix,
                     &queued_message_indent,
                 );
             }
             if !self.queued_messages.is_empty() {
                 lines.push(Line::from(vec![Span::styled(
-                    format!("    {} edit last queued message", self.edit_binding.label),
+                    format!(
+                        "    {}",
+                        tr(self.locale, MessageId::PendingEditHint)
+                            .replace("{key}", self.edit_binding.label)
+                    ),
                     dim,
                 )]));
             }
@@ -178,7 +190,7 @@ impl PendingInputPreview {
 
 impl Default for PendingInputPreview {
     fn default() -> Self {
-        Self::new()
+        Self::new(Locale::En)
     }
 }
 
@@ -208,7 +220,12 @@ fn push_section_header(lines: &mut Vec<Line<'static>>, header: Line<'static>) {
     lines.push(header);
 }
 
-fn push_context_item(lines: &mut Vec<Line<'static>>, item: &ContextPreviewItem, width: u16) {
+fn push_context_item(
+    lines: &mut Vec<Line<'static>>,
+    item: &ContextPreviewItem,
+    width: u16,
+    locale: Locale,
+) {
     let status_style = if item.selected {
         Style::default()
             .fg(palette::SELECTION_TEXT)
@@ -235,11 +252,11 @@ fn push_context_item(lines: &mut Vec<Line<'static>>, item: &ContextPreviewItem, 
         .map(|detail| format!(" · {detail}"))
         .unwrap_or_default();
     let action = if item.selected {
-        " · Backspace/Delete removes"
+        format!(" · {}", tr(locale, MessageId::PendingDeleteHint))
     } else if item.removable {
-        " · removable"
+        format!(" · {}", tr(locale, MessageId::PendingRemovable))
     } else {
-        ""
+        String::new()
     };
     let body = format!("[{}] {}{}{}", item.kind, item.label, detail, action);
     let body_width = width.saturating_sub(4).max(1) as usize;
@@ -256,10 +273,6 @@ fn push_context_item(lines: &mut Vec<Line<'static>>, item: &ContextPreviewItem, 
     }
 }
 
-/// Render a single bucket item with `↳` prefix, truncating to
-/// [`PREVIEW_LINE_LIMIT`] visible rows. Multi-line input wraps at the given
-/// column budget and the continuation rows get the `subsequent_indent` so
-/// the prefix and the body stay column-aligned.
 fn push_truncated_item(
     lines: &mut Vec<Line<'static>>,
     raw: &str,
@@ -305,10 +318,6 @@ fn push_truncated_item(
     }
 }
 
-/// Naive word-aware wrap that respects unicode display widths. Matches the
-/// behavior expected by snapshot tests in the codex source — long URL-like
-/// tokens that exceed `width` are emitted on their own row instead of being
-/// hard-broken mid-character.
 fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     if width == 0 || text.is_empty() {
         return vec![text.to_string()];
@@ -325,9 +334,6 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
             current_width = 0;
         }
         if word_width > width {
-            // Token longer than the budget: flush current, emit the word as
-            // its own row even though it overflows. Avoids the codex-issue
-            // of a long URL fanning out into N junk-ellipsis rows.
             if !current.is_empty() {
                 out.push(std::mem::take(&mut current));
                 current_width = 0;
@@ -374,16 +380,15 @@ mod tests {
 
     #[test]
     fn empty_widget_has_zero_height() {
-        let preview = PendingInputPreview::new();
+        let preview = PendingInputPreview::new(Locale::En);
         assert_eq!(preview.desired_height(40), 0);
     }
 
     #[test]
     fn single_queued_message_renders_header_item_and_hint() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.queued_messages.push("Hello, world!".to_string());
         let rows = render_to_string(&preview, 40);
-        // Expect: header line, message line, hint line.
         assert_eq!(rows.len(), 3, "got rows: {rows:?}");
         assert!(rows[0].contains("Pending inputs"));
         assert!(rows[1].contains("Hello, world!"));
@@ -392,7 +397,7 @@ mod tests {
 
     #[test]
     fn editing_queued_message_renders_explicit_state_and_restore_hint() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.editing_queued_message = Some("revise before sending".to_string());
 
         let rows = render_to_string(&preview, 80);
@@ -418,7 +423,7 @@ mod tests {
 
     #[test]
     fn context_items_render_before_queue_buckets() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.context_items.push(ContextPreviewItem {
             kind: "file".to_string(),
             label: "src/main.rs".to_string(),
@@ -443,7 +448,7 @@ mod tests {
 
     #[test]
     fn selected_removable_attachment_renders_delete_hint() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.context_items.push(ContextPreviewItem {
             kind: "image".to_string(),
             label: "/tmp/pasted.png".to_string(),
@@ -464,7 +469,7 @@ mod tests {
 
     #[test]
     fn pending_steer_renders_without_queue_edit_hint() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.pending_steers.push("Please continue.".to_string());
         let rows = render_to_string(&preview, 80);
         assert!(
@@ -483,7 +488,7 @@ mod tests {
 
     #[test]
     fn all_pending_inputs_render_as_one_list() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.pending_steers.push("steer".to_string());
         preview.rejected_steers.push("rejected".to_string());
         preview.queued_messages.push("queued".to_string());
@@ -501,7 +506,7 @@ mod tests {
 
     #[test]
     fn pending_input_rows_label_each_delivery_mode() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.pending_steers.push("steer".to_string());
         preview.rejected_steers.push("rejected".to_string());
         preview.queued_messages.push("queued".to_string());
@@ -532,7 +537,7 @@ mod tests {
 
     #[test]
     fn wrapped_pending_input_aligns_continuation_under_label() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview
             .queued_messages
             .push("alpha beta gamma delta epsilon zeta".to_string());
@@ -540,8 +545,9 @@ mod tests {
         let rows = render_to_string(&preview, 34);
 
         assert!(rows[1].contains("Queued follow-up: alpha"));
+        let q_prefix = preview.queued_message_prefix();
         assert!(
-            rows[2].starts_with(&continuation_indent(QUEUED_MESSAGE_PREFIX)),
+            rows[2].starts_with(&continuation_indent(&q_prefix)),
             "continuation should align under label: {rows:?}"
         );
         assert!(
@@ -552,12 +558,11 @@ mod tests {
 
     #[test]
     fn message_truncates_to_three_visible_lines() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview
             .queued_messages
             .push("line1\nline2\nline3\nline4\nline5".to_string());
         let rows = render_to_string(&preview, 40);
-        // Header + 3 visible lines + ellipsis row + hint = 6 rows.
         assert_eq!(rows.len(), 6, "got rows: {rows:?}");
         assert!(rows[0].contains("Pending inputs"));
         assert!(rows[1].contains("line1"));
@@ -569,21 +574,19 @@ mod tests {
 
     #[test]
     fn long_url_does_not_explode_into_ellipsis_rows() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.queued_messages.push(
             "example.test/api/v1/projects/alpha/releases/2026-02-17/build/1234567890/artifacts/x"
                 .to_string(),
         );
         let rows = render_to_string(&preview, 36);
-        // Header + URL row + hint = 3 rows; the URL must NOT cause a chain of
-        // wrapped-ellipsis rows.
         assert_eq!(rows.len(), 3, "got rows: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains("…")));
     }
 
     #[test]
     fn narrow_width_renders_nothing() {
-        let mut preview = PendingInputPreview::new();
+        let mut preview = PendingInputPreview::new(Locale::En);
         preview.queued_messages.push("hi".to_string());
         assert_eq!(preview.desired_height(2), 0);
     }
