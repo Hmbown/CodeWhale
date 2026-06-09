@@ -1,5 +1,3 @@
-//! `/mode` picker for Agent / Plan / YOLO.
-
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
@@ -9,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
 };
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::app::AppMode;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
@@ -17,43 +16,44 @@ use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 struct ModeRow {
     mode: AppMode,
     number: char,
-    name: &'static str,
-    hint: &'static str,
 }
 
 const MODE_ROWS: &[ModeRow] = &[
     ModeRow {
         mode: AppMode::Agent,
         number: '1',
-        name: "Agent",
-        hint: "Normal execution with approvals",
     },
     ModeRow {
         mode: AppMode::Plan,
         number: '2',
-        name: "Plan",
-        hint: "Plan first before execution",
     },
     ModeRow {
         mode: AppMode::Yolo,
         number: '3',
-        name: "YOLO",
-        hint: "Auto-approve; shell enabled",
     },
 ];
 
+fn mode_hint(mode: AppMode, locale: Locale) -> &'static str {
+    match mode {
+        AppMode::Agent => tr(locale, MessageId::ModePickerAgentHint),
+        AppMode::Plan => tr(locale, MessageId::ModePickerPlanHint),
+        AppMode::Yolo => tr(locale, MessageId::ModePickerYoloHint),
+    }
+}
+
 pub struct ModePickerView {
     cursor: usize,
+    locale: Locale,
 }
 
 impl ModePickerView {
     #[must_use]
-    pub fn new(current: AppMode) -> Self {
+    pub fn new(current: AppMode, locale: Locale) -> Self {
         let cursor = MODE_ROWS
             .iter()
             .position(|row| row.mode == current)
             .unwrap_or(0);
-        Self { cursor }
+        Self { cursor, locale }
     }
 
     fn selected_mode(&self) -> AppMode {
@@ -126,18 +126,18 @@ impl ModalView for ModePickerView {
 
         let block = Block::default()
             .title(Line::from(Span::styled(
-                " Mode ",
+                tr(self.locale, MessageId::ModePickerTitle),
                 Style::default()
                     .fg(palette::DEEPSEEK_SKY)
                     .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(vec![
                 Span::styled(" Up/Down ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("move "),
+                Span::raw(tr(self.locale, MessageId::ModePickerFooterMove)),
                 Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("select "),
+                Span::raw(tr(self.locale, MessageId::ModePickerFooterSelect)),
                 Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("cancel "),
+                Span::raw(tr(self.locale, MessageId::ModePickerFooterCancel)),
             ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
@@ -149,7 +149,7 @@ impl ModalView for ModePickerView {
 
         let mut lines = Vec::with_capacity(MODE_ROWS.len() + 1);
         lines.push(Line::from(Span::styled(
-            "Choose how CodeWhale should operate:",
+            tr(self.locale, MessageId::ModePickerInstruction),
             Style::default().fg(palette::TEXT_MUTED),
         )));
 
@@ -172,12 +172,16 @@ impl ModalView for ModePickerView {
             };
             let pointer = if is_cursor { ">" } else { " " };
 
+            let name = match row.mode {
+                AppMode::Agent => "Agent",
+                AppMode::Plan => "Plan",
+                AppMode::Yolo => "YOLO",
+            };
+            let hint = mode_hint(row.mode, self.locale);
+
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{pointer} {}. {:<7}", row.number, row.name),
-                    row_style,
-                ),
-                Span::styled(row.hint, hint_style),
+                Span::styled(format!("{pointer} {}. {:<7}", row.number, name), row_style),
+                Span::styled(hint, hint_style),
             ]));
         }
 
@@ -192,13 +196,13 @@ mod tests {
 
     #[test]
     fn opens_on_current_mode() {
-        let view = ModePickerView::new(AppMode::Plan);
+        let view = ModePickerView::new(AppMode::Plan, Locale::En);
         assert_eq!(view.selected_mode(), AppMode::Plan);
     }
 
     #[test]
     fn enter_emits_selected_mode() {
-        let mut view = ModePickerView::new(AppMode::Agent);
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match action {
@@ -211,7 +215,7 @@ mod tests {
 
     #[test]
     fn number_keys_select_modes() {
-        let mut view = ModePickerView::new(AppMode::Agent);
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         match action {
             ViewAction::EmitAndClose(ViewEvent::ModeSelected { mode }) => {

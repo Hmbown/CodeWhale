@@ -6254,6 +6254,7 @@ async fn apply_command_result(
                     app.view_stack
                         .push(crate::tui::views::mode_picker::ModePickerView::new(
                             app.mode,
+                            app.ui_locale,
                         ));
                 }
             }

@@ -550,6 +550,15 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    // Mode picker.
+    ModePickerTitle,
+    ModePickerInstruction,
+    ModePickerAgentHint,
+    ModePickerPlanHint,
+    ModePickerYoloHint,
+    ModePickerFooterMove,
+    ModePickerFooterSelect,
+    ModePickerFooterCancel,
 }
 
 #[allow(dead_code)]
@@ -874,6 +883,14 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::ModePickerTitle,
+    MessageId::ModePickerInstruction,
+    MessageId::ModePickerAgentHint,
+    MessageId::ModePickerPlanHint,
+    MessageId::ModePickerYoloHint,
+    MessageId::ModePickerFooterMove,
+    MessageId::ModePickerFooterSelect,
+    MessageId::ModePickerFooterCancel,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1509,6 +1526,14 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::ModePickerTitle => " Mode ",
+        MessageId::ModePickerInstruction => "Choose how CodeWhale should operate:",
+        MessageId::ModePickerAgentHint => "Normal execution with approvals",
+        MessageId::ModePickerPlanHint => "Plan first before execution",
+        MessageId::ModePickerYoloHint => "Auto-approve; shell enabled",
+        MessageId::ModePickerFooterMove => "move ",
+        MessageId::ModePickerFooterSelect => "select ",
+        MessageId::ModePickerFooterCancel => "cancel ",
     }
 }
 
@@ -2009,6 +2034,14 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+        MessageId::ModePickerTitle => " Chế độ ",
+        MessageId::ModePickerInstruction => "Chọn cách CodeWhale vận hành:",
+        MessageId::ModePickerAgentHint => "Thực thi bình thường với phê duyệt",
+        MessageId::ModePickerPlanHint => "Lập kế hoạch trước khi thực thi",
+        MessageId::ModePickerYoloHint => "Tự động phê duyệt; bật shell",
+        MessageId::ModePickerFooterMove => "di chuyển ",
+        MessageId::ModePickerFooterSelect => "chọn ",
+        MessageId::ModePickerFooterCancel => "hủy ",
     })
 }
 
@@ -2073,6 +2106,14 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
+        MessageId::ModePickerTitle => " 模式 ",
+        MessageId::ModePickerInstruction => "選擇 CodeWhale 的運作方式：",
+        MessageId::ModePickerAgentHint => "一般執行，需經核准",
+        MessageId::ModePickerPlanHint => "先規劃再執行",
+        MessageId::ModePickerYoloHint => "自動核准；啟用 Shell",
+        MessageId::ModePickerFooterMove => "移動 ",
+        MessageId::ModePickerFooterSelect => "選擇 ",
+        MessageId::ModePickerFooterCancel => "取消 ",
         other => chinese_simplified(other)?,
     })
 }
@@ -2536,6 +2577,14 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+        MessageId::ModePickerTitle => " モード ",
+        MessageId::ModePickerInstruction => "CodeWhale の動作モードを選択：",
+        MessageId::ModePickerAgentHint => "承認付きの通常実行",
+        MessageId::ModePickerPlanHint => "実行前に計画を立てる",
+        MessageId::ModePickerYoloHint => "自動承認；シェル有効",
+        MessageId::ModePickerFooterMove => "移動 ",
+        MessageId::ModePickerFooterSelect => "選択 ",
+        MessageId::ModePickerFooterCancel => "キャンセル ",
     })
 }
 
@@ -2940,6 +2989,14 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::ModePickerTitle => " 模式 ",
+        MessageId::ModePickerInstruction => "选择 CodeWhale 的运行方式：",
+        MessageId::ModePickerAgentHint => "正常执行，需要批准",
+        MessageId::ModePickerPlanHint => "先计划再执行",
+        MessageId::ModePickerYoloHint => "自动批准；启用 Shell",
+        MessageId::ModePickerFooterMove => "移动 ",
+        MessageId::ModePickerFooterSelect => "选择 ",
+        MessageId::ModePickerFooterCancel => "取消 ",
     })
 }
 
@@ -3426,6 +3483,14 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+        MessageId::ModePickerTitle => " Modo ",
+        MessageId::ModePickerInstruction => "Escolha como o CodeWhale deve operar:",
+        MessageId::ModePickerAgentHint => "Execução normal com aprovações",
+        MessageId::ModePickerPlanHint => "Planejar antes de executar",
+        MessageId::ModePickerYoloHint => "Aprovação automática; shell ativado",
+        MessageId::ModePickerFooterMove => "mover ",
+        MessageId::ModePickerFooterSelect => "selecionar ",
+        MessageId::ModePickerFooterCancel => "cancelar ",
     })
 }
 
@@ -3922,6 +3987,14 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+        MessageId::ModePickerTitle => " Modo ",
+        MessageId::ModePickerInstruction => "Elige cómo debe operar CodeWhale:",
+        MessageId::ModePickerAgentHint => "Ejecución normal con aprobaciones",
+        MessageId::ModePickerPlanHint => "Planificar antes de ejecutar",
+        MessageId::ModePickerYoloHint => "Aprobación automática; shell habilitado",
+        MessageId::ModePickerFooterMove => "mover ",
+        MessageId::ModePickerFooterSelect => "seleccionar ",
+        MessageId::ModePickerFooterCancel => "cancelar ",
     })
 }
 
