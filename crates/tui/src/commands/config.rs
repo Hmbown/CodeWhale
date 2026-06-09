@@ -12,7 +12,7 @@ use crate::config_persistence::{
     persist_tui_integer_key,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
-use crate::localization::resolve_locale;
+use crate::localization::{MessageId, resolve_locale, tr};
 use crate::settings::Settings;
 use crate::tui::app::{
     App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
@@ -969,20 +969,18 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
         "" | "status" | "list" => trust_status(&workspace, app, sub == "list"),
         "on" | "enable" | "yes" | "y" => {
             app.trust_mode = true;
-            CommandResult::message(
-                "Workspace trust mode enabled — agent file tools can now read/write any path. \
-                 Use `/trust off` to revert; prefer `/trust add <path>` for a narrower opt-in.",
-            )
+            CommandResult::message(tr(app.ui_locale, MessageId::CmdTrustEnabled))
         }
         "off" | "disable" | "no" | "n" => {
             app.trust_mode = false;
-            CommandResult::message("Workspace trust mode disabled.")
+            CommandResult::message(tr(app.ui_locale, MessageId::CmdTrustDisabled))
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error(format!(
-            "Unknown /trust action `{other}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
-        )),
+        other => CommandResult::error_localized(
+            app.ui_locale,
+            tr(app.ui_locale, MessageId::CmdTrustUnknownAction).replace("{action}", other),
+        ),
     }
 }
 
@@ -1072,27 +1070,24 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     // Access lsp_manager config through the App's engine handle
     let current_enabled = app.lsp_enabled;
 
+    let locale = app.ui_locale;
     match raw {
         "" | "status" => {
             let status = if current_enabled { "on" } else { "off" };
-            CommandResult::message(format!(
-                "LSP diagnostics are currently **{status}**.\n\n\
-                 Use `/lsp on` to enable or `/lsp off` to disable inline diagnostics after file edits."
-            ))
+            CommandResult::message(tr(locale, MessageId::CmdLspStatus).replace("{status}", status))
         }
         "on" | "enable" | "1" | "true" => {
             app.lsp_enabled = true;
-            CommandResult::message(
-                "LSP diagnostics enabled — file edit results will include compiler errors and warnings when available.",
-            )
+            CommandResult::message(tr(locale, MessageId::CmdLspEnabled))
         }
         "off" | "disable" | "0" | "false" => {
             app.lsp_enabled = false;
-            CommandResult::message("LSP diagnostics disabled.")
+            CommandResult::message(tr(locale, MessageId::CmdLspDisabled))
         }
-        other => CommandResult::error(format!(
-            "Unknown /lsp argument `{other}`. Use `/lsp on`, `/lsp off`, or `/lsp status`."
-        )),
+        other => CommandResult::error_localized(
+            locale,
+            tr(locale, MessageId::CmdLspUnknownArg).replace("{arg}", other),
+        ),
     }
 }
 
@@ -1102,6 +1097,7 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
 /// `codewhale auth clear --provider <id>` and
 /// `codewhale auth set --provider <id>`.
 pub fn logout(app: &mut App) -> CommandResult {
+    let locale = app.ui_locale;
     let provider_name = app.api_provider.as_str();
     match clear_active_provider_api_key(provider_name) {
         Ok(()) => {
@@ -1109,12 +1105,16 @@ pub fn logout(app: &mut App) -> CommandResult {
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message(format!(
-                "Cleared API key for {provider_name}. \
-                 Use `codewhale auth clear --provider <id>` to clear a different provider."
-            ))
+            CommandResult::message(
+                tr(locale, MessageId::CmdLogoutSuccess).replace("{provider}", provider_name),
+            )
         }
-        Err(e) => CommandResult::error(format!("Failed to clear API key for {provider_name}: {e}")),
+        Err(e) => CommandResult::error_localized(
+            locale,
+            tr(locale, MessageId::CmdLogoutFailed)
+                .replace("{provider}", provider_name)
+                .replace("{error}", &e.to_string()),
+        ),
     }
 }
 
@@ -1122,6 +1122,7 @@ pub fn logout(app: &mut App) -> CommandResult {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::test_support::lock_test_env;
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::approval::ApprovalMode;
@@ -1251,6 +1252,7 @@ mod tests {
         app.auto_model = false;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
+        app.ui_locale = Locale::En;
         app
     }
 
@@ -1892,7 +1894,7 @@ mod tests {
         app.trust_mode = false;
         let result = trust(&mut app, Some("on"));
         let msg = result.message.expect("message");
-        assert!(msg.contains("Workspace trust mode enabled"));
+        assert!(msg.contains(tr(Locale::En, MessageId::CmdTrustEnabled)));
         assert!(app.trust_mode);
     }
 

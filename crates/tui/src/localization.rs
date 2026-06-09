@@ -559,6 +559,22 @@ pub enum MessageId {
     ModePickerFooterMove,
     ModePickerFooterSelect,
     ModePickerFooterCancel,
+    // Cmd command output.
+    CmdErrorPrefix,
+    CmdTaskUsageAdd,
+    CmdTaskUsageShow,
+    CmdTaskUsageCancel,
+    CmdTaskUsageGeneral,
+    CmdTrustEnabled,
+    CmdTrustDisabled,
+    CmdTrustUnknownAction,
+    CmdLspStatus,
+    CmdLspEnabled,
+    CmdLspDisabled,
+    CmdLspUnknownArg,
+    CmdLogoutSuccess,
+    CmdLogoutFailed,
+    CmdEditingQueuedDraft,
 }
 
 #[allow(dead_code)]
@@ -891,6 +907,21 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ModePickerFooterMove,
     MessageId::ModePickerFooterSelect,
     MessageId::ModePickerFooterCancel,
+    MessageId::CmdErrorPrefix,
+    MessageId::CmdTaskUsageAdd,
+    MessageId::CmdTaskUsageShow,
+    MessageId::CmdTaskUsageCancel,
+    MessageId::CmdTaskUsageGeneral,
+    MessageId::CmdTrustEnabled,
+    MessageId::CmdTrustDisabled,
+    MessageId::CmdTrustUnknownAction,
+    MessageId::CmdLspStatus,
+    MessageId::CmdLspEnabled,
+    MessageId::CmdLspDisabled,
+    MessageId::CmdLspUnknownArg,
+    MessageId::CmdLogoutSuccess,
+    MessageId::CmdLogoutFailed,
+    MessageId::CmdEditingQueuedDraft,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1534,6 +1565,34 @@ fn english(id: MessageId) -> &'static str {
         MessageId::ModePickerFooterMove => "move ",
         MessageId::ModePickerFooterSelect => "select ",
         MessageId::ModePickerFooterCancel => "cancel ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "Error:",
+        MessageId::CmdTaskUsageAdd => "Usage: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Usage: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Usage: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Usage: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Workspace trust mode enabled — agent file tools can now read/write any path. Use /trust off to revert; prefer /trust add <path> for a narrower opt-in."
+        }
+        MessageId::CmdTrustDisabled => "Workspace trust mode disabled.",
+        MessageId::CmdTrustUnknownAction => {
+            "Unknown /trust action `{action}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "LSP diagnostics are currently **{status}**.\n\nUse `/lsp on` to enable or `/lsp off` to disable inline diagnostics after file edits."
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP diagnostics enabled — file edit results will include compiler errors and warnings when available."
+        }
+        MessageId::CmdLspDisabled => "LSP diagnostics disabled.",
+        MessageId::CmdLspUnknownArg => {
+            "Unknown /lsp argument `{arg}`. Use `/lsp on`, `/lsp off`, or `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => {
+            "Cleared API key for {provider}. Use `codewhale auth clear --provider <id>` to clear a different provider."
+        }
+        MessageId::CmdLogoutFailed => "Failed to clear API key for {provider}: {error}",
+        MessageId::CmdEditingQueuedDraft => "Editing queued message:",
     }
 }
 
@@ -2042,6 +2101,36 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "di chuyển ",
         MessageId::ModePickerFooterSelect => "chọn ",
         MessageId::ModePickerFooterCancel => "hủy ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "Lỗi:",
+        MessageId::CmdTaskUsageAdd => "Cách dùng: /task add <lời_nhắc>",
+        MessageId::CmdTaskUsageShow => "Cách dùng: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Cách dùng: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => {
+            "Cách dùng: /task [add <lời_nhắc>|list|show <id>|cancel <id>]"
+        }
+        MessageId::CmdTrustEnabled => {
+            "Đã bật chế độ tin cậy không gian làm việc — công cụ tệp của tác nhân có thể đọc/ghi mọi đường dẫn. Dùng /trust off để hoàn tác; ưu tiên /trust add <path> để chọn phạm vi hẹp hơn."
+        }
+        MessageId::CmdTrustDisabled => "Chế độ tin cậy không gian làm việc đã tắt.",
+        MessageId::CmdTrustUnknownAction => {
+            "Hành động /trust không xác định `{action}`. Dùng `/trust`, `/trust on|off`, `/trust add <path>`, hoặc `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "Chẩn đoán LSP hiện đang **{status}**.\n\nDùng `/lsp on` để bật hoặc `/lsp off` để tắt chẩn đoán nội dòng sau khi chỉnh sửa tệp."
+        }
+        MessageId::CmdLspEnabled => {
+            "Đã bật chẩn đoán LSP — kết quả chỉnh sửa tệp sẽ bao gồm lỗi và cảnh báo trình biên dịch khi có."
+        }
+        MessageId::CmdLspDisabled => "Đã tắt chẩn đoán LSP.",
+        MessageId::CmdLspUnknownArg => {
+            "Đối số /lsp không xác định `{arg}`. Dùng `/lsp on`, `/lsp off`, hoặc `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => {
+            "Đã xóa khóa API cho {provider}. Dùng `codewhale auth clear --provider <id>` để xóa nhà cung cấp khác."
+        }
+        MessageId::CmdLogoutFailed => "Không thể xóa khóa API cho {provider}: {error}",
+        MessageId::CmdEditingQueuedDraft => "Đang chỉnh sửa tin nhắn đã xếp hàng:",
     })
 }
 
@@ -2114,6 +2203,32 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "移動 ",
         MessageId::ModePickerFooterSelect => "選擇 ",
         MessageId::ModePickerFooterCancel => "取消 ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "錯誤：",
+        MessageId::CmdTaskUsageAdd => "用法：/task add <提示>",
+        MessageId::CmdTaskUsageShow => "用法：/task show <id>",
+        MessageId::CmdTaskUsageCancel => "用法：/task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "用法：/task [add <提示>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "已啟用工作區信任模式 — 代理檔案工具現在可讀寫任何路徑。使用 /trust off 恢復；建議使用 /trust add <path> 進行更精確的授權。"
+        }
+        MessageId::CmdTrustDisabled => "工作區信任模式已停用。",
+        MessageId::CmdTrustUnknownAction => {
+            "未知的 /trust 操作 `{action}`。請使用 `/trust`、`/trust on|off`、`/trust add <path>` 或 `/trust remove <path>`。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 診斷目前為 **{status}**。\n\n使用 `/lsp on` 啟用或 `/lsp off` 停用檔案編輯後的內嵌診斷。"
+        }
+        MessageId::CmdLspEnabled => "LSP 診斷已啟用 — 檔案編輯結果將包含編譯器錯誤和警告（如有）。",
+        MessageId::CmdLspDisabled => "LSP 診斷已停用。",
+        MessageId::CmdLspUnknownArg => {
+            "未知的 /lsp 參數 `{arg}`。請使用 `/lsp on`、`/lsp off` 或 `/lsp status`。"
+        }
+        MessageId::CmdLogoutSuccess => {
+            "已清除 {provider} 的 API 金鑰。使用 `codewhale auth clear --provider <id>` 清除其他提供者的金鑰。"
+        }
+        MessageId::CmdLogoutFailed => "清除 {provider} 的 API 金鑰失敗：{error}",
+        MessageId::CmdEditingQueuedDraft => "正在編輯佇列中的訊息：",
         other => chinese_simplified(other)?,
     })
 }
@@ -2585,6 +2700,36 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "移動 ",
         MessageId::ModePickerFooterSelect => "選択 ",
         MessageId::ModePickerFooterCancel => "キャンセル ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "エラー：",
+        MessageId::CmdTaskUsageAdd => "使い方：/task add <プロンプト>",
+        MessageId::CmdTaskUsageShow => "使い方：/task show <id>",
+        MessageId::CmdTaskUsageCancel => "使い方：/task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => {
+            "使い方：/task [add <プロンプト>|list|show <id>|cancel <id>]"
+        }
+        MessageId::CmdTrustEnabled => {
+            "ワークスペース信頼モードが有効になりました — エージェントファイルツールがすべてのパスを読み書きできます。元に戻すには /trust off。より狭い範囲の許可には /trust add <path> をお勧めします。"
+        }
+        MessageId::CmdTrustDisabled => "ワークスペース信頼モードが無効になりました。",
+        MessageId::CmdTrustUnknownAction => {
+            "不明な /trust アクション `{action}`。`/trust`、`/trust on|off`、`/trust add <path>`、または `/trust remove <path>` を使用してください。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP診断は現在 **{status}** です。\n\nファイル編集後のインライン診断を有効にするには `/lsp on`、無効にするには `/lsp off` を使用してください。"
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP診断が有効になりました — ファイル編集結果にコンパイラのエラーや警告が含まれます。"
+        }
+        MessageId::CmdLspDisabled => "LSP診断が無効になりました。",
+        MessageId::CmdLspUnknownArg => {
+            "不明な /lsp 引数 `{arg}`。`/lsp on`、`/lsp off`、または `/lsp status` を使用してください。"
+        }
+        MessageId::CmdLogoutSuccess => {
+            "{provider} のAPIキーを消去しました。別のプロバイダーを消去するには `codewhale auth clear --provider <id>` を使用してください。"
+        }
+        MessageId::CmdLogoutFailed => "{provider} のAPIキーの消去に失敗しました：{error}",
+        MessageId::CmdEditingQueuedDraft => "キューされたメッセージを編集中：",
     })
 }
 
@@ -2997,6 +3142,32 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "移动 ",
         MessageId::ModePickerFooterSelect => "选择 ",
         MessageId::ModePickerFooterCancel => "取消 ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "错误：",
+        MessageId::CmdTaskUsageAdd => "用法：/task add <提示>",
+        MessageId::CmdTaskUsageShow => "用法：/task show <id>",
+        MessageId::CmdTaskUsageCancel => "用法：/task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "用法：/task [add <提示>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "工作区信任模式已启用 — 代理文件工具现在可以读写任何路径。使用 /trust off 恢复；建议使用 /trust add <path> 进行更精确的授权。"
+        }
+        MessageId::CmdTrustDisabled => "工作区信任模式已禁用。",
+        MessageId::CmdTrustUnknownAction => {
+            "未知的 /trust 操作 `{action}`。请使用 `/trust`、`/trust on|off`、`/trust add <path>` 或 `/trust remove <path>`。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 诊断当前为 **{status}**。\n\n使用 `/lsp on` 启用或 `/lsp off` 禁用文件编辑后的内联诊断。"
+        }
+        MessageId::CmdLspEnabled => "LSP 诊断已启用 — 文件编辑结果将包含编译器错误和警告（如有）。",
+        MessageId::CmdLspDisabled => "LSP 诊断已禁用。",
+        MessageId::CmdLspUnknownArg => {
+            "未知的 /lsp 参数 `{arg}`。请使用 `/lsp on`、`/lsp off` 或 `/lsp status`。"
+        }
+        MessageId::CmdLogoutSuccess => {
+            "已清除 {provider} 的 API 密钥。使用 `codewhale auth clear --provider <id>` 清除其他提供者的密钥。"
+        }
+        MessageId::CmdLogoutFailed => "清除 {provider} 的 API 密钥失败：{error}",
+        MessageId::CmdEditingQueuedDraft => "正在编辑队列中的消息：",
     })
 }
 
@@ -3491,6 +3662,34 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "mover ",
         MessageId::ModePickerFooterSelect => "escolher ",
         MessageId::ModePickerFooterCancel => "sair ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "Erro:",
+        MessageId::CmdTaskUsageAdd => "Uso: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Uso: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Uso: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Uso: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Modo de confiança do workspace ativado — as ferramentas de arquivo do agente podem ler/escrever qualquer caminho. Use /trust off para reverter; prefira /trust add <path> para uma permissão mais restrita."
+        }
+        MessageId::CmdTrustDisabled => "Modo de confiança do workspace desativado.",
+        MessageId::CmdTrustUnknownAction => {
+            "Ação /trust desconhecida `{action}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, ou `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "O diagnóstico LSP está atualmente **{status}**.\n\nUse `/lsp on` para ativar ou `/lsp off` para desativar o diagnóstico inline após edições de arquivo."
+        }
+        MessageId::CmdLspEnabled => {
+            "Diagnóstico LSP ativado — os resultados de edição de arquivo incluirão erros e avisos do compilador quando disponíveis."
+        }
+        MessageId::CmdLspDisabled => "Diagnóstico LSP desativado.",
+        MessageId::CmdLspUnknownArg => {
+            "Argumento /lsp desconhecido `{arg}`. Use `/lsp on`, `/lsp off`, ou `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => {
+            "Chave de API limpa para {provider}. Use `codewhale auth clear --provider <id>` para limpar um provedor diferente."
+        }
+        MessageId::CmdLogoutFailed => "Falha ao limpar chave de API para {provider}: {error}",
+        MessageId::CmdEditingQueuedDraft => "Editando mensagem enfileirada:",
     })
 }
 
@@ -3995,6 +4194,34 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerFooterMove => "mover ",
         MessageId::ModePickerFooterSelect => "elegir ",
         MessageId::ModePickerFooterCancel => "volver ",
+        // Cmd command output.
+        MessageId::CmdErrorPrefix => "Error:",
+        MessageId::CmdTaskUsageAdd => "Uso: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Uso: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Uso: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Uso: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Modo de confianza del workspace activado — las herramientas de archivo del agente pueden leer/escribir cualquier ruta. Usa /trust off para revertir; prefiere /trust add <path> para una autorización más restringida."
+        }
+        MessageId::CmdTrustDisabled => "Modo de confianza del workspace desactivado.",
+        MessageId::CmdTrustUnknownAction => {
+            "Acción /trust desconocida `{action}`. Usa `/trust`, `/trust on|off`, `/trust add <path>`, o `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "El diagnóstico LSP está actualmente **{status}**.\n\nUsa `/lsp on` para activar o `/lsp off` para desactivar el diagnóstico inline después de ediciones de archivo."
+        }
+        MessageId::CmdLspEnabled => {
+            "Diagnóstico LSP activado — los resultados de edición de archivo incluirán errores y advertencias del compilador cuando estén disponibles."
+        }
+        MessageId::CmdLspDisabled => "Diagnóstico LSP desactivado.",
+        MessageId::CmdLspUnknownArg => {
+            "Argumento /lsp desconocido `{arg}`. Usa `/lsp on`, `/lsp off`, o `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => {
+            "Clave de API borrada para {provider}. Usa `codewhale auth clear --provider <id>` para borrar un proveedor diferente."
+        }
+        MessageId::CmdLogoutFailed => "Error al borrar la clave de API para {provider}: {error}",
+        MessageId::CmdEditingQueuedDraft => "Editando mensaje en cola:",
     })
 }
 

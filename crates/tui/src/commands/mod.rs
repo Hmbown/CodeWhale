@@ -94,6 +94,19 @@ impl CommandResult {
             is_error: true,
         }
     }
+
+    /// Create an error message result with a localized "Error:" prefix
+    pub fn error_localized(locale: Locale, msg: impl Into<String>) -> Self {
+        Self {
+            message: Some(format!(
+                "{} {}",
+                tr(locale, MessageId::CmdErrorPrefix),
+                msg.into()
+            )),
+            action: None,
+            is_error: true,
+        }
+    }
 }
 
 /// Command metadata for help and autocomplete.
