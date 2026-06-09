@@ -612,6 +612,7 @@ fn selection_has_content_rejects_zero_width_selection() {
 #[test]
 fn mouse_selection_autocopies_on_release_without_ctrl_c() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.history = vec![HistoryCell::Assistant {
         content: "alpha beta".to_string(),
         streaming: false,
@@ -4998,6 +4999,7 @@ fn workspace_context_drain_requests_redraw_when_context_changes() {
 #[tokio::test]
 async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Plan;
     app.plan_prompt_pending = true;
     app.offline_mode = true;
@@ -5378,6 +5380,7 @@ fn detail_target_prefers_visible_tool_card() {
 #[test]
 fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.history = vec![HistoryCell::Thinking {
         content: "visible reasoning".to_string(),
         streaming: false,
