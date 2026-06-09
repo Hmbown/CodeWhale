@@ -51,7 +51,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
 use crate::llm_client::LlmClient;
-use crate::localization::{MessageId, tr};
+use crate::localization::{MessageId, cycle_locale_next, tr};
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
 };
@@ -438,10 +438,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
                 }
             }
             Ok(None) => {
-                app.status_message = Some("No sessions found to resume".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoResumableSession).to_string());
             }
             Err(e) => {
-                app.status_message = Some(format!("Failed to load session: {e}"));
+                app.status_message = Some(format!("{}{e}", tr(app.ui_locale, MessageId::StatusCannotLoadSession)));
             }
         }
     }
@@ -480,7 +480,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             Ok(None) => {}
             Err(err) => {
                 if app.status_message.is_none() {
-                    app.status_message = Some(format!("Failed to restore offline queue: {err}"));
+                    app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusCannotRestoreOfflineQueue)));
                 }
             }
         }
@@ -843,7 +843,7 @@ fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
     let path = config.memory_path();
     match crate::memory::append_entry(&path, input) {
         Ok(()) => {
-            app.status_message = Some(format!("memory: appended to {}", path.display()));
+            app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusMemoryAppended), path.display()));
         }
         Err(err) => {
             app.status_message = Some(format!(
@@ -1784,7 +1784,7 @@ async fn run_event_loop(
                         // hint then auto-clears as soon as anything else
                         // updates the slot.
                         if app.status_message.is_none() {
-                            app.status_message = Some("Press Esc or Ctrl+C to cancel".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCancelHint).to_string());
                         }
                         app.runtime_turn_id = Some(turn_id);
                         app.runtime_turn_status = Some("in_progress".to_string());
@@ -1929,7 +1929,7 @@ async fn run_event_loop(
                             // Otherwise the error appears twice: once in a
                             // HistoryCell and again as a redundant status line.
                             if !app.turn_error_posted {
-                                app.status_message = Some(format!("Turn failed: {error}"));
+                                app.status_message = Some(format!("{}{error}", tr(app.ui_locale, MessageId::StatusTurnFailed)));
                             }
                         }
 
@@ -2314,7 +2314,7 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message = Some(format!("Sub-agent {id}: {display}"));
+                        app.status_message = Some(format!("{}{id}: {display}", tr(app.ui_locale, MessageId::StatusSubagentDisplay)));
                     }
                     EngineEvent::AgentComplete { id, result } => {
                         execute_subagent_observer_hook(
@@ -2696,7 +2696,7 @@ async fn run_event_loop(
             )?;
             event_broker.resume_events();
             terminal_paused_at = None;
-            app.status_message = Some("Terminal controls restored".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusTerminalControlRestored).to_string());
             app.needs_redraw = true;
             force_terminal_repaint = true;
         }
@@ -3017,7 +3017,7 @@ async fn run_event_loop(
                     }
                     KeyCode::Esc => {
                         app.decision_card = None;
-                        app.status_message = Some("Decision cancelled".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusDecisionCancelled).to_string());
                         app.needs_redraw = true;
                     }
                     _ => {}
@@ -3266,7 +3266,7 @@ async fn run_event_loop(
                     if let Some(turn_id) = app.runtime_turn_id.as_ref()
                         && app.clipboard.write_text(turn_id).is_ok()
                     {
-                        app.status_message = Some(format!("Copied turn id {turn_id}"));
+                        app.status_message = Some(format!("{}{turn_id}", tr(app.ui_locale, MessageId::StatusCopiedTurnId)));
                     }
                     continue;
                 }
@@ -3279,7 +3279,7 @@ async fn run_event_loop(
                         let _ = write!(detail, "  status={status}");
                     }
                     if !detail.is_empty() && app.clipboard.write_text(&detail).is_ok() {
-                        app.status_message = Some(format!("Copied {detail}"));
+                        app.status_message = Some(format!("{}{detail}", tr(app.ui_locale, MessageId::StatusCopiedDetail)));
                     }
                     continue;
                 }
@@ -3291,15 +3291,12 @@ async fn run_event_loop(
                 if let Some(_state) = app.file_tree.as_mut() {
                     // File tree visible → hide it.
                     app.file_tree = None;
-                    app.status_message = Some("File tree closed".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusFileTreeClosed).to_string());
                 } else {
                     // Build the file tree from the current workspace.
                     let state = crate::tui::file_tree::FileTreeState::new(&app.workspace);
                     app.file_tree = Some(state);
-                    app.status_message = Some(
-                        "File tree: \u{2191}/\u{2193} navigate  Enter select  Esc close"
-                            .to_string(),
-                    );
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusFileTreeHint).to_string());
                 }
                 app.needs_redraw = true;
                 continue;
@@ -3319,6 +3316,7 @@ async fn run_event_loop(
 
             if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::SHIFT)
                 && app.view_stack.is_empty()
             {
                 app.status_message = Some(if app.is_compacting {
@@ -3329,6 +3327,30 @@ async fn run_event_loop(
                 if !app.is_compacting {
                     let _ = engine_handle.send(Op::CompactContext).await;
                 }
+                app.needs_redraw = true;
+                continue;
+            }
+
+            // Ctrl+Shift+L: cycle the UI locale (en → zh-Hans → ja → pt-BR →
+            // es-419 → vi → zh-Hant → en). Composes with /locale for explicit
+            // setting; this hotkey is for fast toggling during a session.
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT)
+                && app.view_stack.is_empty()
+            {
+                let next = cycle_locale_next(app.ui_locale);
+                app.status_message = Some(format!(
+                    "🌐 Locale: {} → {}",
+                    app.ui_locale.tag(),
+                    next
+                ));
+                let _ = commands::set_config_value(
+                    app,
+                    "locale",
+                    next,
+                    true,
+                );
                 app.needs_redraw = true;
                 continue;
             }
@@ -3528,10 +3550,65 @@ async fn run_event_loop(
                     toggle_live_transcript_overlay(app);
                     continue;
                 }
+                // Tab switching: Ctrl+` opens the switcher overlay
+                KeyCode::Char('`')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !app.tab_manager.is_empty() =>
+                {
+                    app.view_stack
+                        .push(crate::tui::views::tab_switcher::TabSwitcherView::new(app));
+                    app.needs_redraw = true;
+                    continue;
+                }
+                // Ctrl+T: create a new tab (standard browser/VS Code convention).
+                // Key chosen to avoid Windows Terminal defaults (Ctrl+Shift+N opens
+                // a new PowerShell window on Windows).
+                KeyCode::Char('t') | KeyCode::Char('T')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::SHIFT)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if app.tab_manager.create_default_chat_tab().is_some() {
+                        app.status_message = Some("Created new tab".to_string());
+                    } else {
+                        app.status_message = Some("Max tabs reached".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                // Ctrl+W: close the active tab (standard browser convention).
+                // Guarded by !tab_manager.is_empty() so composing users typing
+                // Ctrl+W in the composer don't accidentally close a tab.
+                KeyCode::Char('w') | KeyCode::Char('W')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::SHIFT)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                        && !app.tab_manager.is_empty() =>
+                {
+                    if let Some(idx) = app.tab_manager.active_index() {
+                        app.tab_manager.close_tab(idx);
+                        app.status_message = Some("Tab closed".to_string());
+                    } else {
+                        app.status_message = Some("No active tab to close".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::Char(c @ '1'..='9')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    let idx = c.to_digit(10).unwrap_or(1) as usize - 1;
+                    if app.tab_manager.switch_to(idx) {
+                        app.status_message = Some(format!("Switched to tab {}", idx + 1));
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Work);
-                        app.status_message = Some("Sidebar focus: work".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusWork).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Plan).await;
                     }
@@ -3540,7 +3617,7 @@ async fn run_event_loop(
                 KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Tasks);
-                        app.status_message = Some("Sidebar focus: tasks".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusTasks).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Agent).await;
                     }
@@ -3549,7 +3626,7 @@ async fn run_event_loop(
                 KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         app.set_sidebar_focus(SidebarFocus::Agents);
-                        app.status_message = Some("Sidebar focus: agents".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
                     } else {
                         apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
                     }
@@ -3570,7 +3647,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Work);
-                    app.status_message = Some("Sidebar focus: work".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusWork).to_string());
                     continue;
                 }
                 KeyCode::Char('@')
@@ -3578,7 +3655,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: tasks".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusTasks).to_string());
                     continue;
                 }
                 KeyCode::Char('#')
@@ -3586,7 +3663,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
                     continue;
                 }
                 KeyCode::Char('$') | KeyCode::Char('%')
@@ -3594,7 +3671,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Context);
-                    app.status_message = Some("Sidebar focus: context".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusContext).to_string());
                     continue;
                 }
                 KeyCode::Char(')')
@@ -3602,7 +3679,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
                     continue;
                 }
                 KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -3767,7 +3844,7 @@ async fn run_event_loop(
                                     app.needs_redraw = true;
                                 }
                                 crate::tui::backtrack::EscEffect::Cancel => {
-                                    app.status_message = Some("Backtrack canceled".to_string());
+                                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackCancelled).to_string());
                                     app.needs_redraw = true;
                                 }
                                 crate::tui::backtrack::EscEffect::OpenOverlay => {
@@ -3848,6 +3925,30 @@ async fn run_event_loop(
                 {
                     let _ = app.select_next_composer_attachment();
                 }
+                // Ctrl+PageDown / Ctrl+PageUp: cycle tabs (same as Ctrl+Tab /
+                // Ctrl+Shift+Tab, but not intercepted by Windows Terminal).
+                KeyCode::PageDown
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_next() {
+                        app.status_message = Some("Switched to next tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
+                KeyCode::PageUp
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_prev() {
+                        app.status_message = Some("Switched to previous tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::PageUp => {
                     let page = app.viewport.last_transcript_visible.max(1);
                     app.scroll_up(page);
@@ -3855,6 +3956,18 @@ async fn run_event_loop(
                 KeyCode::PageDown => {
                     let page = app.viewport.last_transcript_visible.max(1);
                     app.scroll_down(page);
+                }
+                // Ctrl+Tab: cycle to next tab (only when no input menus are open)
+                KeyCode::Tab
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !mention_menu_open
+                        && !slash_menu_open =>
+                {
+                    if app.tab_manager.switch_to_next() {
+                        app.status_message = Some("Switched to next tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
                 }
                 KeyCode::Tab => {
                     if mention_menu_open
@@ -3901,6 +4014,13 @@ async fn run_event_loop(
                             .await;
                     }
                 }
+                KeyCode::BackTab if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if app.tab_manager.switch_to_prev() {
+                        app.status_message = Some("Switched to previous tab".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 KeyCode::BackTab => {
                     app.cycle_effort();
                 }
@@ -3935,7 +4055,7 @@ async fn run_event_loop(
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Backward) =>
                 {
-                    app.status_message = Some("No previous tool output".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoPrevToolOutput).to_string());
                 }
                 KeyCode::Char(']')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
@@ -3943,7 +4063,7 @@ async fn run_event_loop(
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Forward) =>
                 {
-                    app.status_message = Some("No next tool output".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoNextToolOutput).to_string());
                 }
                 // `Alt+?` opens the searchable help overlay (#93). F1 and
                 // Ctrl+/ are also bound; bare `?` is reserved as text input
@@ -4280,16 +4400,17 @@ async fn run_event_loop(
                                         .filter(|s| !s.trim().is_empty())
                                 })
                                 .unwrap_or_else(|| "vi".to_string());
-                            app.status_message = Some(format!("Edited in {editor}"));
+                            let template = tr(app.ui_locale, MessageId::StatusEditedIn);
+                            app.status_message = Some(template.replace("{editor}", &editor));
                         }
                         Ok(super::external_editor::EditorOutcome::Unchanged) => {
-                            app.status_message = Some("Editor closed (no changes)".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorClosedNoChanges).to_string());
                         }
                         Ok(super::external_editor::EditorOutcome::Cancelled) => {
-                            app.status_message = Some("Editor cancelled".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusEditorCancelled).to_string());
                         }
                         Err(err) => {
-                            app.status_message = Some(format!("Editor error: {err}"));
+                            app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusEditorError)));
                         }
                     }
                     app.needs_redraw = true;
@@ -4309,7 +4430,7 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.restore_last_cleared_input_if_empty() =>
                 {
-                    app.status_message = Some("Restored cleared draft".to_string());
+                    app.status_message = Some(tr(app.ui_locale, MessageId::StatusDraftRestored).to_string());
                 }
                 KeyCode::Char('w') | KeyCode::Char('W')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -4341,12 +4462,12 @@ async fn run_event_loop(
                     if app.input.is_empty() && app.view_stack.is_empty() {
                         if copy_focused_cell(app) {
                             app.push_status_toast(
-                                "Copied to clipboard",
+                                "已复制到剪贴板",
                                 StatusToastLevel::Info,
                                 Some(2_000),
                             );
                         } else {
-                            app.status_message = Some("No transcript cell to copy".to_string());
+                            app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoCopyableCells).to_string());
                         }
                     } else {
                         app.yank();
@@ -4441,21 +4562,21 @@ async fn run_event_loop(
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
     app.set_sidebar_focus(SidebarFocus::Agents);
-    app.status_message = Some("Sidebar focus: agents".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAgents).to_string());
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.sidebar_focus == SidebarFocus::Hidden {
             app.set_sidebar_focus(SidebarFocus::Auto);
-            app.status_message = Some("Sidebar focus: auto".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
         } else {
             app.set_sidebar_focus(SidebarFocus::Hidden);
-            app.status_message = Some("Sidebar hidden".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarHidden).to_string());
         }
     } else {
         app.set_sidebar_focus(SidebarFocus::Auto);
-        app.status_message = Some("Sidebar focus: auto".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusSidebarFocusAuto).to_string());
     }
 }
 
@@ -5121,8 +5242,9 @@ fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
     };
     app.queue_message(queued);
     app.status_message = Some(format!(
-        "{} queued — ↑ to edit, /queue list",
-        app.queued_message_count()
+        "{}{}",
+        app.queued_message_count(),
+        tr(app.ui_locale, MessageId::StatusQueuedCountHint)
     ));
     true
 }
@@ -6013,10 +6135,10 @@ async fn apply_command_result(
                 return Ok(true);
             }
             AppAction::SaveSession(path) => {
-                app.status_message = Some(format!("Session saved to {}", path.display()));
+                app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusSessionSavedTo), path.display()));
             }
             AppAction::LoadSession(path) => {
-                app.status_message = Some(format!("Session loaded from {}", path.display()));
+                app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusSessionLoadedFrom), path.display()));
             }
             AppAction::SyncSession {
                 session_id,
@@ -6086,7 +6208,7 @@ async fn apply_command_result(
                 }
             }
             AppAction::CacheWarmup => {
-                app.status_message = Some("Warming DeepSeek cache...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusWarmingCache).to_string());
                 match run_cache_warmup(app, config).await {
                     Ok((usage, base_url, inspection)) => {
                         app.session.last_base_url = Some(base_url.clone());
@@ -6118,13 +6240,13 @@ async fn apply_command_result(
                             }
                         }
                         app.add_message(HistoryCell::System { content: message });
-                        app.status_message = Some("Cache warmup complete".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusCacheWarmupDone).to_string());
                     }
                     Err(error) => {
                         app.add_message(HistoryCell::System {
                             content: format!("Cache warmup failed: {error}"),
                         });
-                        app.status_message = Some("Cache warmup failed".to_string());
+                        app.status_message = Some(tr(app.ui_locale, MessageId::StatusCacheWarmupFailed).to_string());
                     }
                 }
             }
@@ -6218,7 +6340,7 @@ async fn apply_command_result(
                                 content: format!("Failed to open browser automatically: {err}"),
                             });
                         }
-                        app.status_message = Some(format!("web ui listen on: {url}"));
+                        app.status_message = Some(format!("{}{url}", tr(app.ui_locale, MessageId::StatusWebUiListening)));
                         *web_config_session = Some(session);
                     }
                     #[cfg(not(feature = "web"))]
@@ -6285,7 +6407,7 @@ async fn apply_command_result(
             }
             AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
                 Ok(()) => {
-                    app.status_message = Some(format!("Opened {label} in your browser"));
+                    app.status_message = Some(format!("{}{label}", tr(app.ui_locale, MessageId::StatusOpenedInBrowser)));
                 }
                 Err(err) => {
                     app.add_message(HistoryCell::System {
@@ -6299,7 +6421,7 @@ async fn apply_command_result(
                 open_context_inspector(app);
             }
             AppAction::CompactContext => {
-                app.status_message = Some("Compacting context...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusCompactingContext2).to_string());
                 let _ = engine_handle.send(Op::CompactContext).await;
             }
             AppAction::PurgeContext => {
@@ -6325,7 +6447,7 @@ async fn apply_command_result(
                                 summarize_tool_output(&task.prompt)
                             ),
                         });
-                        app.status_message = Some(format!("Queued {}", task.id));
+                        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusQueuedTask), task.id));
                     }
                     Err(err) => {
                         app.add_message(HistoryCell::System {
@@ -6407,7 +6529,7 @@ async fn apply_command_result(
                                 config.api_provider().as_str()
                             ),
                         });
-                        app.status_message = Some(format!("Profile: {profile}"));
+                        app.status_message = Some(format!("{}{profile}", tr(app.ui_locale, MessageId::StatusConfigProfile)));
                     }
                     Err(err) => {
                         app.config_profile = None;
@@ -6499,7 +6621,7 @@ async fn switch_workspace(
     }
 
     if app.workspace == workspace {
-        app.status_message = Some(format!("Workspace unchanged: {}", workspace.display()));
+        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusWorkspaceUnchanged), workspace.display()));
         return;
     }
 
@@ -6525,7 +6647,7 @@ async fn switch_workspace(
     app.add_message(HistoryCell::System {
         content: format!("Switched workspace to {}", workspace.display()),
     });
-    app.status_message = Some(format!("Workspace: {}", workspace.display()));
+    app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusWorkspaceNow), workspace.display()));
 }
 
 async fn handle_mcp_ui_action(
@@ -6803,7 +6925,7 @@ async fn steer_user_message(
         }],
     });
 
-    app.status_message = Some("Steering current turn...".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusSteeringTurn2).to_string());
     Ok(())
 }
 
@@ -6835,10 +6957,13 @@ async fn submit_or_steer_message(
             let count = app.queued_message_count().saturating_add(1);
             app.queue_message(message);
             if app.offline_mode {
-                app.status_message =
-                    Some(format!("Offline: {count} queued — ↑ to edit, /queue list"));
+                app.status_message = Some(format!(
+                    "{}{count}{}",
+                    tr(app.ui_locale, MessageId::StatusOfflinePrefix),
+                    tr(app.ui_locale, MessageId::StatusQueuedCountHint)
+                ));
             } else {
-                app.status_message = Some(format!("{count} queued — ↑ to edit, /queue list"));
+                app.status_message = Some(format!("{count}{}", tr(app.ui_locale, MessageId::StatusQueuedCountHint)));
             }
             Ok(())
         }
@@ -6848,12 +6973,13 @@ async fn submit_or_steer_message(
             if let Err(err) = steer_user_message(app, engine_handle, message.clone()).await {
                 app.queue_message(message);
                 app.status_message = Some(format!(
-                    "Steer failed ({err}); {} queued — ↑ to edit, /queue list",
-                    app.queued_message_count()
+                    "Steer failed ({err}); {}{}",
+                    app.queued_message_count(),
+                    tr(app.ui_locale, MessageId::StatusQueuedCountHint)
                 ));
             } else {
                 app.push_status_toast(
-                    "Steering into current turn",
+                    "正在引导当前回合",
                     StatusToastLevel::Info,
                     Some(1_500),
                 );
@@ -6972,7 +7098,7 @@ async fn apply_plan_choice(
             let prompt = "Revise the plan: ";
             app.input = prompt.to_string();
             app.cursor_position = prompt.chars().count();
-            app.status_message = Some("Revise the plan and press Enter.".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusRevisePlanHint).to_string());
         }
         PlanChoice::ExitPlan => {
             apply_mode_update(app, engine_handle, AppMode::Agent).await;
@@ -7094,7 +7220,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // footer. This guarantees the header is never vertically centered
     // regardless of ratatui Flex defaults or terminal size.
     // Fixes #1834 — macOS terminal title centering.
-    let (header_area, body_area) = {
+    let (header_area, mut body_area) = {
         let split = Layout::default()
             .direction(Direction::Vertical)
             .flex(ratatui::layout::Flex::Start)
@@ -7102,6 +7228,24 @@ fn render(f: &mut Frame, app: &mut App) {
             .split(size);
         (split[0], split[1])
     };
+
+    // Tab bar — always 1 row (when height allows). Shows the open tabs
+    // when present, or a "Press Ctrl+T" hint when empty so the
+    // multi-tab system is discoverable from a fresh launch. Sits
+    // between the header and the chat.
+    let mut tab_bar_area: Option<Rect> = None;
+    if body_area.height > crate::tui::tab::TAB_BAR_HEIGHT + 3 {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .flex(ratatui::layout::Flex::Start)
+            .constraints([
+                Constraint::Length(crate::tui::tab::TAB_BAR_HEIGHT),
+                Constraint::Min(1),
+            ])
+            .split(body_area);
+        tab_bar_area = Some(split[0]);
+        body_area = split[1];
+    }
 
     let body_height = body_area.height;
     let composer_max_height = body_height
@@ -7201,6 +7345,10 @@ fn render(f: &mut Frame, app: &mut App) {
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
         header_widget.render(header_area, buf);
+    }
+
+    if let Some(area) = tab_bar_area {
+        crate::tui::tab::render_tab_bar(area, f.buffer_mut(), app);
     }
 
     // Render chat + sidebar + optional file-tree pane
@@ -7552,7 +7700,7 @@ fn toggle_live_transcript_overlay(app: &mut App) {
     let mut overlay = LiveTranscriptOverlay::new();
     overlay.refresh_from_app(app);
     app.view_stack.push(overlay);
-    app.status_message = Some("Live transcript: tailing (Esc to close)".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusLiveOverlayTracking).to_string());
     app.needs_redraw = true;
 }
 
@@ -7599,13 +7747,14 @@ async fn handle_view_events(
                 open_text_pager(app, title, content);
             }
             ViewEvent::CopyToClipboard { text, label } => {
-                if text.is_empty() {
-                    app.status_message = Some(format!("{label} is empty"));
+                let template = if text.is_empty() {
+                    tr(app.ui_locale, MessageId::StatusLabelEmpty)
                 } else if app.clipboard.write_text(&text).is_ok() {
-                    app.status_message = Some(format!("{label} copied"));
+                    tr(app.ui_locale, MessageId::StatusCopiedLabel)
                 } else {
-                    app.status_message = Some(format!("Copy failed ({label})"));
-                }
+                    tr(app.ui_locale, MessageId::StatusCopyFailedLabel)
+                };
+                app.status_message = Some(template.replace("{label}", &label));
             }
             ViewEvent::ApprovalDecision {
                 tool_id,
@@ -7687,7 +7836,7 @@ async fn handle_view_events(
                         && let Err(err) =
                             apply_plan_choice(app, config, engine_handle, choice).await
                     {
-                        app.status_message = Some(format!("Failed to apply plan selection: {err}"));
+                        app.status_message = Some(format!("{}{err}", tr(app.ui_locale, MessageId::StatusApplyPlanChoiceFailed)));
                     }
                 }
             }
@@ -7814,7 +7963,7 @@ async fn handle_view_events(
                 }
             }
             ViewEvent::SubAgentsRefresh => {
-                app.status_message = Some("Refreshing sub-agents...".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRefreshingSubagents).to_string());
                 let _ = engine_handle.send(Op::ListSubAgents).await;
             }
             ViewEvent::FilePickerSelected { path } => {
@@ -7835,7 +7984,7 @@ async fn handle_view_events(
                 insertion.push_str(&path);
                 insertion.push(' ');
                 app.insert_str(&insertion);
-                app.status_message = Some(format!("Attached @{path}"));
+                app.status_message = Some(format!("{}{path}", tr(app.ui_locale, MessageId::StatusFileAttached)));
             }
             ViewEvent::ModelPickerApplied {
                 model,
@@ -7905,7 +8054,7 @@ async fn handle_view_events(
             }
             ViewEvent::BacktrackCancel => {
                 app.backtrack.reset();
-                app.status_message = Some("Backtrack canceled".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackCancelled).to_string());
                 app.needs_redraw = true;
             }
             ViewEvent::ContextMenuSelected { action } => {
@@ -7918,7 +8067,50 @@ async fn handle_view_events(
                 app.backtrack.reset();
                 engine_handle.cancel();
                 mark_active_turn_cancelled_locally(app);
-                app.status_message = Some("Request cancelled".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusRequestCancelled).to_string());
+            }
+            ViewEvent::TabSwitch { index } => {
+                if app.tab_manager.switch_to(index) {
+                    app.status_message = Some(format!("Switched to tab {}", index + 1));
+                    app.needs_redraw = true;
+                }
+            }
+            ViewEvent::CollabRequested { kind, to_tab } => {
+                use crate::tui::views::tab_picker::TabPickerAction;
+                let to_tab_id = crate::tui::tab::TabId::new(to_tab);
+                let from_tab = app.tab_manager.active_id();
+                app.status_message = Some(match (kind, from_tab) {
+                    (TabPickerAction::Delegate, Some(from)) => {
+                        // Compose a description that at least identifies the
+                        // action and the target tab. A future UX iteration
+                        // can prompt for a richer message (e.g. the right-
+                        // clicked cell's text) before this delegation fires.
+                        let description =
+                            format!("Task delegated from tab {} to tab {}", from.0, to_tab);
+                        match app.tab_manager.delegate_task(
+                            from,
+                            to_tab_id,
+                            description.clone(),
+                            Default::default(),
+                        ) {
+                            Some(task_id) => {
+                                format!("{} (ID: {})", description, task_id)
+                            }
+                            None => "Failed to delegate task".to_string(),
+                        }
+                    }
+                    (TabPickerAction::Review, Some(_)) => {
+                        format!("Review requested from tab {}", to_tab)
+                    }
+                    (TabPickerAction::Meeting, Some(_)) => {
+                        format!("Meeting invitation sent to tab {}", to_tab)
+                    }
+                    (TabPickerAction::Share, Some(_)) => {
+                        format!("Context shared with tab {}", to_tab)
+                    }
+                    (_, None) => "No active tab to collaborate from".to_string(),
+                });
+                app.needs_redraw = true;
             }
         }
     }
@@ -8103,7 +8295,7 @@ fn find_user_cell_index_from_tail(app: &App, depth: usize) -> Option<usize> {
 /// re-synced via `Op::SyncSession` so the next turn starts fresh.
 fn apply_backtrack(app: &mut App, depth: usize) {
     let Some(history_idx) = find_user_cell_index_from_tail(app, depth) else {
-        app.status_message = Some("Backtrack target no longer present".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusRollbackTargetGone).to_string());
         return;
     };
 
@@ -8764,32 +8956,32 @@ fn render_toast_stack_overlay(
 
 pub(crate) fn open_shell_control(app: &mut App) {
     if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("No foreground shell command to control".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoForegroundShell).to_string());
         return;
     }
 
     app.view_stack.push(ShellControlView::new());
-    app.status_message = Some("Shell control opened".to_string());
+    app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellControlOpened).to_string());
 }
 
 pub(crate) fn request_foreground_shell_background(app: &mut App) {
     if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("No foreground shell command to background".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoBgShell).to_string());
         return;
     }
 
     let Some(shell_manager) = app.runtime_services.shell_manager.clone() else {
-        app.status_message = Some("Shell manager is not attached".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellManagerDisconnected).to_string());
         return;
     };
 
     match shell_manager.lock() {
         Ok(mut manager) => {
             manager.request_foreground_background();
-            app.status_message = Some("Backgrounding current shell command...".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusBackgroundingShell).to_string());
         }
         Err(_) => {
-            app.status_message = Some("Shell manager lock is poisoned".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusShellLockCorrupt).to_string());
         }
     }
 }
@@ -9093,7 +9285,7 @@ fn open_thinking_pager(app: &mut App) -> bool {
 /// surface.
 fn open_activity_detail_pager(app: &mut App) -> bool {
     let Some(idx) = activity_target_cell_index(app) else {
-        app.status_message = Some("No activity detail available".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoActivityDetails).to_string());
         return true;
     };
 
@@ -9103,7 +9295,7 @@ fn open_activity_detail_pager(app: &mut App) -> bool {
         .map(|area| area.width)
         .unwrap_or(80);
     let Some(text) = activity_detail_text(app, idx, width) else {
-        app.status_message = Some("No activity detail available".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoActivityDetails).to_string());
         return true;
     };
     let title = if matches!(
@@ -9349,16 +9541,17 @@ fn thinking_chunk_preview(app: &App, cell_index: usize) -> String {
 
 fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> String {
     match cell {
-        HistoryCell::Thinking { .. } => "thinking".to_string(),
-        HistoryCell::Error { .. } => "error".to_string(),
-        HistoryCell::SubAgent(_) => "sub-agent".to_string(),
+        HistoryCell::Thinking { .. } => tr(app.ui_locale, MessageId::StatusActivityLabelThinking).to_string(),
+        HistoryCell::Error { .. } => tr(app.ui_locale, MessageId::StatusActivityLabelError).to_string(),
+        HistoryCell::SubAgent(_) => tr(app.ui_locale, MessageId::StatusActivityLabelSubagent).to_string(),
         HistoryCell::Tool(ToolCell::Generic(generic)) => {
             crate::tui::widgets::tool_card::tool_activity_label_for_name(&generic.name)
         }
         HistoryCell::Tool(_) => {
-            detail_target_label(app, cell_index).unwrap_or_else(|| "tool activity".to_string())
+            detail_target_label(app, cell_index)
+                .unwrap_or_else(|| tr(app.ui_locale, MessageId::StatusActivityLabelTool).to_string())
         }
-        _ => "message".to_string(),
+        _ => tr(app.ui_locale, MessageId::StatusActivityLabelMessage).to_string(),
     }
 }
 
@@ -9628,7 +9821,7 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
     }
 
     let Some(cell) = app.cell_at_virtual_index(cell_index) else {
-        app.status_message = Some("No details available for the selected line".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoDetailsForLine).to_string());
         return false;
     };
     let title = match cell {
@@ -9669,7 +9862,7 @@ fn copy_focused_cell(app: &mut App) -> bool {
 
 pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
     let Some(cell) = app.cell_at_virtual_index(cell_index) else {
-        app.status_message = Some("No message at that line".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoMessageAtPos).to_string());
         return false;
     };
     let width = app
@@ -9679,14 +9872,14 @@ pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
         .unwrap_or(80);
     let text = history_cell_to_text(cell, width);
     if text.trim().is_empty() {
-        app.status_message = Some("Message is empty".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageEmpty).to_string());
         return false;
     }
     if app.clipboard.write_text(&text).is_ok() {
-        app.status_message = Some("Message copied".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageCopied).to_string());
         true
     } else {
-        app.status_message = Some("Copy failed".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusMessageCopyFailed).to_string());
         false
     }
 }
@@ -9728,8 +9921,9 @@ pub(crate) fn selected_detail_footer_label(app: &App) -> Option<String> {
         String::new()
     };
     Some(format!(
-        "{} Activity: {label}{detail_hint}",
-        key_shortcuts::activity_shortcut_label()
+        "{} {}{label}{detail_hint}",
+        key_shortcuts::activity_shortcut_label(),
+        tr(app.ui_locale, MessageId::StatusFooterActivity),
     ))
 }
 

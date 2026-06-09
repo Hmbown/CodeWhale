@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::localization::MessageId;
+use crate::localization::{MessageId, tr};
 use crate::tui::app::App;
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
@@ -701,6 +701,39 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
+    // Cross-tab collaboration: only when there is more than one tab, since
+    // each action requires picking a *different* tab as the target.
+    if app.tab_manager.len() > 1 {
+        entries.push(ContextMenuEntry {
+            label: "Delegate task to tab…".to_string(),
+            description: "Send the current request to another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Delegate,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Request review from tab…".to_string(),
+            description: "Ask another tab to review the last response".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Review,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Invite tab to meeting…".to_string(),
+            description: "Start a multi-agent meeting with another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Meeting,
+            ),
+        });
+        entries.push(ContextMenuEntry {
+            label: "Share context with tab…".to_string(),
+            description: "Share the current session context with another tab".to_string(),
+            action: ContextMenuAction::OpenTabPicker(
+                crate::tui::views::tab_picker::TabPickerAction::Share,
+            ),
+        });
+    }
+
     entries.push(ContextMenuEntry {
         label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
         description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),
@@ -737,19 +770,19 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
         }
         ContextMenuAction::OpenSelection => {
             if !open_pager_for_selection(app) {
-                app.status_message = Some("No selection to open".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoSelectionToOpen).to_string());
             }
         }
         ContextMenuAction::ClearSelection => {
             app.viewport.transcript_selection.clear();
-            app.status_message = Some("Selection cleared".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusSelectionCleared).to_string());
         }
         ContextMenuAction::CopyCell { cell_index } => {
             copy_cell_to_clipboard(app, cell_index);
         }
         ContextMenuAction::OpenDetails { cell_index } => {
             if !open_details_pager_for_cell(app, cell_index) {
-                app.status_message = Some("No details available for that line".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoDetailsAvailable).to_string());
             }
         }
         ContextMenuAction::Paste => {
@@ -785,23 +818,28 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
                 width,
             );
             if crate::tui::history::try_open_file_at_line(&text, &app.workspace) {
-                app.status_message = Some("Opened file in editor".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusOpenedInEditor).to_string());
             } else {
-                app.status_message = Some("No file:line pattern found in selection".to_string());
+                app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoFileLineInSelection).to_string());
             }
         }
         ContextMenuAction::HideCell { cell_index } => {
             app.collapsed_cells.insert(cell_index);
-            app.status_message = Some("Cell hidden".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCellHidden).to_string());
         }
         ContextMenuAction::ShowCell { cell_index } => {
             app.collapsed_cells.remove(&cell_index);
-            app.status_message = Some("Cell shown".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCellShown).to_string());
         }
         ContextMenuAction::ShowAllHidden => {
             let count = app.collapsed_cells.len();
             app.collapsed_cells.clear();
-            app.status_message = Some(format!("{count} hidden cell(s) restored"));
+            let template = tr(app.ui_locale, MessageId::StatusCellsRestoredWithCount);
+            app.status_message = Some(template.replace("{count}", &count.to_string()));
+        }
+        ContextMenuAction::OpenTabPicker(kind) => {
+            app.view_stack
+                .push(crate::tui::views::tab_picker::TabPickerView::new(app, kind));
         }
     }
     app.needs_redraw = true;
@@ -907,13 +945,13 @@ pub(crate) fn copy_active_selection(app: &mut App) {
     }
     if let Some(text) = selection_to_text(app).filter(|text| !text.is_empty()) {
         if app.clipboard.write_text(&text).is_ok() {
-            app.status_message = Some("Selection copied".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCopiedSelection).to_string());
         } else {
-            app.status_message = Some("Copy failed".to_string());
+            app.status_message = Some(tr(app.ui_locale, MessageId::StatusCopyFailed).to_string());
         }
     } else {
         app.viewport.transcript_selection.clear();
-        app.status_message = Some("No selection to copy".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusNoSelectionToCopy).to_string());
     }
 }
 

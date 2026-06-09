@@ -18,10 +18,10 @@ mod tests {
     /// Simulate the sequence of key events the user would press
     /// to: create a new tab, switch to it, type a message, and submit.
     fn simulate_create_and_switch(manager: &mut TabManager) {
-        // Ctrl+Shift+N: create new tab
+        // Ctrl+T: create new tab
         manager
             .create_tab(format!("Tab {}", manager.len() + 1), TabType::Chat)
-            .expect("Ctrl+Shift+N should create tab");
+            .expect("Ctrl+T should create tab");
 
         // The new tab is automatically active after creation,
         // simulating the key handler that updates active_tab.
@@ -212,11 +212,11 @@ mod tests {
         manager.switch_to_by_id(to);
 
         // Press Ctrl+Shift+D 4 times
-        assert!(simulate_process_delegation(&mut manager).is_some());
-        assert!(simulate_process_delegation(&mut manager).is_some());
-        assert!(simulate_process_delegation(&mut manager).is_some());
+        assert_eq!(simulate_process_delegation(&mut manager).is_some(), true);
+        assert_eq!(simulate_process_delegation(&mut manager).is_some(), true);
+        assert_eq!(simulate_process_delegation(&mut manager).is_some(), true);
         // 4th should be the last task
-        assert!(simulate_process_delegation(&mut manager).is_some());
+        assert_eq!(simulate_process_delegation(&mut manager).is_some(), true);
         // 5th should be none
         assert_eq!(simulate_process_delegation(&mut manager), None);
     }
@@ -233,7 +233,7 @@ mod tests {
         // Switch to B (index 1)
         manager.switch_to(1);
 
-        // Ctrl+Shift+W: close current
+        // Ctrl+W: close current
         manager.close_tab(1);
         assert_eq!(manager.len(), 2);
         // Active should now be C (index 1) since B was removed.

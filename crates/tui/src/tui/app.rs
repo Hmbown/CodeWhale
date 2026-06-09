@@ -1509,6 +1509,8 @@ pub struct App {
     pub todos: SharedTodoList,
     /// Durable runtime services exposed to model-visible task/automation tools.
     pub runtime_services: RuntimeToolServices,
+    /// Tab manager for multi-tab and cross-tab collaboration system
+    pub tab_manager: crate::tui::tab::TabManager,
     /// Last MCP manager/discovery snapshot shown in the UI.
     pub mcp_snapshot: Option<crate::mcp::McpManagerSnapshot>,
     /// Number of MCP servers declared in the user's config at app boot.
@@ -2217,6 +2219,7 @@ impl App {
                 shell_manager: Some(shell_manager),
                 ..RuntimeToolServices::default()
             },
+            tab_manager: crate::tui::tab::TabManager::new(),
             mcp_snapshot: None,
             // Read the MCP config once at boot to know how many servers
             // the user has declared. The footer chip uses this even when
@@ -2305,6 +2308,35 @@ impl App {
         }
     }
 
+    /// Create a minimal App for testing - no config loading, no engine setup.
+    /// Only the fields that render tests need (tab_manager, etc.) are populated.
+    #[allow(dead_code)] // reserved for the render_tests follow-up; not used in this PR
+    pub fn new_for_test() -> App {
+        use std::path::PathBuf;
+        let options = TuiOptions {
+            model: "test-model".to_string(),
+            workspace: PathBuf::from("."),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        App::new(options, &Config::default())
+    }
+
     fn discover_cached_skills(
         workspace: &std::path::Path,
         skills_dir: &std::path::Path,
@@ -2342,7 +2374,7 @@ impl App {
     pub fn finish_onboarding(&mut self) {
         self.onboarding = OnboardingState::None;
         if let Err(err) = crate::tui::onboarding::mark_onboarded() {
-            self.status_message = Some(format!("Failed to mark onboarding: {err}"));
+            self.status_message = Some(format!("{}{err}", tr(self.ui_locale, MessageId::StatusCannotMarkOnboarding)));
         }
         self.needs_redraw = true;
     }
@@ -2381,7 +2413,8 @@ impl App {
         let entering_yolo = mode == AppMode::Yolo && previous_mode != AppMode::Yolo;
         let leaving_yolo = previous_mode == AppMode::Yolo && mode != AppMode::Yolo;
         self.mode = mode;
-        self.status_message = Some(format!("Switched to {} mode", mode.label()));
+        let template = tr(self.ui_locale, MessageId::StatusModeSwitched);
+        self.status_message = Some(template.replace("{mode}", mode.label()));
 
         if entering_yolo {
             self.yolo_restore = Some(YoloRestoreState {
@@ -3552,7 +3585,7 @@ impl App {
             .map_or(count.saturating_sub(1), |index| index.saturating_sub(1));
         self.selected_attachment_index = Some(next);
         self.cursor_position = 0;
-        self.status_message = Some("Attachment selected - Backspace/Delete removes it".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusAttachmentSelected).to_string());
         self.needs_redraw = true;
         true
     }
@@ -3565,10 +3598,10 @@ impl App {
         if index + 1 < count {
             self.selected_attachment_index = Some(index + 1);
             self.status_message =
-                Some("Attachment selected - Backspace/Delete removes it".to_string());
+                Some("已选择附件 - Backspace/Delete 删除".to_string());
         } else {
             self.selected_attachment_index = None;
-            self.status_message = Some("Composer focused".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusComposerFocused).to_string());
         }
         self.needs_redraw = true;
         true
@@ -3576,7 +3609,7 @@ impl App {
 
     pub fn clear_composer_attachment_selection(&mut self) -> bool {
         if self.selected_attachment_index.take().is_some() {
-            self.status_message = Some("Composer focused".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusComposerFocused).to_string());
             self.needs_redraw = true;
             true
         } else {
@@ -3617,7 +3650,7 @@ impl App {
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
-        self.status_message = Some(format!("Removed attachment: {}", reference.path));
+        self.status_message = Some(format!("{}{}", tr(self.ui_locale, MessageId::StatusAttachmentRemoved), reference.path));
         self.needs_redraw = true;
         true
     }
@@ -3699,7 +3732,7 @@ impl App {
             ClipboardContent::Image(pasted) => {
                 let description = format!("{} ({})", pasted.short_label(), pasted.size_label());
                 self.insert_media_attachment("image", &pasted.path, Some(&description));
-                self.status_message = Some(format!("Attached image: {description}"));
+                self.status_message = Some(format!("{}{description}", tr(self.ui_locale, MessageId::StatusImageAttached)));
             }
         }
     }
@@ -4381,7 +4414,7 @@ impl App {
         self.slash_menu_hidden = true;
         self.mention_menu_hidden = true;
         self.paste_burst.clear_after_explicit_paste();
-        self.status_message = Some("History search: type to filter, Enter accepts".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchFilter).to_string());
         self.needs_redraw = true;
     }
 
@@ -4460,7 +4493,7 @@ impl App {
         if let Some(search) = self.composer_history_search.as_mut() {
             search.query.push(ch);
             search.selected = 0;
-            self.status_message = Some("History search: Enter accepts, Esc restores".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchConfirm).to_string());
             self.needs_redraw = true;
         }
     }
@@ -4472,7 +4505,7 @@ impl App {
         if let Some(search) = self.composer_history_search.as_mut() {
             search.query.push_str(&normalize_paste_text(text));
             search.selected = 0;
-            self.status_message = Some("History search: Enter accepts, Esc restores".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistorySearchConfirm).to_string());
             self.needs_redraw = true;
         }
     }
@@ -4520,12 +4553,12 @@ impl App {
             self.input = selected;
             self.cursor_position = char_count(&self.input);
             self.history_index = None;
-            self.status_message = Some("History match inserted into composer".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryInserted).to_string());
             self.needs_redraw = true;
             true
         } else {
             self.composer_history_search = Some(search);
-            self.status_message = Some("No history matches".to_string());
+            self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryNoMatches).to_string());
             self.needs_redraw = true;
             false
         }
@@ -4537,7 +4570,7 @@ impl App {
         };
         self.input = search.pre_search_input;
         self.cursor_position = search.pre_search_cursor.min(char_count(&self.input));
-        self.status_message = Some("History search canceled".to_string());
+        self.status_message = Some(tr(self.ui_locale, MessageId::StatusHistoryCancelled).to_string());
         self.needs_redraw = true;
     }
 
@@ -6179,7 +6212,7 @@ mod tests {
     #[test]
     fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
         let mut app = App::new(test_options(false), &Config::default());
-        app.status_message = Some("Task queued".to_string());
+        app.status_message = Some(tr(app.ui_locale, MessageId::StatusTaskQueued).to_string());
         app.sync_status_message_to_toasts();
 
         app.set_mode(AppMode::Agent);

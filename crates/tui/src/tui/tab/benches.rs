@@ -14,7 +14,7 @@
 //! - Persistence save/load (startup + shutdown overhead)
 //! - Group color rendering (per-frame work in tab bar)
 
-#![allow(unused_imports, clippy::module_inception, clippy::print_stderr)]
+#![allow(unused_imports)]
 
 #[cfg(test)]
 mod benches {

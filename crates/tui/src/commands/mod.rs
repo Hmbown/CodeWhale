@@ -377,6 +377,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
+        name: "locale",
+        aliases: &["language", "lang"],
+        usage: "/locale [code]",
+        description_id: MessageId::CmdLocaleDescription,
+    },
+    CommandInfo {
         name: "verbose",
         aliases: &[],
         usage: "/verbose [on|off]",
@@ -616,6 +622,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jihua" => config::mode(app, Some("plan")),
         "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),
+        "locale" | "language" | "lang" => config::locale(app, arg),
         "verbose" => config::verbose(app, arg),
         "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),
@@ -712,6 +719,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     config::switch_mode(app, mode)
 }
+
 /// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
 /// Zhang et al. (arXiv:2512.24601).
 ///

@@ -9,6 +9,7 @@
 //! behaviour differ enough to keep them apart.
 
 use crate::commands;
+use crate::localization::{MessageId, tr};
 
 use super::app::{App, looks_like_slash_command_input};
 use super::widgets::SlashMenuEntry;
@@ -57,7 +58,7 @@ pub fn apply_slash_menu_selection(
     {
         replace_inline_skill_mention(app, byte_start, &partial, &skill_name);
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Skill selected: /{skill_name}"));
+        app.status_message = Some(format!("{}{skill_name}", tr(app.ui_locale, MessageId::StatusSkillSelected)));
         return true;
     }
 
@@ -76,7 +77,7 @@ pub fn apply_slash_menu_selection(
     app.input = command;
     app.cursor_position = app.input.chars().count();
     app.slash_menu_hidden = false;
-    app.status_message = Some(format!("Command selected: {}", app.input.trim_end()));
+    app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusCommandSelected), app.input.trim_end()));
     true
 }
 
@@ -233,7 +234,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         app.input = format!("/{shared}");
         app.cursor_position = app.input.chars().count();
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Autocomplete: /{shared}"));
+        app.status_message = Some(format!("{}{shared}", tr(app.ui_locale, MessageId::StatusAutoCompleted)));
         return true;
     }
 
@@ -245,7 +246,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         app.input = completed.clone();
         app.cursor_position = completed.chars().count();
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Command completed: {}", completed.trim_end()));
+        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusCommandCompleted), completed.trim_end()));
         return true;
     }
 
@@ -255,6 +256,6 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    app.status_message = Some(format!("Suggestions: {preview}"));
+    app.status_message = Some(format!("{}{preview}", tr(app.ui_locale, MessageId::StatusSuggestionPrefix)));
     true
 }

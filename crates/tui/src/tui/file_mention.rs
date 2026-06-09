@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::{App, MentionCompletionCache};
+use crate::localization::{MessageId, tr};
 use crate::working_set::Workspace;
 
 /// Maximum number of `@`-mentions whose contents are inlined into one user
@@ -278,7 +279,7 @@ pub fn apply_mention_menu_selection(app: &mut App, entries: &[String]) -> bool {
     super::file_frecency::record_mention(replacement);
     replace_file_mention(app, byte_start, &partial, replacement);
     app.mention_menu_hidden = false;
-    app.status_message = Some(format!("Attached @{replacement}"));
+    app.status_message = Some(format!("{}{replacement}", tr(app.ui_locale, MessageId::StatusFileAttached)));
     true
 }
 
@@ -301,6 +302,7 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
     };
     if candidates.is_empty() {
         app.status_message = Some(no_file_mention_matches_status(
+            app.ui_locale,
             &partial,
             app.mention_walk_depth,
         ));
@@ -310,14 +312,14 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         // #441: a unique-match completion is also a "mention" for ranking.
         super::file_frecency::record_mention(&candidates[0]);
         replace_file_mention(app, byte_start, &partial, &candidates[0]);
-        app.status_message = Some(format!("Attached @{}", candidates[0]));
+        app.status_message = Some(format!("{}{}", tr(app.ui_locale, MessageId::StatusFileAttached), candidates[0]));
         return true;
     }
     let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
     let shared = longest_common_prefix(&candidate_refs);
     if shared.len() > partial.len() {
         replace_file_mention(app, byte_start, &partial, shared);
-        app.status_message = Some(format!("@{shared}…"));
+        app.status_message = Some(format!("{}{}…", tr(app.ui_locale, MessageId::StatusFileSharedPrefix), shared));
         return true;
     }
     let preview = candidates
@@ -326,17 +328,22 @@ pub fn try_autocomplete_file_mention(app: &mut App) -> bool {
         .map(|c| format!("@{c}"))
         .collect::<Vec<_>>()
         .join(", ");
-    app.status_message = Some(format!("Matches: {preview}"));
+    app.status_message = Some(format!("{}{preview}", tr(app.ui_locale, MessageId::StatusFileMatchPreview)));
     true
 }
 
-fn no_file_mention_matches_status(partial: &str, walk_depth: usize) -> String {
+fn no_file_mention_matches_status(
+    locale: crate::localization::Locale,
+    partial: &str,
+    walk_depth: usize,
+) -> String {
+    let prefix = tr(locale, MessageId::StatusNoFileMatch);
     if path_partial_reaches_walk_depth(partial, walk_depth) {
         format!(
-            "No files match @{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
+            "{prefix}{partial} (mention_walk_depth={walk_depth}; use /config set mention_walk_depth 0 to search deeper)"
         )
     } else {
-        format!("No files match @{partial}")
+        format!("{prefix}{partial}")
     }
 }
 

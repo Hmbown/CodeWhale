@@ -550,9 +550,118 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    CmdLocaleDescription,
+    LocaleCurrentLabel,
+    LocaleAvailableLabel,
+    LocaleUsageLabel,
+    // Status bar messages (locale-switched)
+    StatusNoResumableSession,
+    StatusCannotLoadSession,
+    StatusCannotRestoreOfflineQueue,
+    StatusMemoryAppended,
+    StatusCancelHint,
+    StatusTurnFailed,
+    StatusSubagentDisplay,
+    StatusTerminalControlRestored,
+    StatusDecisionCancelled,
+    StatusCopiedTurnId,
+    StatusCopiedDetail,
+    StatusFileTreeClosed,
+    StatusFileTreeHint,
+    StatusSidebarFocusWork,
+    StatusCannotMarkOnboarding,
+    StatusModeSwitched,
+    StatusAttachmentSelected,
+    StatusComposerFocused,
+    StatusAttachmentRemoved,
+    StatusImageAttached,
+    StatusHistorySearchFilter,
+    StatusHistorySearchConfirm,
+    StatusHistoryInserted,
+    StatusHistoryNoMatches,
+    StatusHistoryCancelled,
+    StatusNoFileMatch,
+    StatusSidebarFocusTasks,
+    StatusSidebarFocusAgents,
+    StatusSidebarFocusContext,
+    StatusFileAttached,
+    StatusFileSharedPrefix,
+    StatusFileMatchPreview,
+    StatusTaskQueued,
+    StatusNoSelectionToOpen,
+    StatusSelectionCleared,
+    StatusNoDetailsAvailable,
+    StatusOpenedInEditor,
+    StatusNoFileLineInSelection,
+    StatusCellHidden,
+    StatusCellShown,
+    StatusCellsRestored,
+    StatusCopiedSelection,
+    StatusCopyFailed,
+    StatusNoSelectionToCopy,
+    StatusSkillSelected,
+    StatusCommandSelected,
+    StatusAutoCompleted,
+    StatusCommandCompleted,
+    StatusSidebarFocusAuto,
+    StatusSuggestionPrefix,
+    StatusRollbackCancelled,
+    StatusNoPrevToolOutput,
+    StatusNoNextToolOutput,
+    StatusEditedIn,
+    StatusEditorClosedNoChanges,
+    StatusEditorCancelled,
+    StatusEditorError,
+    StatusDraftRestored,
+    StatusNoCopyableCells,
+    StatusSidebarHidden,
+    StatusSessionSavedTo,
+    StatusSessionLoadedFrom,
+    StatusWarmingCache,
+    StatusCacheWarmupDone,
+    StatusCacheWarmupFailed,
+    StatusWebUiListening,
+    StatusOpenedInBrowser,
+    StatusQueuedTask,
+    StatusConfigProfile,
+    StatusWorkspaceUnchanged,
+    StatusWorkspaceNow,
+    StatusQueuedCountHint,
+    StatusFooterActivity,
+    StatusOfflinePrefix,
+    StatusActivityLabelThinking,
+    StatusActivityLabelError,
+    StatusActivityLabelSubagent,
+    StatusActivityLabelTool,
+    StatusActivityLabelMessage,
+    // Phase 2 cleanup
+    StatusCompactingContext2,
+    StatusSteeringTurn2,
+    StatusRevisePlanHint,
+    StatusLiveOverlayTracking,
+    StatusLabelEmpty,
+    StatusCopiedLabel,
+    StatusCopyFailedLabel,
+    StatusApplyPlanChoiceFailed,
+    StatusRefreshingSubagents,
+    StatusRollbackTargetGone,
+    StatusRequestCancelled,
+    StatusNoForegroundShell,
+    StatusShellControlOpened,
+    StatusNoBgShell,
+    StatusShellManagerDisconnected,
+    StatusBackgroundingShell,
+    StatusShellLockCorrupt,
+    StatusNoActivityDetails,
+    StatusNoDetailsForLine,
+    StatusNoMessageAtPos,
+    StatusMessageEmpty,
+    StatusMessageCopied,
+    StatusMessageCopyFailed,
+    StatusCellsRestoredWithCount,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ComposerPlaceholder,
     MessageId::HistorySearchPlaceholder,
@@ -874,10 +983,132 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::CmdLocaleDescription,
+    MessageId::LocaleCurrentLabel,
+    MessageId::LocaleAvailableLabel,
+    MessageId::LocaleUsageLabel,
+    MessageId::StatusNoResumableSession,
+    MessageId::StatusCannotLoadSession,
+    MessageId::StatusCannotRestoreOfflineQueue,
+    MessageId::StatusMemoryAppended,
+    MessageId::StatusCancelHint,
+    MessageId::StatusTurnFailed,
+    MessageId::StatusSubagentDisplay,
+    MessageId::StatusTerminalControlRestored,
+    MessageId::StatusDecisionCancelled,
+    MessageId::StatusCopiedTurnId,
+    MessageId::StatusCopiedDetail,
+    MessageId::StatusFileTreeClosed,
+    MessageId::StatusFileTreeHint,
+    MessageId::StatusSidebarFocusWork,
+    MessageId::StatusCannotMarkOnboarding,
+    MessageId::StatusModeSwitched,
+    MessageId::StatusAttachmentSelected,
+    MessageId::StatusComposerFocused,
+    MessageId::StatusAttachmentRemoved,
+    MessageId::StatusImageAttached,
+    MessageId::StatusHistorySearchFilter,
+    MessageId::StatusHistorySearchConfirm,
+    MessageId::StatusHistoryInserted,
+    MessageId::StatusHistoryNoMatches,
+    MessageId::StatusHistoryCancelled,
+    MessageId::StatusNoFileMatch,
+    MessageId::StatusSidebarFocusTasks,
+    MessageId::StatusSidebarFocusAgents,
+    MessageId::StatusSidebarFocusContext,
+    MessageId::StatusFileAttached,
+    MessageId::StatusFileSharedPrefix,
+    MessageId::StatusFileMatchPreview,
+    MessageId::StatusTaskQueued,
+    MessageId::StatusNoSelectionToOpen,
+    MessageId::StatusSelectionCleared,
+    MessageId::StatusNoDetailsAvailable,
+    MessageId::StatusOpenedInEditor,
+    MessageId::StatusNoFileLineInSelection,
+    MessageId::StatusCellHidden,
+    MessageId::StatusCellShown,
+    MessageId::StatusCellsRestored,
+    MessageId::StatusCopiedSelection,
+    MessageId::StatusCopyFailed,
+    MessageId::StatusNoSelectionToCopy,
+    MessageId::StatusSkillSelected,
+    MessageId::StatusCommandSelected,
+    MessageId::StatusAutoCompleted,
+    MessageId::StatusCommandCompleted,
+    MessageId::StatusSidebarFocusAuto,
+    MessageId::StatusSuggestionPrefix,
+    MessageId::StatusRollbackCancelled,
+    MessageId::StatusNoPrevToolOutput,
+    MessageId::StatusNoNextToolOutput,
+    MessageId::StatusEditedIn,
+    MessageId::StatusEditorClosedNoChanges,
+    MessageId::StatusEditorCancelled,
+    MessageId::StatusEditorError,
+    MessageId::StatusDraftRestored,
+    MessageId::StatusNoCopyableCells,
+    MessageId::StatusSidebarHidden,
+    MessageId::StatusSessionSavedTo,
+    MessageId::StatusSessionLoadedFrom,
+    MessageId::StatusWarmingCache,
+    MessageId::StatusCacheWarmupDone,
+    MessageId::StatusCacheWarmupFailed,
+    MessageId::StatusWebUiListening,
+    MessageId::StatusOpenedInBrowser,
+    MessageId::StatusQueuedTask,
+    MessageId::StatusConfigProfile,
+    MessageId::StatusWorkspaceUnchanged,
+    MessageId::StatusWorkspaceNow,
+    MessageId::StatusQueuedCountHint,
+    MessageId::StatusFooterActivity,
+    MessageId::StatusOfflinePrefix,
+    MessageId::StatusActivityLabelThinking,
+    MessageId::StatusActivityLabelError,
+    MessageId::StatusActivityLabelSubagent,
+    MessageId::StatusActivityLabelTool,
+    MessageId::StatusActivityLabelMessage,
+    MessageId::StatusCompactingContext2,
+    MessageId::StatusSteeringTurn2,
+    MessageId::StatusRevisePlanHint,
+    MessageId::StatusLiveOverlayTracking,
+    MessageId::StatusLabelEmpty,
+    MessageId::StatusCopiedLabel,
+    MessageId::StatusCopyFailedLabel,
+    MessageId::StatusApplyPlanChoiceFailed,
+    MessageId::StatusRefreshingSubagents,
+    MessageId::StatusRollbackTargetGone,
+    MessageId::StatusRequestCancelled,
+    MessageId::StatusNoForegroundShell,
+    MessageId::StatusShellControlOpened,
+    MessageId::StatusNoBgShell,
+    MessageId::StatusShellManagerDisconnected,
+    MessageId::StatusBackgroundingShell,
+    MessageId::StatusShellLockCorrupt,
+    MessageId::StatusNoActivityDetails,
+    MessageId::StatusNoDetailsForLine,
+    MessageId::StatusNoMessageAtPos,
+    MessageId::StatusMessageEmpty,
+    MessageId::StatusMessageCopied,
+    MessageId::StatusMessageCopyFailed,
+    MessageId::StatusCellsRestoredWithCount,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
     fallback_translation(translation(locale, id), id)
+}
+
+/// Return the next locale in the cycle, used by Ctrl+Shift+L. The cycle is
+/// the order in which locales are listed in the /locale help output, ending
+/// with ZhHant which is the least-shipped variant.
+pub fn cycle_locale_next(current: Locale) -> &'static str {
+    match current {
+        Locale::En => "zh-Hans",
+        Locale::ZhHans => "ja",
+        Locale::Ja => "pt-BR",
+        Locale::PtBr => "es-419",
+        Locale::Es419 => "vi",
+        Locale::Vi => "zh-Hant",
+        Locale::ZhHant => "en",
+    }
 }
 
 pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {
@@ -940,7 +1171,7 @@ pub fn hidden_translation_failed(locale: Locale) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn missing_message_ids(locale: Locale) -> Vec<MessageId> {
     ALL_MESSAGE_IDS
         .iter()
@@ -1321,8 +1552,8 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbCompleteCycleModes => {
             "Complete /command, queue running-turn follow-up, cycle modes; Shift+Tab cycles reasoning effort"
         }
-        MessageId::KbJumpPlanAgentYolo => "Jump directly to Plan / Agent / YOLO mode",
-        MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to Plan / Agent / YOLO mode",
+        MessageId::KbJumpPlanAgentYolo => "Jump directly to 计划模式/智能体模式 / YOLO mode",
+        MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to 计划模式/智能体模式 / YOLO mode",
         MessageId::KbFocusSidebar => {
             "Focus Work / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 hides it"
         }
@@ -1371,14 +1602,14 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeQuickTaskList => "/task list   - Show background task queue",
         MessageId::HomeQuickHelp => "/help        - Show help",
         MessageId::HomeModeTips => "Mode Tips",
-        MessageId::HomeAgentModeTip => "Agent mode - Use tools for autonomous tasks",
-        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in Plan mode before executing",
+        MessageId::HomeAgentModeTip => "代理模式 - 使用工具执行自主任务",
+        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in 计划模式 before executing",
         MessageId::HomeAgentModeYoloTip => "  Type /mode yolo to enable full tool access",
         MessageId::HomeYoloModeTip => "YOLO mode - Full tool access, no approvals",
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
-        MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
+        MessageId::HomePlanModeTip => "计划模式 - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
-        MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
+        MessageId::HomeGoalModeTip => "目标跟踪 - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
         MessageId::OnboardLanguageBlurb => {
@@ -1509,6 +1740,113 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        MessageId::CmdLocaleDescription => "Switch UI language or list available locales",
+        MessageId::LocaleCurrentLabel => "Current locale: ",
+        MessageId::LocaleAvailableLabel => "Available: ",
+        MessageId::LocaleUsageLabel => "Usage: /locale <code>  (e.g. en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",
     }
 }
 
@@ -2009,6 +2347,114 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+
+        MessageId::CmdLocaleDescription => "Chuyển đổi ngôn ngữ giao diện hoặc liệt kê các ngôn ngữ có sẵn",
+        MessageId::LocaleCurrentLabel => "Ngôn ngữ hiện tại: ",
+        MessageId::LocaleAvailableLabel => "Có sẵn: ",
+        MessageId::LocaleUsageLabel => "Cách dùng: /locale <mã>  (ví dụ: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+
     })
 }
 
@@ -2073,7 +2519,500 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：穩定前綴區塊符合 DeepSeek V4 前綴快取條件。易變工作集的更改僅會破壞快取尾部。"
         }
-        other => chinese_simplified(other)?,
+        MessageId::ClearConversation => "Conversation cleared",
+        MessageId::ClearConversationBusy => {
+            "Conversation cleared (plan state busy; run /clear again if needed)"
+        }
+        MessageId::ModelChanged => "Model changed: {old} \u{2192} {new}",
+        MessageId::CmdAgentDescription => {
+            "Open a persistent sub-agent session: /agent [0-3] <task>"
+        }
+        MessageId::CmdGoalDescription => "Set a session goal with optional token budget",
+        MessageId::CmdAnchorDescription => {
+            "Pin a fact that survives compaction (auto-injected into context)"
+        }
+        MessageId::CmdAttachDescription => {
+            "Attach image/video media; use @path for text files or directories"
+        }
+        MessageId::CmdCacheDescription => {
+            "Show DeepSeek prefix-cache hit/miss stats for the last N turns"
+        }
+        MessageId::CmdChangeDescription => "Show the latest changelog entry",
+        MessageId::CmdCacheAdvice => {
+            "Hit/miss ratios over ~70% after the third turn indicate a stable cache prefix; \n\
+             lower than that on long sessions suggests prefix churn worth investigating (#263)."
+        }
+        MessageId::CmdCacheFootnote => {
+            "* miss inferred from input − hit when the provider did not report it explicitly.\n"
+        }
+        MessageId::CmdCacheHeader => {
+            "Cache telemetry — last {count} of {total} turn(s) (model: {model})\n"
+        }
+        MessageId::CmdCacheNoData => {
+            "Cache history: no turns recorded yet.\n\n\
+             DeepSeek surfaces `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` \
+             on every API turn that the model supports it (V4 family). Run a turn \
+             and try /cache again."
+        }
+        MessageId::CmdCacheTotals => {
+            "Σ in: {sum_in}   Σ hit: {sum_hit}   Σ miss: {sum_miss}   avg hit ratio: {avg}\n"
+        }
+        MessageId::CmdCostReport => {
+            "Session Cost:\n\
+             ─────────────────────────────\n\
+             Approx total spent: {cost}\n\n\
+             Cost estimates are approximate and use provider usage telemetry when available.\n\n\
+             DeepSeek API Pricing:\n\
+             ─────────────────────────────\n\
+             Pricing details are not configured in this CLI."
+        }
+        MessageId::CmdTokensCacheBoth => "{hit} hit / {miss} miss",
+        MessageId::CmdChangeHeader => "Latest Changelog",
+        MessageId::CmdChangeTranslationQueued => {
+            "English release notes are shown below. A translated version will be requested next; if the provider is unavailable, this English text is the fallback."
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "English release notes are shown below. Translation is unavailable because the current session has no API key or is offline."
+        }
+        MessageId::CmdChangePreviousVersion => {
+            "Previous version: {version} — run `/change {version}` to view it"
+        }
+        MessageId::CmdBalanceDescription => "Check the active provider account balance",
+        MessageId::CmdClearDescription => "Clear conversation history",
+        MessageId::CmdCompactDescription => "Trigger context compaction to free up space",
+        MessageId::CmdContextDescription => "Open compact session context inspector",
+        MessageId::CmdCostDescription => "Show session cost breakdown",
+        MessageId::CmdDiffDescription => "Show file changes since session start",
+        MessageId::CmdEditDescription => "Revise and resubmit the last message",
+        MessageId::CmdExitDescription => "Exit the application",
+        MessageId::CmdExportDescription => "Export conversation to markdown",
+        MessageId::CmdFeedbackDescription => "Generate a GitHub feedback URL",
+        MessageId::CmdHelpDescription => "Show help information",
+        MessageId::CmdHfDescription => "Inspect Hugging Face MCP setup and concepts",
+        MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
+        MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
+        MessageId::CmdInitDescription => "Generate AGENTS.md for project",
+        MessageId::CmdJobsDescription => "Inspect and control background commands",
+        MessageId::CmdLinksDescription => "Show DeepSeek dashboard and docs links",
+        MessageId::CmdLoadDescription => "Load session from file",
+        MessageId::CmdLogoutDescription => "Clear API key and return to setup",
+        MessageId::CmdLspDescription => "Toggle LSP diagnostics on or off",
+        MessageId::CmdMcpDescription => "Open or manage MCP servers",
+        MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
+        MessageId::CmdModeDescription => {
+            "Switch mode or open picker: /mode [agent|plan|yolo|1|2|3]"
+        }
+        MessageId::CmdModelDescription => "Switch or view current model",
+        MessageId::CmdModelsDescription => "List available models from API",
+        MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
+        MessageId::CmdNewDescription => "Start a fresh saved session",
+        MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
+        MessageId::CmdProviderDescription => "Switch the active provider and/or model",
+        MessageId::CmdPurgeDescription => {
+            "Let the agent surgically prune conversation history to free context space"
+        }
+        MessageId::CmdConfigDescription => "Open interactive configuration editor",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Already editing a queued message. Send it or /queue clear to discard."
+        }
+        MessageId::CmdQueueNotFound => "Queued message not found",
+        MessageId::CmdQueueAlreadyEmpty => "Queue already empty",
+        MessageId::CmdQueueCleared => "Queue cleared",
+        MessageId::CmdQueueDescription => "View or edit queued messages",
+        MessageId::CmdQueueDraftHeader => "Editing queued message:",
+        MessageId::CmdQueueEditingMessage => {
+            "Editing queued message {index} (press Enter to re-queue/send)"
+        }
+        MessageId::CmdQueueDropped => "Dropped queued message {index}",
+        MessageId::CmdQueueEditingStatus => "Editing queued message {index}",
+        MessageId::CmdQueueIndexMin => "Index must be >= 1",
+        MessageId::CmdQueueListHeader => "Queued messages ({count}):",
+        MessageId::CmdQueueMissingIndex => {
+            "Missing index. Usage: /queue edit <n> or /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Index must be a positive number",
+        MessageId::CmdQueueNoMessages => "No queued messages",
+        MessageId::CmdQueueTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdRenameDescription => "Rename the current session",
+        MessageId::CmdRestoreDescription => {
+            "Roll back the workspace to a prior pre/post-turn snapshot. With no arg, lists recent snapshots."
+        }
+        MessageId::CmdRetryDescription => "Retry the last request",
+        MessageId::CmdReviewDescription => "Run a structured code review on a file, diff, or PR",
+        MessageId::CmdRlmDescription => "Open a persistent RLM context: /rlm [0-3] <file_or_text>",
+        MessageId::CmdSaveDescription => "Save session to file",
+        MessageId::CmdSessionsDescription => "Open session history picker",
+        MessageId::CmdSettingsDescription => "Show persistent settings",
+        MessageId::CmdShareDescription => "Export current session as a shareable web URL",
+        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
+        MessageId::CmdSkillDescription => {
+            "Activate a skill, or install/update/uninstall/trust a community skill"
+        }
+        MessageId::CmdSkillsDescription => {
+            "List local skills (filter by `/skills <prefix>`; --remote browses the curated registry)"
+        }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
+        MessageId::CmdStashDescription => {
+            "Park or restore a composer draft (Ctrl+S to push, /stash list/pop)"
+        }
+        MessageId::CmdStatusDescription => "Show runtime session status",
+        MessageId::CmdStatuslineDescription => "Configure which items appear in the footer",
+        MessageId::CmdSubagentsDescription => "List sub-agent status",
+        MessageId::CmdSwarmDescription => {
+            "Run a multi-agent fanout turn (sequential | mixture | distill | deliberate)"
+        }
+        MessageId::CmdSystemDescription => "Show current system prompt",
+        MessageId::CmdTaskDescription => "Manage background tasks",
+        MessageId::CmdTokensCacheHitOnly => "{hit} hit / miss not reported",
+        MessageId::CmdTokensCacheMissOnly => "hit not reported / {miss} miss",
+        MessageId::CmdTokensContextUnknownWindow => "~{estimated} / unknown window",
+        MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::CmdTokensDescription => "Show token usage for session",
+        MessageId::CmdTokensNotReported => "not reported",
+        MessageId::CmdTokensReport => {
+            "Token Usage:\n\
+             ─────────────────────────────\n\
+             Active context:        {active}\n\
+             Last API input:        {input} (turn telemetry; may count repeated prefix across tool rounds)\n\
+             Last API output:       {output}\n\
+             Cache hit/miss:        {cache} (telemetry/cost only)\n\
+             Cumulative tokens:     {total} (session usage telemetry)\n\
+             Approx session cost:   {cost}\n\
+             API messages:          {api_messages}\n\
+             Chat messages:         {chat_messages}\n\
+             Model:                 {model}"
+        }
+        MessageId::KbScrollTranscript => {
+            "Scroll transcript, navigate input history, or select composer attachments"
+        }
+        MessageId::KbNavigateHistory => "Navigate input history",
+        MessageId::CmdTrustDescription => {
+            "Manage workspace trust and per-path allowlist (`/trust add <path>`, `/trust list`, `/trust on|off`)"
+        }
+        MessageId::CmdWorkspaceDescription => "Show or switch the current workspace",
+        MessageId::CmdUndoDescription => "Remove last message pair",
+        MessageId::CmdVerboseDescription => "Toggle full live thinking in the transcript",
+        MessageId::ComposerPlaceholder => "Write a task or use /.",
+        MessageId::ConfigFilteredSettings => "  Filtered settings",
+        MessageId::ConfigFooterDefault => {
+            " type=filter, Up/Down=select, Enter/e=edit, Esc/q=close "
+        }
+        MessageId::ConfigFooterScrollable => {
+            " type=filter, Up/Down=select, Enter/e=edit, PgUp/PgDn=scroll, Esc/q=close "
+        }
+        MessageId::ConfigFooterFiltered => {
+            " type=filter, Backspace=delete, Ctrl+U/Esc=clear, Enter=edit "
+        }
+        MessageId::HelpTitle => "Help",
+        MessageId::ConfigModalTitle => " Config ",
+        MessageId::ConfigNoMatchesPrefix => "  No settings match ",
+        MessageId::ConfigNoSettings => "  No settings available.",
+        MessageId::ConfigSearchPlaceholder => "type to filter",
+        MessageId::ConfigShowing => "  Showing",
+        MessageId::ConfigTitle => "Session Configuration",
+        MessageId::CtxMenuClearSelection => "Clear selection",
+        MessageId::CtxMenuCmdPalette => "Command palette",
+        MessageId::CtxMenuCmdPaletteDesc => "commands, skills, and tools",
+        MessageId::CtxMenuContextInspector => "Context inspector",
+        MessageId::CtxMenuContextInspectorDesc => "active context and cache hints",
+        MessageId::CtxMenuCopyMessage => "Copy message",
+        MessageId::CtxMenuCopyMessageDesc => "write clicked transcript cell",
+        MessageId::CtxMenuCopySelection => "Copy selection",
+        MessageId::CtxMenuCopySelectionDesc => "write selected transcript text",
+        MessageId::CtxMenuHelp => "Help",
+        MessageId::CtxMenuHelpDesc => "keybindings and commands",
+        MessageId::CtxMenuHideCell => "Hide cell",
+        MessageId::CtxMenuHideCellDesc => "collapse this transcript cell",
+        MessageId::CtxMenuOpenDetails => "Open details",
+        MessageId::CtxMenuOpenInEditor => "Open in editor",
+        MessageId::CtxMenuOpenInEditorDesc => "open file:line in $EDITOR",
+        MessageId::CtxMenuOpenSelection => "Open selection",
+        MessageId::CtxMenuOpenSelectionDesc => "show selected text in pager",
+        MessageId::CtxMenuPaste => "Paste",
+        MessageId::CtxMenuPasteDesc => "insert clipboard into composer",
+        MessageId::CtxMenuShowCell => "Show cell",
+        MessageId::CtxMenuShowCellDesc => "unhide this transcript cell",
+        MessageId::CtxMenuShowHidden => "Show hidden",
+        MessageId::CtxMenuShowHiddenDesc => "unhide all collapsed cells",
+        MessageId::FooterAgentSingular => "1 agent",
+        MessageId::FooterAgentsPlural => "{count} agents",
+        MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
+        MessageId::FooterWorking => "working",
+        MessageId::HelpAliasesLabel => "Aliases:",
+        MessageId::HelpFilterPlaceholder => "Type to filter",
+        MessageId::HelpFilterPrefix => "Filter: ",
+        MessageId::HelpFooterClose => " Esc close ",
+        MessageId::HelpFooterJump => " PgUp/PgDn jump ",
+        MessageId::HelpFooterMove => "  Up/Down move ",
+        MessageId::HelpFooterTypeFilter => " type to filter ",
+        MessageId::HelpKeybindings => "Keybindings",
+        MessageId::HelpNoMatches => "  No matches.",
+        MessageId::HelpSectionActions => "Actions",
+        MessageId::HelpSectionClipboard => "Clipboard",
+        MessageId::HelpSectionEditing => "Input editing",
+        MessageId::HelpSectionHelp => "Help",
+        MessageId::HelpSectionModes => "Modes",
+        MessageId::HelpSectionNavigation => "Navigation",
+        MessageId::HelpSectionSessions => "Sessions",
+        MessageId::HelpSlashCommands => "Slash commands",
+        MessageId::HelpUnknownCommand => "Unknown command: {topic}",
+        MessageId::HelpUsageLabel => "Usage:",
+        MessageId::HistoryHintAccept => "Enter accept",
+        MessageId::HistoryHintMove => "Up/Down move",
+        MessageId::HistoryHintRestore => "Esc restore",
+        MessageId::HistoryNoMatches => "  No matches",
+        MessageId::HistorySearchPlaceholder => "Search prompt history...",
+        MessageId::HistorySearchTitle => "History Search",
+        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in 计划模式 before executing",
+        MessageId::HomeAgentModeTip => "代理模式 - 使用工具执行自主任务",
+        MessageId::HomeAgentModeYoloTip => "  Type /mode yolo to enable full tool access",
+        MessageId::HomeDashboardTitle => "codewhale Home Dashboard",
+        MessageId::HomeGoalModeTip => "目标跟踪 - Set /goal <objective> to pursue objectives",
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "Choose your language",
+        MessageId::HomeHistory => "History:",
+        MessageId::HomeMode => "Mode:",
+        MessageId::HomeModeTips => "Mode Tips",
+        MessageId::HomeModel => "Model:",
+        MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        MessageId::HomePlanModeTip => "计划模式 - Design before implementing",
+        MessageId::HomeQueued => "Queued:",
+        MessageId::HomeQuickActions => "Quick Actions",
+        MessageId::HomeQuickConfig => "/config      - Open interactive configuration editor",
+        MessageId::HomeQuickHelp => "/help        - Show help",
+        MessageId::HomeQuickLinks => "/links      - Dashboard & API links",
+        MessageId::HomeQuickModel => "/model       - Switch or view model",
+        MessageId::HomeQuickSettings => "/settings    - Show persistent settings",
+        MessageId::HomeQuickSkills => "/skills      - List available skills",
+        MessageId::HomeQuickSubagents => "/subagents   - List sub-agent status",
+        MessageId::HomeQuickTaskList => "/task list   - Show background task queue",
+        MessageId::HomeSkill => "Skill:",
+        MessageId::HomeSubagents => "Sub-agents:",
+        MessageId::HomeTokens => "Tokens:",
+        MessageId::HomeWorkspace => "Workspace:",
+        MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
+        MessageId::HomeYoloModeTip => "YOLO mode - Full tool access, no approvals",
+        MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to 计划模式/智能体模式 / YOLO mode",
+        MessageId::KbBacktrackMessage => {
+            "Backtrack to a previous user message (Left/Right step, Enter to rewind)"
+        }
+        MessageId::KbCompleteCycleModes => {
+            "Complete /command, queue running-turn follow-up, cycle modes; Shift+Tab cycles reasoning effort"
+        }
+        MessageId::KbJumpPlanAgentYolo => "Jump directly to 计划模式/智能体模式 / YOLO mode",
+        MessageId::KbBrowseHistory => "Browse conversation history",
+        MessageId::KbCancelOrExit => "Cancel request, or exit when idle",
+        MessageId::KbCloseMenu => "Close menu, cancel request, discard draft, or clear input",
+        MessageId::KbCommandPalette => "Open the command palette",
+        MessageId::KbCompactInspector => "Open compact session context inspector",
+        MessageId::KbContextMenu => {
+            "Open context actions for paste, selection, message details, context, and help"
+        }
+        MessageId::KbAttachPath => "Add a local text file or directory to context",
+        MessageId::KbCopySelection => "Copy the current selection (Cmd+C on macOS)",
+        MessageId::KbDeleteChar => {
+            "Delete character before / after the cursor, or remove selected attachment"
+        }
+        MessageId::KbClearDraft => "Clear the current draft",
+        MessageId::KbExitEmpty => "Exit when input is empty",
+        MessageId::KbFocusSidebar => {
+            "Focus Work / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 hides it"
+        }
+        MessageId::KbTogglePlanAgent => "Toggle between Plan and Agent modes",
+        MessageId::KbFuzzyFilePicker => "Open the fuzzy file picker (insert @path on Enter)",
+        MessageId::KbHelpOverlay => "Open this help overlay (when input is empty)",
+        MessageId::KbInsertNewline => "Insert a newline in the composer",
+        MessageId::KbJumpLineStartEnd => "Jump to start / end of line",
+        MessageId::KbJumpToolBlocks => "Jump between tool output blocks",
+        MessageId::KbJumpTopBottom => "Jump to top / bottom of transcript",
+        MessageId::KbJumpTopBottomEmpty => "Jump to top / bottom (when input is empty)",
+        MessageId::KbLastMessagePager => "Open pager for the last message (when input is empty)",
+        MessageId::KbLiveTranscript => "Open live transcript overlay (sticky-tail auto-scroll)",
+        MessageId::KbMoveCursor => "Move cursor in composer",
+        MessageId::KbPasteAttach => "Paste text or attach a clipboard image",
+        MessageId::KbScrollPage => "Scroll transcript by page",
+        MessageId::KbScrollTranscriptAlt => "Scroll transcript",
+        MessageId::KbSearchHistory => "Search prompt history and recover local drafts",
+        MessageId::KbSelectedDetails => {
+            "Open details for the selected tool or message (when input is empty)"
+        }
+        MessageId::KbToolDetailsPager => "Open tool-details pager",
+        MessageId::KbSendDraft => "Send the current draft",
+        MessageId::KbSessionPicker => "Open the session picker",
+        MessageId::KbShellControls => "Open shell controls for a running foreground command",
+        MessageId::KbStashDraft => "Stash the current draft (`/stash pop` to restore)",
+        MessageId::KbThinkingPager => "Open Activity Detail",
+        MessageId::KbToggleHelp => "Toggle help overlay",
+        MessageId::KbToggleHelpSlash => "Toggle help overlay",
+        MessageId::LinksDashboard => "Dashboard:",
+        MessageId::LinksDocs => "Docs:",
+        MessageId::LinksTip => "Tip: API keys are available in the dashboard console.",
+        MessageId::LinksTitle => "DeepSeek Links:",
+        MessageId::LocaleAvailableLabel => "Available: ",
+        MessageId::LocaleCurrentLabel => "Current locale: ",
+        MessageId::LocaleUsageLabel => "Usage: /locale <code>  (e.g. en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::OnboardApiKeyFooter => "Press Enter to save, Esc to go back.",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "Trust Workspace",
+        MessageId::OnboardApiKeyLabel => "Key: ",
+        MessageId::OnboardApiKeySavedHint => {
+            "Saved to ~/.codewhale/config.toml so it works from any folder."
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "Paste the full key exactly as issued (no spaces or newlines)."
+        }
+        MessageId::OnboardApiKeyPlaceholder => "(paste key here)",
+        MessageId::OnboardApiKeyStep1 => {
+            "Step 1.  Open https://platform.deepseek.com/api_keys and create a key."
+        }
+        MessageId::OnboardApiKeyStep2 => "Step 2.  Paste it below and press Enter.",
+        MessageId::OnboardLanguageBlurb => {
+            "Pick the UI language. You can change it any time with `/settings set locale <tag>`."
+        }
+        MessageId::OnboardLanguageFooter => {
+            "Press 1-7 to choose, or Enter to keep the current setting"
+        }
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "Connect your DeepSeek API key",
+        MessageId::OnboardTipsFooterAction => " to open the workspace",
+        // Context menu.
+        MessageId::CtxMenuTitle => " Right click ",
+        MessageId::OnboardTipsLine1 => {
+            "Write the task in plain language. Use /help or Ctrl+K when you want a command."
+        }
+        MessageId::OnboardTipsLine2 => {
+            "The bottom composer is multi-line: Enter sends, Alt+Enter or Ctrl+J adds a new line."
+        }
+        MessageId::OnboardTipsLine3 => {
+            "Switch modes only when the job changes: Plan for review-first work, Agent for execution, YOLO when you want auto-approval."
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R resumes earlier sessions, and Esc backs out of the current draft or overlay."
+        }
+        MessageId::OnboardTipsFooterEnter => "Press Enter",
+        MessageId::OnboardTrustFooterMiddle => " to trust and continue, ",
+        MessageId::OnboardTrustFooterSuffix => " to quit",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "Start Simple",
+        MessageId::OnboardTrustLocationPrefix => "You are in ",
+        MessageId::OnboardTrustQuestion => "Do you trust the contents of this directory?",
+        MessageId::OnboardTrustRiskHint => {
+            "Working with untrusted contents comes with higher risk of prompt injection."
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "Trusting this directory records it in global config and enables trusted workspace mode."
+        }
+        MessageId::OnboardTrustFooterPrefix => "Press ",
+        MessageId::SettingsConfigFile => "Config file:",
+        MessageId::SettingsTitle => "Settings:",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",
+        MessageId::CmdLocaleDescription => "Switch UI language or list available locales",
+        MessageId::SubagentsFetching => "Fetching sub-agent status...",        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+        MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
+        MessageId::CmdForkDescription => "Fork the active conversation into a sibling session",
+
     })
 }
 
@@ -2345,8 +3284,8 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "/command を補完、実行中ターンのフォローアップをキュー、モードを切り替え；Shift+Tab で推論強度を切り替え"
         }
-        MessageId::KbJumpPlanAgentYolo => "Plan / Agent / YOLO モードに直接ジャンプ",
-        MessageId::KbAltJumpPlanAgentYolo => "Plan / Agent / YOLO モードへの代替ジャンプ",
+        MessageId::KbJumpPlanAgentYolo => "计划模式/智能体模式 / YOLO モードに直接ジャンプ",
+        MessageId::KbAltJumpPlanAgentYolo => "计划模式/智能体模式 / YOLO モードへの代替ジャンプ",
         MessageId::KbFocusSidebar => {
             "Work / Tasks / Agents / Context / Auto / Hidden サイドバーにフォーカス"
         }
@@ -2536,6 +3475,114 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+
+        MessageId::CmdLocaleDescription => "UI言語を切り替えるか利用可能な言語を一覧表示",
+        MessageId::LocaleCurrentLabel => "現在の言語: ",
+        MessageId::LocaleAvailableLabel => "利用可能: ",
+        MessageId::LocaleUsageLabel => "使い方: /locale <コード>  (例: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+
     })
 }
 
@@ -2769,10 +3816,10 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "补全 /command、排队运行轮次跟进、切换模式；Shift+Tab 切换推理强度"
         }
-        MessageId::KbJumpPlanAgentYolo => "直接跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
+        MessageId::KbJumpPlanAgentYolo => "直接跳转到计划模式/智能体模式 / YOLO 模式",
+        MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到计划模式/智能体模式 / YOLO 模式",
         MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
-        MessageId::KbTogglePlanAgent => "在 Plan 和 Agent 模式之间切换",
+        MessageId::KbTogglePlanAgent => "在计划模式和智能体模式之间切换",
         MessageId::KbSessionPicker => "打开会话选择器",
         MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
         MessageId::KbCopySelection => "复制当前选中内容（macOS 为 Cmd+C）",
@@ -2815,14 +3862,14 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickTaskList => "/task list   - 显示后台任务队列",
         MessageId::HomeQuickHelp => "/help        - 显示帮助",
         MessageId::HomeModeTips => "模式提示",
-        MessageId::HomeAgentModeTip => "Agent 模式 - 使用工具执行自主任务",
-        MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在 Plan 模式下审查后再执行",
+        MessageId::HomeAgentModeTip => "智能体模式 - 使用工具执行自主任务",
+        MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在计划模式下审查后再执行",
         MessageId::HomeAgentModeYoloTip => "  输入 /mode yolo 启用完整工具访问",
         MessageId::HomeYoloModeTip => "YOLO 模式 - 完整工具访问，无需审批",
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
-        MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
+        MessageId::HomePlanModeTip => "计划模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
-        MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
+        MessageId::HomeGoalModeTip => "目标跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
         MessageId::OnboardLanguageBlurb => {
@@ -2858,7 +3905,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardTipsLine1 => "用自然语言描述任务。需要命令时使用 /help 或 Ctrl+K。",
         MessageId::OnboardTipsLine2 => "底部输入框支持多行：Enter 发送，Alt+Enter 或 Ctrl+J 换行。",
         MessageId::OnboardTipsLine3 => {
-            "按需切换模式：Plan 适合先审后行，Agent 用于执行，YOLO 启用自动批准。"
+            "按需切换模式：计划模式适合先审后行，智能体模式用于执行，YOLO 启用自动批准。"
         }
         MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
         MessageId::OnboardTipsFooterEnter => "按 Enter",
@@ -2940,6 +3987,113 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        MessageId::CmdLocaleDescription => "切换界面语言或列出可用语言",
+        MessageId::LocaleCurrentLabel => "当前语言: ",
+        MessageId::LocaleAvailableLabel => "可用: ",
+        MessageId::LocaleUsageLabel => "用法: /locale <代码>  (例如 en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusNoResumableSession => "没有找到可恢复的会话",
+        MessageId::StatusCannotLoadSession => "无法加载会话: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "无法恢复离线队列: ",
+        MessageId::StatusMemoryAppended => "memory: 已追加到 ",
+        MessageId::StatusCancelHint => "按 Esc 或 Ctrl+C 取消",
+        MessageId::StatusTurnFailed => "回合失败: ",
+        MessageId::StatusSubagentDisplay => "子代理 ",
+        MessageId::StatusTerminalControlRestored => "终端控制已恢复",
+        MessageId::StatusDecisionCancelled => "决策已取消",
+        MessageId::StatusCopiedTurnId => "已复制回合 ID ",
+        MessageId::StatusCopiedDetail => "已复制 ",
+        MessageId::StatusFileTreeClosed => "文件树已关闭",
+        MessageId::StatusFileTreeHint => "文件树: ↑/↓ 导航  Enter 选中  Esc 关闭",
+        MessageId::StatusSidebarFocusWork => "侧边栏焦点: 工作",
+        MessageId::StatusCannotMarkOnboarding => "无法标记入职状态: ",
+        MessageId::StatusModeSwitched => "已切换到 {mode} 模式",
+        MessageId::StatusAttachmentSelected => "已选择附件 - Backspace/Delete 删除",
+        MessageId::StatusComposerFocused => "输入框已聚焦",
+        MessageId::StatusAttachmentRemoved => "已移除附件: ",
+        MessageId::StatusImageAttached => "已附加图片: ",
+        MessageId::StatusHistorySearchFilter => "历史搜索: 输入以筛选，回车确认",
+        MessageId::StatusHistorySearchConfirm => "历史搜索: 回车确认，Esc 恢复",
+        MessageId::StatusHistoryInserted => "历史记录已插入到输入框",
+        MessageId::StatusHistoryNoMatches => "没有匹配的历史记录",
+        MessageId::StatusHistoryCancelled => "历史搜索已取消",
+        MessageId::StatusNoFileMatch => "没有文件匹配 @",
+        MessageId::StatusSidebarFocusTasks => "侧边栏焦点: 任务",
+        MessageId::StatusSidebarFocusAgents => "侧边栏焦点: 代理",
+        MessageId::StatusSidebarFocusContext => "侧边栏焦点: 上下文",
+        MessageId::StatusFileAttached => "已附加 @",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileMatchPreview => "匹配: ",
+        MessageId::StatusTaskQueued => "任务已排队",
+        MessageId::StatusNoSelectionToOpen => "没有选中内容可打开",
+        MessageId::StatusSelectionCleared => "已清除选中内容",
+        MessageId::StatusNoDetailsAvailable => "该行没有可用的详情信息",
+        MessageId::StatusOpenedInEditor => "已在编辑器中打开文件",
+        MessageId::StatusNoFileLineInSelection => "选中内容中未找到文件:行号格式",
+        MessageId::StatusCellHidden => "单元格已隐藏",
+        MessageId::StatusCellShown => "单元格已显示",
+        MessageId::StatusCellsRestored => "已恢复 ",
+        MessageId::StatusCopiedSelection => "已复制选中内容",
+        MessageId::StatusCopyFailed => "复制失败",
+        MessageId::StatusNoSelectionToCopy => "没有选中内容可复制",
+        MessageId::StatusSkillSelected => "已选择技能: /",
+        MessageId::StatusCommandSelected => "已选择命令: ",
+        MessageId::StatusAutoCompleted => "自动补全: /",
+        MessageId::StatusCommandCompleted => "命令已完成: ",
+        MessageId::StatusSidebarFocusAuto => "侧边栏焦点: 自动",
+        MessageId::StatusSuggestionPrefix => "建议: ",
+        MessageId::StatusRollbackCancelled => "回退已取消",
+        MessageId::StatusNoPrevToolOutput => "没有上一条工具输出",
+        MessageId::StatusNoNextToolOutput => "没有下一条工具输出",
+        MessageId::StatusEditedIn => "已在 {editor} 中编辑",
+        MessageId::StatusEditorClosedNoChanges => "编辑器已关闭（无更改）",
+        MessageId::StatusEditorCancelled => "编辑器已取消",
+        MessageId::StatusEditorError => "编辑器错误: ",
+        MessageId::StatusDraftRestored => "已恢复清除的草稿",
+        MessageId::StatusNoCopyableCells => "没有可复制的对话单元格",
+        MessageId::StatusSidebarHidden => "侧边栏已隐藏",
+        MessageId::StatusSessionSavedTo => "会话已保存到 ",
+        MessageId::StatusSessionLoadedFrom => "会话已从 ",
+        MessageId::StatusWarmingCache => "正在预热 DeepSeek 缓存...",
+        MessageId::StatusCacheWarmupDone => "缓存预热完成",
+        MessageId::StatusCacheWarmupFailed => "缓存预热失败",
+        MessageId::StatusWebUiListening => "Web UI 监听: ",
+        MessageId::StatusOpenedInBrowser => "已在浏览器中打开 ",
+        MessageId::StatusQueuedTask => "已排队 ",
+        MessageId::StatusConfigProfile => "配置文件: ",
+        MessageId::StatusWorkspaceUnchanged => "工作区未改变: ",
+        MessageId::StatusWorkspaceNow => "工作区: ",
+        MessageId::StatusQueuedCountHint => " 个已排队 — ↑ 编辑, /queue list",
+        MessageId::StatusFooterActivity => "活动: ",
+        MessageId::StatusOfflinePrefix => "离线: ",
+        MessageId::StatusActivityLabelThinking => "思考中",
+        MessageId::StatusActivityLabelError => "错误",
+        MessageId::StatusActivityLabelSubagent => "子代理",
+        MessageId::StatusActivityLabelTool => "工具活动",
+        MessageId::StatusActivityLabelMessage => "消息",
+        MessageId::StatusCompactingContext2 => "正在压缩上下文...",
+        MessageId::StatusSteeringTurn2 => "正在引导当前回合...",
+        MessageId::StatusRevisePlanHint => "请修订计划后按回车",
+        MessageId::StatusLiveOverlayTracking => "实时对话: 跟踪中 (按 Esc 关闭)",
+        MessageId::StatusLabelEmpty => "{label} 为空",
+        MessageId::StatusCopiedLabel => "已复制 {label}",
+        MessageId::StatusCopyFailedLabel => "复制失败 ({label})",
+        MessageId::StatusApplyPlanChoiceFailed => "应用计划选择失败: ",
+        MessageId::StatusRefreshingSubagents => "正在刷新子代理...",
+        MessageId::StatusRollbackTargetGone => "回退目标已不存在",
+        MessageId::StatusRequestCancelled => "请求已取消",
+        MessageId::StatusNoForegroundShell => "没有前台 shell 命令可控制",
+        MessageId::StatusShellControlOpened => "Shell 控制已打开",
+        MessageId::StatusNoBgShell => "没有可后台运行的前台 shell 命令",
+        MessageId::StatusShellManagerDisconnected => "Shell 管理器未连接",
+        MessageId::StatusBackgroundingShell => "正在将当前 shell 命令放到后台...",
+        MessageId::StatusShellLockCorrupt => "Shell 管理器锁已损坏",
+        MessageId::StatusNoActivityDetails => "没有可用的活动详情",
+        MessageId::StatusNoDetailsForLine => "所选行没有可用详情",
+        MessageId::StatusNoMessageAtPos => "该位置没有消息",
+        MessageId::StatusMessageEmpty => "消息为空",
+        MessageId::StatusMessageCopied => "消息已复制",
+        MessageId::StatusMessageCopyFailed => "复制失败",
+        MessageId::StatusCellsRestoredWithCount => "已恢复 {count} 个隐藏单元格",
     })
 }
 
@@ -3227,8 +4381,8 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "Completar /command, enfileirar follow-up, ciclar modos; Shift+Tab cicla esforço de raciocínio"
         }
-        MessageId::KbJumpPlanAgentYolo => "Pular direto para modo Plan / Agent / YOLO",
-        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo Plan / Agent / YOLO",
+        MessageId::KbJumpPlanAgentYolo => "Pular direto para modo 计划模式/智能体模式 / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo 计划模式/智能体模式 / YOLO",
         MessageId::KbFocusSidebar => {
             "Focar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
         }
@@ -3426,6 +4580,114 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+
+        MessageId::CmdLocaleDescription => "Alternar idioma da interface ou listar idiomas disponíveis",
+        MessageId::LocaleCurrentLabel => "Idioma atual: ",
+        MessageId::LocaleAvailableLabel => "Disponíveis: ",
+        MessageId::LocaleUsageLabel => "Uso: /locale <código>  (ex: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+
     })
 }
 
@@ -3725,8 +4987,8 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbCompleteCycleModes => {
             "Completar /command, encolar follow-up, ciclar modos; Shift+Tab cicla esfuerzo de razonamiento"
         }
-        MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo Plan / Agent / YOLO",
-        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo Plan / Agent / YOLO",
+        MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo 计划模式/智能体模式 / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo 计划模式/智能体模式 / YOLO",
         MessageId::KbFocusSidebar => {
             "Enfocar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
         }
@@ -3922,6 +5184,114 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+
+        MessageId::CmdLocaleDescription => "Cambiar idioma de la interfaz o listar idiomas disponibles",
+        MessageId::LocaleCurrentLabel => "Idioma actual: ",
+        MessageId::LocaleAvailableLabel => "Disponibles: ",
+        MessageId::LocaleUsageLabel => "Uso: /locale <código>  (ej: en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi, auto)",
+        MessageId::StatusApplyPlanChoiceFailed => "Apply plan choice failed: ",
+        MessageId::StatusAttachmentRemoved => "Attachment removed: ",
+        MessageId::StatusAttachmentSelected => "Attachment selected - Backspace/Delete to remove",
+        MessageId::StatusAutoCompleted => "Auto-completed: /",
+        MessageId::StatusBackgroundingShell => "Backgrounding current shell command...",
+        MessageId::StatusCacheWarmupDone => "Cache warmup complete",
+        MessageId::StatusCacheWarmupFailed => "Cache warmup failed",
+        MessageId::StatusCancelHint => "Press Esc or Ctrl+C to cancel",
+        MessageId::StatusCannotLoadSession => "Cannot load session: ",
+        MessageId::StatusCannotMarkOnboarding => "Cannot mark onboarding: ",
+        MessageId::StatusCannotRestoreOfflineQueue => "Cannot restore offline queue: ",
+        MessageId::StatusCellHidden => "Cell hidden",
+        MessageId::StatusCellShown => "Cell shown",
+        MessageId::StatusCellsRestored => "Restored ",
+        MessageId::StatusCommandCompleted => "Command completed: ",
+        MessageId::StatusCommandSelected => "Command selected: ",
+        MessageId::StatusCompactingContext2 => "Compacting context...",
+        MessageId::StatusComposerFocused => "Composer focused",
+        MessageId::StatusConfigProfile => "Profile: ",
+        MessageId::StatusCopiedDetail => "Copied ",
+        MessageId::StatusCopiedLabel => "Copied {label}",
+        MessageId::StatusCopiedSelection => "Copied selection",
+        MessageId::StatusCopiedTurnId => "Copied turn ID ",
+        MessageId::StatusCopyFailed => "Copy failed",
+        MessageId::StatusCopyFailedLabel => "Copy failed ({label})",
+        MessageId::StatusDecisionCancelled => "Decision cancelled",
+        MessageId::StatusDraftRestored => "Cleared draft restored",
+        MessageId::StatusEditedIn => "Edited in {editor}",
+        MessageId::StatusEditorCancelled => "Editor cancelled",
+        MessageId::StatusEditorClosedNoChanges => "Editor closed (no changes)",
+        MessageId::StatusEditorError => "Editor error: ",
+        MessageId::StatusFileAttached => "Attached @",
+        MessageId::StatusFileMatchPreview => "Matches: ",
+        MessageId::StatusFileSharedPrefix => "@",
+        MessageId::StatusFileTreeClosed => "File tree closed",
+        MessageId::StatusFileTreeHint => "File tree: ↑/↓ navigate  Enter select  Esc close",
+        MessageId::StatusHistoryCancelled => "History search cancelled",
+        MessageId::StatusHistoryInserted => "History entry inserted into composer",
+        MessageId::StatusHistoryNoMatches => "No matching history entries",
+        MessageId::StatusHistorySearchConfirm => "History search: Enter to confirm, Esc to restore",
+        MessageId::StatusHistorySearchFilter => "History search: type to filter, Enter to confirm",
+        MessageId::StatusImageAttached => "Attached image: ",
+        MessageId::StatusLabelEmpty => "{label} is empty",
+        MessageId::StatusLiveOverlayTracking => "Live overlay: tracking (Esc to close)",
+        MessageId::StatusMemoryAppended => "memory: appended to ",
+        MessageId::StatusMessageCopied => "Message copied",
+        MessageId::StatusMessageCopyFailed => "Copy failed",
+        MessageId::StatusMessageEmpty => "Message is empty",
+        MessageId::StatusModeSwitched => "Switched to {mode} mode",
+        MessageId::StatusNoActivityDetails => "No activity details available",
+        MessageId::StatusNoBgShell => "No foreground shell command to background",
+        MessageId::StatusNoCopyableCells => "No copyable transcript cells",
+        MessageId::StatusNoDetailsAvailable => "No details available for this line",
+        MessageId::StatusNoDetailsForLine => "No details available for the selected line",
+        MessageId::StatusNoFileLineInSelection => "No file:line pattern in selection",
+        MessageId::StatusNoFileMatch => "No files match @",
+        MessageId::StatusNoForegroundShell => "No foreground shell command to control",
+        MessageId::StatusNoMessageAtPos => "No message at this position",
+        MessageId::StatusNoNextToolOutput => "No next tool output",
+        MessageId::StatusNoPrevToolOutput => "No previous tool output",
+        MessageId::StatusNoResumableSession => "No resumable session found",
+        MessageId::StatusNoSelectionToCopy => "No selection to copy",
+        MessageId::StatusNoSelectionToOpen => "No selection to open",
+        MessageId::StatusOpenedInBrowser => "Opened in browser: ",
+        MessageId::StatusOpenedInEditor => "Opened file in editor",
+        MessageId::StatusQueuedCountHint => " queued — ↑ to edit, /queue list",
+        MessageId::StatusQueuedTask => "Queued ",
+        MessageId::StatusRefreshingSubagents => "Refreshing sub-agents...",
+        MessageId::StatusRequestCancelled => "Request cancelled",
+        MessageId::StatusRevisePlanHint => "Revise the plan and press Enter",
+        MessageId::StatusRollbackCancelled => "Rollback cancelled",
+        MessageId::StatusRollbackTargetGone => "Rollback target no longer exists",
+        MessageId::StatusSelectionCleared => "Selection cleared",
+        MessageId::StatusSessionLoadedFrom => "Session loaded from ",
+        MessageId::StatusSessionSavedTo => "Session saved to ",
+        MessageId::StatusShellControlOpened => "Shell control opened",
+        MessageId::StatusShellLockCorrupt => "Shell manager lock is corrupt",
+        MessageId::StatusShellManagerDisconnected => "Shell manager disconnected",
+        MessageId::StatusSidebarFocusAgents => "Sidebar focus: agents",
+        MessageId::StatusSidebarFocusAuto => "Sidebar focus: auto",
+        MessageId::StatusSidebarFocusContext => "Sidebar focus: context",
+        MessageId::StatusSidebarFocusTasks => "Sidebar focus: tasks",
+        MessageId::StatusSidebarFocusWork => "Sidebar focus: work",
+        MessageId::StatusSidebarHidden => "Sidebar hidden",
+        MessageId::StatusSkillSelected => "Skill selected: /",
+        MessageId::StatusSteeringTurn2 => "Steering current turn...",
+        MessageId::StatusSubagentDisplay => "Sub-agent ",
+        MessageId::StatusSuggestionPrefix => "Suggestions: ",
+        MessageId::StatusTaskQueued => "Task queued",
+        MessageId::StatusTerminalControlRestored => "Terminal control restored",
+        MessageId::StatusTurnFailed => "Turn failed: ",
+        MessageId::StatusWarmingCache => "Warming DeepSeek cache...",
+        MessageId::StatusWebUiListening => "Web UI listening: ",
+        MessageId::StatusWorkspaceNow => "Workspace: ",
+        MessageId::StatusWorkspaceUnchanged => "Workspace unchanged: ",
+        MessageId::StatusCellsRestoredWithCount => "Restored {count} hidden cells",        MessageId::StatusFooterActivity => "Activity: ",
+        MessageId::StatusOfflinePrefix => "Offline: ",
+        MessageId::StatusActivityLabelThinking => "thinking",
+        MessageId::StatusActivityLabelError => "error",
+        MessageId::StatusActivityLabelSubagent => "sub-agent",
+        MessageId::StatusActivityLabelTool => "tool activity",
+        MessageId::StatusActivityLabelMessage => "message",
+
     })
 }
 
@@ -4064,5 +5434,17 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn cycle_locale_next_returns_expected_sequence() {
+        // Verify the 7-element cycle: en → zh-Hans → ja → pt-BR → es-419 → vi → zh-Hant → en
+        assert_eq!(cycle_locale_next(Locale::En), "zh-Hans");
+        assert_eq!(cycle_locale_next(Locale::ZhHans), "ja");
+        assert_eq!(cycle_locale_next(Locale::Ja), "pt-BR");
+        assert_eq!(cycle_locale_next(Locale::PtBr), "es-419");
+        assert_eq!(cycle_locale_next(Locale::Es419), "vi");
+        assert_eq!(cycle_locale_next(Locale::Vi), "zh-Hant");
+        assert_eq!(cycle_locale_next(Locale::ZhHant), "en");
     }
 }

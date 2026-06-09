@@ -14,8 +14,11 @@ use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod meeting_view;
 pub mod mode_picker;
 pub mod status_picker;
+pub mod tab_picker;
+pub mod tab_switcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
@@ -39,6 +42,14 @@ pub enum ModalKind {
     ThemePicker,
     ContextMenu,
     ShellControl,
+    TabSwitcher,
+    TabPicker,
+    /// Meeting modal — part of the WIP collaboration surface. The narrow
+    /// tab-core harvest in PR #2753 does not yet wire it into the modal
+    /// stack; it lives here so the `ModalKind` round-trip and the future
+    /// UI pass line up.
+    #[allow(dead_code)]
+    Meeting,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +88,10 @@ pub enum ContextMenuAction {
     },
     /// Show all currently hidden cells.
     ShowAllHidden,
+    /// Open the tab picker to choose a target tab for a cross-tab
+    /// collaboration action. The picker emits a `CollabRequested` event
+    /// with the user's selection.
+    OpenTabPicker(crate::tui::views::tab_picker::TabPickerAction),
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +219,19 @@ pub enum ViewEvent {
     CopyToClipboard {
         text: String,
         label: String,
+    },
+    /// Emitted by the tab switcher when the user confirms a tab. The host
+    /// handler activates that tab on `app.tab_manager` and updates the
+    /// status bar.
+    TabSwitch {
+        index: usize,
+    },
+    /// Emitted by the tab picker once the user has chosen a target tab
+    /// for a cross-tab collaboration action. The host dispatches the
+    /// `kind` against the active tab → `to_tab` pair.
+    CollabRequested {
+        kind: crate::tui::views::tab_picker::TabPickerAction,
+        to_tab: u64,
     },
 }
 
@@ -1061,7 +1089,7 @@ impl ConfigView {
         match key.code {
             KeyCode::Esc => {
                 self.editing = None;
-                self.status = Some("Edit cancelled".to_string());
+                self.status = Some("编辑已取消".to_string());
                 ViewAction::None
             }
             KeyCode::Enter => {
@@ -2808,7 +2836,7 @@ base_url = "https://api.xiaomimimo.com/v1"
         let cancel = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(cancel, ViewAction::None));
         assert!(view.editing.is_none());
-        assert_eq!(view.status.as_deref(), Some("Edit cancelled"));
+        assert_eq!(view.status.as_deref(), Some("编辑已取消"));
     }
 
     #[test]

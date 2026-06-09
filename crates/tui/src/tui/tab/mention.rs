@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn test_resolve_tab_mention() {
         // Tab IDs in the visual order they appear in the tab bar.
-        let tab_ids = [100, 50, 200];
+        let tab_ids = vec![100, 50, 200];
         // Tab 1 = first in visual order (100)
         assert_eq!(resolve_tab_mention(1, tab_ids.iter()), Some(100));
         // Tab 2 = second in visual order (50)

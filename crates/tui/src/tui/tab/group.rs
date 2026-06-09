@@ -239,17 +239,6 @@ impl TabGroupManager {
         self.next_id += 1;
         format!("group_{}", id)
     }
-
-    pub(crate) fn advance_next_id_past_existing_groups(&mut self) {
-        let max_seen = self
-            .groups
-            .keys()
-            .filter_map(|id| id.strip_prefix("group_"))
-            .filter_map(|suffix| suffix.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0);
-        self.next_id = self.next_id.max(max_seen + 1);
-    }
 }
 
 impl Default for TabGroupManager {
@@ -356,28 +345,6 @@ mod tests {
 
         mgr.delete_group(&g1);
         assert!(mgr.group_of(tab1).is_none());
-        assert!(!mgr.tab_to_group.contains_key(&tab1));
-    }
-
-    #[test]
-    fn test_advance_next_id_after_restore() {
-        let mut mgr = TabGroupManager::new();
-        mgr.groups.insert(
-            "group_7".to_string(),
-            TabGroup {
-                id: "group_7".to_string(),
-                name: "Restored".to_string(),
-                color: GroupColor::Blue,
-                tab_ids: Vec::new(),
-                created_at: Utc::now(),
-            },
-        );
-
-        mgr.advance_next_id_past_existing_groups();
-        let new_id = mgr.create_group("Fresh".to_string(), GroupColor::Green);
-
-        assert_eq!(new_id, "group_8");
-        assert!(mgr.groups.contains_key("group_7"));
-        assert!(mgr.groups.contains_key("group_8"));
+        assert!(mgr.tab_to_group.get(&tab1).is_none());
     }
 }

@@ -612,6 +612,7 @@ fn selection_has_content_rejects_zero_width_selection() {
 #[test]
 fn mouse_selection_autocopies_on_release_without_ctrl_c() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.history = vec![HistoryCell::Assistant {
         content: "alpha beta".to_string(),
         streaming: false,
@@ -661,7 +662,7 @@ fn mouse_selection_autocopies_on_release_without_ctrl_c() {
         },
     );
 
-    assert_eq!(app.status_message.as_deref(), Some("Selection copied"));
+    assert_eq!(app.status_message.as_deref(), Some("已复制选中内容"));
     assert!(
         app.clipboard
             .last_written_text()
@@ -3108,6 +3109,7 @@ fn spans_text(spans: &[Span<'_>]) -> String {
 #[test]
 fn alt_4_focuses_agents_sidebar_without_switching_modes() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Agent;
     app.sidebar_focus = SidebarFocus::Auto;
 
@@ -3115,12 +3117,13 @@ fn alt_4_focuses_agents_sidebar_without_switching_modes() {
 
     assert_eq!(app.mode, AppMode::Agent);
     assert_eq!(app.sidebar_focus, SidebarFocus::Agents);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: agents"));
+    assert_eq!(app.status_message.as_deref(), Some("侧边栏焦点: 代理"));
 }
 
 #[test]
 fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Agent;
     app.sidebar_focus = SidebarFocus::Auto;
 
@@ -3128,40 +3131,43 @@ fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
 
     assert_eq!(app.mode, AppMode::Agent);
     assert_eq!(app.sidebar_focus, SidebarFocus::Agents);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: agents"));
+    assert_eq!(app.status_message.as_deref(), Some("侧边栏焦点: 代理"));
 }
 
 #[test]
 fn alt_0_restores_auto_sidebar_focus() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Hidden;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT);
 
     assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
+    assert_eq!(app.status_message.as_deref(), Some("侧边栏焦点: 自动"));
 }
 
 #[test]
 fn ctrl_alt_0_hides_sidebar() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Tasks;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
     assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar hidden"));
+    assert_eq!(app.status_message.as_deref(), Some("侧边栏已隐藏"));
 }
 
 #[test]
 fn ctrl_alt_0_restores_auto_sidebar_when_already_hidden() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.sidebar_focus = SidebarFocus::Hidden;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
     assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
+    assert_eq!(app.status_message.as_deref(), Some("侧边栏焦点: 自动"));
 }
 
 #[test]
@@ -4191,10 +4197,10 @@ fn test_esc_cancels_streaming_sets_is_loading_false() {
     // engine_handle.cancel() is called (can't test directly - private)
     // Then these state changes occur:
     app.is_loading = false;
-    app.status_message = Some("Request cancelled".to_string());
+    app.status_message = Some("请求已取消".to_string());
 
     assert!(!app.is_loading);
-    assert_eq!(app.status_message, Some("Request cancelled".to_string()));
+    assert_eq!(app.status_message, Some("请求已取消".to_string()));
 }
 
 #[test]
@@ -4295,10 +4301,10 @@ fn test_ctrl_c_cancels_streaming_sets_status() {
     // Simulate Ctrl+C during loading state
     // engine_handle.cancel() is called (can't test directly - private)
     app.is_loading = false;
-    app.status_message = Some("Request cancelled".to_string());
+    app.status_message = Some("请求已取消".to_string());
 
     assert!(!app.is_loading);
-    assert_eq!(app.status_message, Some("Request cancelled".to_string()));
+    assert_eq!(app.status_message, Some("请求已取消".to_string()));
 }
 
 #[test]
@@ -4993,6 +4999,7 @@ fn workspace_context_drain_requests_redraw_when_context_changes() {
 #[tokio::test]
 async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.mode = AppMode::Plan;
     app.plan_prompt_pending = true;
     app.offline_mode = true;
@@ -5022,7 +5029,7 @@ async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
     );
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Offline: 1 queued — ↑ to edit, /queue list")
+        Some("离线: 1 个已排队 — ↑ 编辑, /queue list")
     );
 }
 
@@ -5373,6 +5380,7 @@ fn detail_target_prefers_visible_tool_card() {
 #[test]
 fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.history = vec![HistoryCell::Thinking {
         content: "visible reasoning".to_string(),
         streaming: false,
@@ -5391,7 +5399,7 @@ fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
 
     assert_eq!(
         selected_detail_footer_label(&app).as_deref(),
-        Some("Ctrl+O Activity: thinking")
+        Some("Ctrl+O 活动: 思考中")
     );
 }
 
@@ -5780,6 +5788,7 @@ fn try_autocomplete_file_mention_no_match_reports_status() {
     std::fs::write(tmpdir.path().join("README.md"), "x").unwrap();
 
     let mut app = create_test_app();
+    app.ui_locale = crate::localization::Locale::ZhHans;
     app.workspace = tmpdir.path().to_path_buf();
     app.input = "@nonexistent_xyz".to_string();
     app.cursor_position = app.input.chars().count();
@@ -5788,7 +5797,7 @@ fn try_autocomplete_file_mention_no_match_reports_status() {
     assert_eq!(app.input, "@nonexistent_xyz");
     assert_eq!(
         app.status_message.as_deref(),
-        Some("No files match @nonexistent_xyz")
+        Some("没有文件匹配 @nonexistent_xyz")
     );
 }
 

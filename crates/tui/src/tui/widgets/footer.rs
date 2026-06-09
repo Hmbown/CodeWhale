@@ -189,6 +189,21 @@ pub fn footer_agents_chip(running: usize, locale: Locale) -> Vec<Span<'static>> 
     )]
 }
 
+/// Build a "🌐 <tag>" chip showing the active UI locale. Always rendered so
+/// the user has a visible signal of which language is currently in effect
+/// (and a clickable target for future mouse wiring). Empty when the locale
+/// is `En` to keep the bar uncluttered for English users.
+#[must_use]
+pub fn footer_locale_chip(locale: Locale) -> Vec<Span<'static>> {
+    if locale == Locale::En {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        format!("\u{1F310} {}", locale.tag()),
+        Style::default().fg(palette::DEEPSEEK_SKY),
+    )]
+}
+
 /// Build the cumulative-elapsed chip ("worked 3h 12m") for the
 /// footer's right cluster (#448). Hidden during the first minute of
 /// a session so a fresh launch doesn't render a noisy `worked 5s`
@@ -699,7 +714,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FooterProps, FooterWidget, Renderable};
+    use super::{FooterProps, FooterWidget, Renderable, footer_locale_chip};
     use crate::config::Config;
     use crate::localization::Locale;
     use crate::palette;
@@ -1469,6 +1484,25 @@ mod tests {
                 buf[(x, area.y)].bg,
                 app.ui_theme.footer_bg,
                 "footer background should cover the full row"
+            );
+        }
+    }
+
+    #[test]
+    fn footer_locale_chip_en_is_empty() {
+        let chip = footer_locale_chip(Locale::En);
+        assert!(chip.is_empty(), "En locale should not render a chip");
+    }
+
+    #[test]
+    fn footer_locale_chip_non_en_is_present() {
+        for locale in [Locale::ZhHans, Locale::Ja, Locale::PtBr] {
+            let chip = footer_locale_chip(locale);
+            assert!(!chip.is_empty(), "{locale:?} locale should render a chip");
+            assert!(
+                chip[0].content.contains(locale.tag()),
+                "chip for {locale:?} should contain tag '{}'",
+                locale.tag()
             );
         }
     }
