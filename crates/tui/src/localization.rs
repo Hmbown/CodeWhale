@@ -5436,5 +5436,15 @@ mod tests {
         out
     }
 
-
+    #[test]
+    fn cycle_locale_next_returns_expected_sequence() {
+        // Verify the 7-element cycle: en → zh-Hans → ja → pt-BR → es-419 → vi → zh-Hant → en
+        assert_eq!(cycle_locale_next(Locale::En), "zh-Hans");
+        assert_eq!(cycle_locale_next(Locale::ZhHans), "ja");
+        assert_eq!(cycle_locale_next(Locale::Ja), "pt-BR");
+        assert_eq!(cycle_locale_next(Locale::PtBr), "es-419");
+        assert_eq!(cycle_locale_next(Locale::Es419), "vi");
+        assert_eq!(cycle_locale_next(Locale::Vi), "zh-Hant");
+        assert_eq!(cycle_locale_next(Locale::ZhHant), "en");
+    }
 }
