@@ -2038,7 +2038,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerInstruction => "Chọn cách CodeWhale vận hành:",
         MessageId::ModePickerAgentHint => "Thực thi bình thường với phê duyệt",
         MessageId::ModePickerPlanHint => "Lập kế hoạch trước khi thực thi",
-        MessageId::ModePickerYoloHint => "Tự động phê duyệt; bật shell",
+        MessageId::ModePickerYoloHint => "Tự động duyệt; bật shell",
         MessageId::ModePickerFooterMove => "di chuyển ",
         MessageId::ModePickerFooterSelect => "chọn ",
         MessageId::ModePickerFooterCancel => "hủy ",
@@ -3487,10 +3487,10 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerInstruction => "Escolha como o CodeWhale deve operar:",
         MessageId::ModePickerAgentHint => "Execução normal com aprovações",
         MessageId::ModePickerPlanHint => "Planejar antes de executar",
-        MessageId::ModePickerYoloHint => "Aprovação automática; shell ativado",
+        MessageId::ModePickerYoloHint => "Auto-aprovar; shell ativo",
         MessageId::ModePickerFooterMove => "mover ",
-        MessageId::ModePickerFooterSelect => "selecionar ",
-        MessageId::ModePickerFooterCancel => "cancelar ",
+        MessageId::ModePickerFooterSelect => "escolher ",
+        MessageId::ModePickerFooterCancel => "sair ",
     })
 }
 
@@ -3991,10 +3991,10 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ModePickerInstruction => "Elige cómo debe operar CodeWhale:",
         MessageId::ModePickerAgentHint => "Ejecución normal con aprobaciones",
         MessageId::ModePickerPlanHint => "Planificar antes de ejecutar",
-        MessageId::ModePickerYoloHint => "Aprobación automática; shell habilitado",
+        MessageId::ModePickerYoloHint => "Auto-aprobar; shell activo",
         MessageId::ModePickerFooterMove => "mover ",
-        MessageId::ModePickerFooterSelect => "seleccionar ",
-        MessageId::ModePickerFooterCancel => "cancelar ",
+        MessageId::ModePickerFooterSelect => "elegir ",
+        MessageId::ModePickerFooterCancel => "volver ",
     })
 }
 
