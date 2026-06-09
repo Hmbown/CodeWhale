@@ -370,6 +370,10 @@ pub struct EngineConfig {
     /// Applied to the per-turn tool registry after built-in tools are registered.
     /// When `None`, no overrides or plugin loading occurs.
     pub tools: Option<crate::config::ToolsConfig>,
+    /// Path to the hippocampal memory database. When `Some`, the engine
+    /// initializes a `MemoryStore` and injects it into tool contexts so
+    /// `memorize` / `recall` tools can persist facts across sessions.
+    pub memory_db_path: Option<PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -427,6 +431,7 @@ impl Default for EngineConfig {
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
             tools: None,
+            memory_db_path: None,
         }
     }
 }
@@ -561,6 +566,8 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+    /// Hippocampal memory store for cross-session recall.
+    pub memory_store: Option<std::sync::Arc<codewhale_memory::MemoryStore>>,
 }
 
 // === Internal tool helpers ===
@@ -818,6 +825,7 @@ impl Engine {
             current_mode: AppMode::Agent,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
+            memory_store: None,
         };
         engine.rehydrate_latest_canonical_state();
 
@@ -2231,6 +2239,12 @@ impl Engine {
             ctx.memory_path = Some(self.config.memory_path.clone());
         }
 
+        // Wire the hippocampal memory store into the tool context so
+        // `memorize` and `recall` can access it.
+        if let Some(ref store) = self.memory_store {
+            ctx.memory_store = Some(store.clone());
+        }
+
         if let Some(decider) = self.config.network_policy.as_ref() {
             ctx = ctx.with_network_policy(decider.clone());
         }
@@ -2671,7 +2685,20 @@ fn runtime_prompt_text(mode: AppMode, approval_mode: crate::tui::approval::Appro
 
 /// Spawn the engine in a background task
 pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
-    let (engine, handle) = Engine::new(config, api_config);
+    let (mut engine, handle) = Engine::new(config, api_config);
+
+    // Initialize hippocampal memory store if configured.
+    if let Some(db_path) = engine.config.memory_db_path.as_ref() {
+        match codewhale_memory::MemoryStore::open(db_path) {
+            Ok(store) => {
+                tracing::info!("Hippocampal memory store opened at {db_path}");
+                engine.memory_store = Some(std::sync::Arc::new(store));
+            }
+            Err(e) => {
+                tracing::warn!("Failed to open hippocampal memory store at {db_path}: {e}");
+            }
+        }
+    }
 
     spawn_supervised(
         "engine-event-loop",

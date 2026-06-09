@@ -926,6 +926,12 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         search_base_url: config.search.as_ref().and_then(|s| s.base_url.clone()),
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
+        memory_db_path: Some(
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("codewhale")
+                .join("hippocampal_memory.db"),
+        ),
     }
 }
 
