@@ -714,7 +714,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FooterProps, FooterWidget, Renderable};
+    use super::{FooterProps, FooterWidget, Renderable, footer_locale_chip};
     use crate::config::Config;
     use crate::localization::Locale;
     use crate::palette;
@@ -1484,6 +1484,25 @@ mod tests {
                 buf[(x, area.y)].bg,
                 app.ui_theme.footer_bg,
                 "footer background should cover the full row"
+            );
+        }
+    }
+
+    #[test]
+    fn footer_locale_chip_en_is_empty() {
+        let chip = footer_locale_chip(Locale::En);
+        assert!(chip.is_empty(), "En locale should not render a chip");
+    }
+
+    #[test]
+    fn footer_locale_chip_non_en_is_present() {
+        for locale in [Locale::ZhHans, Locale::Ja, Locale::PtBr] {
+            let chip = footer_locale_chip(locale);
+            assert!(!chip.is_empty(), "{locale:?} locale should render a chip");
+            assert!(
+                chip[0].content.contains(locale.tag()),
+                "chip for {locale:?} should contain tag '{}'",
+                locale.tag()
             );
         }
     }
