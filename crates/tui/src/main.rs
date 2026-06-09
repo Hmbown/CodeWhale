@@ -5836,6 +5836,12 @@ async fn run_exec_agent(
         search_base_url: config.search.as_ref().and_then(|s| s.base_url.clone()),
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
+        memory_db_path: Some(
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("codewhale")
+                .join("hippocampal_memory.db"),
+        ),
     };
 
     let engine_handle = spawn_engine(engine_config, config);

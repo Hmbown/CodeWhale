@@ -845,6 +845,22 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RememberTool))
     }
 
+    /// Include the hippocampal `memorize` tool (entity-graph-backed structured
+    /// memory storage). Requires `MemoryStore` in `ToolContext`.
+    #[must_use]
+    pub fn with_memorize_tool(self) -> Self {
+        use super::memorize::MemorizeTool;
+        self.with_tool(Arc::new(MemorizeTool))
+    }
+
+    /// Include the hippocampal `recall` tool (full-text + graph query over
+    /// stored memories). Requires `MemoryStore` in `ToolContext`.
+    #[must_use]
+    pub fn with_recall_tool(self) -> Self {
+        use super::recall::RecallTool;
+        self.with_tool(Arc::new(RecallTool))
+    }
+
     /// Include the slop ledger tools (#2127) — durable tracking of
     /// unresolved architectural residue: append, query, update, export.
     /// Registered unconditionally; the ledger JSON file is auto-created
