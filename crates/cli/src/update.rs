@@ -17,6 +17,7 @@ use codewhale_release::{
 };
 use reqwest::Proxy;
 use std::io::Write;
+use std::time::Duration;
 
 /// Run the self-update workflow.
 pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Result<()> {
@@ -367,6 +368,7 @@ fn update_http_client(proxy: Option<&Proxy>) -> Result<reqwest::blocking::Client
     }
     builder
         .user_agent(UPDATE_USER_AGENT)
+        .timeout(Duration::from_secs(5 * 60))
         .build()
         .context("failed to build update HTTP client")
 }
