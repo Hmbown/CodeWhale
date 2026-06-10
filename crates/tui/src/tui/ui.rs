@@ -5842,6 +5842,10 @@ async fn switch_provider(
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
     app.model_ids_passthrough = config.model_ids_pass_through();
+    app.api_key = config.api_key.clone();
+    app.base_url = config
+        .provider_config_for(target)
+        .and_then(|pc| pc.base_url.clone());
     app.set_model_selection(new_model.clone());
     if model_override.is_some() {
         app.provider_models
@@ -6063,6 +6067,10 @@ async fn apply_command_result(
             AppAction::SendMessage(content) => {
                 let queued = build_queued_message(app, content);
                 submit_or_steer_message(app, config, engine_handle, queued).await?;
+            }
+            AppAction::InsertComposerText(text) => {
+                app.input = text;
+                app.cursor_position = app.input.chars().count();
             }
             AppAction::ListSubAgents => {
                 let _ = engine_handle.send(Op::ListSubAgents).await;

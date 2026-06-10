@@ -1379,6 +1379,12 @@ pub struct App {
     pub cost_currency: CostCurrency,
     pub composer_density: ComposerDensity,
     pub composer_border: bool,
+    /// Voice input state — toggled by `/voice`.
+    pub voice_enabled: bool,
+    /// Whether to auto-send after transcription (when text ends with "send"/"发送").
+    pub voice_send_enabled: bool,
+    /// Whether AI-powered voice control (edit/send/agent actions) is enabled.
+    pub voice_control_enabled: bool,
     pub transcript_spacing: TranscriptSpacing,
     pub sidebar_width_percent: u16,
     pub sidebar_focus: SidebarFocus,
@@ -1458,6 +1464,11 @@ pub struct App {
     pub api_key_env_only: bool,
     pub api_key_input: String,
     pub api_key_cursor: usize,
+    /// Cached API key for the active provider (populated from Config at startup
+    /// and after provider switches). Used by voice transcription.
+    pub api_key: Option<String>,
+    /// Cached base URL for the active provider.
+    pub base_url: Option<String>,
     // Hooks system
     pub hooks: HookExecutor,
     #[allow(dead_code)]
@@ -2143,6 +2154,9 @@ impl App {
             cost_currency,
             composer_density,
             composer_border,
+            voice_enabled: false,
+            voice_send_enabled: false,
+            voice_control_enabled: false,
             transcript_spacing,
             sidebar_width_percent,
             sidebar_focus,
@@ -2181,6 +2195,10 @@ impl App {
             onboarding_workspace_trust_gate,
             api_key_env_only,
             api_key_input: String::new(),
+            api_key: effective_auth_config.api_key.clone(),
+            base_url: effective_auth_config
+                .provider_config_for(provider)
+                .and_then(|pc| pc.base_url.clone()),
             api_key_cursor: 0,
             hooks,
             yolo: initial_mode == AppMode::Yolo,
@@ -5109,6 +5127,8 @@ pub enum AppAction {
         model: String,
         mode: String,
     },
+    /// Insert transcribed text into the composer (from `/voice`).
+    InsertComposerText(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

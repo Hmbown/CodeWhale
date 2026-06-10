@@ -583,6 +583,24 @@ pub enum MessageId {
     CtxInspChangesByTurn,
     CtxInspStablePrefixOnly,
     CtxInspCacheTip,
+    // Voice command
+    CmdVoiceDescription,
+    CmdVoiceSendDescription,
+    CmdVoiceControlDescription,
+    VoiceEnabled,
+    VoiceDisabled,
+    VoiceSendEnabled,
+    VoiceSendDisabled,
+    VoiceControlEnabled,
+    VoiceControlDisabled,
+    VoiceErrNoAuth,
+    VoiceErrNoRecorder,
+    VoiceErrNetwork,
+    VoiceErrEmptySend,
+    VoiceErrUnknownAgent,
+    VoiceRecording,
+    VoiceProcessing,
+    VoiceTranscribed,
 }
 
 #[allow(dead_code)]
@@ -937,6 +955,23 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspChangesByTurn,
     MessageId::CtxInspStablePrefixOnly,
     MessageId::CtxInspCacheTip,
+    MessageId::CmdVoiceDescription,
+    MessageId::CmdVoiceSendDescription,
+    MessageId::CmdVoiceControlDescription,
+    MessageId::VoiceEnabled,
+    MessageId::VoiceDisabled,
+    MessageId::VoiceSendEnabled,
+    MessageId::VoiceSendDisabled,
+    MessageId::VoiceControlEnabled,
+    MessageId::VoiceControlDisabled,
+    MessageId::VoiceErrNoAuth,
+    MessageId::VoiceErrNoRecorder,
+    MessageId::VoiceErrNetwork,
+    MessageId::VoiceErrEmptySend,
+    MessageId::VoiceErrUnknownAgent,
+    MessageId::VoiceRecording,
+    MessageId::VoiceProcessing,
+    MessageId::VoiceTranscribed,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1604,6 +1639,24 @@ fn english(id: MessageId) -> &'static str {
             "Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
             Volatile working-set changes break the cache only for the tail."
         }
+        // Voice command
+        MessageId::CmdVoiceDescription => "Toggle voice input: record speech and transcribe to text",
+        MessageId::CmdVoiceSendDescription => "Toggle auto-send: submit after transcription when ending with send/send it",
+        MessageId::CmdVoiceControlDescription => "Toggle voice control: AI-powered edit/send/agent actions from speech",
+        MessageId::VoiceEnabled => "Voice input enabled. Speak to record.",
+        MessageId::VoiceDisabled => "Voice input disabled.",
+        MessageId::VoiceSendEnabled => "Voice auto-send enabled.",
+        MessageId::VoiceSendDisabled => "Voice auto-send disabled.",
+        MessageId::VoiceControlEnabled => "Voice control enabled.",
+        MessageId::VoiceControlDisabled => "Voice control disabled.",
+        MessageId::VoiceErrNoAuth => "Voice: no API key configured for the active provider",
+        MessageId::VoiceErrNoRecorder => "Voice: no recording tool found. Install sox, arecord, or rec.",
+        MessageId::VoiceErrNetwork => "Voice: network error during transcription",
+        MessageId::VoiceErrEmptySend => "Voice: nothing to send",
+        MessageId::VoiceErrUnknownAgent => "Voice: unknown agent",
+        MessageId::VoiceRecording => "🎙 Recording... speak now",
+        MessageId::VoiceProcessing => "🎙 Transcribing...",
+        MessageId::VoiceTranscribed => "🎙 Transcribed",
     }
 }
 
@@ -2138,6 +2191,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
+        _ => return None,
     })
 }
 
@@ -2729,6 +2783,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
+        _ => return None,
     })
 }
 
@@ -3165,6 +3220,24 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
         }
+        // Voice command
+        MessageId::CmdVoiceDescription => "切换语音输入：录制语音并转录为文字",
+        MessageId::CmdVoiceSendDescription => "切换自动发送：转录后若以「发送」结尾则自动提交",
+        MessageId::CmdVoiceControlDescription => "切换语音控制：AI 驱动的语音编辑/发送/切换代理操作",
+        MessageId::VoiceEnabled => "语音输入已开启，开始说话即可录制",
+        MessageId::VoiceDisabled => "语音输入已关闭",
+        MessageId::VoiceSendEnabled => "语音自动发送已开启",
+        MessageId::VoiceSendDisabled => "语音自动发送已关闭",
+        MessageId::VoiceControlEnabled => "语音控制已开启",
+        MessageId::VoiceControlDisabled => "语音控制已关闭",
+        MessageId::VoiceErrNoAuth => "语音：当前提供商未配置 API 密钥",
+        MessageId::VoiceErrNoRecorder => "语音：未找到录音工具，请安装 sox、arecord 或 rec",
+        MessageId::VoiceErrNetwork => "语音：转录网络请求失败",
+        MessageId::VoiceErrEmptySend => "语音：没有可发送的内容",
+        MessageId::VoiceErrUnknownAgent => "语音：未知代理",
+        MessageId::VoiceRecording => "🎙 正在录音...请说话",
+        MessageId::VoiceProcessing => "🎙 正在转录...",
+        MessageId::VoiceTranscribed => "🎙 转录完成",
     })
 }
 
@@ -3683,6 +3756,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
+        _ => return None,
     })
 }
 
@@ -4211,6 +4285,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
+        _ => return None,
     })
 }
 
