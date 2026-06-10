@@ -698,7 +698,10 @@ impl Personality {
 
     fn prompt(self) -> &'static str {
         match self {
-            Self::Calm => CALM_PERSONALITY,
+            // Calm is the default personality; its voice rules are kept
+            // out of the model-prompt path to reduce static token overhead.
+            // The full Calm text remains in calm.md for documentation.
+            Self::Calm => "",
             Self::Playful => PLAYFUL_PERSONALITY,
         }
     }
@@ -1272,7 +1275,7 @@ mod tests {
             assert_eq!(ctx.model_id, "deepseek-v4-pro");
             assert_eq!(ctx.personality, Personality::Calm);
             assert!(ctx.default_layers.contains("You are deepseek-v4-pro"));
-            assert!(ctx.default_layers.contains("Personality: Calm"));
+            assert!(!ctx.default_layers.contains("Personality: Calm"));
             assert!(!ctx.default_layers.contains("## Core Tool Taxonomy"));
             assert!(!ctx.default_layers.contains("Approval Policy"));
             "embedder static prompt".to_string()
@@ -2234,8 +2237,8 @@ mod tests {
         let prompt = compose_prompt(Personality::Calm);
         // Base layer
         assert!(prompt.contains("You are codewhale"));
-        // Personality layer
-        assert!(prompt.contains("Personality: Calm"));
+        // Calm personality layer excluded by default (#2953)
+        assert!(!prompt.contains("Personality: Calm"));
         // Mode and approval are no longer inlined — they travel as
         // request-time runtime metadata.
         assert!(!prompt.contains("Mode: Agent"));
@@ -2293,11 +2296,10 @@ mod tests {
     fn compose_prompt_deterministic_order() {
         let prompt = compose_prompt(Personality::Calm);
         let base_pos = prompt.find("You are codewhale").unwrap();
-        let personality_pos = prompt.find("Personality: Calm").unwrap();
-
-        assert!(base_pos < personality_pos);
+        // Calm personality layer excluded by default (#2953)
         // Mode and approval text are no longer inlined — they travel as
         // request-time runtime metadata.
+        let _ = base_pos;
     }
 
     #[test]
@@ -2311,7 +2313,7 @@ mod tests {
         assert!(!prompt.contains("Approval Policy:"));
         // Base prompt still contains Constitutional preamble and personality
         assert!(prompt.contains("You are codewhale"));
-        assert!(prompt.contains("Personality: Calm"));
+        assert!(!prompt.contains("Personality: Calm"));
     }
 
     #[test]
@@ -2327,9 +2329,9 @@ mod tests {
     fn personality_switches_correctly() {
         let calm = compose_prompt(Personality::Calm);
         let playful = compose_prompt(Personality::Playful);
-        assert!(calm.contains("Personality: Calm"));
-        assert!(playful.contains("Personality: Playful"));
+        assert!(!calm.contains("Personality: Calm"));
         assert!(!calm.contains("Personality: Playful"));
+        assert!(playful.contains("Personality: Playful"));
     }
 
     #[test]
@@ -2605,8 +2607,7 @@ mod tests {
         let prompt = compose_prompt(Personality::Calm);
         // Preamble rhythm is now part of the Calm personality overlay.
         // Verify the load-bearing guidance is still present.
-        assert!(prompt.contains("In preambles, name the action"));
-        assert!(prompt.contains("Reading the module tree"));
+        assert!(!prompt.contains("In preambles, name the action"));
     }
 
     #[test]
@@ -2922,6 +2923,17 @@ mod tests {
         assert!(
             prompt.contains(&extra.display().to_string()),
             "instructions block must annotate its source path"
+        );
+    }
+
+    #[test]
+    fn default_prompt_does_not_include_calm_personality_overlay() {
+        let prompt = compose_prompt(Personality::Calm);
+        let calm_text = include_str!("prompts/personalities/calm.md");
+        let first_calm_line = calm_text.lines().find(|l| !l.is_empty()).unwrap_or("");
+        assert!(
+            !prompt.contains(first_calm_line),
+            "default agent prompt must not include calm.md overlay"
         );
     }
 }
