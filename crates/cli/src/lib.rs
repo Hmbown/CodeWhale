@@ -14,7 +14,8 @@ use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
 use codewhale_config::{
-    CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
+    CliRuntimeOverrides, ConfigStore, ProviderKind, ProviderSource, ResolvedRuntimeOptions,
+    RuntimeApiKeySource,
 };
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use codewhale_mcp::{McpServerDefinition, run_stdio_server};
@@ -1604,29 +1605,32 @@ fn build_tui_command(
     }
     cmd.args(passthrough);
 
-    if !matches!(
-        resolved_runtime.provider,
-        ProviderKind::Deepseek
-            | ProviderKind::NvidiaNim
-            | ProviderKind::Openai
-            | ProviderKind::Atlascloud
-            | ProviderKind::WanjieArk
-            | ProviderKind::Volcengine
-            | ProviderKind::Openrouter
-            | ProviderKind::XiaomiMimo
-            | ProviderKind::Novita
-            | ProviderKind::Fireworks
-            | ProviderKind::Siliconflow
-            | ProviderKind::Arcee
-            | ProviderKind::Moonshot
-            | ProviderKind::Sglang
-            | ProviderKind::Vllm
-            | ProviderKind::Ollama
-    ) {
-        bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, Volcengine Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Arcee AI, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
-            resolved_runtime.provider.as_str()
-        );
+    let mut resolved_runtime = resolved_runtime.clone();
+    if !resolved_runtime.provider.is_tui_capable() {
+        match resolved_runtime.provider_source {
+            ProviderSource::Cli => {
+                bail!(
+                    "The interactive TUI supports {} providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+                    ProviderKind::tui_supported_providers_msg(),
+                    resolved_runtime.provider.as_str()
+                );
+            }
+            ProviderSource::Env(var_name) => {
+                bail!(
+                    "The interactive TUI supports {} providers. Unset `{}` (currently `{}`) or use `codewhale model ...` for provider registry inspection.",
+                    ProviderKind::tui_supported_providers_msg(),
+                    var_name,
+                    resolved_runtime.provider.as_str()
+                );
+            }
+            ProviderSource::Config => {
+                eprintln!(
+                    "warning: Unsupported provider '{}' configured in config.toml. Falling back to default 'deepseek'.",
+                    resolved_runtime.provider.as_str()
+                );
+                resolved_runtime.provider = ProviderKind::Deepseek;
+            }
+        }
     }
 
     if let Some(provider) = cli.provider {
@@ -2973,6 +2977,7 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
+            provider_source: ProviderSource::Cli,
             model: "glm-5".to_string(),
             api_key: Some("resolved-openai-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -3033,6 +3038,7 @@ mod tests {
         resolved_headers.insert("X-From-Base".to_string(), "base".to_string());
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Deepseek,
+            provider_source: ProviderSource::Config,
             model: "deepseek-v4-pro".to_string(),
             api_key: Some("config-file-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::ConfigFile),
@@ -3089,6 +3095,7 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Moonshot,
+            provider_source: ProviderSource::Cli,
             model: "kimi-k2.6".to_string(),
             api_key: Some("resolved-kimi-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -3154,6 +3161,7 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Volcengine,
+            provider_source: ProviderSource::Cli,
             model: "DeepSeek-V4-Pro".to_string(),
             api_key: Some("resolved-ark-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -3220,6 +3228,7 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
+            provider_source: ProviderSource::Cli,
             model: "glm-5".to_string(),
             api_key: None,
             api_key_source: None,
@@ -3316,6 +3325,7 @@ mod tests {
             ]);
             let resolved = ResolvedRuntimeOptions {
                 provider,
+                provider_source: ProviderSource::Cli,
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
                 api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -3604,5 +3614,114 @@ mod tests {
 
         let resolved = locate_sibling_tui_binary().expect("override must resolve");
         assert_eq!(resolved, custom);
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_cli() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::OpenaiCodex,
+            provider_source: ProviderSource::Cli,
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Remove --provider openai-codex"),
+            "msg: {}",
+            msg
+        );
+        assert!(msg.contains("The interactive TUI supports"), "msg: {}", msg);
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_env() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::OpenaiCodex,
+            provider_source: ProviderSource::Env("CODEWHALE_PROVIDER"),
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unset `CODEWHALE_PROVIDER` (currently `openai-codex`)"),
+            "msg: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_config_fallback() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::OpenaiCodex,
+            provider_source: ProviderSource::Config,
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let _cmd = build_tui_command(&cli, &options, vec![]).expect("should graceful fallback");
     }
 }
