@@ -686,10 +686,7 @@ mod tests {
             "codewhale-tui"
         );
         // Legacy deepseek (dispatcher) maps to codewhale prefix
-        assert_eq!(
-            binary_prefix_for_exe(Path::new("deepseek")),
-            "codewhale"
-        );
+        assert_eq!(binary_prefix_for_exe(Path::new("deepseek")), "codewhale");
     }
 
     #[test]
