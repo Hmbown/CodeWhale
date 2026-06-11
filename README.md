@@ -93,6 +93,36 @@ For Docker, direct downloads, China mirrors, Windows/Scoop, Nix, checksums, and
 troubleshooting, use [docs/INSTALL.md](docs/INSTALL.md) or the website install
 page.
 
+## Upgrading from deepseek-tui
+
+If you installed the legacy `deepseek-tui` package, run the commands for your
+install method below. Your existing config, sessions, skills, and MCP settings
+are preserved — see [docs/REBRAND.md](docs/REBRAND.md) for the full migration
+guide.
+
+**npm**
+
+```bash
+npm uninstall -g deepseek-tui
+npm install -g codewhale
+```
+
+**Cargo**
+
+```bash
+cargo uninstall deepseek-tui-cli deepseek-tui 2>/dev/null || true
+cargo install codewhale-cli codewhale-tui --locked
+```
+
+**Homebrew** — keep using `brew upgrade deepseek-tui` for now; the formula
+rename is in progress.
+
+**GitHub Releases** — download the `codewhale-*` archive for your platform
+from the [Releases page](https://github.com/Hmbown/CodeWhale/releases) and
+replace the old binaries on your `PATH`.
+
+After upgrading, run `codewhale doctor` to confirm the migration succeeded.
+
 ## First Run
 
 ```bash
@@ -119,6 +149,7 @@ The README carries the idea and the first path. The details live in docs and on
 
 - [User guide](docs/GUIDE.md) — first hour with CodeWhale.
 - [Install guide](docs/INSTALL.md) — every package path and troubleshooting.
+- [Upgrading from deepseek-tui](docs/REBRAND.md) — migration guide for users on the legacy package.
 - [Configuration](docs/CONFIGURATION.md) — config files, repo constitution, and
   provider settings.
 - [Provider registry](docs/PROVIDERS.md) — model routes, credentials, base URLs,
