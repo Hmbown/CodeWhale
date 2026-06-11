@@ -872,6 +872,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         show_thinking: app.show_thinking,
+        verbosity: app.verbosity.clone(),
         // Effectively unlimited. V4 has a 1M context window and the user
         // wants the model running until it's actually done. The previous cap
         // of 100 hit the ceiling on long multi-step plans (wide refactors,
@@ -5367,6 +5368,7 @@ async fn dispatch_user_message(
                 translation_enabled: app.translation_enabled,
                 model_id: &app.model,
                 show_thinking: app.show_thinking,
+                verbosity: app.verbosity.as_deref(),
             },
         ),
     );
@@ -5469,6 +5471,7 @@ async fn dispatch_user_message(
             show_thinking: app.show_thinking,
             allowed_tools: app.active_allowed_tools.clone(),
             hook_executor: app.runtime_services.hook_executor.clone(),
+            verbosity: app.verbosity.clone(),
         })
         .await
     {

@@ -5848,6 +5848,7 @@ async fn run_exec_agent(
         search_base_url: config.search.as_ref().and_then(|s| s.base_url.clone()),
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
+        verbosity: config.verbosity.clone(),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -5914,6 +5915,7 @@ async fn run_exec_agent(
                     .and_then(crate::tui::approval::ApprovalMode::from_config_value)
                     .unwrap_or_default()
             },
+            verbosity: config.verbosity.clone(),
         })
         .await?;
 

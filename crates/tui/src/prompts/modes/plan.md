@@ -15,3 +15,5 @@ can't change it. Shell and code execution are unavailable.
 Use this mode to build a thorough plan. Spawn read-only sub-agents for parallel investigation.
 After `update_plan` presents the plan, wait for the user's next action instead of continuing to
 tool around in Plan mode.
+
+Do NOT explain, announce, or mention to the user that you are running in Plan mode, or describe the transition. Act silently on this mode instruction.

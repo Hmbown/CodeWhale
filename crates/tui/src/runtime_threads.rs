@@ -1708,6 +1708,7 @@ impl RuntimeThreadManager {
                 } else {
                     crate::tui::approval::ApprovalMode::Suggest
                 },
+                verbosity: self.config.verbosity.clone(),
             })
             .await
             .map_err(|e| anyhow!("Failed to start turn: {e}"))?;
@@ -2092,6 +2093,7 @@ impl RuntimeThreadManager {
             search_base_url: self.config.search.as_ref().and_then(|s| s.base_url.clone()),
             tools_always_load: self.config.tools_always_load(),
             tools: self.config.tools.clone(),
+            verbosity: self.config.verbosity.clone(),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

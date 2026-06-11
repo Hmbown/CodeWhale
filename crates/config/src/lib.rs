@@ -550,6 +550,7 @@ pub struct ConfigToml {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub output_mode: Option<String>,
+    pub verbosity: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: Option<bool>,
     pub approval_policy: Option<String>,
@@ -1062,6 +1063,9 @@ impl ConfigToml {
         if project.output_mode.is_some() {
             self.output_mode = project.output_mode;
         }
+        if project.verbosity.is_some() {
+            self.verbosity = project.verbosity;
+        }
         if project.log_level.is_some() {
             self.log_level = project.log_level;
         }
@@ -1132,6 +1136,7 @@ impl ConfigToml {
             "model" => self.model.clone(),
             "auth.mode" => self.auth_mode.clone(),
             "output_mode" => self.output_mode.clone(),
+            "verbosity" => self.verbosity.clone(),
             "log_level" => self.log_level.clone(),
             "telemetry" => self.telemetry.map(|v| v.to_string()),
             "approval_policy" => self.approval_policy.clone(),
@@ -1280,6 +1285,7 @@ impl ConfigToml {
             "model" => self.model = Some(value.to_string()),
             "auth.mode" => self.auth_mode = Some(value.to_string()),
             "output_mode" => self.output_mode = Some(value.to_string()),
+            "verbosity" => self.verbosity = Some(value.to_string()),
             "log_level" => self.log_level = Some(value.to_string()),
             "telemetry" => {
                 self.telemetry = Some(parse_bool(value)?);
@@ -1533,6 +1539,7 @@ impl ConfigToml {
             "model" => self.model = None,
             "auth.mode" => self.auth_mode = None,
             "output_mode" => self.output_mode = None,
+            "verbosity" => self.verbosity = None,
             "log_level" => self.log_level = None,
             "telemetry" => self.telemetry = None,
             "approval_policy" => self.approval_policy = None,
@@ -1670,6 +1677,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.output_mode.as_ref() {
             out.insert("output_mode".to_string(), v.clone());
+        }
+        if let Some(v) = self.verbosity.as_ref() {
+            out.insert("verbosity".to_string(), v.clone());
         }
         if let Some(v) = self.log_level.as_ref() {
             out.insert("log_level".to_string(), v.clone());
@@ -2122,6 +2132,11 @@ impl ConfigToml {
             .or_else(|| env.sandbox_mode.clone())
             .or_else(|| self.sandbox_mode.clone());
         let yolo = cli.yolo.or(env.yolo);
+        let verbosity = cli
+            .verbosity
+            .clone()
+            .or_else(|| env.verbosity.clone())
+            .or_else(|| self.verbosity.clone());
 
         ResolvedRuntimeOptions {
             provider,
@@ -2137,6 +2152,7 @@ impl ConfigToml {
             approval_policy,
             sandbox_mode,
             yolo,
+            verbosity,
             http_headers,
         }
     }
@@ -2740,6 +2756,7 @@ pub struct CliRuntimeOverrides {
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    pub verbosity: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2777,6 +2794,7 @@ pub struct ResolvedRuntimeOptions {
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    pub verbosity: Option<String>,
     pub http_headers: BTreeMap<String, String>,
 }
 
@@ -3207,6 +3225,7 @@ struct EnvRuntimeOverrides {
     approval_policy: Option<String>,
     sandbox_mode: Option<String>,
     yolo: Option<bool>,
+    verbosity: Option<String>,
     http_headers: Option<BTreeMap<String, String>>,
     deepseek_base_url: Option<String>,
     nvidia_base_url: Option<String>,
@@ -3279,6 +3298,9 @@ impl EnvRuntimeOverrides {
             arcee_model: std::env::var("ARCEE_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            verbosity: std::env::var("CODEWHALE_VERBOSITY")
+                .or_else(|_| std::env::var("DEEPSEEK_VERBOSITY"))
+                .ok(),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
             auth_mode: std::env::var("DEEPSEEK_AUTH_MODE").ok(),
             log_level: std::env::var("DEEPSEEK_LOG_LEVEL").ok(),
@@ -6718,5 +6740,29 @@ unknown_policy = "surprise"
         .expect_err("unknown posture keys should not be ignored");
 
         assert!(err.to_string().contains("unknown_policy"));
+    }
+
+    #[test]
+    fn test_verbosity_resolution() {
+        let _lock = env_lock();
+        // Test TOML parsing
+        let toml_str = r#"
+            verbosity = "concise"
+        "#;
+        let config: ConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.verbosity, Some("concise".to_string()));
+
+        // Test Env overrides
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        std::env::set_var("CODEWHALE_VERBOSITY", "normal");
+        let env_overrides = EnvRuntimeOverrides::load();
+        assert_eq!(env_overrides.verbosity, Some("normal".to_string()));
+        std::env::remove_var("CODEWHALE_VERBOSITY");
+
+        // Test fallback to DEEPSEEK_VERBOSITY
+        std::env::set_var("DEEPSEEK_VERBOSITY", "concise");
+        let env_overrides = EnvRuntimeOverrides::load();
+        assert_eq!(env_overrides.verbosity, Some("concise".to_string()));
+        std::env::remove_var("DEEPSEEK_VERBOSITY");
     }
 }

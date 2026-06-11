@@ -1423,6 +1423,7 @@ pub struct App {
     pub compact_threshold: usize,
     pub max_input_history: usize,
     pub allow_shell: bool,
+    pub verbosity: Option<String>,
     pub max_subagents: usize,
     /// Per-SSE-chunk idle timeout for streamed turns, in seconds.
     pub stream_chunk_timeout_secs: u64,
@@ -2166,6 +2167,7 @@ impl App {
             compact_threshold,
             max_input_history,
             allow_shell,
+            verbosity: config.verbosity.clone(),
             max_subagents,
             stream_chunk_timeout_secs: config.stream_chunk_timeout_secs(),
             subagent_cache: Vec::new(),

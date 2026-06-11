@@ -1612,6 +1612,7 @@ pub struct Config {
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    pub verbosity: Option<String>,
     /// External sandbox backend: `"none"` or `"opensandbox"`.
     /// When set, exec_shell routes commands through the backend's HTTP API
     /// instead of spawning a local process.
@@ -2184,6 +2185,12 @@ impl Config {
                 anyhow::bail!(
                     "Invalid approval_policy '{policy}': expected on-request, untrusted, never, auto, or suggest."
                 );
+            }
+        }
+        if let Some(v) = self.verbosity.as_deref() {
+            let normalized = v.trim().to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "normal" | "concise") {
+                anyhow::bail!("Invalid verbosity '{v}': expected normal or concise.");
             }
         }
         if let Some(mode) = self.sandbox_mode.as_deref() {
@@ -4003,6 +4010,9 @@ fn apply_env_overrides(config: &mut Config) {
     if let Ok(value) = std::env::var("DEEPSEEK_YOLO") {
         config.yolo = Some(value == "1" || value.eq_ignore_ascii_case("true"));
     }
+    if let Ok(value) = std::env::var("CODEWHALE_VERBOSITY").or_else(|_| std::env::var("DEEPSEEK_VERBOSITY")) {
+        config.verbosity = Some(value);
+    }
     if let Ok(value) = std::env::var("DEEPSEEK_SANDBOX_BACKEND") {
         config.sandbox_backend = Some(value);
     }
@@ -4604,6 +4614,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         allow_shell: override_cfg.allow_shell.or(base.allow_shell),
         prompt_suggestion: override_cfg.prompt_suggestion.or(base.prompt_suggestion),
         yolo: override_cfg.yolo.or(base.yolo),
+        verbosity: override_cfg.verbosity.or(base.verbosity),
         approval_policy: override_cfg.approval_policy.or(base.approval_policy),
         sandbox_mode: override_cfg.sandbox_mode.or(base.sandbox_mode),
         sandbox_backend: override_cfg.sandbox_backend.or(base.sandbox_backend),
@@ -4732,7 +4743,7 @@ fn warn_on_misplaced_top_level_keys(raw: &str) -> Option<String> {
     // Sections CodeWhale does not recognize but users nest settings under.
     const UNKNOWN_SECTIONS: &[&str] = &["general", "sandbox"];
     // Keys that are only ever read from the top level of the config.
-    const TOP_LEVEL_KEYS: &[&str] = &["allow_shell", "sandbox_mode", "approval_policy"];
+    const TOP_LEVEL_KEYS: &[&str] = &["allow_shell", "sandbox_mode", "approval_policy", "verbosity"];
 
     let mut hits: Vec<String> = Vec::new();
     for section in UNKNOWN_SECTIONS {

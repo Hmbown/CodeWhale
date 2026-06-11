@@ -41,6 +41,7 @@ pub enum Op {
         /// Hook executor for control-plane hooks.
         /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
         hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
+        verbosity: Option<String>,
     },
 
     /// Execute a user-submitted composer shell command (`! <command>`) without
