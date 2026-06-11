@@ -3132,6 +3132,68 @@ fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
 }
 
 #[test]
+fn hotbar_bare_digit_fires_only_when_composer_empty() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+
+    let bare_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE);
+    assert_eq!(hotbar_slot_from_key(&app, &bare_four), Some(4));
+
+    app.input = "draft".to_string();
+    assert_eq!(hotbar_slot_from_key(&app, &bare_four), None);
+
+    app.input = "   ".to_string();
+    assert_eq!(hotbar_slot_from_key(&app, &bare_four), None);
+}
+
+#[test]
+fn hotbar_alt_digit_fires_when_composer_has_text() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.input = "draft".to_string();
+
+    let alt_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT);
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
+}
+
+#[test]
+fn hotbar_digits_are_blocked_while_overlay_is_open() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.view_stack.push(HelpView::new());
+
+    let bare_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE);
+    let alt_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT);
+
+    assert_eq!(hotbar_slot_from_key(&app, &bare_four), None);
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), None);
+}
+
+#[test]
+fn hotbar_dispatches_bound_slot_and_ignores_empty_slot() {
+    let mut app = create_test_app();
+    let config = Config::default();
+    app.onboarding = OnboardingState::None;
+    app.mode = AppMode::Plan;
+
+    let dispatch = dispatch_hotbar_slot(&mut app, &config, 4).expect("hotbar dispatch");
+    assert!(matches!(
+        dispatch,
+        Some(HotbarDispatch::AppAction(AppAction::ModeChanged(
+            AppMode::Agent
+        )))
+    ));
+    assert_eq!(app.mode, AppMode::Agent);
+
+    let mut empty_config = Config::default();
+    empty_config.hotbar = Some(Vec::new());
+    assert_eq!(
+        dispatch_hotbar_slot(&mut app, &empty_config, 1).expect("empty slot is ok"),
+        None
+    );
+}
+
+#[test]
 fn alt_0_restores_auto_sidebar_focus() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Hidden;

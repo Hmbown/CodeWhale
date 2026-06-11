@@ -82,6 +82,7 @@ use crate::tui::footer_ui::{
     friendly_subagent_progress, is_noisy_subagent_progress, one_line_summary, render_footer,
 };
 use crate::tui::format_helpers;
+use crate::tui::hotbar::actions::HotbarDispatch;
 use crate::tui::key_shortcuts;
 use crate::tui::live_transcript::LiveTranscriptOverlay;
 use crate::tui::mcp_routing::{add_mcp_message, open_mcp_manager_pager};
@@ -3382,6 +3383,32 @@ async fn run_event_loop(
                 continue;
             }
 
+            if let Some(slot) = hotbar_slot_from_key(app, &key) {
+                if let Some(dispatch) = dispatch_hotbar_slot(app, config, slot)? {
+                    match dispatch {
+                        HotbarDispatch::Handled => {
+                            app.needs_redraw = true;
+                        }
+                        HotbarDispatch::AppAction(action) => {
+                            if apply_command_result(
+                                terminal,
+                                app,
+                                &mut engine_handle,
+                                &task_manager,
+                                config,
+                                &mut web_config_session,
+                                commands::CommandResult::action(action),
+                            )
+                            .await?
+                            {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
             // File-tree navigation: delegated to key_actions module.
             if key_actions::handle_file_tree_key(app, &key) {
                 continue;
@@ -3532,34 +3559,34 @@ async fn run_event_loop(
                     toggle_live_transcript_overlay(app);
                     continue;
                 }
-                KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.set_sidebar_focus(SidebarFocus::Work);
-                        app.status_message = Some("Sidebar focus: work".to_string());
-                    } else {
-                        apply_mode_update(app, &engine_handle, AppMode::Plan).await;
-                    }
+                KeyCode::Char('1')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.set_sidebar_focus(SidebarFocus::Work);
+                    app.status_message = Some("Sidebar focus: work".to_string());
                     continue;
                 }
-                KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.set_sidebar_focus(SidebarFocus::Tasks);
-                        app.status_message = Some("Sidebar focus: tasks".to_string());
-                    } else {
-                        apply_mode_update(app, &engine_handle, AppMode::Agent).await;
-                    }
+                KeyCode::Char('2')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.set_sidebar_focus(SidebarFocus::Tasks);
+                    app.status_message = Some("Sidebar focus: tasks".to_string());
                     continue;
                 }
-                KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.set_sidebar_focus(SidebarFocus::Agents);
-                        app.status_message = Some("Sidebar focus: agents".to_string());
-                    } else {
-                        apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
-                    }
+                KeyCode::Char('3')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.set_sidebar_focus(SidebarFocus::Agents);
+                    app.status_message = Some("Sidebar focus: agents".to_string());
                     continue;
                 }
-                KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char('4')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
                     apply_alt_4_shortcut(app, key.modifiers);
                     continue;
                 }
@@ -4441,6 +4468,63 @@ async fn run_event_loop(
             }
         }
     }
+}
+
+fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u8> {
+    if app.onboarding != OnboardingState::None || !app.view_stack.is_empty() {
+        return None;
+    }
+
+    let KeyCode::Char(c) = key.code else {
+        return None;
+    };
+    if !('1'..='8').contains(&c) {
+        return None;
+    }
+    let slot = c.to_digit(10).and_then(|digit| u8::try_from(digit).ok())?;
+
+    if key.modifiers == KeyModifiers::NONE {
+        return app.input.is_empty().then_some(slot);
+    }
+
+    if key.modifiers.contains(KeyModifiers::ALT)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::SUPER)
+    {
+        return Some(slot);
+    }
+
+    None
+}
+
+fn dispatch_hotbar_slot(
+    app: &mut App,
+    config: &Config,
+    slot: u8,
+) -> Result<Option<HotbarDispatch>> {
+    let known_action_ids = app
+        .hotbar_actions
+        .iter()
+        .map(|action| action.id())
+        .collect::<Vec<_>>();
+    let bindings = config.resolve_hotbar_bindings(&known_action_ids).bindings;
+    let Some(action_id) = bindings
+        .iter()
+        .find(|binding| binding.slot == slot)
+        .map(|binding| binding.action.clone())
+    else {
+        return Ok(None);
+    };
+
+    let Some(action) = app.hotbar_actions.get(&action_id) else {
+        app.status_message = Some(format!(
+            "Hotbar slot {slot} action is not available: {action_id}"
+        ));
+        app.needs_redraw = true;
+        return Ok(Some(HotbarDispatch::Handled));
+    };
+
+    action.dispatch(app).map(Some)
 }
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
