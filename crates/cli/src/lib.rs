@@ -1683,9 +1683,9 @@ fn build_tui_command(
     let tui = locate_sibling_tui_binary()?;
     let mut verbosity = resolved_runtime.verbosity.clone();
     if verbosity.is_none()
-        && (passthrough.contains(&"exec".to_string())
-            || passthrough.contains(&"swebench".to_string())
-            || passthrough.contains(&"eval".to_string()))
+        && passthrough
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "exec" | "swebench" | "eval"))
     {
         verbosity = Some("concise".to_string());
     }

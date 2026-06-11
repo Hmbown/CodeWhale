@@ -94,7 +94,7 @@ so any English prose in your response will block their decision-making."
     )
 }
 
-fn concise_output_discipline_instruction() -> String {
+fn concise_output_discipline_instruction() -> &'static str {
     "\
 ## Concise Output Discipline
 
@@ -104,7 +104,6 @@ To minimize token usage and optimize speed:
 - Do NOT explain what you are about to do or what you have just completed.
 - Do NOT provide conversational status updates before or after running tools.
 - Keep explanations and comments extremely brief and technical, explaining only non-obvious reasoning."
-        .to_string()
 }
 
 fn translation_target_language_for_tag(locale_tag: &str) -> &'static str {
