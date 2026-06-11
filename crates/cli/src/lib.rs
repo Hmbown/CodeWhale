@@ -88,7 +88,11 @@ struct Cli {
     model: Option<String>,
     #[arg(long = "output-mode")]
     output_mode: Option<String>,
-    #[arg(long = "verbosity", value_name = "LEVEL", help = "Controls transcript and output verbosity (normal, concise)")]
+    #[arg(
+        long = "verbosity",
+        value_name = "LEVEL",
+        help = "Controls transcript and output verbosity (normal, concise)"
+    )]
     verbosity: Option<String>,
     #[arg(long = "log-level")]
     log_level: Option<String>,

@@ -4010,7 +4010,9 @@ fn apply_env_overrides(config: &mut Config) {
     if let Ok(value) = std::env::var("DEEPSEEK_YOLO") {
         config.yolo = Some(value == "1" || value.eq_ignore_ascii_case("true"));
     }
-    if let Ok(value) = std::env::var("CODEWHALE_VERBOSITY").or_else(|_| std::env::var("DEEPSEEK_VERBOSITY")) {
+    if let Ok(value) =
+        std::env::var("CODEWHALE_VERBOSITY").or_else(|_| std::env::var("DEEPSEEK_VERBOSITY"))
+    {
         config.verbosity = Some(value);
     }
     if let Ok(value) = std::env::var("DEEPSEEK_SANDBOX_BACKEND") {
@@ -4743,7 +4745,12 @@ fn warn_on_misplaced_top_level_keys(raw: &str) -> Option<String> {
     // Sections CodeWhale does not recognize but users nest settings under.
     const UNKNOWN_SECTIONS: &[&str] = &["general", "sandbox"];
     // Keys that are only ever read from the top level of the config.
-    const TOP_LEVEL_KEYS: &[&str] = &["allow_shell", "sandbox_mode", "approval_policy", "verbosity"];
+    const TOP_LEVEL_KEYS: &[&str] = &[
+        "allow_shell",
+        "sandbox_mode",
+        "approval_policy",
+        "verbosity",
+    ];
 
     let mut hits: Vec<String> = Vec::new();
     for section in UNKNOWN_SECTIONS {

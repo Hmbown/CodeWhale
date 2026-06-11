@@ -6754,15 +6754,23 @@ unknown_policy = "surprise"
 
         // Test Env overrides
         let _env = EnvGuard::without_deepseek_runtime_overrides();
-        std::env::set_var("CODEWHALE_VERBOSITY", "normal");
+        unsafe {
+            std::env::set_var("CODEWHALE_VERBOSITY", "normal");
+        }
         let env_overrides = EnvRuntimeOverrides::load();
         assert_eq!(env_overrides.verbosity, Some("normal".to_string()));
-        std::env::remove_var("CODEWHALE_VERBOSITY");
+        unsafe {
+            std::env::remove_var("CODEWHALE_VERBOSITY");
+        }
 
         // Test fallback to DEEPSEEK_VERBOSITY
-        std::env::set_var("DEEPSEEK_VERBOSITY", "concise");
+        unsafe {
+            std::env::set_var("DEEPSEEK_VERBOSITY", "concise");
+        }
         let env_overrides = EnvRuntimeOverrides::load();
         assert_eq!(env_overrides.verbosity, Some("concise".to_string()));
-        std::env::remove_var("DEEPSEEK_VERBOSITY");
+        unsafe {
+            std::env::remove_var("DEEPSEEK_VERBOSITY");
+        }
     }
 }

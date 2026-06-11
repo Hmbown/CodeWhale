@@ -323,13 +323,8 @@ impl DeepSeekClient {
                                         .and_then(|s| s.as_str())
                                         .unwrap_or("completed");
                                     let stop_reason = match status {
-                                        "completed" => {
-                                            if saw_tool_call {
-                                                "tool_use"
-                                            } else {
-                                                "end_turn"
-                                            }
-                                        }
+                                        "completed" if saw_tool_call => "tool_use",
+                                        "completed" => "end_turn",
                                         "incomplete" => "max_tokens",
                                         _ => "end_turn",
                                     };
