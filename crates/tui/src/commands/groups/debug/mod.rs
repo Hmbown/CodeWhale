@@ -31,7 +31,7 @@ pub(in crate::commands) fn dispatch(
             let result = debug::patch_undo(app);
             if result.message.as_deref().is_none_or(|m| {
                 m.starts_with("No snapshots found")
-                    || m.starts_with("No tool or pre-turn")
+                    || m.starts_with("No older tool or pre-turn")
                     || m.starts_with("Snapshot repo")
             }) {
                 debug::undo_conversation(app)
