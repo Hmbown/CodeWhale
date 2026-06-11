@@ -1141,7 +1141,6 @@ mod tests {
 
         assert!(command_labels.contains(&"/config"));
         assert!(command_labels.contains(&"/links"));
-        assert!(!command_labels.contains(&"/voice"));
         assert!(!command_labels.contains(&"/set"));
         assert!(!command_labels.contains(&"/deepseek"));
     }

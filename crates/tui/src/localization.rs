@@ -1640,9 +1640,15 @@ fn english(id: MessageId) -> &'static str {
             Volatile working-set changes break the cache only for the tail."
         }
         // Voice command
-        MessageId::CmdVoiceDescription => "Toggle voice input: record speech and transcribe to text",
-        MessageId::CmdVoiceSendDescription => "Toggle auto-send: submit after transcription when ending with send/send it",
-        MessageId::CmdVoiceControlDescription => "Toggle voice control: AI-powered edit/send/agent actions from speech",
+        MessageId::CmdVoiceDescription => {
+            "Toggle voice input: record speech and transcribe to text"
+        }
+        MessageId::CmdVoiceSendDescription => {
+            "Toggle auto-send: submit after transcription when ending with send/send it"
+        }
+        MessageId::CmdVoiceControlDescription => {
+            "Toggle voice control: AI-powered edit/send/agent actions from speech"
+        }
         MessageId::VoiceEnabled => "Voice input enabled. Speak to record.",
         MessageId::VoiceDisabled => "Voice input disabled.",
         MessageId::VoiceSendEnabled => "Voice auto-send enabled.",
@@ -1650,7 +1656,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::VoiceControlEnabled => "Voice control enabled.",
         MessageId::VoiceControlDisabled => "Voice control disabled.",
         MessageId::VoiceErrNoAuth => "Voice: no API key configured for the active provider",
-        MessageId::VoiceErrNoRecorder => "Voice: no recording tool found. Install sox, arecord, or rec.",
+        MessageId::VoiceErrNoRecorder => {
+            "Voice: no recording tool found. Install sox, arecord, or rec."
+        }
         MessageId::VoiceErrNetwork => "Voice: network error during transcription",
         MessageId::VoiceErrEmptySend => "Voice: nothing to send",
         MessageId::VoiceErrUnknownAgent => "Voice: unknown agent",
@@ -2191,7 +2199,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Gợi ý: Các khối ổn định đủ điều kiện cho bộ nhớ đệm tiền tố DeepSeek V4. Thay đổi vùng làm việc chỉ phá vỡ bộ nhớ đệm ở phần cuối."
         }
-        _ => return None,
+        _ => english(id),
     })
 }
 
@@ -2783,7 +2791,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "ヒント：安定プレフィックスブロックはDeepSeek V4プレフィックスキャッシュの対象です。揮発性ワーキングセットの変更は末尾のキャッシュのみを破壊します。"
         }
-        _ => return None,
+        _ => english(id),
     })
 }
 
@@ -3223,7 +3231,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         // Voice command
         MessageId::CmdVoiceDescription => "切换语音输入：录制语音并转录为文字",
         MessageId::CmdVoiceSendDescription => "切换自动发送：转录后若以「发送」结尾则自动提交",
-        MessageId::CmdVoiceControlDescription => "切换语音控制：AI 驱动的语音编辑/发送/切换代理操作",
+        MessageId::CmdVoiceControlDescription => {
+            "切换语音控制：AI 驱动的语音编辑/发送/切换代理操作"
+        }
         MessageId::VoiceEnabled => "语音输入已开启，开始说话即可录制",
         MessageId::VoiceDisabled => "语音输入已关闭",
         MessageId::VoiceSendEnabled => "语音自动发送已开启",
@@ -3756,7 +3766,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Dica: Blocos de prefixo estável são elegíveis para cache de prefixo DeepSeek V4. Alterações no conjunto de trabalho volátil quebram o cache apenas no final."
         }
-        _ => return None,
+        _ => english(id),
     })
 }
 
@@ -4285,7 +4295,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspCacheTip => {
             "Consejo: Los bloques de prefijo estable son elegibles para caché de prefijo DeepSeek V4. Los cambios en el conjunto de trabajo volátil solo rompen la caché al final."
         }
-        _ => return None,
+        _ => english(id),
     })
 }
 

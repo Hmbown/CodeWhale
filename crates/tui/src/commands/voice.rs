@@ -260,7 +260,7 @@ fn transcribe_internal(
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("api-key", api_key)
+        .header("Authorization", format!("Bearer {api_key}"))
         .json(&body)
         .send()
         .map_err(|e| format!("Transcription request failed: {e}"))?;
@@ -340,7 +340,7 @@ pub fn process_voice_control(
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("api-key", api_key)
+        .header("Authorization", format!("Bearer {api_key}"))
         .json(&body)
         .send()
         .map_err(|e| format!("Voice control request failed: {e}"))?;
