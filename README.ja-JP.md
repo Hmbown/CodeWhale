@@ -43,8 +43,8 @@ codewhale --model auto
 # https://github.com/Hmbown/CodeWhale/releases
 
 # GitHub に安定して到達できない場合は CNB mirror を使えます:
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-tui --locked --force
 
 # 旧 Homebrew 互換。formula はまだ deepseek-tui 名を使います。
 brew tap Hmbown/deepseek-tui

@@ -43,8 +43,8 @@ codewhale --model auto
 # https://github.com/Hmbown/CodeWhale/releases
 
 # 如果 GitHub 访问不稳定，可以使用 CNB 镜像：
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-tui --locked --force
 
 # 旧 Homebrew 兼容路径，formula 仍使用 deepseek-tui 名称
 brew tap Hmbown/deepseek-tui
