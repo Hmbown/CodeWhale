@@ -537,6 +537,25 @@ pub enum MessageId {
     ApprovalChooseAction,
     ApprovalIntentLabel,
     ApprovalMoreLines,
+    // Sandbox elevation dialog.
+    ElevationTitleSandboxDenied,
+    ElevationTitleRequired,
+    ElevationFieldTool,
+    ElevationFieldCmd,
+    ElevationFieldReason,
+    ElevationImpactHeader,
+    ElevationImpactNetwork,
+    ElevationImpactWrite,
+    ElevationImpactFullAccess,
+    ElevationPromptProceed,
+    ElevationOptionNetwork,
+    ElevationOptionWrite,
+    ElevationOptionFullAccess,
+    ElevationOptionAbort,
+    ElevationOptionNetworkDesc,
+    ElevationOptionWriteDesc,
+    ElevationOptionFullAccessDesc,
+    ElevationOptionAbortDesc,
 
     CtxInspTitle,
     CtxInspSessionContext,
@@ -892,6 +911,24 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ApprovalChooseAction,
     MessageId::ApprovalIntentLabel,
     MessageId::ApprovalMoreLines,
+    MessageId::ElevationTitleSandboxDenied,
+    MessageId::ElevationTitleRequired,
+    MessageId::ElevationFieldTool,
+    MessageId::ElevationFieldCmd,
+    MessageId::ElevationFieldReason,
+    MessageId::ElevationImpactHeader,
+    MessageId::ElevationImpactNetwork,
+    MessageId::ElevationImpactWrite,
+    MessageId::ElevationImpactFullAccess,
+    MessageId::ElevationPromptProceed,
+    MessageId::ElevationOptionNetwork,
+    MessageId::ElevationOptionWrite,
+    MessageId::ElevationOptionFullAccess,
+    MessageId::ElevationOptionAbort,
+    MessageId::ElevationOptionNetworkDesc,
+    MessageId::ElevationOptionWriteDesc,
+    MessageId::ElevationOptionFullAccessDesc,
+    MessageId::ElevationOptionAbortDesc,
     MessageId::CtxInspTitle,
     MessageId::CtxInspSessionContext,
     MessageId::CtxInspSystemPrompt,
@@ -1373,7 +1410,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbSendDraft => "Send the current draft",
         MessageId::KbCloseMenu => "Close menu, cancel request, discard draft, or clear input",
         MessageId::KbCancelOrExit => "Cancel request, or exit when idle",
-        MessageId::KbShellControls => "Open shell controls for a running foreground command",
+        MessageId::KbShellControls => "Background the running foreground shell command",
         MessageId::KbExitEmpty => "Exit when input is empty",
         MessageId::KbCommandPalette => "Open the command palette",
         MessageId::KbFuzzyFilePicker => "Open the fuzzy file picker (insert @path on Enter)",
@@ -1555,6 +1592,37 @@ fn english(id: MessageId) -> &'static str {
         MessageId::ApprovalChooseAction => "Enter selected option, or press y/a/d directly",
         MessageId::ApprovalIntentLabel => "Intent: ",
         MessageId::ApprovalMoreLines => "  … (+{count} lines)",
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} Sandbox Denied ",
+        MessageId::ElevationTitleRequired => " Sandbox Elevation Required ",
+        MessageId::ElevationFieldTool => "  Tool: ",
+        MessageId::ElevationFieldCmd => "  Cmd:  ",
+        MessageId::ElevationFieldReason => "  Reason: ",
+        MessageId::ElevationImpactHeader => "  Impact if approved:",
+        MessageId::ElevationImpactNetwork => {
+            "    - network retry enables outbound downloads and HTTP requests"
+        }
+        MessageId::ElevationImpactWrite => {
+            "    - write retry expands writable filesystem scope for this tool call"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "    - full access removes sandbox restrictions entirely for this retry"
+        }
+        MessageId::ElevationPromptProceed => "  Choose how to proceed:",
+        MessageId::ElevationOptionNetwork => "Allow outbound network",
+        MessageId::ElevationOptionWrite => "Allow extra write access",
+        MessageId::ElevationOptionFullAccess => "Full access (filesystem + network)",
+        MessageId::ElevationOptionAbort => "Abort",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Retry this tool call with outbound network access for downloads and HTTP requests"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Retry this tool call with additional writable filesystem scope"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Retry without sandbox limits; grants unrestricted filesystem and network access"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancel this tool execution",
 
         MessageId::CtxInspTitle => "Context inspector",
         MessageId::CtxInspSessionContext => "Session Context",
@@ -1894,7 +1962,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::KbSendDraft => "Gửi bản nháp hiện tại",
         MessageId::KbCloseMenu => "Đóng menu, hủy yêu cầu, hủy bản nháp hoặc xóa sạch đầu vào",
         MessageId::KbCancelOrExit => "Hủy yêu cầu, hoặc thoát khi rảnh",
-        MessageId::KbShellControls => "Mở các điều khiển shell cho một lệnh đang chạy ở tiền cảnh",
+        MessageId::KbShellControls => "Chuyển lệnh shell đang chạy ở tiền cảnh xuống nền",
         MessageId::KbExitEmpty => "Thoát khi khung nhập trống",
         MessageId::KbCommandPalette => "Mở bảng lệnh (command palette)",
         MessageId::KbFuzzyFilePicker => {
@@ -2090,6 +2158,38 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enter để chọn, hoặc nhấn y/a/d trực tiếp",
         MessageId::ApprovalIntentLabel => "Ý định: ",
         MessageId::ApprovalMoreLines => "  … (+{count} dòng)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} Sandbox Bị Từ Chối ",
+        MessageId::ElevationTitleRequired => " Yêu Cầu Nâng Cấp Sandbox ",
+        MessageId::ElevationFieldTool => "  Công cụ: ",
+        MessageId::ElevationFieldCmd => "  Lệnh:   ",
+        MessageId::ElevationFieldReason => "  Lý do: ",
+        MessageId::ElevationImpactHeader => "  Tác động nếu được chấp thuận:",
+        MessageId::ElevationImpactNetwork => {
+            "    - thử lại với mạng cho phép tải xuống và yêu cầu HTTP"
+        }
+        MessageId::ElevationImpactWrite => {
+            "    - thử lại với quyền ghi mở rộng phạm vi hệ thống tệp"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "    - truy cập đầy đủ loại bỏ hoàn toàn hạn chế sandbox"
+        }
+        MessageId::ElevationPromptProceed => "  Chọn cách tiếp tục:",
+        MessageId::ElevationOptionNetwork => "Cho phép mạng ngoài",
+        MessageId::ElevationOptionWrite => "Cho phép quyền ghi bổ sung",
+        MessageId::ElevationOptionFullAccess => "Truy cập đầy đủ (hệ thống tệp + mạng)",
+        MessageId::ElevationOptionAbort => "Hủy bỏ",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Thử lại cuộc gọi công cụ này với quyền truy cập mạng ngoài"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Thử lại cuộc gọi công cụ này với phạm vi hệ thống tệp có thể ghi bổ sung"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Thử lại không giới hạn sandbox; cấp quyền truy cập không hạn chế"
+        }
+        MessageId::ElevationOptionAbortDesc => "Hủy thực thi công cụ này",
 
         MessageId::CtxInspTitle => "Trình kiểm tra ngữ cảnh",
         MessageId::CtxInspSessionContext => "Ngữ cảnh phiên",
@@ -2179,6 +2279,30 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enter 執行選中項，或直接按 y/a/d",
         MessageId::ApprovalIntentLabel => "意圖：",
         MessageId::ApprovalMoreLines => "  … (還有 {count} 行)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} 沙箱拒絕 ",
+        MessageId::ElevationTitleRequired => " 沙箱提權 ",
+        MessageId::ElevationFieldTool => "  工具：",
+        MessageId::ElevationFieldCmd => "  命令：",
+        MessageId::ElevationFieldReason => "  原因：",
+        MessageId::ElevationImpactHeader => "  批准後的影響：",
+        MessageId::ElevationImpactNetwork => "    - 網路重試允許外部下載和 HTTP 請求",
+        MessageId::ElevationImpactWrite => "    - 寫入重試擴大此工具呼叫的檔案系統寫入範圍",
+        MessageId::ElevationImpactFullAccess => "    - 完全訪問解除沙箱限制",
+        MessageId::ElevationPromptProceed => "  請選擇處理方式：",
+        MessageId::ElevationOptionNetwork => "允許外部網路訪問",
+        MessageId::ElevationOptionWrite => "允許額外寫入權限",
+        MessageId::ElevationOptionFullAccess => "完全訪問（檔案系統 + 網路）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "使用外部網路訪問重試此工具呼叫（下載和 HTTP 請求）"
+        }
+        MessageId::ElevationOptionWriteDesc => "重試此工具呼叫，擴大可寫入的檔案系統範圍",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "無沙箱限制重試（授予無限制的檔案系統和網路訪問權限）"
+        }
+        MessageId::ElevationOptionAbortDesc => "取消此工具呼叫",
 
         MessageId::CtxInspTitle => "上下文檢查器",
         MessageId::CtxInspSessionContext => "會話上下文",
@@ -2495,7 +2619,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "メニューを閉じる、リクエストをキャンセル、下書きを破棄、または入力をクリア"
         }
         MessageId::KbCancelOrExit => "リクエストをキャンセル、またはアイドル時に終了",
-        MessageId::KbShellControls => "実行中のフォアグラウンドコマンドのシェル制御を開く",
+        MessageId::KbShellControls => "実行中のフォアグラウンドコマンドをバックグラウンドへ移す",
         MessageId::KbExitEmpty => "入力が空の時に終了",
         MessageId::KbCommandPalette => "コマンドパレットを開く",
         MessageId::KbFuzzyFilePicker => "ファジーファイルピッカーを開く（Enter で @path を挿入）",
@@ -2679,6 +2803,36 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enterで選択、または y/a/d を直接入力",
         MessageId::ApprovalIntentLabel => "意図：",
         MessageId::ApprovalMoreLines => "  … (+{count} 行)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} サンドボックス拒否 ",
+        MessageId::ElevationTitleRequired => " サンドボックス昇格 ",
+        MessageId::ElevationFieldTool => "  ツール：",
+        MessageId::ElevationFieldCmd => "  コマンド：",
+        MessageId::ElevationFieldReason => "  理由：",
+        MessageId::ElevationImpactHeader => "  承認された場合の影響：",
+        MessageId::ElevationImpactNetwork => {
+            "    - ネットワーク再試行で外部ダウンロードとHTTPリクエストが可能"
+        }
+        MessageId::ElevationImpactWrite => {
+            "    - 書き込み再試行でファイルシステムの書き込み範囲が拡大"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "    - フルアクセスでサンドボックス制限を完全に解除"
+        }
+        MessageId::ElevationPromptProceed => "  方法を選択：",
+        MessageId::ElevationOptionNetwork => "外部ネットワークを許可",
+        MessageId::ElevationOptionWrite => "追加の書き込みアクセスを許可",
+        MessageId::ElevationOptionFullAccess => "フルアクセス（ファイルシステム + ネットワーク）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "外部ネットワークアクセスでこのツール呼び出しを再試行（ダウンロードとHTTPリクエスト用）"
+        }
+        MessageId::ElevationOptionWriteDesc => "追加の書き込み可能ファイルシステム範囲で再試行",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "サンドボックス制限なしで再試行（ファイルシステムとネットワークへの無制限アクセス）"
+        }
+        MessageId::ElevationOptionAbortDesc => "このツール実行をキャンセル",
 
         MessageId::CtxInspTitle => "コンテキストインスペクタ",
         MessageId::CtxInspSessionContext => "セッションコンテキスト",
@@ -2955,7 +3109,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbSendDraft => "发送当前草稿",
         MessageId::KbCloseMenu => "关闭菜单、取消请求、丢弃草稿或清空输入",
         MessageId::KbCancelOrExit => "取消请求，或空闲时退出",
-        MessageId::KbShellControls => "打开正在运行的前台命令的 shell 控制",
+        MessageId::KbShellControls => "将正在运行的前台命令转入后台",
         MessageId::KbExitEmpty => "输入框为空时退出",
         MessageId::KbCommandPalette => "打开命令面板",
         MessageId::KbFuzzyFilePicker => "打开模糊文件选择器（按 Enter 插入 @path）",
@@ -3117,6 +3271,30 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enter 执行选中项，或直接按 y/a/d",
         MessageId::ApprovalIntentLabel => "意图：",
         MessageId::ApprovalMoreLines => "  … (还有 {count} 行)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} 沙箱拒绝 ",
+        MessageId::ElevationTitleRequired => " 沙箱提权 ",
+        MessageId::ElevationFieldTool => "  工具：",
+        MessageId::ElevationFieldCmd => "  命令：",
+        MessageId::ElevationFieldReason => "  原因：",
+        MessageId::ElevationImpactHeader => "  批准后的影响：",
+        MessageId::ElevationImpactNetwork => "    - 网络重试允许外部下载和 HTTP 请求",
+        MessageId::ElevationImpactWrite => "    - 写入重试扩大此工具调用的文件系统写入范围",
+        MessageId::ElevationImpactFullAccess => "    - 完全访问解除沙箱限制",
+        MessageId::ElevationPromptProceed => "  请选择处理方式：",
+        MessageId::ElevationOptionNetwork => "允许外部网络访问",
+        MessageId::ElevationOptionWrite => "允许额外写入权限",
+        MessageId::ElevationOptionFullAccess => "完全访问（文件系统 + 网络）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "使用外部网络访问重试此工具调用（下载和 HTTP 请求）"
+        }
+        MessageId::ElevationOptionWriteDesc => "重试此工具调用，扩大可写入的文件系统范围",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "无沙箱限制重试（授予无限制的文件系统和网络访问权限）"
+        }
+        MessageId::ElevationOptionAbortDesc => "取消此工具调用",
 
         MessageId::CtxInspTitle => "上下文检查器",
         MessageId::CtxInspSessionContext => "会话上下文",
@@ -3437,7 +3615,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Fechar menu, cancelar requisição, descartar rascunho ou limpar entrada"
         }
         MessageId::KbCancelOrExit => "Cancelar requisição ou sair quando ocioso",
-        MessageId::KbShellControls => "Abrir controles de shell para comando em primeiro plano",
+        MessageId::KbShellControls => "Enviar o comando em primeiro plano para segundo plano",
         MessageId::KbExitEmpty => "Sair quando entrada vazia",
         MessageId::KbCommandPalette => "Abrir paleta de comandos",
         MessageId::KbFuzzyFilePicker => {
@@ -3631,6 +3809,38 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enter para selecionar, ou pressione y/a/d diretamente",
         MessageId::ApprovalIntentLabel => "Intenção: ",
         MessageId::ApprovalMoreLines => "  … (+{count} linhas)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} Sandbox Negado ",
+        MessageId::ElevationTitleRequired => " Elevação de Sandbox Necessária ",
+        MessageId::ElevationFieldTool => "  Ferramenta: ",
+        MessageId::ElevationFieldCmd => "  Comando:  ",
+        MessageId::ElevationFieldReason => "  Motivo: ",
+        MessageId::ElevationImpactHeader => "  Impacto se aprovado:",
+        MessageId::ElevationImpactNetwork => {
+            "    - retry de rede permite downloads externos e requisições HTTP"
+        }
+        MessageId::ElevationImpactWrite => {
+            "    - retry de escrita expande o escopo do sistema de arquivos para esta chamada"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "    - acesso total remove todas as restrições de sandbox para este retry"
+        }
+        MessageId::ElevationPromptProceed => "  Escolha como prosseguir:",
+        MessageId::ElevationOptionNetwork => "Permitir rede externa",
+        MessageId::ElevationOptionWrite => "Permitir acesso extra de escrita",
+        MessageId::ElevationOptionFullAccess => "Acesso total (sistema de arquivos + rede)",
+        MessageId::ElevationOptionAbort => "Abortar",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Retry esta chamada com acesso de rede externa para downloads e requisições HTTP"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Retry esta chamada com escopo adicional de sistema de arquivos gravável"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Retry sem limites de sandbox; concede acesso irrestrito ao sistema de arquivos e rede"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancelar esta execução de ferramenta",
 
         MessageId::CtxInspTitle => "Inspetor de contexto",
         MessageId::CtxInspSessionContext => "Contexto da sessão",
@@ -3967,7 +4177,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Cerrar menú, cancelar solicitud, descartar borrador o limpiar entrada"
         }
         MessageId::KbCancelOrExit => "Cancelar solicitud o salir cuando está inactivo",
-        MessageId::KbShellControls => "Abrir controles de shell para comando en primer plano",
+        MessageId::KbShellControls => "Enviar el comando en primer plano a segundo plano",
         MessageId::KbExitEmpty => "Salir cuando la entrada está vacía",
         MessageId::KbCommandPalette => "Abrir paleta de comandos",
         MessageId::KbFuzzyFilePicker => {
@@ -4159,6 +4369,38 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::ApprovalChooseAction => "Enter para seleccionar, o presione y/a/d directamente",
         MessageId::ApprovalIntentLabel => "Intención: ",
         MessageId::ApprovalMoreLines => "  … (+{count} líneas)",
+        // Sandbox elevation dialog.
+        // Sandbox elevation dialog.
+        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} Sandbox Denegado ",
+        MessageId::ElevationTitleRequired => " Elevación de Sandbox Requerida ",
+        MessageId::ElevationFieldTool => "  Herramienta: ",
+        MessageId::ElevationFieldCmd => "  Comando:  ",
+        MessageId::ElevationFieldReason => "  Motivo: ",
+        MessageId::ElevationImpactHeader => "  Impacto si se aprueba:",
+        MessageId::ElevationImpactNetwork => {
+            "    - reintento de red permite descargas y solicitudes HTTP externas"
+        }
+        MessageId::ElevationImpactWrite => {
+            "    - reintento de escritura expande el ámbito del sistema de archivos para esta llamada"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "    - acceso total elimina todas las restricciones de sandbox para este reintento"
+        }
+        MessageId::ElevationPromptProceed => "  Elige cómo proceder:",
+        MessageId::ElevationOptionNetwork => "Permitir red externa",
+        MessageId::ElevationOptionWrite => "Permitir acceso extra de escritura",
+        MessageId::ElevationOptionFullAccess => "Acceso total (sistema de archivos + red)",
+        MessageId::ElevationOptionAbort => "Abortar",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Reintenta esta llamada con acceso de red externa para descargas y solicitudes HTTP"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Reintenta esta llamada con ámbito adicional de sistema de archivos grabable"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Reintenta sin límites de sandbox; concede acceso sin restricciones al sistema de archivos y red"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancelar esta ejecución de herramienta",
 
         MessageId::CtxInspTitle => "Inspector de contexto",
         MessageId::CtxInspSessionContext => "Contexto de la sesión",

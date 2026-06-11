@@ -77,8 +77,8 @@ Other install paths are supported:
 # https://github.com/Hmbown/CodeWhale/releases
 
 # CNB mirror path for users who cannot reliably reach GitHub:
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.57 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-tui --locked --force
 
 # Legacy Homebrew compatibility while the formula is renamed
 brew tap Hmbown/deepseek-tui

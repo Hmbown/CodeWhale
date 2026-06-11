@@ -21,6 +21,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const OSC8_PREFIX: &str = "\x1b]8;;";
 const OSC8_TERMINATOR: &str = "\x1b\\";
+const OSC8_CLOSE: &str = "\x1b]8;;\x1b\\";
+
+/// A contiguous run of cells on one terminal row that share a hyperlink target.
+#[derive(Debug, Clone)]
+pub struct LinkRegion {
+    pub row: u16,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub target: String,
+}
+
+/// Write an OSC 8 hyperlink open sequence for `target` to `w`.
+pub fn write_osc8_open(w: &mut impl std::io::Write, target: &str) -> std::io::Result<()> {
+    w.write_all(OSC8_PREFIX.as_bytes())?;
+    w.write_all(target.as_bytes())?;
+    w.write_all(OSC8_TERMINATOR.as_bytes())
+}
+
+/// Write an OSC 8 hyperlink close sequence to `w`.
+pub fn write_osc8_close(w: &mut impl std::io::Write) -> std::io::Result<()> {
+    w.write_all(OSC8_CLOSE.as_bytes())
+}
 
 /// Process-wide enable flag. `true` by default. Set once at app init from
 /// `[ui] osc8_links` (when present) and read by the renderer.
@@ -36,6 +58,30 @@ pub fn set_enabled(enabled: bool) {
 #[must_use]
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+// --- Thread-local link region accumulator (#3029) ---
+
+use std::cell::RefCell;
+
+thread_local! {
+    /// Link regions collected during the current render frame.
+    /// Populated by the render closure after scanning the ratatui buffer;
+    /// consumed and cleared by `ColorCompatBackend::draw()`.
+    pub static FRAME_LINKS: RefCell<Vec<LinkRegion>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Replace the thread-local frame link buffer with `links`.
+#[allow(dead_code)] // called from render closure (future integration)
+pub fn set_frame_links(links: Vec<LinkRegion>) {
+    FRAME_LINKS.with(|cell| {
+        *cell.borrow_mut() = links;
+    });
+}
+
+/// Take the thread-local frame links, leaving an empty vec behind.
+pub fn take_frame_links() -> Vec<LinkRegion> {
+    FRAME_LINKS.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
 }
 
 /// Wrap `label` so it links to `target` in OSC 8-aware terminals. The returned

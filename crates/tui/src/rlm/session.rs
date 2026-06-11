@@ -346,7 +346,7 @@ fn compact_content_block(block: &ContentBlock) -> Value {
             "type": "text",
             "text": text,
         }),
-        ContentBlock::Thinking { thinking } => json!({
+        ContentBlock::Thinking { thinking, .. } => json!({
             "type": "thinking",
             "redacted": true,
             "chars": thinking.chars().count(),

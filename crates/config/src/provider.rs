@@ -27,6 +27,8 @@ pub enum WireFormat {
     ChatCompletions,
     /// OpenAI Responses API (`/responses`).
     Responses,
+    /// Native Anthropic Messages API (`/v1/messages`).
+    AnthropicMessages,
 }
 
 /// Static metadata for a built-in model provider.
@@ -320,6 +322,39 @@ impl Provider for OpenaiCodex {
     }
 }
 
+/// Native Anthropic Messages API provider (#3014).
+pub struct Anthropic;
+
+impl Provider for Anthropic {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Anthropic
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Anthropic"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        crate::DEFAULT_ANTHROPIC_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        crate::DEFAULT_ANTHROPIC_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["ANTHROPIC_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "anthropic"
+    }
+
+    fn wire(&self) -> WireFormat {
+        WireFormat::AnthropicMessages
+    }
+}
+
 static DEEPSEEK: Deepseek = Deepseek;
 static NVIDIA_NIM: NvidiaNim = NvidiaNim;
 static OPENAI: Openai = Openai;
@@ -340,8 +375,9 @@ static OLLAMA: Ollama = Ollama;
 static HUGGINGFACE: Huggingface = Huggingface;
 static TOGETHER: Together = Together;
 static OPENAI_CODEX: OpenaiCodex = OpenaiCodex;
+static ANTHROPIC: Anthropic = Anthropic;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 20] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 21] = [
     &DEEPSEEK,
     &NVIDIA_NIM,
     &OPENAI,
@@ -362,6 +398,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 20] = [
     &HUGGINGFACE,
     &TOGETHER,
     &OPENAI_CODEX,
+    &ANTHROPIC,
 ];
 
 /// Return all built-in provider metadata entries in `ProviderKind::ALL` order.
@@ -410,5 +447,6 @@ pub fn provider_for_kind(kind: ProviderKind) -> &'static dyn Provider {
         ProviderKind::Huggingface => &HUGGINGFACE,
         ProviderKind::Together => &TOGETHER,
         ProviderKind::OpenaiCodex => &OPENAI_CODEX,
+        ProviderKind::Anthropic => &ANTHROPIC,
     }
 }

@@ -28,7 +28,7 @@ Checks:
 3. Confirm no local sandbox/permission deadlock in tool output
 
 Actions:
-1. If a foreground shell command is running, press `Ctrl+B` and choose whether to background it or cancel the current turn.
+1. If a foreground shell command is running, press `Ctrl+B` to move it to the background (the turn keeps running and the command becomes a background job under `/jobs`); use `Ctrl+C` instead if you want to cancel the turn.
 2. If the command was started in the background, ask the assistant to cancel it with `exec_shell_cancel` and the returned task id.
 3. Use `Esc` or `Ctrl+C` to interrupt the current turn when you want to stop the request itself.
 4. Retry prompt; if still failing, restart TUI.

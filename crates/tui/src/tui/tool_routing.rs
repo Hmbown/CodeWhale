@@ -449,6 +449,19 @@ fn record_spillover_artifact_if_any(
         ));
 }
 
+/// #3031: shell/tasks tools embed the literal `"(no output)"` into successful
+/// `ToolResult` content (the model-facing transcript needs a non-empty tool
+/// result). Treat it as no output on the TUI side so the compact-mode
+/// suppression gate in `history.rs` actually fires; the raw content remains
+/// available through the tool-detail store.
+fn visible_tool_output(content: &str) -> Option<String> {
+    if content.trim() == "(no output)" {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
 pub(super) fn handle_tool_call_complete(
     app: &mut App,
     id: &str,
@@ -549,9 +562,11 @@ pub(super) fn handle_tool_call_complete(
                         .and_then(|m| m.get("duration_ms"))
                         .and_then(serde_json::Value::as_u64);
                     if status != ToolStatus::Running && exec.interaction.is_none() {
-                        exec.output = Some(tool_result.content.clone());
-                        exec.output_summary =
-                            Some(super::history::summarize_tool_output(&tool_result.content));
+                        exec.output = visible_tool_output(&tool_result.content);
+                        exec.output_summary = exec
+                            .output
+                            .as_deref()
+                            .map(super::history::summarize_tool_output);
                         exec.live_output = None;
                     } else if status == ToolStatus::Running
                         && exec.interaction.is_none()
@@ -642,8 +657,9 @@ pub(super) fn handle_tool_call_complete(
                 generic.status = status;
                 match result.as_ref() {
                     Ok(tool_result) => {
-                        generic.output = Some(tool_result.content.clone());
-                        generic.output_summary = Some(summarize_tool_output(&tool_result.content));
+                        generic.output = visible_tool_output(&tool_result.content);
+                        generic.output_summary =
+                            generic.output.as_deref().map(summarize_tool_output);
                         generic.is_diff = output_looks_like_diff(&tool_result.content);
                     }
                     Err(err) => {
@@ -1272,5 +1288,65 @@ mod tests {
         assert_eq!(snapshot.items.len(), 1);
         assert_eq!(snapshot.items[0].step, "render all fields");
         assert_eq!(snapshot.items[0].status, StepStatus::Pending);
+    }
+
+    // ── #3031: "(no output)" placeholder must not defeat compact rendering ─
+
+    #[test]
+    fn visible_tool_output_maps_no_output_placeholder_to_none() {
+        assert_eq!(visible_tool_output("(no output)"), None);
+        assert_eq!(visible_tool_output("  (no output)\n"), None);
+    }
+
+    #[test]
+    fn visible_tool_output_preserves_real_content() {
+        assert_eq!(
+            visible_tool_output("compiled 3 crates").as_deref(),
+            Some("compiled 3 crates")
+        );
+        // Output that merely CONTAINS the placeholder is real output.
+        assert_eq!(
+            visible_tool_output("step 1: (no output) — continuing").as_deref(),
+            Some("step 1: (no output) — continuing")
+        );
+        assert_eq!(visible_tool_output("").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn exec_cell_without_output_suppresses_placeholder_in_live_mode() {
+        use crate::tui::history::{ExecCell, ExecSource, ToolCell, ToolStatus};
+
+        let cell = ToolCell::Exec(ExecCell {
+            command: "true".to_string(),
+            status: ToolStatus::Success,
+            output: None,
+            live_output: None,
+            shell_task_id: None,
+            started_at: None,
+            duration_ms: Some(120),
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        });
+
+        let live: String = cell
+            .lines(80)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            !live.contains("(no output)"),
+            "Live mode must suppress the placeholder: {live:?}"
+        );
+
+        let transcript: String = cell
+            .transcript_lines(80)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            transcript.contains("(no output)"),
+            "Transcript mode still records the placeholder: {transcript:?}"
+        );
     }
 }

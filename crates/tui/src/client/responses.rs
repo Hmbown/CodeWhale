@@ -16,6 +16,7 @@ use crate::models::{
     ContentBlock, ContentBlockStart, Delta, MessageDelta, MessageRequest, MessageResponse,
     StreamEvent, Tool, Usage,
 };
+use crate::tools::schema_sanitize;
 
 use super::{DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, system_to_instructions};
 
@@ -60,21 +61,13 @@ impl DeepSeekClient {
         // map CodeWhale's effort string onto those and omit reasoning entirely
         // when it is disabled. CodeWhale's "auto" has no Codex equivalent and
         // falls back to "medium".
-        if let Some(raw) = request.reasoning_effort.as_deref() {
-            let effort = match raw.trim().to_ascii_lowercase().as_str() {
-                "off" | "disabled" | "none" | "false" => None,
-                "minimal" => Some("minimal"),
-                "low" => Some("low"),
-                "high" => Some("high"),
-                "xhigh" | "max" => Some("xhigh"),
-                _ => Some("medium"),
-            };
-            if let Some(effort) = effort {
-                body["reasoning"] = json!({
-                    "effort": effort,
-                    "summary": "auto",
-                });
-            }
+        if let Some(raw) = request.reasoning_effort.as_deref()
+            && let Some(effort) = codex_responses_reasoning_effort(raw)
+        {
+            body["reasoning"] = json!({
+                "effort": effort,
+                "summary": "auto",
+            });
         }
 
         // Include reasoning summaries in the stream.
@@ -323,13 +316,8 @@ impl DeepSeekClient {
                                         .and_then(|s| s.as_str())
                                         .unwrap_or("completed");
                                     let stop_reason = match status {
-                                        "completed" => {
-                                            if saw_tool_call {
-                                                "tool_use"
-                                            } else {
-                                                "end_turn"
-                                            }
-                                        }
+                                        "completed" if saw_tool_call => "tool_use",
+                                        "completed" => "end_turn",
                                         "incomplete" => "max_tokens",
                                         _ => "end_turn",
                                     };
@@ -413,9 +401,10 @@ impl DeepSeekClient {
                             text,
                             cache_control: None,
                         },
-                        ContentBlockStart::Thinking { thinking } => {
-                            ContentBlock::Thinking { thinking }
-                        }
+                        ContentBlockStart::Thinking { thinking } => ContentBlock::Thinking {
+                            thinking,
+                            signature: None,
+                        },
                         ContentBlockStart::ToolUse {
                             id,
                             name,
@@ -445,8 +434,9 @@ impl DeepSeekClient {
                             }
                         }
                         Delta::ThinkingDelta { thinking } => {
-                            if let Some(ContentBlock::Thinking { thinking: existing }) =
-                                response.content.get_mut(i)
+                            if let Some(ContentBlock::Thinking {
+                                thinking: existing, ..
+                            }) = response.content.get_mut(i)
                             {
                                 existing.push_str(&thinking);
                             }
@@ -455,6 +445,10 @@ impl DeepSeekClient {
                             if let Some(buf) = tool_args.get_mut(i) {
                                 buf.push_str(&partial_json);
                             }
+                        }
+                        Delta::SignatureDelta { .. } => {
+                            // Anthropic-native signature deltas never occur on
+                            // the Responses bridge (#3014).
                         }
                     }
                 }
@@ -508,6 +502,26 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
                                 "image_url": image_url.url,
                             }));
                         }
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            ..
+                        } => {
+                            if !content_items.is_empty() {
+                                items.push(json!({
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": content_items,
+                                }));
+                                content_items = Vec::new();
+                            }
+                            let (call_id, _item_id) = parse_tool_use_id(tool_use_id);
+                            items.push(json!({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": content,
+                            }));
+                        }
                         _ => {}
                     }
                 }
@@ -543,7 +557,7 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
                                 "arguments": serde_json::to_string(input).unwrap_or_default(),
                             }));
                         }
-                        ContentBlock::Thinking { thinking } => {
+                        ContentBlock::Thinking { thinking, .. } => {
                             items.push(json!({
                                 "type": "reasoning",
                                 "summary": [{
@@ -582,13 +596,26 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
 
 /// Convert a CodeWhale tool definition to a Responses API function tool.
 fn tool_to_responses_function(tool: &Tool) -> Value {
+    let mut parameters = tool.input_schema.clone();
+    schema_sanitize::sanitize_for_responses(&mut parameters);
     json!({
         "type": "function",
         "name": tool.name,
         "description": tool.description,
-        "parameters": tool.input_schema,
+        "parameters": parameters,
         "strict": false,
     })
+}
+
+fn codex_responses_reasoning_effort(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "none" | "false" => None,
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "high" => Some("high"),
+        "xhigh" | "max" | "maximum" => Some("xhigh"),
+        _ => Some("medium"),
+    }
 }
 
 /// Parse a composite tool_use_id back to (call_id, item_id).
@@ -624,5 +651,105 @@ fn parse_responses_usage(val: &Value) -> Usage {
         reasoning_tokens: None,
         reasoning_replay_tokens: None,
         server_tool_use: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Message;
+
+    #[test]
+    fn codex_reasoning_effort_uses_responses_labels() {
+        assert_eq!(codex_responses_reasoning_effort("max"), Some("xhigh"));
+        assert_eq!(codex_responses_reasoning_effort("maximum"), Some("xhigh"));
+        assert_eq!(codex_responses_reasoning_effort("xhigh"), Some("xhigh"));
+        assert_eq!(codex_responses_reasoning_effort("high"), Some("high"));
+        assert_eq!(codex_responses_reasoning_effort("medium"), Some("medium"));
+        assert_eq!(codex_responses_reasoning_effort("auto"), Some("medium"));
+        assert_eq!(codex_responses_reasoning_effort("off"), None);
+    }
+
+    #[test]
+    fn responses_input_includes_user_role_tool_results() {
+        let request = MessageRequest {
+            model: "gpt-5.5".to_string(),
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: "call_abc|fc_123".to_string(),
+                        name: "checklist_write".to_string(),
+                        input: json!({"items": []}),
+                        caller: None,
+                    }],
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::ToolResult {
+                        tool_use_id: "call_abc|fc_123".to_string(),
+                        content: "<6 items>".to_string(),
+                        is_error: None,
+                        content_blocks: None,
+                    }],
+                },
+            ],
+            max_tokens: 128,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let input = convert_messages_to_responses_input(&request);
+
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["call_id"], "call_abc");
+        assert_eq!(input[1]["type"], "function_call_output");
+        assert_eq!(input[1]["call_id"], "call_abc");
+        assert_eq!(input[1]["output"], "<6 items>");
+    }
+
+    #[test]
+    fn responses_function_tool_sanitizes_root_composition_schema() {
+        let tool = Tool {
+            tool_type: None,
+            name: "apply_patch".to_string(),
+            description: "Apply patch".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "patch": {"type": "string"},
+                    "changes": {"type": "array"}
+                },
+                "oneOf": [
+                    {"required": ["patch"]},
+                    {"required": ["changes"]}
+                ]
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        };
+
+        let payload = tool_to_responses_function(&tool);
+        let parameters = &payload["parameters"];
+
+        assert_eq!(parameters["type"], "object");
+        assert!(parameters.get("oneOf").is_none());
+        assert!(parameters.get("anyOf").is_none());
+        assert!(parameters.get("allOf").is_none());
+        assert!(parameters.get("enum").is_none());
+        assert!(parameters.get("not").is_none());
+        assert!(parameters["properties"].get("patch").is_some());
+        assert!(parameters["properties"].get("changes").is_some());
+        assert!(tool.input_schema.get("oneOf").is_some());
     }
 }

@@ -20,7 +20,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface | together | openai-codex | anthropic
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -439,6 +439,17 @@ max_subagents = 10 # optional (1-20)
 [providers.openai_codex]
 # base_url = "https://chatgpt.com/backend-api"
 # model = "gpt-5.5"
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Anthropic Provider (native Messages API)
+# Talks to https://api.anthropic.com/v1/messages with x-api-key auth — not an
+# OpenAI-compatible route. Models: claude-opus-4-8, claude-sonnet-4-6 (default),
+# claude-haiku-4-5. Env vars: ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL,
+# ANTHROPIC_MODEL.
+[providers.anthropic]
+# api_key = "sk-ant-..."
+# base_url = "https://api.anthropic.com"
+# model = "claude-sonnet-4-6"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider

@@ -952,6 +952,7 @@ mod tests {
                 cache_control: None,
             },
             ContentBlock::Thinking {
+                signature: None,
                 thinking: "skip".to_string(),
             },
             ContentBlock::Text {

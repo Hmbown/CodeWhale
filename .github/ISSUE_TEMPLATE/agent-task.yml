@@ -1,0 +1,91 @@
+name: Agent task
+description: Create a self-contained task that a headless agent (DeepSeek V4, remote droplet) can execute end-to-end without human context.
+title: "v0.8.58: "
+labels: ["agent-ready", "v0.8.58"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Instructions for authors
+
+        This issue will be executed by an autonomous agent running `codewhale exec --auto`
+        on a headless VM.  The body must be **self-sufficient** — every file path, command,
+        and acceptance criterion must be explicit.  The agent has:
+
+        - A fresh clone of `Hmbown/CodeWhale` at `main`
+        - Shell, read, write, and git tools with auto-approvals
+        - No conversation context — this issue body is all it knows
+
+        Fill every section.  Sections marked * are required.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: "Goal / Why"
+      description: "What problem does this fix, and why now? (2-4 sentences)"
+      placeholder: |
+        e.g. "The TUI freezes when 4+ sub-agents run concurrently because
+        AgentProgress events trigger a full redraw each.  This blocks v0.8.58's
+        recommended sub-agent fanout."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: "Scope / Plan"
+      description: "Numbered steps with file paths.  Each step is one concrete action."
+      placeholder: |
+        1. crates/tui/src/tui/ui.rs — add throttle in AgentProgress handler (line ~2308)
+        2. crates/tui/src/tui/app.rs — add `last_agent_progress_redraw` field
+        3. cargo test -p codewhale-tui — verify no regressions
+    validations:
+      required: true
+
+  - type: textarea
+    id: key-files
+    attributes:
+      label: "Key files"
+      description: "One file path per line.  The agent will read these first."
+      placeholder: |
+        crates/tui/src/tui/ui.rs
+        crates/tui/src/tui/sidebar.rs
+        crates/tui/src/tui/app.rs
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: "Acceptance criteria"
+      description: "Behavior-level checkboxes.  Every item must be testable."
+      placeholder: |
+        - [ ] 4 concurrent sub-agents do not freeze TUI input
+        - [ ] Ctrl+C works during sub-agent activity
+        - [ ] Sidebar updates throttle under load
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: "Verification"
+      description: "Exact shell commands the agent must run to prove the fix works."
+      placeholder: |
+        cargo check -p codewhale-tui
+        cargo test -p codewhale-tui -- subagent
+        cargo clippy -p codewhale-tui -- -D warnings
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: "Out of scope"
+      description: "What this issue does NOT change.  Prevents scope creep."
+      placeholder: |
+        - Changing the sub-agent execution model
+        - Reducing the recommended fanout count
+        - Network-level optimizations
+    validations:
+      required: true
