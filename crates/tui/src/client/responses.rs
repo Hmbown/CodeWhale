@@ -597,11 +597,16 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
 /// Convert a CodeWhale tool definition to a Responses API function tool.
 fn tool_to_responses_function(tool: &Tool) -> Value {
     let mut parameters = tool.input_schema.clone();
-    schema_sanitize::sanitize_for_responses(&mut parameters);
+    let constraint_note = schema_sanitize::sanitize_for_responses(&mut parameters);
+    let description = match constraint_note {
+        Some(note) if tool.description.trim().is_empty() => note,
+        Some(note) => format!("{}\n\n{}", tool.description, note),
+        None => tool.description.clone(),
+    };
     json!({
         "type": "function",
         "name": tool.name,
-        "description": tool.description,
+        "description": description,
         "parameters": parameters,
         "strict": false,
     })
@@ -750,6 +755,34 @@ mod tests {
         assert!(parameters.get("not").is_none());
         assert!(parameters["properties"].get("patch").is_some());
         assert!(parameters["properties"].get("changes").is_some());
+        assert_eq!(
+            payload["description"],
+            "Apply patch\n\nExactly one of these parameter groups must be provided: `patch` | `changes`."
+        );
         assert!(tool.input_schema.get("oneOf").is_some());
+    }
+
+    #[test]
+    fn responses_function_tool_leaves_description_unchanged_without_constraint_note() {
+        let tool = Tool {
+            tool_type: None,
+            name: "lookup".to_string(),
+            description: "Lookup".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        };
+
+        let payload = tool_to_responses_function(&tool);
+
+        assert_eq!(payload["description"], "Lookup");
     }
 }
