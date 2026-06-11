@@ -604,10 +604,13 @@ impl ModelPickerView {
             self.focus == Pane::Model,
         );
 
+        let effort_provider = self.resolved_provider().unwrap_or(self.initial_provider);
         let effort_rows: Vec<(String, String)> = PICKER_EFFORTS
             .iter()
             .map(|effort| {
-                let label = effort.short_label().to_string();
+                let label = effort
+                    .display_label_for_provider(effort_provider)
+                    .to_string();
                 let hint = match effort {
                     ReasoningEffort::Auto => "choose per turn".to_string(),
                     ReasoningEffort::Off => "no extra reasoning".to_string(),

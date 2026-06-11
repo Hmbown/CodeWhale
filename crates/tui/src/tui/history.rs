@@ -638,7 +638,7 @@ pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
                     _ => {}
                 }
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 if let Some(HistoryCell::Thinking { content, .. }) = cells.last_mut() {
                     if !content.is_empty() {
                         content.push('\n');
@@ -957,11 +957,14 @@ impl ExecCell {
                 ));
             } else if self.status == ToolStatus::Running && self.source == ExecSource::Assistant {
                 lines.extend(wrap_plain_line(
-                    "  Ctrl+B opens shell controls.",
+                    "  Ctrl+B backgrounds this command.",
                     Style::default().fg(palette::TEXT_MUTED),
                     width,
                 ));
-            } else if self.status != ToolStatus::Running {
+            } else if self.status != ToolStatus::Running && mode == RenderMode::Transcript {
+                // #3031: Suppress "(no output)" in compact/Live mode;
+                // the success header is enough signal. Transcript still
+                // records it for exports/clipboard/pager.
                 lines.push(Line::from(Span::styled(
                     "  (no output)",
                     Style::default().fg(palette::TEXT_MUTED).italic(),
@@ -970,13 +973,17 @@ impl ExecCell {
         }
 
         if let Some(duration_ms) = self.duration_ms {
-            let seconds = f64::from(u32::try_from(duration_ms).unwrap_or(u32::MAX)) / 1000.0;
-            lines.extend(render_compact_kv(
-                "time",
-                &format!("{seconds:.2}s"),
-                Style::default().fg(palette::TEXT_DIM),
-                width,
-            ));
+            // #3031: Suppress sub-second timing in compact mode.
+            // Transcript mode always shows exact timing.
+            if mode == RenderMode::Transcript || duration_ms >= 1000 {
+                let seconds = f64::from(u32::try_from(duration_ms).unwrap_or(u32::MAX)) / 1000.0;
+                lines.extend(render_compact_kv(
+                    "time",
+                    &format!("{seconds:.2}s"),
+                    Style::default().fg(palette::TEXT_DIM),
+                    width,
+                ));
+            }
         }
 
         wrap_card_rail(lines)
@@ -2377,13 +2384,13 @@ fn render_thinking(
     let mut lines = Vec::new();
 
     // Header: `…` opener (replaces the spinner; reasoning isn't a tool, it's
-    // a slow exhale) followed by the `thinking` label and live status.
+    // a slow exhale) followed by the reasoning label and live status.
     let mut header_spans = vec![
         Span::styled(
             format!("{REASONING_OPENER} "),
             Style::default().fg(thinking_state_accent(state)),
         ),
-        Span::styled("thinking", thinking_title_style()),
+        Span::styled("reasoning", thinking_title_style()),
     ];
     header_spans.push(Span::styled(" ", Style::default()));
     header_spans.push(Span::styled(
@@ -2449,7 +2456,7 @@ fn render_thinking(
 
     if rendered.is_empty() && streaming {
         let mut spans = vec![Span::styled(REASONING_RAIL.to_string(), rail_style)];
-        spans.push(Span::styled("thinking...", body_style.italic()));
+        spans.push(Span::styled("reasoning...", body_style.italic()));
         if !low_motion {
             spans.push(Span::styled(format!(" {REASONING_CURSOR}"), cursor_style));
         }
@@ -2507,7 +2514,7 @@ fn render_hidden_thinking_activity(
             format!("{REASONING_OPENER} "),
             Style::default().fg(thinking_state_accent(state)),
         ),
-        Span::styled("thinking", thinking_title_style()),
+        Span::styled("reasoning", thinking_title_style()),
         Span::styled(" ", Style::default()),
         Span::styled(thinking_status_label(state), thinking_status_style(state)),
     ];
@@ -2840,10 +2847,15 @@ fn render_preserved_output_mode(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if output.trim().is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  (no output)",
-            Style::default().fg(palette::TEXT_MUTED).italic(),
-        )));
+        // #3031: In compact/Live mode, suppress "(no output)" — the tool
+        // header already carries the success/failure status.  Transcript
+        // mode still records it for exports/clipboard/pager.
+        if mode == RenderMode::Transcript {
+            lines.push(Line::from(Span::styled(
+                "  (no output)",
+                Style::default().fg(palette::TEXT_MUTED).italic(),
+            )));
+        }
         return lines;
     }
 
@@ -4185,7 +4197,26 @@ mod tests {
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
         assert!(text.contains("Full reasoning in Ctrl+O"));
-        assert!(text.contains("thinking"));
+        // Pin the actual header shape ("… reasoning done") — a bare
+        // `contains("reasoning")` is already satisfied by the Ctrl+O
+        // affordance line above and would never fail on its own.
+        let header = lines
+            .first()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        assert!(
+            header.starts_with(REASONING_OPENER),
+            "header opens with the dotted opener: {header:?}"
+        );
+        assert!(
+            header.contains("reasoning done"),
+            "header carries the reasoning title and done status: {header:?}"
+        );
     }
 
     #[test]
@@ -5075,7 +5106,7 @@ mod tests {
 
         assert!(text.contains("running line 1"));
         assert!(text.contains("running line 2"));
-        assert!(!text.contains("Ctrl+B opens shell controls"));
+        assert!(!text.contains("Ctrl+B backgrounds this command"));
     }
 
     #[test]

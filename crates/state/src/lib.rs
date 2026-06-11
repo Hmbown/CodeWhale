@@ -234,7 +234,8 @@ pub struct StateStore {
 impl StateStore {
     /// Open (or create) a state store at the given database path.
     ///
-    /// If `path` is `None`, the default location (`~/.deepseek/state.db`) is used.
+    /// If `path` is `None`, the default location (`~/.codewhale/state.db`, with
+    /// `~/.deepseek/state.db` as a legacy fallback) is used.
     /// The database schema is created automatically if it does not exist.
     pub fn open(path: Option<PathBuf>) -> Result<Self> {
         let db_path = path.unwrap_or_else(default_state_db_path);
@@ -1344,10 +1345,15 @@ impl StateStore {
 }
 
 fn default_state_db_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".deepseek")
-        .join("state.db")
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    // Prefer the CodeWhale directory, falling back to legacy DeepSeek path
+    // so existing installs don't lose their session history.
+    let primary = home.join(".codewhale").join("state.db");
+    if primary.exists() || !home.join(".deepseek").join("state.db").exists() {
+        primary
+    } else {
+        home.join(".deepseek").join("state.db")
+    }
 }
 
 fn bool_to_i64(value: bool) -> i64 {

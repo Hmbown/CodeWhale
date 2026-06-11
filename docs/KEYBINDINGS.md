@@ -11,6 +11,7 @@ Bindings are not (yet) user-configurable — tracked for a future release (#436,
 | `F1` or `Ctrl-/`     | Toggle the help overlay                                       |
 | `Ctrl-K`             | Open the command palette (slash-command finder)                |
 | `Ctrl-C`             | Cancel current turn / dismiss modal / arm-then-confirm quit    |
+| `Ctrl-B`             | Background the running foreground shell command (turn continues; the command becomes a `/jobs` background job) |
 | `Ctrl-D`             | Quit (only when the composer is empty)                         |
 | `Tab`                | Cycle TUI mode: Plan → Agent → YOLO → Plan                     |
 | `Shift-Tab`          | Cycle reasoning effort: off → high → max → off                 |

@@ -26,6 +26,7 @@ use crate::tools::todo::TodoStatus;
 
 use super::app::{
     App, SidebarFocus, SidebarHoverRow, SidebarHoverSection, SidebarHoverState, TaskPanelEntry,
+    TaskPanelEntryKind,
 };
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::subagent_routing::active_fanout_counts;
@@ -739,7 +740,29 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
     );
 
     let full_texts = work_panel_hover_texts(&summary, content_width.max(1), usable_rows);
-    render_sidebar_section(f, area, "Work", lines, full_texts, app);
+    render_sidebar_section(f, area, "Work", lines, full_texts, Vec::new(), app);
+}
+
+/// Click actions for one background job row pair (#3028).
+///
+/// Returns `(show, detail)` where `show` opens the job and `detail` cancels
+/// it while it is still running (finished jobs make the detail row a second
+/// show target instead — cancel would only error). `shell_*` ids belong to
+/// the shell job manager and route through `/jobs`; everything else routes
+/// through `/task`.
+fn background_task_click_actions(task: &TaskPanelEntry) -> (String, String) {
+    let namespace = if task.id.starts_with("shell_") {
+        "jobs"
+    } else {
+        "task"
+    };
+    let show = format!("/{namespace} show {}", task.id);
+    let detail = if matches!(task.status.as_str(), "running" | "queued") {
+        format!("/{namespace} cancel {}", task.id)
+    } else {
+        show.clone()
+    };
+    (show, detail)
 }
 
 fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
@@ -749,10 +772,10 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
 
     let content_width = area.width.saturating_sub(4) as usize;
     let usable_rows = area.height.saturating_sub(3) as usize;
-    let lines = task_panel_lines(app, content_width.max(1), usable_rows.max(1));
+    let (lines, row_actions) = task_panel_rows(app, content_width.max(1), usable_rows.max(1));
 
     let full_texts = task_panel_hover_texts(app, usable_rows.max(1));
-    render_sidebar_section(f, area, "Tasks", lines, full_texts, app);
+    render_sidebar_section(f, area, "Tasks", lines, full_texts, row_actions, app);
 }
 
 #[derive(Debug, Clone)]
@@ -763,25 +786,39 @@ struct SidebarToolRow {
     duration_ms: Option<u64>,
 }
 
+#[cfg(test)]
 fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    task_panel_rows(app, content_width, max_rows).0
+}
+
+/// Build the Tasks panel lines together with a parallel per-line click-action
+/// vector (#3028). Producing both in a single pass keeps the action indices
+/// aligned with the rendered lines no matter how the layout evolves.
+fn task_panel_rows(
+    app: &App,
+    content_width: usize,
+    max_rows: usize,
+) -> (Vec<Line<'static>>, Vec<Option<String>>) {
     let theme = &app.ui_theme;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
+    let mut actions: Vec<Option<String>> = Vec::with_capacity(max_rows.max(4));
 
-    if let Some(turn_id) = app.runtime_turn_id.as_ref() {
+    if app.runtime_turn_id.is_some() {
         let status = app
             .runtime_turn_status
             .as_deref()
             .unwrap_or("unknown")
             .to_string();
-        // Show enough of the turn id prefix to identify it for
-        // task_read / task_cancel. A UUID needs ~13 chars before the
-        // first hyphen; 16 chars gives a safe prefix for disambiguation.
-        let turn_prefix = truncate_line_to_width(turn_id, 16);
+        // #3030: Use a stable turn number ("Turn 1") instead of the raw
+        // UUID prefix.  The full UUID is preserved in the hover text
+        // (task_panel_hover_texts) for inspection.
+        let turn_label = if app.turn_counter > 0 {
+            format!("Turn {} ({status})", app.turn_counter)
+        } else {
+            format!("Current turn ({status})")
+        };
         lines.push(Line::from(Span::styled(
-            truncate_line_to_width(
-                &format!("turn {turn_prefix} ({status})",),
-                content_width.max(1),
-            ),
+            truncate_line_to_width(&turn_label, content_width.max(1)),
             Style::default().fg(theme.accent_primary),
         )));
     }
@@ -792,7 +829,16 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
         push_tool_rows(&mut lines, &active_rows, content_width, max_rows, theme);
     }
 
+    let reasoning_rows = reasoning_task_rows(app);
+    if !reasoning_rows.is_empty() && lines.len() < max_rows {
+        push_sidebar_label_theme(&mut lines, "Model reasoning", theme);
+        push_reasoning_rows(&mut lines, &reasoning_rows, content_width, max_rows, theme);
+    }
+
     let background_rows = background_task_rows(app, &active_rows);
+    // Lines pushed so far (turn label, Live tools header, live tool rows)
+    // are not clickable — backfill their action slots.
+    actions.resize(lines.len(), None);
     if !background_rows.is_empty() && lines.len() < max_rows {
         let running = background_rows
             .iter()
@@ -810,6 +856,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             label,
             Style::default().fg(theme.accent_primary).bold(),
         )));
+        actions.push(None);
 
         let max_items = max_rows.saturating_sub(lines.len());
         for task in background_rows.iter().take(max_items) {
@@ -826,10 +873,12 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
                 .map(format_duration_ms)
                 .unwrap_or_else(|| "-".to_string());
             let (label, detail) = background_task_labels(task, &duration);
+            let (show_action, detail_action) = background_task_click_actions(task);
             lines.push(Line::from(Span::styled(
                 truncate_line_to_width(&label, content_width.max(1)),
                 Style::default().fg(color),
             )));
+            actions.push(Some(show_action));
             lines.push(Line::from(Span::styled(
                 format!(
                     "  {}",
@@ -837,6 +886,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
                 ),
                 Style::default().fg(theme.text_dim),
             )));
+            actions.push(Some(detail_action));
         }
 
         if lines.len() < max_rows
@@ -850,6 +900,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
                     .fg(theme.text_muted)
                     .add_modifier(ratatui::style::Modifier::ITALIC),
             )));
+            actions.push(Some("/jobs cancel-all".to_string()));
         }
     }
 
@@ -878,6 +929,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
         || (lines.len() == 1
             && app.runtime_turn_id.is_some()
             && active_rows.is_empty()
+            && reasoning_rows.is_empty()
             && background_rows.is_empty())
     {
         lines.push(Line::from(Span::styled(
@@ -886,7 +938,10 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
         )));
     }
 
-    lines
+    // Backfill action slots for the trailing non-clickable lines (Recent
+    // tools, yank hint, empty-state notice).
+    actions.resize(lines.len(), None);
+    (lines, actions)
 }
 
 fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
@@ -901,6 +956,12 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
     if !active_rows.is_empty() && texts.len() < max_rows {
         texts.push("Live tools".to_string());
         push_tool_row_hover_texts(&mut texts, &active_rows, max_rows);
+    }
+
+    let reasoning_rows = reasoning_task_rows(app);
+    if !reasoning_rows.is_empty() && texts.len() < max_rows {
+        texts.push("Model reasoning".to_string());
+        push_reasoning_row_hover_texts(&mut texts, &reasoning_rows, max_rows);
     }
 
     let background_rows = background_task_rows(app, &active_rows);
@@ -961,6 +1022,7 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
         || (texts.len() == 1
             && app.runtime_turn_id.is_some()
             && active_rows.is_empty()
+            && reasoning_rows.is_empty()
             && background_rows.is_empty())
     {
         texts.push("No live tools or background jobs".to_string());
@@ -990,6 +1052,69 @@ fn push_tool_row_hover_texts(texts: &mut Vec<String>, rows: &[SidebarToolRow], m
         texts.push(label);
         if !row.summary.trim().is_empty() && texts.len() < max_rows {
             texts.push(format!("  {}", row.summary));
+        }
+    }
+}
+
+fn push_reasoning_rows(
+    lines: &mut Vec<Line<'static>>,
+    rows: &[TaskPanelEntry],
+    content_width: usize,
+    max_rows: usize,
+    theme: &palette::UiTheme,
+) {
+    for task in rows {
+        if lines.len() >= max_rows {
+            break;
+        }
+        let color = match task.status.as_str() {
+            "running" => theme.warning,
+            "completed" => theme.success,
+            "failed" => theme.error_fg,
+            _ => theme.text_muted,
+        };
+        let duration = task
+            .duration_ms
+            .map(format_duration_ms)
+            .unwrap_or_else(|| "-".to_string());
+        lines.push(Line::from(Span::styled(
+            truncate_line_to_width(
+                &format!("thinking {} {duration}", task.status),
+                content_width,
+            ),
+            Style::default().fg(color),
+        )));
+        if !task.prompt_summary.trim().is_empty() && lines.len() < max_rows {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  {}",
+                    truncate_line_to_width(
+                        &task.prompt_summary,
+                        content_width.saturating_sub(2).max(1)
+                    )
+                ),
+                Style::default().fg(theme.text_dim),
+            )));
+        }
+    }
+}
+
+fn push_reasoning_row_hover_texts(
+    texts: &mut Vec<String>,
+    rows: &[TaskPanelEntry],
+    max_rows: usize,
+) {
+    for task in rows {
+        if texts.len() >= max_rows {
+            break;
+        }
+        let duration = task
+            .duration_ms
+            .map(format_duration_ms)
+            .unwrap_or_else(|| "-".to_string());
+        texts.push(format!("thinking {} {duration}", task.status));
+        if !task.prompt_summary.trim().is_empty() && texts.len() < max_rows {
+            texts.push(format!("  {}", task.prompt_summary));
         }
     }
 }
@@ -1377,7 +1502,19 @@ fn background_task_rows(app: &App, active_rows: &[SidebarToolRow]) -> Vec<TaskPa
     let mut rows: Vec<TaskPanelEntry> = app
         .task_panel
         .iter()
+        .filter(|task| task.kind == TaskPanelEntryKind::Background)
         .filter(|task| !background_task_duplicates_live_tool(task, active_rows))
+        .cloned()
+        .collect();
+    rows.sort_by_key(|task| (task_status_rank(task.status.as_str()), task.id.clone()));
+    rows
+}
+
+fn reasoning_task_rows(app: &App) -> Vec<TaskPanelEntry> {
+    let mut rows: Vec<TaskPanelEntry> = app
+        .task_panel
+        .iter()
+        .filter(|task| task.kind == TaskPanelEntryKind::ModelReasoning)
         .cloned()
         .collect();
     rows.sort_by_key(|task| (task_status_rank(task.status.as_str()), task.id.clone()));
@@ -1765,7 +1902,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
         role_counts,
     };
     let rows = sidebar_agent_rows(app);
-    let lines = subagent_panel_lines(
+    let (lines, row_actions) = subagent_panel_rows(
         &summary,
         &rows,
         content_width,
@@ -1774,7 +1911,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
     );
     let full_texts = subagent_panel_hover_texts(&summary, &rows, usable_rows.max(1));
 
-    render_sidebar_section(f, area, "Agents", lines, full_texts, app);
+    render_sidebar_section(f, area, "Agents", lines, full_texts, row_actions, app);
 }
 
 /// Minimal projection of the data the sub-agent sidebar needs. Lifted out
@@ -1834,9 +1971,17 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
                         .map(summarize_tool_output)
                         .filter(|summary| !summary.trim().is_empty())
                 });
+            // #3030: Prefer the user-assigned nickname > stable label
+            // ("Agent 1") > raw name. Every spawned agent gets a label-map
+            // entry, so the generated label must not shadow nicknames.
+            let display_name = agent
+                .nickname
+                .clone()
+                .or_else(|| app.agent_label_map.get(&agent.agent_id).cloned())
+                .unwrap_or_else(|| agent.name.clone());
             SidebarAgentRow {
                 id: agent.agent_id.clone(),
-                name: agent.nickname.clone().unwrap_or_else(|| agent.name.clone()),
+                name: display_name,
                 role: agent.agent_type.as_str().to_string(),
                 status: subagent_status_text(&agent.status).to_string(),
                 git_branch: agent.git_branch.clone(),
@@ -1856,17 +2001,25 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
         app.agent_progress
             .iter()
             .filter(|(id, _)| !cached_ids.contains(id.as_str()))
-            .map(|(id, progress)| SidebarAgentRow {
-                id: id.clone(),
-                name: id.clone(),
-                role: "agent".to_string(),
-                status: "running".to_string(),
-                git_branch: None,
-                progress: Some(progress.clone()),
-                steps_taken: 0,
-                duration_ms: app.agent_activity_started_at.map(|started| {
-                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                }),
+            .map(|(id, progress)| {
+                // #3030: Prefer stable label for progress-only agents too.
+                let display_name = app
+                    .agent_label_map
+                    .get(id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| id.clone());
+                SidebarAgentRow {
+                    id: id.clone(),
+                    name: display_name,
+                    role: "agent".to_string(),
+                    status: "running".to_string(),
+                    git_branch: None,
+                    progress: Some(progress.clone()),
+                    steps_taken: 0,
+                    duration_ms: app.agent_activity_started_at.map(|started| {
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+                    }),
+                }
             }),
     );
 
@@ -1885,6 +2038,7 @@ fn subagent_status_text(status: &SubAgentStatus) -> &'static str {
 
 /// Build sub-agent sidebar lines from summary + per-agent rows. Public
 /// for the snapshot tests in this module.
+#[cfg(test)]
 pub fn subagent_panel_lines(
     summary: &SidebarSubagentSummary,
     rows: &[SidebarAgentRow],
@@ -1892,7 +2046,21 @@ pub fn subagent_panel_lines(
     max_rows: usize,
     theme: &palette::UiTheme,
 ) -> Vec<Line<'static>> {
+    subagent_panel_rows(summary, rows, content_width, max_rows, theme).0
+}
+
+/// Build the Agents panel lines together with a parallel per-line
+/// click-action vector (#3028). Agent label rows open the agents view via
+/// `/subagents`; header, role-mix, detail, and RLM lines are not clickable.
+fn subagent_panel_rows(
+    summary: &SidebarSubagentSummary,
+    rows: &[SidebarAgentRow],
+    content_width: usize,
+    max_rows: usize,
+    theme: &palette::UiTheme,
+) -> (Vec<Line<'static>>, Vec<Option<String>>) {
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
+    let mut actions: Vec<Option<String>> = Vec::with_capacity(max_rows.max(4));
 
     let fanout_total = summary.fanout_total.unwrap_or(0);
     if summary.cached_total == 0
@@ -1904,7 +2072,8 @@ pub fn subagent_panel_lines(
             "No agents",
             Style::default().fg(theme.text_muted),
         )));
-        return lines;
+        actions.push(None);
+        return (lines, actions);
     }
 
     let (live_running, total) = if let Some(total) = summary.fanout_total {
@@ -1931,6 +2100,7 @@ pub fn subagent_panel_lines(
         )]
     };
     lines.push(Line::from(header));
+    actions.push(None);
 
     if !summary.role_counts.is_empty() {
         let mix: Vec<String> = summary
@@ -1943,6 +2113,7 @@ pub fn subagent_panel_lines(
             truncate_line_to_width(&role_line, content_width.max(1)),
             Style::default().fg(theme.text_dim),
         )));
+        actions.push(None);
     }
 
     for row in rows {
@@ -1955,6 +2126,7 @@ pub fn subagent_panel_lines(
             truncate_line_to_width(&label, content_width.max(1)),
             Style::default().fg(color),
         )));
+        actions.push(Some("/subagents".to_string()));
 
         // Auto-collapse finished sub-agents: hide detail lines for completed
         // agents so the sidebar stays compact when work is done.
@@ -1965,8 +2137,9 @@ pub fn subagent_panel_lines(
         if lines.len() >= max_rows {
             break;
         }
+        // #3030: keep raw agent ids out of the compact detail line — the
+        // full id remains available in the hover text.
         let mut detail_parts = Vec::new();
-        detail_parts.push(truncate_line_to_width(&row.id, 10));
         if row.steps_taken > 0 {
             detail_parts.push(format!("{} step(s)", row.steps_taken));
         }
@@ -1981,6 +2154,9 @@ pub fn subagent_panel_lines(
         if let Some(duration) = row.duration_ms {
             detail_parts.push(format_duration_ms(duration));
         }
+        if detail_parts.is_empty() {
+            detail_parts.push(row.status.clone());
+        }
         lines.push(Line::from(Span::styled(
             format!(
                 "  {}",
@@ -1991,6 +2167,7 @@ pub fn subagent_panel_lines(
             ),
             Style::default().fg(theme.text_dim),
         )));
+        actions.push(None);
     }
 
     if summary.foreground_rlm_running {
@@ -2001,9 +2178,11 @@ pub fn subagent_panel_lines(
                 Style::default().fg(theme.text_dim),
             ),
         ]));
+        actions.push(None);
     }
 
-    lines
+    debug_assert_eq!(lines.len(), actions.len());
+    (lines, actions)
 }
 
 fn subagent_panel_hover_texts(
@@ -2225,7 +2404,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, Vec::new(), app);
+    render_sidebar_section(f, area, "Session", lines, Vec::new(), Vec::new(), app);
 }
 
 fn spans_to_text(spans: &[Span<'_>]) -> String {
@@ -2242,6 +2421,7 @@ fn render_sidebar_section(
     title: &str,
     lines: Vec<Line<'static>>,
     full_texts: Vec<String>,
+    row_actions: Vec<Option<String>>,
     app: &mut App,
 ) {
     if area.width < 4 || area.height < 3 {
@@ -2277,7 +2457,7 @@ fn render_sidebar_section(
                 .unwrap_or_else(|| display.clone())
         })
         .collect();
-    let rows = sidebar_hover_rows(content_area, &display_texts, &hover_texts);
+    let rows = sidebar_hover_rows(content_area, &display_texts, &hover_texts, &row_actions);
     app.sidebar_hover.sections.push(SidebarHoverSection {
         content_area,
         lines: hover_texts,
@@ -2325,6 +2505,7 @@ fn sidebar_hover_rows(
     content_area: Rect,
     display_texts: &[String],
     hover_texts: &[String],
+    row_actions: &[Option<String>],
 ) -> Vec<SidebarHoverRow> {
     display_texts
         .iter()
@@ -2334,6 +2515,7 @@ fn sidebar_hover_rows(
             let row_y = content_area.y.saturating_add(idx as u16);
             let display_width = unicode_width::UnicodeWidthStr::width(display_text.as_str());
             let full_width = unicode_width::UnicodeWidthStr::width(full_text.as_str());
+            let click_action = row_actions.get(idx).and_then(|a| a.clone());
             SidebarHoverRow {
                 row_y,
                 display_text: display_text.clone(),
@@ -2342,6 +2524,7 @@ fn sidebar_hover_rows(
                 is_truncated: display_width > content_area.width as usize
                     || full_width > content_area.width as usize
                     || display_text != full_text,
+                click_action,
             }
         })
         .collect()
@@ -2355,7 +2538,8 @@ mod tests {
         SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
         SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
         normalize_activity_text, sidebar_hover_rows, sidebar_work_summary,
-        subagent_panel_hover_texts, subagent_panel_lines, task_panel_lines, work_panel_empty_hint,
+        subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
+        task_panel_hover_texts, task_panel_lines, task_panel_rows, work_panel_empty_hint,
         work_panel_hover_texts, work_panel_lines,
     };
     use crate::config::Config;
@@ -2364,7 +2548,7 @@ mod tests {
     use crate::tools::plan::StepStatus;
     use crate::tools::todo::TodoStatus;
     use crate::tui::active_cell::ActiveCell;
-    use crate::tui::app::{App, HuntVerdict, TaskPanelEntry, TuiOptions};
+    use crate::tui::app::{App, HuntVerdict, TaskPanelEntry, TaskPanelEntryKind, TuiOptions};
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
     };
@@ -2923,6 +3107,7 @@ mod tests {
             status: "running".to_string(),
             prompt_summary: "shell: cargo test --workspace".to_string(),
             duration_ms: Some(12_000),
+            kind: TaskPanelEntryKind::Background,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 80, 10));
@@ -2954,6 +3139,7 @@ mod tests {
             prompt_summary: "shell: cd /tmp/repo && cargo test --workspace --all-features"
                 .to_string(),
             duration_ms: Some(178_000),
+            kind: TaskPanelEntryKind::Background,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 96, 8));
@@ -2967,6 +3153,282 @@ mod tests {
             text.iter().any(|line| line.contains("shell_33a08c3c")),
             "shell id should remain available as detail: {text:?}"
         );
+    }
+
+    #[test]
+    fn tasks_panel_renders_model_reasoning_outside_background_commands() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "reasoning-1".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "model reasoning".to_string(),
+            duration_ms: Some(4_200),
+            kind: TaskPanelEntryKind::ModelReasoning,
+        });
+
+        let text = lines_to_text(&task_panel_lines(&app, 80, 8));
+
+        assert!(
+            text.iter().any(|line| line == "Model reasoning"),
+            "reasoning section missing: {text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|line| line.contains("thinking running 4.2s")),
+            "reasoning row should show live thinking duration: {text:?}"
+        );
+        assert!(
+            !text.iter().any(|line| line.contains("Background commands")),
+            "reasoning must not be counted as a background command: {text:?}"
+        );
+    }
+
+    #[test]
+    fn task_panel_actions_make_single_background_job_clickable() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_only".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cargo build".to_string(),
+            duration_ms: Some(1_000),
+            kind: TaskPanelEntryKind::Background,
+        });
+
+        let (lines, actions) = task_panel_rows(&app, 80, 12);
+        let text = lines_to_text(&lines);
+        assert_eq!(lines.len(), actions.len());
+
+        let label_idx = text
+            .iter()
+            .position(|line| line.contains("cargo build"))
+            .expect("background job label row");
+        assert_eq!(
+            actions[label_idx].as_deref(),
+            Some("/jobs show shell_only"),
+            "single-job label row must be clickable: {actions:?}"
+        );
+        assert_eq!(
+            actions[label_idx + 1].as_deref(),
+            Some("/jobs cancel shell_only"),
+            "single-job detail row must cancel that job: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn task_panel_actions_route_each_job_to_its_own_id() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_aaa".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cargo test --workspace".to_string(),
+            duration_ms: Some(2_000),
+            kind: TaskPanelEntryKind::Background,
+        });
+        app.task_panel.push(TaskPanelEntry {
+            id: "task_bbb".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "summarize the release notes".to_string(),
+            duration_ms: Some(3_000),
+            kind: TaskPanelEntryKind::Background,
+        });
+
+        let (lines, actions) = task_panel_rows(&app, 96, 16);
+        let text = lines_to_text(&lines);
+        assert_eq!(lines.len(), actions.len());
+
+        let header_idx = text
+            .iter()
+            .position(|line| line.starts_with("Background commands"))
+            .expect("background header row");
+        assert!(actions[header_idx].is_none(), "header is not clickable");
+
+        let shell_idx = text
+            .iter()
+            .position(|line| line.contains("cargo test --workspace"))
+            .expect("shell job label row");
+        assert_eq!(
+            actions[shell_idx].as_deref(),
+            Some("/jobs show shell_aaa"),
+            "shell jobs route through /jobs: {actions:?}"
+        );
+        assert_eq!(
+            actions[shell_idx + 1].as_deref(),
+            Some("/jobs cancel shell_aaa"),
+            "shell job detail row cancels the SAME job: {actions:?}"
+        );
+
+        let task_idx = text
+            .iter()
+            .position(|line| line.contains("task_bbb"))
+            .expect("task job label row");
+        assert_eq!(
+            actions[task_idx].as_deref(),
+            Some("/task show task_bbb"),
+            "task-manager jobs route through /task: {actions:?}"
+        );
+        assert_eq!(
+            actions[task_idx + 1].as_deref(),
+            Some("/task cancel task_bbb"),
+            "task job detail row cancels the SAME job: {actions:?}"
+        );
+
+        let hint_idx = text
+            .iter()
+            .position(|line| line.contains("Ctrl+K"))
+            .expect("cancel-all hint row");
+        assert_eq!(actions[hint_idx].as_deref(), Some("/jobs cancel-all"));
+    }
+
+    #[test]
+    fn task_panel_finished_job_detail_row_shows_instead_of_cancels() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_done".to_string(),
+            status: "completed".to_string(),
+            prompt_summary: "shell: cargo fmt".to_string(),
+            duration_ms: Some(500),
+            kind: TaskPanelEntryKind::Background,
+        });
+
+        let (lines, actions) = task_panel_rows(&app, 80, 12);
+        let text = lines_to_text(&lines);
+
+        let label_idx = text
+            .iter()
+            .position(|line| line.contains("cargo fmt"))
+            .expect("completed job label row");
+        assert_eq!(actions[label_idx].as_deref(), Some("/jobs show shell_done"));
+        assert_eq!(
+            actions[label_idx + 1].as_deref(),
+            Some("/jobs show shell_done"),
+            "finished jobs must not expose a cancel click target: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn task_panel_actions_align_with_lines_when_live_tools_present() {
+        let mut app = create_test_app();
+        app.runtime_turn_id = Some("0196f0a3-aaaa-bbbb-cccc-ddddeeee0000".to_string());
+        let mut active = ActiveCell::new();
+        active.push_tool(
+            "shell-1",
+            HistoryCell::Tool(ToolCell::Exec(ExecCell {
+                command: "sleep 600".to_string(),
+                status: ToolStatus::Running,
+                output: None,
+                live_output: None,
+                shell_task_id: None,
+                started_at: Some(Instant::now()),
+                duration_ms: None,
+                source: ExecSource::Assistant,
+                interaction: None,
+                output_summary: None,
+            })),
+        );
+        app.active_cell = Some(active);
+        app.task_panel.push(TaskPanelEntry {
+            id: "task_q".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "investigate flaky test".to_string(),
+            duration_ms: Some(9_000),
+            kind: TaskPanelEntryKind::Background,
+        });
+
+        let (lines, actions) = task_panel_rows(&app, 96, 16);
+        let text = lines_to_text(&lines);
+        assert_eq!(
+            lines.len(),
+            actions.len(),
+            "actions must stay index-aligned with lines: {text:?}"
+        );
+
+        // Turn label and live-tool rows are not clickable.
+        assert!(actions[0].is_none(), "turn label row has no action");
+        let live_idx = text
+            .iter()
+            .position(|line| line == "Live tools")
+            .expect("live tools header");
+        assert!(actions[live_idx].is_none());
+
+        let task_idx = text
+            .iter()
+            .position(|line| line.contains("task_q"))
+            .expect("background job label row");
+        assert_eq!(actions[task_idx].as_deref(), Some("/task show task_q"));
+    }
+
+    #[test]
+    fn subagent_panel_actions_mark_agent_rows_with_role_mix_header() {
+        let mut role_counts = std::collections::BTreeMap::new();
+        role_counts.insert("worker".to_string(), 1);
+        let summary = SidebarSubagentSummary {
+            cached_total: 1,
+            cached_running: 1,
+            role_counts,
+            ..SidebarSubagentSummary::default()
+        };
+        let rows = vec![SidebarAgentRow {
+            id: "agent_0123456789".to_string(),
+            name: "investigator".to_string(),
+            role: "worker".to_string(),
+            status: "running".to_string(),
+            git_branch: None,
+            progress: Some("scanning".to_string()),
+            steps_taken: 2,
+            duration_ms: Some(1_000),
+        }];
+
+        let (lines, actions) = subagent_panel_rows(&summary, &rows, 48, 8, &palette::UI_THEME);
+        let text = lines_to_text(&lines);
+        assert_eq!(lines.len(), actions.len());
+
+        assert!(actions[0].is_none(), "count header has no action");
+        assert!(actions[1].is_none(), "role-mix header has no action");
+        let agent_idx = text
+            .iter()
+            .position(|line| line.contains("investigator"))
+            .expect("agent label row");
+        assert_eq!(actions[agent_idx].as_deref(), Some("/subagents"));
+        assert!(
+            actions[agent_idx + 1].is_none(),
+            "agent detail row has no action"
+        );
+    }
+
+    #[test]
+    fn subagent_panel_actions_skip_role_mix_slot_for_progress_only_agents() {
+        // Progress-only agents have no cached role counts, so there is no
+        // role-mix line — the first agent row sits directly under the count
+        // header and must still resolve to /subagents (#3028 audit fix).
+        let summary = SidebarSubagentSummary {
+            progress_only_count: 1,
+            ..SidebarSubagentSummary::default()
+        };
+        let rows = vec![SidebarAgentRow {
+            id: "agent_fedcba987654".to_string(),
+            name: "scout".to_string(),
+            role: "explorer".to_string(),
+            status: "running".to_string(),
+            git_branch: None,
+            progress: Some("reading".to_string()),
+            steps_taken: 1,
+            duration_ms: None,
+        }];
+
+        let (lines, actions) = subagent_panel_rows(&summary, &rows, 48, 8, &palette::UI_THEME);
+        let text = lines_to_text(&lines);
+        assert_eq!(lines.len(), actions.len());
+
+        assert!(actions[0].is_none(), "count header has no action");
+        let agent_idx = text
+            .iter()
+            .position(|line| line.contains("scout"))
+            .expect("agent label row");
+        assert_eq!(
+            agent_idx, 1,
+            "no role-mix line should be emitted without role counts: {text:?}"
+        );
+        assert_eq!(actions[agent_idx].as_deref(), Some("/subagents"));
     }
 
     #[test]
@@ -3468,7 +3930,7 @@ mod tests {
         use ratatui::layout::Rect;
         let display = vec!["[~] agent imple…".to_string()];
         let full = vec!["[~] agent implementation-worker-for-sidebar-detail-popover".to_string()];
-        let rows = sidebar_hover_rows(Rect::new(62, 5, 16, 4), &display, &full);
+        let rows = sidebar_hover_rows(Rect::new(62, 5, 16, 4), &display, &full, &[]);
 
         let expected = SidebarHoverRow {
             row_y: 5,
@@ -3476,6 +3938,7 @@ mod tests {
             full_text: full[0].clone(),
             detail: None,
             is_truncated: true,
+            click_action: None,
         };
         assert_eq!(rows, vec![expected]);
     }
@@ -3513,5 +3976,105 @@ mod tests {
             hover.iter().any(|line| line.contains(long_progress)),
             "hover text should include the full progress before popover wrapping: {hover:?}"
         );
+    }
+
+    // ── #3030: stable labels instead of raw internal ids ───────────────────
+
+    #[test]
+    fn tasks_panel_shows_stable_turn_label_not_uuid() {
+        let mut app = create_test_app();
+        app.runtime_turn_id = Some("0196f0a3-1111-2222-3333-444455556666".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.turn_counter = 3;
+
+        let text = lines_to_text(&task_panel_lines(&app, 64, 8));
+        assert!(
+            text[0].contains("Turn 3 (in_progress)"),
+            "compact row must show the stable turn label: {text:?}"
+        );
+        assert!(
+            !text[0].contains("0196f0a3"),
+            "raw turn UUID must stay out of the compact row: {text:?}"
+        );
+
+        let hover = task_panel_hover_texts(&app, 8);
+        assert!(
+            hover[0].contains("0196f0a3-1111-2222-3333-444455556666"),
+            "full turn UUID must remain available in hover text: {hover:?}"
+        );
+    }
+
+    #[test]
+    fn tasks_panel_turn_label_falls_back_before_first_counted_turn() {
+        let mut app = create_test_app();
+        app.runtime_turn_id = Some("0196f0a3-1111-2222-3333-444455556666".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.turn_counter = 0;
+
+        let text = lines_to_text(&task_panel_lines(&app, 64, 8));
+        assert!(
+            text[0].contains("Current turn (in_progress)"),
+            "zero counter falls back to a generic label: {text:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_agent_label_assigns_stable_sequential_labels() {
+        let mut app = create_test_app();
+        assert_eq!(app.ensure_agent_label("agent_aaa111"), "Agent 1");
+        assert_eq!(app.ensure_agent_label("agent_bbb222"), "Agent 2");
+        // Re-seeing a known agent keeps its original label.
+        assert_eq!(app.ensure_agent_label("agent_aaa111"), "Agent 1");
+        assert_eq!(app.agent_counter, 2);
+        // Read-only lookup falls back to the raw id for unknown agents.
+        assert_eq!(app.agent_display_label("agent_bbb222"), "Agent 2");
+        assert_eq!(app.agent_display_label("agent_zzz999"), "agent_zzz999");
+    }
+
+    fn cached_agent(
+        agent_id: &str,
+        nickname: Option<&str>,
+    ) -> crate::tools::subagent::SubAgentResult {
+        crate::tools::subagent::SubAgentResult {
+            name: "implementation-worker".to_string(),
+            agent_id: agent_id.to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
+            workspace: None,
+            git_branch: None,
+            agent_type: crate::tools::subagent::SubAgentType::General,
+            assignment: crate::tools::subagent::SubAgentAssignment {
+                objective: "task".to_string(),
+                role: Some("worker".to_string()),
+            },
+            model: String::new(),
+            nickname: nickname.map(str::to_string),
+            status: crate::tools::subagent::SubAgentStatus::Running,
+            result: None,
+            steps_taken: 1,
+            checkpoint: None,
+            duration_ms: 100,
+            from_prior_session: false,
+        }
+    }
+
+    #[test]
+    fn sidebar_agent_rows_prefer_nickname_over_generated_label() {
+        let mut app = create_test_app();
+        let agent_id = "agent_cafe0123";
+        app.ensure_agent_label(agent_id);
+        app.subagent_cache
+            .push(cached_agent(agent_id, Some("doc-fixer")));
+
+        let rows = super::sidebar_agent_rows(&app);
+        assert_eq!(
+            rows[0].name, "doc-fixer",
+            "user nickname must beat the generated Agent-N label"
+        );
+
+        // Without a nickname the generated label is used.
+        app.subagent_cache[0].nickname = None;
+        let rows = super::sidebar_agent_rows(&app);
+        assert_eq!(rows[0].name, "Agent 1");
     }
 }

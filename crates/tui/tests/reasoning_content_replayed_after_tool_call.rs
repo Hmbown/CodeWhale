@@ -32,6 +32,7 @@ fn assistant_thinking_tool_call(
         content: vec![
             ContentBlock::Thinking {
                 thinking: thinking.to_string(),
+                signature: None,
             },
             ContentBlock::ToolUse {
                 id: id.to_string(),

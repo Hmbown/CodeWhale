@@ -27,6 +27,8 @@ const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_OPENAI_CODEX_MODEL: &str = "gpt-5.5";
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
@@ -152,10 +154,12 @@ pub enum ProviderKind {
         alias = "chatgpt_codex"
     )]
     OpenaiCodex,
+    #[serde(alias = "claude")]
+    Anthropic,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -176,6 +180,7 @@ impl ProviderKind {
         Self::Huggingface,
         Self::Together,
         Self::OpenaiCodex,
+        Self::Anthropic,
     ];
 
     #[must_use]
@@ -201,6 +206,7 @@ impl ProviderKind {
             Self::Huggingface => "huggingface",
             Self::Together => "together",
             Self::OpenaiCodex => "openai-codex",
+            Self::Anthropic => "anthropic",
         }
     }
 
@@ -231,6 +237,7 @@ impl ProviderKind {
             "ollama" | "ollama-local" => Some(Self::Ollama),
             "huggingface" | "hugging-face" | "hugging_face" | "hf" => Some(Self::Huggingface),
             "together" | "together-ai" | "together_ai" => Some(Self::Together),
+            "anthropic" | "claude" => Some(Self::Anthropic),
             "openai-codex" | "openai_codex" | "openaicodex" | "codex" | "chatgpt"
             | "chatgpt-codex" | "chatgpt_codex" | "chatgptcodex" => Some(Self::OpenaiCodex),
             _ => None,
@@ -312,6 +319,8 @@ pub struct ProvidersToml {
         alias = "chatgpt-codex"
     )]
     pub openai_codex: ProviderConfigToml,
+    #[serde(default)]
+    pub anthropic: ProviderConfigToml,
 }
 
 /// Sibling `permissions.toml` schema.
@@ -361,6 +370,7 @@ impl ProvidersToml {
             ProviderKind::Huggingface => &self.huggingface,
             ProviderKind::Together => &self.together,
             ProviderKind::OpenaiCodex => &self.openai_codex,
+            ProviderKind::Anthropic => &self.anthropic,
         }
     }
 
@@ -385,6 +395,7 @@ impl ProvidersToml {
             ProviderKind::Huggingface => &mut self.huggingface,
             ProviderKind::Together => &mut self.together,
             ProviderKind::OpenaiCodex => &mut self.openai_codex,
+            ProviderKind::Anthropic => &mut self.anthropic,
         }
     }
 }
@@ -2032,6 +2043,7 @@ impl ConfigToml {
                 ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
                 ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
                 ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
+                ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
             })
         };
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
@@ -2470,6 +2482,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
         ProviderKind::Together => DEFAULT_TOGETHER_MODEL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
+        ProviderKind::Anthropic => DEFAULT_ANTHROPIC_MODEL,
     }
 }
 
@@ -2495,6 +2508,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
         ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+        ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
     }
 }
 
@@ -3250,6 +3264,8 @@ struct EnvRuntimeOverrides {
     together_model: Option<String>,
     openai_codex_base_url: Option<String>,
     openai_codex_model: Option<String>,
+    anthropic_base_url: Option<String>,
+    anthropic_model: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -3416,6 +3432,12 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("CODEX_MODEL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            anthropic_base_url: std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            anthropic_model: std::env::var("ANTHROPIC_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 
@@ -3444,6 +3466,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Huggingface => self.huggingface_base_url.clone(),
             ProviderKind::Together => self.together_base_url.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_base_url.clone(),
+            ProviderKind::Anthropic => self.anthropic_base_url.clone(),
         }
     }
 
@@ -3463,6 +3486,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Huggingface => self.huggingface_model.clone(),
             ProviderKind::Together => self.together_model.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_model.clone(),
+            ProviderKind::Anthropic => self.anthropic_model.clone(),
             _ => None,
         }?;
 
@@ -5154,10 +5178,12 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             );
             assert!(!provider.display_name().trim().is_empty());
             assert!(!provider.env_vars().is_empty());
-            // OpenAI Codex (ChatGPT) speaks the Responses API; every other
-            // built-in provider is OpenAI-compatible Chat Completions.
+            // OpenAI Codex (ChatGPT) speaks the Responses API and Anthropic
+            // speaks the native Messages API; every other built-in provider
+            // is OpenAI-compatible Chat Completions.
             let expected_wire = match kind {
                 ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
+                ProviderKind::Anthropic => provider::WireFormat::AnthropicMessages,
                 _ => provider::WireFormat::ChatCompletions,
             };
             assert_eq!(provider.wire(), expected_wire);

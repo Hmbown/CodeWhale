@@ -13,16 +13,95 @@ use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::tui::app::ReasoningEffort;
 
-/// Auto-select a model based on request complexity.
+/// Big/cheap model pair the auto-router may choose between for the active
+/// provider (#3018).
 ///
-/// Short messages (<100 chars) go to Flash. Long messages and requests with
-/// complex keywords go to Pro. The fallback is Flash.
-pub(crate) fn auto_model_heuristic(input: &str, current_model: &str) -> String {
-    auto_model_heuristic_with_bias(input, current_model, false)
+/// `cheap == None` means the provider has no known cheap tier: heuristics
+/// stay on the current model (only thinking effort varies) and the network
+/// router is skipped entirely (#1549).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RouterCandidates {
+    pub(crate) big: String,
+    pub(crate) cheap: Option<String>,
 }
 
+impl RouterCandidates {
+    pub(crate) fn deepseek() -> Self {
+        Self {
+            big: "deepseek-v4-pro".to_string(),
+            cheap: Some("deepseek-v4-flash".to_string()),
+        }
+    }
+
+    /// The cheap-tier id, falling back to `big` when no cheap tier exists.
+    pub(crate) fn cheap_or_big(&self) -> &str {
+        self.cheap.as_deref().unwrap_or(&self.big)
+    }
+}
+
+/// Derive the auto-router's candidate pair for the active provider (#3018).
+///
+/// DeepSeek providers route between the canonical pro/flash pair. Hosted
+/// routes with known wire ids for that pair (NVIDIA NIM, OpenRouter, Novita,
+/// SiliconFlow, SGLang, vLLM) use their provider-prefixed spellings. Every
+/// other provider has no known cheap tier: `big` is the session model and
+/// `cheap` is `None`, so auto mode never fabricates a DeepSeek id for a
+/// provider that cannot serve it.
+pub(crate) fn provider_router_candidates(
+    provider: crate::config::ApiProvider,
+    current_model: &str,
+) -> RouterCandidates {
+    use crate::config::ApiProvider;
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => RouterCandidates::deepseek(),
+        ApiProvider::NvidiaNim
+        | ApiProvider::Openrouter
+        | ApiProvider::Novita
+        | ApiProvider::Siliconflow
+        | ApiProvider::SiliconflowCn
+        | ApiProvider::Sglang
+        | ApiProvider::Vllm => RouterCandidates {
+            big: crate::config::wire_model_for_provider(provider, "deepseek-v4-pro"),
+            cheap: Some(crate::config::wire_model_for_provider(
+                provider,
+                "deepseek-v4-flash",
+            )),
+        },
+        _ => RouterCandidates {
+            big: current_model.to_string(),
+            cheap: None,
+        },
+    }
+}
+
+/// Auto-select a model based on request complexity.
+///
+/// Short messages (<100 chars) go to the cheap tier. Long messages and
+/// requests with complex keywords go to the big tier. The fallback is cheap.
+/// This DeepSeek-candidate wrapper keeps legacy callers and tests intact;
+/// provider-aware callers use [`auto_model_heuristic_for_candidates`].
+pub(crate) fn auto_model_heuristic(input: &str, current_model: &str) -> String {
+    auto_model_heuristic_for_candidates(input, current_model, &RouterCandidates::deepseek())
+}
+
+/// Candidate-aware variant of [`auto_model_heuristic`] (#3018).
+pub(crate) fn auto_model_heuristic_for_candidates(
+    input: &str,
+    current_model: &str,
+    candidates: &RouterCandidates,
+) -> String {
+    auto_model_heuristic_selection_with_bias(input, current_model, false, candidates).model
+}
+
+#[cfg(test)]
 fn auto_model_heuristic_with_bias(input: &str, current_model: &str, cost_saving: bool) -> String {
-    auto_model_heuristic_selection_with_bias(input, current_model, cost_saving).model
+    auto_model_heuristic_selection_with_bias(
+        input,
+        current_model,
+        cost_saving,
+        &RouterCandidates::deepseek(),
+    )
+    .model
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +120,7 @@ fn auto_model_heuristic_selection_with_bias(
     input: &str,
     _current_model: &str,
     cost_saving: bool,
+    candidates: &RouterCandidates,
 ) -> AutoModelHeuristicSelection {
     let len = input.chars().count();
     let lower = input.to_lowercase();
@@ -58,26 +138,26 @@ fn auto_model_heuristic_selection_with_bias(
     let pro_match = strong_match || (!cost_saving && borderline_match);
     if pro_match {
         return AutoModelHeuristicSelection {
-            model: "deepseek-v4-pro".to_string(),
+            model: candidates.big.clone(),
             confidence: AutoModelHeuristicConfidence::Decisive,
         };
     }
     if len < 100 {
         return AutoModelHeuristicSelection {
-            model: "deepseek-v4-flash".to_string(),
+            model: candidates.cheap_or_big().to_string(),
             confidence: AutoModelHeuristicConfidence::Decisive,
         };
     }
     let long_threshold = if cost_saving { 1_000 } else { 500 };
     if len > long_threshold {
         return AutoModelHeuristicSelection {
-            model: "deepseek-v4-pro".to_string(),
+            model: candidates.big.clone(),
             confidence: AutoModelHeuristicConfidence::Decisive,
         };
     }
 
     AutoModelHeuristicSelection {
-        model: "deepseek-v4-flash".to_string(),
+        model: candidates.cheap_or_big().to_string(),
         confidence: AutoModelHeuristicConfidence::Ambiguous,
     }
 }
@@ -148,26 +228,50 @@ pub(crate) struct AutoRouteSelection {
     pub(crate) source: AutoRouteSource,
 }
 
-const AUTO_MODEL_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the codewhale auto-routing classifier. Return only compact JSON: \
-{\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
-Use deepseek-v4-flash for trivial, conversational, status, or single-step work. \
-Use deepseek-v4-pro for coding, debugging, release work, multi-step tasks, high-risk decisions, \
+/// Render the auto-router system prompt with the actual candidate ids
+/// (#3018): the classifier must answer with ids the active provider can
+/// serve, not hardcoded DeepSeek spellings.
+pub(crate) fn auto_router_system_prompt(
+    candidates: &RouterCandidates,
+    cost_saving: bool,
+) -> String {
+    let cheap = candidates.cheap_or_big();
+    let big = &candidates.big;
+    let mut prompt = format!(
+        "You are the codewhale auto-routing classifier. Return only compact JSON: \
+{{\"model\":\"{cheap}|{big}\",\"thinking\":\"off|high|max\"}}. \
+Use {cheap} for trivial, conversational, status, or single-step work. \
+Use {big} for coding, debugging, release work, multi-step tasks, high-risk decisions, \
 tool-heavy work, ambiguous requests, or anything that benefits from deeper reasoning. \
 Use thinking off only for trivial no-tool answers, high for ordinary reasoning, and max for \
-agentic, coding, multi-file, release, architecture, debugging, security, tool-heavy, or uncertain work.";
-
-const AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM: &str = "\
-\n\nCost-saving mode is ON. Prefer deepseek-v4-flash for any request that is \
+agentic, coding, multi-file, release, architecture, debugging, security, tool-heavy, or uncertain work."
+    );
+    if cost_saving {
+        prompt.push_str(&format!(
+            "\n\nCost-saving mode is ON. Prefer {cheap} for any request that is \
 not unmistakably agentic, multi-step, architecture/design, security review, \
-debugging, or otherwise clearly out of Flash's capability. Resolve ambiguous \
-cases in favour of deepseek-v4-flash, not deepseek-v4-pro.";
+debugging, or otherwise clearly out of the cheap tier's capability. Resolve \
+ambiguous cases in favour of {cheap}, not {big}."
+        ));
+    }
+    prompt
+}
 
+/// DeepSeek-candidate wrapper kept for the legacy parser tests; the
+/// network router parses with [`parse_auto_route_recommendation_for_candidates`].
+#[cfg(test)]
 pub(crate) fn parse_auto_route_recommendation(raw: &str) -> Option<AutoRouteRecommendation> {
+    parse_auto_route_recommendation_for_candidates(raw, &RouterCandidates::deepseek())
+}
+
+pub(crate) fn parse_auto_route_recommendation_for_candidates(
+    raw: &str,
+    candidates: &RouterCandidates,
+) -> Option<AutoRouteRecommendation> {
     let json = extract_first_json_object(raw)?;
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let model = value.get("model").and_then(serde_json::Value::as_str)?;
-    let model = normalize_auto_route_model(model)?;
+    let model = normalize_auto_route_model(model, candidates)?;
     let reasoning_effort = value
         .get("thinking")
         .or_else(|| value.get("reasoning_effort"))
@@ -176,7 +280,7 @@ pub(crate) fn parse_auto_route_recommendation(raw: &str) -> Option<AutoRouteReco
         .and_then(parse_auto_route_reasoning_effort);
 
     Some(AutoRouteRecommendation {
-        model: model.to_string(),
+        model,
         reasoning_effort,
     })
 }
@@ -187,10 +291,21 @@ fn extract_first_json_object(raw: &str) -> Option<&str> {
     (end >= start).then_some(&raw[start..=end])
 }
 
-fn normalize_auto_route_model(model: &str) -> Option<&'static str> {
-    match model.trim().to_ascii_lowercase().as_str() {
-        "deepseek-v4-pro" | "v4-pro" | "pro" => Some("deepseek-v4-pro"),
-        "deepseek-v4-flash" | "v4-flash" | "flash" => Some("deepseek-v4-flash"),
+fn normalize_auto_route_model(model: &str, candidates: &RouterCandidates) -> Option<String> {
+    let normalized = model.trim().to_ascii_lowercase();
+    // Exact candidate ids, case-insensitively (#3018).
+    if normalized == candidates.big.to_ascii_lowercase() {
+        return Some(candidates.big.clone());
+    }
+    if let Some(cheap) = candidates.cheap.as_deref()
+        && normalized == cheap.to_ascii_lowercase()
+    {
+        return Some(cheap.to_string());
+    }
+    // Legacy pro/flash shorthand maps onto the big/cheap tiers.
+    match normalized.as_str() {
+        "deepseek-v4-pro" | "v4-pro" | "pro" => Some(candidates.big.clone()),
+        "deepseek-v4-flash" | "v4-flash" | "flash" => Some(candidates.cheap_or_big().to_string()),
         _ => None,
     }
 }
@@ -221,14 +336,29 @@ pub(crate) async fn resolve_auto_route_with_flash(
     selected_thinking_mode: &str,
 ) -> AutoRouteSelection {
     let cost_saving = config.auto_cost_saving();
-    let heuristic =
-        auto_model_heuristic_selection_with_bias(latest_request, selected_model_mode, cost_saving);
+    // #3018: derive the candidate pair from the active provider. The
+    // config-resolved default model stands in for the session model — with
+    // auto mode on, that is the canonical id the provider serves.
+    let candidates = provider_router_candidates(config.api_provider(), &config.default_model());
+    let heuristic = auto_model_heuristic_selection_with_bias(
+        latest_request,
+        selected_model_mode,
+        cost_saving,
+        &candidates,
+    );
     if heuristic.confidence == AutoModelHeuristicConfidence::Decisive {
+        return auto_route_from_heuristic(latest_request, heuristic);
+    }
+
+    // #1549/#3018: no cheap tier → no network round-trip. The heuristic is
+    // the only signal and the routed model stays on the session model.
+    if candidates.cheap.is_none() {
         return auto_route_from_heuristic(latest_request, heuristic);
     }
 
     match auto_route_flash_recommendation(
         config,
+        &candidates,
         latest_request,
         recent_context,
         selected_model_mode,
@@ -261,6 +391,7 @@ fn auto_route_from_heuristic(
 
 async fn auto_route_flash_recommendation(
     config: &Config,
+    candidates: &RouterCandidates,
     latest_request: &str,
     recent_context: &str,
     selected_model_mode: &str,
@@ -269,14 +400,16 @@ async fn auto_route_flash_recommendation(
     if cfg!(test) {
         return Ok(None);
     }
+    let Some(cheap_model) = candidates.cheap.clone() else {
+        // Callers skip the router when there is no cheap tier; this is a
+        // defensive second gate so a future caller cannot 400 the provider.
+        return Ok(None);
+    };
 
     let client = DeepSeekClient::new(config)?;
-    let mut router_system = AUTO_MODEL_ROUTER_SYSTEM_PROMPT.to_string();
-    if config.auto_cost_saving() {
-        router_system.push_str(AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM);
-    }
+    let router_system = auto_router_system_prompt(candidates, config.auto_cost_saving());
     let request = MessageRequest {
-        model: "deepseek-v4-flash".to_string(),
+        model: cheap_model,
         messages: vec![Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
@@ -303,9 +436,10 @@ async fn auto_route_flash_recommendation(
 
     let response =
         tokio::time::timeout(Duration::from_secs(4), client.create_message(request)).await??;
-    Ok(parse_auto_route_recommendation(&message_response_text(
-        &response,
-    )))
+    Ok(parse_auto_route_recommendation_for_candidates(
+        &message_response_text(&response),
+        candidates,
+    ))
 }
 
 fn auto_route_prompt(
@@ -334,7 +468,7 @@ fn message_response_text(response: &MessageResponse) -> String {
             ContentBlock::Text { text, .. } | ContentBlock::ToolResult { content: text, .. } => {
                 append_router_text(&mut out, text);
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 append_router_text(&mut out, thinking);
             }
             ContentBlock::ToolUse { name, .. } => {
@@ -416,7 +550,12 @@ mod tests {
 
     #[test]
     fn auto_heuristic_selection_marks_short_and_complex_routes_decisive() {
-        let short = auto_model_heuristic_selection_with_bias("yes", "auto", false);
+        let short = auto_model_heuristic_selection_with_bias(
+            "yes",
+            "auto",
+            false,
+            &RouterCandidates::deepseek(),
+        );
         assert_eq!(short.model, "deepseek-v4-flash");
         assert_eq!(
             short.confidence,
@@ -428,6 +567,7 @@ mod tests {
             "Please review the auth migration",
             "auto",
             false,
+            &RouterCandidates::deepseek(),
         );
         assert_eq!(complex.model, "deepseek-v4-pro");
         assert_eq!(
@@ -446,7 +586,12 @@ mod tests {
             "test request must stay in the default grey zone"
         );
 
-        let selection = auto_model_heuristic_selection_with_bias(&request, "auto", false);
+        let selection = auto_model_heuristic_selection_with_bias(
+            &request,
+            "auto",
+            false,
+            &RouterCandidates::deepseek(),
+        );
         assert_eq!(selection.model, "deepseek-v4-flash");
         assert_eq!(
             selection.confidence,
@@ -548,6 +693,91 @@ mod tests {
             auto_model_heuristic_with_bias(&body, "auto", true),
             "deepseek-v4-flash"
         );
+    }
+
+    #[test]
+    fn provider_router_candidates_cover_known_provider_classes() {
+        use crate::config::ApiProvider;
+
+        let deepseek = provider_router_candidates(ApiProvider::Deepseek, "deepseek-v4-pro");
+        assert_eq!(deepseek.big, "deepseek-v4-pro");
+        assert_eq!(deepseek.cheap.as_deref(), Some("deepseek-v4-flash"));
+
+        let openrouter =
+            provider_router_candidates(ApiProvider::Openrouter, "deepseek/deepseek-v4-pro");
+        assert_eq!(openrouter.big, "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            openrouter.cheap.as_deref(),
+            Some("deepseek/deepseek-v4-flash")
+        );
+
+        // Providers without a known cheap tier: big = session model, no cheap.
+        let ollama = provider_router_candidates(ApiProvider::Ollama, "qwen3:32b");
+        assert_eq!(ollama.big, "qwen3:32b");
+        assert_eq!(ollama.cheap, None);
+
+        let moonshot = provider_router_candidates(ApiProvider::Moonshot, "kimi-k2.6");
+        assert_eq!(moonshot.big, "kimi-k2.6");
+        assert_eq!(moonshot.cheap, None);
+    }
+
+    #[test]
+    fn heuristic_without_cheap_tier_always_returns_current_model() {
+        // #3018 AC: Ollama + auto must never fabricate a DeepSeek id.
+        let candidates = RouterCandidates {
+            big: "qwen3:32b".to_string(),
+            cheap: None,
+        };
+        for prompt in [
+            "hi",
+            "please refactor the auth module for security",
+            &"long filler sentence. ".repeat(60),
+        ] {
+            let model = auto_model_heuristic_for_candidates(prompt, "qwen3:32b", &candidates);
+            assert_eq!(model, "qwen3:32b", "prompt {prompt:?}");
+        }
+    }
+
+    #[test]
+    fn auto_route_parser_accepts_candidate_ids_and_legacy_shorthand() {
+        let candidates = RouterCandidates {
+            big: "deepseek/deepseek-v4-pro".to_string(),
+            cheap: Some("deepseek/deepseek-v4-flash".to_string()),
+        };
+
+        let rec = parse_auto_route_recommendation_for_candidates(
+            r#"{"model":"DeepSeek/DeepSeek-V4-Pro","thinking":"max"}"#,
+            &candidates,
+        )
+        .expect("exact candidate id parses case-insensitively");
+        assert_eq!(rec.model, "deepseek/deepseek-v4-pro");
+
+        let rec = parse_auto_route_recommendation_for_candidates(
+            r#"{"model":"flash","thinking":"off"}"#,
+            &candidates,
+        )
+        .expect("legacy shorthand maps onto the cheap tier");
+        assert_eq!(rec.model, "deepseek/deepseek-v4-flash");
+
+        assert!(
+            parse_auto_route_recommendation_for_candidates(
+                r#"{"model":"gpt-4o","thinking":"high"}"#,
+                &candidates,
+            )
+            .is_none(),
+            "non-candidate ids are rejected"
+        );
+    }
+
+    #[test]
+    fn auto_router_system_prompt_names_candidate_ids() {
+        let candidates = RouterCandidates {
+            big: "deepseek/deepseek-v4-pro".to_string(),
+            cheap: Some("deepseek/deepseek-v4-flash".to_string()),
+        };
+        let prompt = auto_router_system_prompt(&candidates, true);
+        assert!(prompt.contains("deepseek/deepseek-v4-flash|deepseek/deepseek-v4-pro"));
+        assert!(prompt.contains("Cost-saving mode is ON"));
     }
 
     #[test]

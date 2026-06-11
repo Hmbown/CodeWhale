@@ -120,8 +120,8 @@ use super::key_actions;
 
 use super::app::{
     App, AppAction, AppMode, OnboardingState, PendingProviderSwitch, QueuedMessage,
-    ReasoningEffort, SidebarFocus, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
-    looks_like_slash_command_input, shell_command_from_bang_input,
+    ReasoningEffort, SidebarFocus, StatusToastLevel, SubmitDisposition, TaskPanelEntry,
+    TaskPanelEntryKind, TuiOptions, looks_like_slash_command_input, shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -134,7 +134,7 @@ use super::slash_menu::{
     apply_slash_menu_selection, partial_inline_skill_mention_at_cursor,
     try_autocomplete_slash_command, visible_slash_menu_entries,
 };
-use super::views::{ConfigView, HelpView, ModalKind, ShellControlView, ViewEvent};
+use super::views::{ConfigView, HelpView, ModalKind, ViewEvent};
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
 use super::widgets::{ChatWidget, ComposerWidget, HeaderData, HeaderWidget, Renderable};
 
@@ -895,6 +895,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         allowed_tools: app.active_allowed_tools.clone(),
+        disallowed_tools: None,
         hook_executor: app.runtime_services.hook_executor.clone(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
@@ -1009,6 +1010,7 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
                 status: "running".to_string(),
                 prompt_summary: format!("shell: {}", job.command),
                 duration_ms: Some(job.elapsed_ms),
+                kind: TaskPanelEntryKind::Background,
             });
         }
     }
@@ -1119,6 +1121,7 @@ fn active_reasoning_task_entries(app: &App) -> Vec<TaskPanelEntry> {
                 status: "running".to_string(),
                 prompt_summary: "model reasoning".to_string(),
                 duration_ms,
+                kind: TaskPanelEntryKind::ModelReasoning,
             }),
             _ => None,
         })
@@ -1157,6 +1160,7 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
                 status: "running".to_string(),
                 prompt_summary: format!("RLM: {summary}"),
                 duration_ms,
+                kind: TaskPanelEntryKind::Background,
             })
         })
         .collect()
@@ -1431,6 +1435,11 @@ async fn run_event_loop(
                         break;
                     }
                 };
+                // #3033: remember whether an EARLIER event in this drain batch
+                // already requested a redraw. The AgentProgress throttle below
+                // may opt the current event out of repainting, but it must not
+                // cancel redraws owed to other events in the same batch.
+                let redraw_requested_before_event = received_engine_event;
                 received_engine_event = true;
                 if app.suppress_stream_events_until_turn_complete {
                     if matches!(event, EngineEvent::TurnStarted { .. }) {
@@ -1792,6 +1801,7 @@ async fn run_event_loop(
                         }
                         app.runtime_turn_id = Some(turn_id);
                         app.runtime_turn_status = Some("in_progress".to_string());
+                        app.turn_counter = app.turn_counter.saturating_add(1);
                         app.reasoning_buffer.clear();
                         app.reasoning_header = None;
                         app.last_reasoning = None;
@@ -2302,8 +2312,10 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message =
-                            Some(format!("Sub-agent {id} starting: {prompt_summary}"));
+                        // #3030: Assign a stable user-facing label for this
+                        // agent and keep the raw id out of the status bar.
+                        let label = app.ensure_agent_label(&id);
+                        app.status_message = Some(format!("{label} starting: {prompt_summary}"));
                         let _ = engine_handle.send(Op::ListSubAgents).await;
                     }
                     EngineEvent::AgentProgress { id, status } => {
@@ -2318,7 +2330,27 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message = Some(format!("Sub-agent {id}: {display}"));
+                        // #3030: progress can arrive before AgentSpawned is
+                        // observed — assign the stable label on first sight.
+                        let label = app.ensure_agent_label(&id);
+                        app.status_message = Some(format!("{label}: {display}"));
+                        // #3033: Throttle redraws from rapid AgentProgress events.
+                        // When 4+ sub-agents are running concurrently, each firing
+                        // progress events, the per-event `needs_redraw = true` saturates
+                        // the render loop and starves terminal input.  Limit
+                        // progress-driven repaints to at most one per 100ms; the
+                        // status-animation timer (80ms cadence) provides a guaranteed
+                        // floor for sidebar updates.  Data is still recorded immediately;
+                        // the sidebar picks it up on the next permitted redraw.
+                        if !agent_progress_redraw_permitted(
+                            &mut app.last_agent_progress_redraw,
+                            Instant::now(),
+                        ) {
+                            // Restore the pre-event accumulator value: a
+                            // throttled progress event contributes no redraw of
+                            // its own, but earlier events' redraws survive.
+                            received_engine_event = redraw_requested_before_event;
+                        }
                     }
                     EngineEvent::AgentComplete { id, result } => {
                         execute_subagent_observer_hook(
@@ -2340,8 +2372,10 @@ async fn run_event_loop(
                                         && matches!(agent.status, SubAgentStatus::Running)
                                 });
                         app.agent_progress.remove(&id);
+                        // #3030: stable label with raw-id fallback.
+                        let label = app.agent_display_label(&id);
                         app.status_message = Some(format!(
-                            "Sub-agent {id} completed: {}",
+                            "{label} completed: {}",
                             summarize_tool_output(&result)
                         ));
                         let should_recapture_terminal =
@@ -2555,7 +2589,8 @@ async fn run_event_loop(
                                 blocked_network,
                                 blocked_write,
                             );
-                            app.view_stack.push(ElevationView::new(request));
+                            app.view_stack
+                                .push(ElevationView::new(request, app.ui_locale));
                             if let Some((method, _, _)) =
                                 crate::tui::notifications::settings(config)
                             {
@@ -3341,7 +3376,12 @@ async fn run_event_loop(
                 && key.modifiers.contains(KeyModifiers::CONTROL)
                 && app.view_stack.is_empty()
             {
-                open_shell_control(app);
+                // #3032: Ctrl+B directly backgrounds the active foreground
+                // shell command instead of opening a two-step shell-control
+                // menu.  When nothing is backgroundable, the status message
+                // tells the user what's going on.
+                request_foreground_shell_background(app);
+                app.needs_redraw = true;
                 continue;
             }
 
@@ -4651,6 +4691,21 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
     false
 }
 
+/// #3033: gate progress-driven repaints to at most one per 100ms.
+///
+/// Returns whether the current `AgentProgress` event may request a redraw,
+/// updating the last-redraw timestamp when it may. Data updates are never
+/// throttled — only the repaint request is.
+fn agent_progress_redraw_permitted(last_redraw: &mut Option<Instant>, now: Instant) -> bool {
+    match *last_redraw {
+        Some(last) if now.duration_since(last) < Duration::from_millis(100) => false,
+        _ => {
+            *last_redraw = Some(now);
+            true
+        }
+    }
+}
+
 fn recover_engine_event_disconnect(app: &mut App) -> bool {
     let had_live_work = app.is_loading
         || app.is_compacting
@@ -4944,7 +4999,10 @@ fn push_assistant_message(
 ) {
     let mut blocks = Vec::new();
     if let Some(thinking) = thinking {
-        blocks.push(ContentBlock::Thinking { thinking });
+        blocks.push(ContentBlock::Thinking {
+            thinking,
+            signature: None,
+        });
     }
     if !text.is_empty() {
         blocks.push(ContentBlock::Text {
@@ -5619,7 +5677,7 @@ async fn drain_web_config_events(
 
 /// Apply the choice made in the `/model` picker (#39): mutate App state so
 /// the next turn uses the new model/effort, persist the selection to
-/// `~/.deepseek/settings.toml` so it survives a restart, push the change to
+/// `~/.codewhale/settings.toml` (legacy: `~/.deepseek/settings.toml`) so it survives a restart, push the change to
 /// the running engine via `Op::SetModel`/`Op::SetCompaction`, and surface
 /// a one-line status describing what changed.
 // The model/effort transition needs both the previous and next model+effort
@@ -5664,7 +5722,7 @@ async fn apply_model_picker_choice(
     if !model_changed && !effort_changed {
         app.status_message = Some(format!(
             "Model unchanged: {model} · thinking {}",
-            effort.short_label()
+            effort.display_label_for_provider(app.api_provider)
         ));
         return;
     }
@@ -5715,11 +5773,13 @@ async fn apply_model_picker_choice(
     } else {
         model.clone()
     };
-    let previous_effort_summary = previous_effort.short_label();
+    let previous_effort_summary = previous_effort.display_label_for_provider(app.api_provider);
     let effort_summary = if effort == ReasoningEffort::Auto {
         "auto (per-turn thinking)".to_string()
     } else {
-        effort.short_label().to_string()
+        effort
+            .display_label_for_provider(app.api_provider)
+            .to_string()
     };
 
     let mut summary = match (model_changed, effort_changed) {
@@ -5767,8 +5827,8 @@ async fn apply_picker_effort_choice(
 
     let mut summary = format!(
         "Thinking: {} → {} · model {}",
-        previous_effort.short_label(),
-        effort.short_label(),
+        previous_effort.display_label_for_provider(app.api_provider),
+        effort.display_label_for_provider(app.api_provider),
         app.model_display_label()
     );
     if let Some(warning) = persist_warning {
@@ -6472,7 +6532,10 @@ fn spawn_external_url_command(mut command: Command) -> Result<()> {
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {
     app.workspace = workspace.clone();
-    app.hooks = HookExecutor::new(config.hooks_config(), workspace.clone());
+    app.hooks = HookExecutor::new(
+        crate::hooks::HooksConfig::load_with_project(config.hooks_config(), &workspace),
+        workspace.clone(),
+    );
     app.skills_dir = crate::tui::app::resolve_skills_dir(&workspace, &config.skills_dir(), config);
     app.refresh_skill_cache();
     app.workspace_context = None;
@@ -7166,6 +7229,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::DeepseekCN => None,
             crate::config::ApiProvider::NvidiaNim => Some("NIM"),
             crate::config::ApiProvider::Openai => Some("OpenAI"),
+            crate::config::ApiProvider::Anthropic => Some("Claude"),
             crate::config::ApiProvider::Atlascloud => Some("Atlas"),
             crate::config::ApiProvider::WanjieArk => Some("Wanjie"),
             crate::config::ApiProvider::Volcengine => Some("Volc"),
@@ -7922,15 +7986,6 @@ async fn handle_view_events(
             ViewEvent::ContextMenuSelected { action } => {
                 handle_context_menu_action(app, action);
             }
-            ViewEvent::ShellControlBackground => {
-                request_foreground_shell_background(app);
-            }
-            ViewEvent::ShellControlCancel => {
-                app.backtrack.reset();
-                engine_handle.cancel();
-                mark_active_turn_cancelled_locally(app);
-                app.status_message = Some("Request cancelled".to_string());
-            }
         }
     }
 
@@ -8226,6 +8281,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Huggingface => &mut providers.huggingface,
             ApiProvider::Together => &mut providers.together,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
+            ApiProvider::Anthropic => &mut providers.anthropic,
         };
         entry.api_key = Some(api_key);
     }
@@ -8285,6 +8341,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Huggingface => &mut providers.huggingface,
         ApiProvider::Together => &mut providers.together,
         ApiProvider::OpenaiCodex => &mut providers.openai_codex,
+        ApiProvider::Anthropic => &mut providers.anthropic,
     };
     entry.auth_mode = Some(auth_mode);
 }
@@ -8777,19 +8834,29 @@ fn render_toast_stack_overlay(
     }
 }
 
-pub(crate) fn open_shell_control(app: &mut App) {
-    if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("No foreground shell command to control".to_string());
+pub(crate) fn request_foreground_shell_background(app: &mut App) {
+    if !app.is_loading {
+        app.status_message = Some("No foreground shell command to background".to_string());
         return;
     }
-
-    app.view_stack.push(ShellControlView::new());
-    app.status_message = Some("Shell control opened".to_string());
-}
-
-pub(crate) fn request_foreground_shell_background(app: &mut App) {
-    if !app.is_loading || !active_foreground_shell_running(app) {
-        app.status_message = Some("No foreground shell command to background".to_string());
+    if !active_foreground_shell_running(app) {
+        // #3032 AC3: name the reason backgrounding is unavailable —
+        // interactive execs and non-shell blocking tools are visibly running
+        // but cannot be detached, and a generic shrug reads like a bug.
+        let reason = if terminal_pause_has_live_owner(app) {
+            "the running command is interactive"
+        } else if app
+            .active_cell
+            .as_ref()
+            .is_some_and(|active| !active.is_empty())
+        {
+            "the running tool is not a foreground shell command"
+        } else {
+            "no foreground shell command is running"
+        };
+        app.status_message = Some(format!(
+            "Cannot background: {reason}. Press Ctrl+C to cancel the turn, or wait for completion."
+        ));
         return;
     }
 

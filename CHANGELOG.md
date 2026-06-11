@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.58] - 2026-06-11
+
+### Added
+
+- **Native Anthropic provider.** A dedicated Messages API adapter
+  (`/v1/messages` with `x-api-key` auth) replaces OpenAI-dialect shims for
+  Claude models: adaptive thinking with `output_config.effort` shaping,
+  prompt-cache breakpoints (capped at 4, earliest dropped), signed-thinking
+  replay via `signature_delta`, normalized cache-hit/miss usage telemetry,
+  and SSE error envelopes. `claude-opus-4-8`, `claude-sonnet-4-6`, and
+  `claude-haiku-4-5` join the model registry; configure with
+  `ANTHROPIC_API_KEY` (#3014).
+- **Hooks v2.** `tool_call_before` hooks can now return a JSON decision —
+  `{"decision": "allow"|"deny"|"ask", "reason", "updatedInput",
+  "additionalContext"}` — with deny > ask > allow precedence across multiple
+  hooks, last-writer-wins input rewriting, and concatenated context. Exit
+  code 2 remains a legacy hard deny. Hooks support glob matchers and
+  project-local `.codewhale/hooks.toml` (#3026).
+- **Clickable sidebar.** Background-job rows show/cancel on click, the
+  Ctrl+K hint row runs `/jobs cancel-all`, and agent rows open `/subagents`;
+  row actions are built in the same pass as the rendered lines so a click
+  can never target the wrong job (#3028).
+- OSC 8 out-of-band hyperlink infrastructure with per-region open/close
+  sequences that survive partial redraws (#3029).
+- `codewhale exec` gains `--allowed-tools`, `--disallowed-tools` (deny wins),
+  `--max-turns`, and `--append-system-prompt` (#3027).
+- Constitution prompt source: YAML source-of-truth plus Python renderer for
+  the system prompt, with the active prompt now served from
+  `constitution.md` (#3015, renderer reconciliation still tracked).
+- Agent-task issue template, labels, and runner protocol (#3021); remote
+  smoke-test droplet loop hardening — gh CLI, swapfile, agent sessions
+  (#3022).
+
+### Changed
+
+- **Sub-agent routing is provider-aware.** DeepSeek ids are no longer
+  hardcoded into model validation; routing works from per-provider
+  big/cheap candidates, the network router is skipped when a provider has
+  no cheap tier, and spawn-time model requests are validated against the
+  active provider (#3018).
+- Model-specific facts in the system prompt (context window, sub-agent
+  pricing, thinking notes, architecture characteristics) are now templated
+  per-model instead of hardcoded DeepSeek V4 claims, in both `base.md` and
+  `constitution.md` (#3025).
+- Provider capability lookups for Moonshot/OpenAI/Atlascloud resolve from
+  per-model registry rows (bare and vendor-prefixed ids) instead of
+  hardcoded 64K-era floors (#3023).
+- Reasoning-effort now reaches Atlascloud (DeepSeek dialect), Moonshot
+  (`thinking` enable/disable), and Ollama (`think` param) (#3024); Moonshot/
+  Kimi models joined the reasoning-content provider and model gates (#3016).
+- Transcript polish: compact tool-call cells without boilerplate (#3031),
+  internal turn/agent ids hidden behind stable labels (#3030), and Ctrl+B
+  now backgrounds the running foreground shell directly instead of opening
+  a menu (#3032).
+- The Tasks sidebar separates "Model reasoning" from "Background commands",
+  and `auth list` reports the same active-credential source as
+  `auth status` for openai-codex.
+
+### Fixed
+
+- **TUI freeze under sub-agent load.** Rapid `AgentProgress` events
+  saturated the render loop and starved terminal input; progress-driven
+  repaints are now throttled to one per 100ms (#3033).
+- **Hooks on Windows.** Hook commands were passed to `cmd /C` through
+  CRT-style argument quoting, which injected literal `\"` sequences that
+  cmd.exe never unescapes — JSON decisions could not parse. Commands now
+  reach cmd.exe verbatim via `raw_arg`.
+- Codex Responses: assistant tool results are converted to
+  `function_call_output` items (multi-turn tool calling previously broke),
+  tool schemas are sanitized for the Responses API, and `maximum` effort
+  maps to `xhigh` (#3019, #3017 — both partially; retry/backoff and
+  per-tool strict mode remain open).
+- Better tool-denial and provider error messages harvested from PR #2933
+  (#3020).
+
+
 ## [0.8.57] - 2026-06-10
 
 ### Added
@@ -1636,7 +1712,8 @@ overflow report and `/theme` picker edge-wrapping patch in #1814.
 
 Older releases (v0.8.39 and earlier) are archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.57...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.58...HEAD
+[0.8.58]: https://github.com/Hmbown/CodeWhale/compare/v0.8.57...v0.8.58
 [0.8.57]: https://github.com/Hmbown/CodeWhale/compare/v0.8.56...v0.8.57
 [0.8.56]: https://github.com/Hmbown/CodeWhale/compare/v0.8.55...v0.8.56
 [0.8.55]: https://github.com/Hmbown/CodeWhale/compare/v0.8.54...v0.8.55

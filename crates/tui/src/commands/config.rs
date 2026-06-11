@@ -1477,10 +1477,12 @@ mod tests {
     #[test]
     fn config_command_provider_rejects_unknown_provider() {
         let mut app = create_test_app();
-        let result = config_command(&mut app, Some("provider anthropic"));
+        // "anthropic" became a real provider in #3014; probe with an id that
+        // stays unknown.
+        let result = config_command(&mut app, Some("provider not-a-provider"));
         assert!(result.is_error);
         let msg = result.message.unwrap();
-        assert!(msg.contains("Unknown provider 'anthropic'"));
+        assert!(msg.contains("Unknown provider 'not-a-provider'"));
         assert!(msg.contains("openrouter"));
         assert!(msg.contains("xiaomi-mimo"));
     }

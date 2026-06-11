@@ -2083,6 +2083,7 @@ impl RuntimeThreadManager {
             strict_tool_mode: self.config.strict_tool_mode.unwrap_or(false),
             goal_objective: None,
             allowed_tools: None,
+            disallowed_tools: None,
             hook_executor: None,
             locale_tag: crate::localization::resolve_locale(&settings.locale)
                 .tag()

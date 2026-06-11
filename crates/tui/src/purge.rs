@@ -767,6 +767,7 @@ mod tests {
             role: "assistant".to_string(),
             content: vec![
                 ContentBlock::Thinking {
+                    signature: None,
                     thinking: "let me think...".to_string(),
                 },
                 ContentBlock::Text {

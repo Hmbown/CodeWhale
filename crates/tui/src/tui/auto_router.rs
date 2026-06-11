@@ -171,6 +171,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "The user seems to be asking me to classify myself.".to_string(),
                     },
                     ContentBlock::Text {

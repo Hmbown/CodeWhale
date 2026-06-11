@@ -326,6 +326,9 @@ pub struct EngineConfig {
     /// Tool restriction from custom slash command frontmatter.
     /// `None` means the current turn may use the normal tool set.
     pub allowed_tools: Option<Vec<String>>,
+    /// Tool deny-list.  Deny always wins over allow (#3027).
+    /// `None` means no tools are explicitly denied.
+    pub disallowed_tools: Option<Vec<String>>,
     /// Hook executor for control-plane hooks.
     /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
     pub hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
@@ -410,6 +413,7 @@ impl Default for EngineConfig {
             strict_tool_mode: false,
             goal_objective: None,
             allowed_tools: None,
+            disallowed_tools: None,
             hook_executor: None,
             locale_tag: "en".to_string(),
             workshop: None,
@@ -602,6 +606,7 @@ impl Engine {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY/NVIDIA_NIM_API_KEY",
             ApiProvider::Openai => "OPENAI_API_KEY",
+            ApiProvider::Anthropic => "ANTHROPIC_API_KEY",
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
             ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY",
             ApiProvider::Volcengine => "VOLCENGINE_API_KEY/VOLCENGINE_ARK_API_KEY/ARK_API_KEY",
@@ -1307,7 +1312,7 @@ impl Engine {
                     } else if messages.is_empty() && system_prompt.is_none() {
                         self.session.id = uuid::Uuid::new_v4().to_string();
                     }
-                    self.session.messages = messages;
+                    self.session.messages = messages.into();
                     self.session.compaction_summary_prompt =
                         extract_compaction_summary_prompt(system_prompt.clone());
                     self.session.system_prompt = system_prompt;
@@ -1356,7 +1361,7 @@ impl Engine {
                         }
                     }
                     if let Some(idx) = cut {
-                        self.session.messages.truncate(idx);
+                        self.session.messages.truncate_to(idx);
                         self.session.bump_messages_revision();
                     }
                     // Now dispatch the new message as a normal send,
@@ -1404,7 +1409,7 @@ impl Engine {
             .tx_event
             .send(Event::SessionUpdated {
                 session_id: self.session.id.clone(),
-                messages: self.session.messages.clone(),
+                messages: self.session.messages.clone().into(),
                 system_prompt: self.session.system_prompt.clone(),
                 model: self.session.model.clone(),
                 workspace: self.session.workspace.clone(),
@@ -1817,6 +1822,11 @@ impl Engine {
                     tool.defer_loading = Some(false);
                 }
             }
+            filter_tool_catalog_for_gates(
+                &mut catalog,
+                self.config.allowed_tools.as_deref(),
+                self.config.disallowed_tools.as_deref(),
+            );
             catalog
         });
         let tool_catalog_for_event = tools.clone();
@@ -1946,7 +1956,7 @@ impl Engine {
             Ok(result) => {
                 if !result.messages.is_empty() || self.session.messages.is_empty() {
                     let messages_after = result.messages.len();
-                    self.session.messages = result.messages;
+                    self.session.messages = result.messages.into();
                     self.merge_compaction_summary(result.summary_prompt);
                     self.emit_session_updated().await;
                     let removed = messages_before.saturating_sub(messages_after);
@@ -2042,7 +2052,7 @@ impl Engine {
         {
             Ok(result) => {
                 let messages_after = result.messages.len();
-                self.session.messages = result.messages;
+                self.session.messages = result.messages.into();
                 self.emit_session_updated().await;
 
                 let summary = format!(
@@ -2096,7 +2106,7 @@ impl Engine {
         while self.session.messages.len() > MIN_RECENT_MESSAGES_TO_KEEP
             && self.estimated_input_tokens() > target_input_budget
         {
-            self.session.messages.remove(0);
+            self.session.messages.trim_front(1);
             self.session.bump_messages_revision();
             removed = removed.saturating_add(1);
         }
@@ -2118,7 +2128,7 @@ impl Engine {
 
         let mut retries_used = 0u32;
         let mut summary_prompt = None;
-        let mut compacted_messages = self.session.messages.clone();
+        let mut compacted_messages: Vec<Message> = self.session.messages.clone().into();
 
         let mut forced_config = self.config.compaction.clone();
         forced_config.enabled = true;
@@ -2153,7 +2163,7 @@ impl Engine {
         }
 
         if !compacted_messages.is_empty() || self.session.messages.is_empty() {
-            self.session.messages = compacted_messages;
+            self.session.messages = compacted_messages.into();
         }
         self.merge_compaction_summary(summary_prompt);
 
@@ -2227,7 +2237,7 @@ impl Engine {
             self.session.model.clone(),
             self.session.workspace.clone(),
             self.session.system_prompt.clone(),
-            self.session.messages.clone(),
+            self.session.messages.clone().into(),
         ))
         .with_cancel_token(self.cancel_token.clone())
         .with_trusted_external_paths(trusted_external_paths);
@@ -2789,6 +2799,19 @@ pub(crate) use token_estimate_cache::TokenEstimateCache;
 
 pub(crate) fn default_active_native_tool_names() -> &'static [&'static str] {
     tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS
+}
+
+/// Drop catalog entries the execution gates would reject (#3027): the model
+/// should never be advertised a tool it cannot call. Deny wins over allow.
+fn filter_tool_catalog_for_gates(
+    catalog: &mut Vec<Tool>,
+    allowed_tools: Option<&[String]>,
+    disallowed_tools: Option<&[String]>,
+) {
+    catalog.retain(|tool| {
+        !turn_loop::command_denies_tool(disallowed_tools, &tool.name)
+            && turn_loop::command_allows_tool(allowed_tools, &tool.name)
+    });
 }
 
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};

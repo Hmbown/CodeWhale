@@ -1489,6 +1489,12 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         msg.contains("running"),
         "includes the conflicting status: {msg}"
     );
+    // #3020: elapsed time lets the parent distinguish a live worker from a
+    // stale earlier spawn.
+    assert!(
+        msg.contains("started ") && msg.contains(" ago"),
+        "includes elapsed time since spawn: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -2074,6 +2080,23 @@ fn annotate_child_model_error_adds_actionable_hint() {
 
     let unrelated = annotate_child_model_error("connection reset by peer", "kimi-k2");
     assert_eq!(unrelated, "connection reset by peer");
+
+    // #3020: provider rejections that classify as Internal (not
+    // Authorization/State) still get the hint via raw-text matching.
+    let not_exist = annotate_child_model_error("Model Not Exist", "kimi-k2");
+    assert!(
+        not_exist.contains("retry agent_open"),
+        "DeepSeek-style rejection gets the hint: {not_exist}"
+    );
+
+    let openai_style = annotate_child_model_error(
+        "The model `gpt-5.5-nano` does not exist or you do not have access to it.",
+        "gpt-5.5-nano",
+    );
+    assert!(
+        openai_style.contains("retry agent_open"),
+        "OpenAI-style rejection gets the hint: {openai_style}"
+    );
 }
 
 #[test]
@@ -2642,6 +2665,35 @@ fn stub_runtime() -> SubAgentRuntime {
 /// *some* `DeepSeekClient` because `SubAgentRuntime.client` isn't
 /// `Option<...>`. `Config::default()` is enough — `DeepSeekClient::new`
 /// only validates that an API key field exists, not that the key works.
+fn stub_runtime_for_provider(provider: &str) -> SubAgentRuntime {
+    let mut runtime = stub_runtime();
+    runtime.client = stub_client_for_provider(provider);
+    runtime
+}
+
+fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut providers = crate::config::ProvidersConfig::default();
+    match provider {
+        "moonshot" => {
+            providers.moonshot = crate::config::ProviderConfig {
+                api_key: Some("test-key".to_string()),
+                ..Default::default()
+            };
+        }
+        // Ollama is keyless (local runtime); extend per-provider as needed.
+        "ollama" => {}
+        other => panic!("extend stub_client_for_provider for provider {other}"),
+    }
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        provider: Some(provider.to_string()),
+        providers: Some(providers),
+        ..crate::config::Config::default()
+    };
+    DeepSeekClient::new(&config).expect("stub client should construct")
+}
+
 fn stub_client() -> DeepSeekClient {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let config = crate::config::Config {
@@ -3172,4 +3224,117 @@ fn model_catalog_only_advertises_canonical_subagent_tools() {
             "{legacy} should be hidden from the model-facing catalog"
         );
     }
+}
+
+// ── #3018: provider-aware auto routing and model validation ─────────────────
+
+#[tokio::test]
+async fn auto_route_on_provider_without_cheap_tier_stays_on_parent_model() {
+    // AC: Ollama + auto-model must never build a request with a DeepSeek id;
+    // the routed model equals the session model for any prompt class.
+    let mut runtime = stub_runtime_for_provider("ollama").with_auto_model(true);
+    runtime.model = "qwen3:32b".to_string();
+
+    for prompt in ["hi", "please refactor the whole auth module for security"] {
+        let route =
+            resolve_subagent_assignment_route(&runtime, None, prompt, &SubAgentType::General).await;
+        assert_eq!(route.model, "qwen3:32b", "prompt {prompt:?}");
+        assert!(
+            !route.model.contains("deepseek"),
+            "no DeepSeek id may be fabricated: {route:?}"
+        );
+    }
+}
+
+#[test]
+fn flash_router_gate_requires_cheap_tier() {
+    let deepseek = stub_runtime().with_auto_model(true);
+    assert!(
+        should_use_subagent_flash_router(&deepseek),
+        "DeepSeek keeps the network router"
+    );
+
+    let mut moonshot = stub_runtime_for_provider("moonshot").with_auto_model(true);
+    moonshot.model = "kimi-k2.6".to_string();
+    assert!(
+        !should_use_subagent_flash_router(&moonshot),
+        "providers without a cheap tier skip the network router"
+    );
+}
+
+#[test]
+fn role_model_validation_accepts_provider_native_ids() {
+    // AC: [subagents] worker_model = "kimi-k2.5" on Moonshot must not fail
+    // with "Expected a DeepSeek model id".
+    let mut runtime = stub_runtime_for_provider("moonshot");
+    runtime
+        .role_models
+        .insert("worker".to_string(), "kimi-k2.5".to_string());
+
+    let model = configured_model_for_role_or_type(&runtime, Some("worker"), &SubAgentType::General)
+        .expect("provider-native id is accepted");
+    assert_eq!(model.as_deref(), Some("kimi-k2.5"));
+}
+
+#[test]
+fn role_model_validation_stays_strict_on_official_deepseek() {
+    let mut runtime = stub_runtime();
+    runtime
+        .role_models
+        .insert("worker".to_string(), "kimi-k2.5".to_string());
+
+    let err = configured_model_for_role_or_type(&runtime, Some("worker"), &SubAgentType::General)
+        .expect_err("non-DeepSeek id is rejected on the official API");
+    let msg = err.to_string();
+    assert!(msg.contains("kimi-k2.5"), "names the bad id: {msg}");
+    assert!(
+        msg.contains("deepseek-v4-pro"),
+        "lists accepted ids from model_completion_names_for_provider: {msg}"
+    );
+}
+
+#[test]
+fn normalize_requested_subagent_model_is_provider_aware() {
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "kimi-k2.5",
+            "model",
+            crate::config::ApiProvider::Moonshot
+        )
+        .expect("Moonshot accepts its own ids"),
+        "kimi-k2.5"
+    );
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "qwen3:32b",
+            "model",
+            crate::config::ApiProvider::Ollama
+        )
+        .expect("Ollama tags pass through"),
+        "qwen3:32b"
+    );
+    assert!(
+        normalize_requested_subagent_model(
+            "kimi-k2.5",
+            "model",
+            crate::config::ApiProvider::Deepseek
+        )
+        .is_err(),
+        "official DeepSeek API rejects foreign ids"
+    );
+}
+
+// ── #3030: step-counter formatting ──────────────────────────────────────────
+
+#[test]
+fn format_step_counter_hides_unbounded_sentinel() {
+    // DEFAULT_MAX_STEPS is u32::MAX, meaning "unbounded" — rendering the
+    // sentinel as a denominator produced "step 16/4294967295".
+    assert_eq!(format_step_counter(16, u32::MAX), "step 16");
+}
+
+#[test]
+fn format_step_counter_keeps_concrete_budgets() {
+    assert_eq!(format_step_counter(3, 25), "step 3/25");
+    assert_eq!(format_step_counter(0, 1), "step 0/1");
 }

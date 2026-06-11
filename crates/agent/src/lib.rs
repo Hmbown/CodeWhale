@@ -607,6 +607,28 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // Anthropic native Messages API models (#3014)
+            ModelInfo {
+                id: "claude-opus-4-8".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["opus".to_string(), "claude-opus".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "claude-sonnet-4-6".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["sonnet".to_string(), "claude-sonnet".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "claude-haiku-4-5".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["haiku".to_string(), "claude-haiku".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
             // MiniMax 2.7 (OpenRouter)
             ModelInfo {
                 id: "minimax/minimax-2.7".to_string(),

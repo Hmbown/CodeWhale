@@ -5608,6 +5608,7 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
     assert_eq!(entries[0].id, "rlm-1");
     assert_eq!(entries[0].status, "running");
     assert_eq!(entries[0].prompt_summary, "RLM: file_path: Cargo.lock");
+    assert_eq!(entries[0].kind, TaskPanelEntryKind::Background);
     assert!(entries[0].duration_ms.unwrap_or_default() >= 3000);
 }
 
@@ -5628,6 +5629,7 @@ fn active_reasoning_task_entries_surface_reasoning_only_turns() {
     assert_eq!(entries[0].id, "reasoning-1");
     assert_eq!(entries[0].status, "running");
     assert_eq!(entries[0].prompt_summary, "model reasoning");
+    assert_eq!(entries[0].kind, TaskPanelEntryKind::ModelReasoning);
     assert!(entries[0].duration_ms.unwrap_or_default() >= 2000);
 }
 
@@ -9298,8 +9300,70 @@ mod work_sidebar_projection_tests {
             status: "completed".to_string(),
             prompt_summary: "echo hello".to_string(),
             duration_ms: Some(100),
+            kind: crate::tui::app::TaskPanelEntryKind::Background,
         };
         assert_eq!(entry.status, "completed");
         assert_ne!(entry.status, "running");
     }
+}
+
+// ── #3033: AgentProgress redraw throttle ───────────────────────────────────
+
+#[test]
+fn agent_progress_redraw_throttle_permits_first_and_spaced_events() {
+    let mut last_redraw = None;
+    let t0 = Instant::now();
+
+    assert!(
+        agent_progress_redraw_permitted(&mut last_redraw, t0),
+        "first progress event always repaints"
+    );
+    assert!(
+        !agent_progress_redraw_permitted(&mut last_redraw, t0 + Duration::from_millis(50)),
+        "events inside the 100ms window are throttled"
+    );
+    assert!(
+        !agent_progress_redraw_permitted(&mut last_redraw, t0 + Duration::from_millis(99)),
+        "throttled events must not advance the window"
+    );
+    assert!(
+        agent_progress_redraw_permitted(&mut last_redraw, t0 + Duration::from_millis(150)),
+        "events past the window repaint again"
+    );
+}
+
+#[test]
+fn throttled_progress_event_does_not_cancel_other_events_redraw() {
+    // Repro for the #3033 audit finding: `received_engine_event` is a shared
+    // accumulator for the whole drain batch. A throttled AgentProgress event
+    // must restore the PRE-EVENT value instead of clearing the flag, so
+    // redraws owed to other events (AgentSpawned, AgentList, cross-agent
+    // AgentComplete...) survive.
+    let t0 = Instant::now();
+    let mut last_redraw = Some(t0);
+
+    // Batch: AgentSpawned (requests redraw), then a throttled AgentProgress.
+    let mut received_engine_event = true; // AgentSpawned drained
+    let redraw_requested_before_event = received_engine_event;
+    received_engine_event = true; // AgentProgress drained
+    if !agent_progress_redraw_permitted(&mut last_redraw, t0 + Duration::from_millis(10)) {
+        received_engine_event = redraw_requested_before_event;
+    }
+    assert!(
+        received_engine_event,
+        "redraw owed to AgentSpawned must survive a throttled progress event"
+    );
+
+    // Same batch shape but with NO earlier redraw-worthy event: the lone
+    // throttled progress event contributes nothing.
+    let mut received_engine_event = false;
+    let redraw_requested_before_event = received_engine_event;
+    received_engine_event = true; // AgentProgress drained
+    if !agent_progress_redraw_permitted(&mut last_redraw, t0 + Duration::from_millis(20)) {
+        received_engine_event = redraw_requested_before_event;
+    }
+    assert!(
+        !received_engine_event,
+        "a lone throttled progress event must not trigger a repaint"
+    );
 }

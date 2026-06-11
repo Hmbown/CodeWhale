@@ -140,7 +140,9 @@ mod tests {
     #[test]
     fn unknown_provider_returns_error() {
         let mut app = create_test_app();
-        let result = provider(&mut app, Some("anthropic"));
+        // "anthropic" became a real provider in #3014; probe with an id that
+        // stays unknown.
+        let result = provider(&mut app, Some("not-a-provider"));
         let msg = result.message.expect("expected error message");
         assert!(msg.contains("Unknown provider"));
         assert!(msg.contains("openrouter"));

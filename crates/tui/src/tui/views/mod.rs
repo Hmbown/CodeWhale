@@ -38,7 +38,6 @@ pub enum ModalKind {
     FeedbackPicker,
     ThemePicker,
     ContextMenu,
-    ShellControl,
 }
 
 #[derive(Debug, Clone)]
@@ -195,8 +194,6 @@ pub enum ViewEvent {
     ContextMenuSelected {
         action: ContextMenuAction,
     },
-    ShellControlBackground,
-    ShellControlCancel,
     /// Emitted by the pager (`c` / `y`) to copy its body to the system
     /// clipboard. The host handler writes via `app.clipboard` and surfaces a
     /// status message — modal views cannot reach `app` directly. `label` is
@@ -360,142 +357,6 @@ impl fmt::Debug for ViewStack {
             .field("len", &self.views.len())
             .field("top", &self.top_kind())
             .finish()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShellControlChoice {
-    Background,
-    Cancel,
-}
-
-impl ShellControlChoice {
-    fn event(self) -> ViewEvent {
-        match self {
-            ShellControlChoice::Background => ViewEvent::ShellControlBackground,
-            ShellControlChoice::Cancel => ViewEvent::ShellControlCancel,
-        }
-    }
-}
-
-pub struct ShellControlView {
-    selected: ShellControlChoice,
-}
-
-impl ShellControlView {
-    pub fn new() -> Self {
-        Self {
-            selected: ShellControlChoice::Background,
-        }
-    }
-
-    fn toggle(&mut self) {
-        self.selected = match self.selected {
-            ShellControlChoice::Background => ShellControlChoice::Cancel,
-            ShellControlChoice::Cancel => ShellControlChoice::Background,
-        };
-    }
-}
-
-impl ModalView for ShellControlView {
-    fn kind(&self) -> ModalKind {
-        ModalKind::ShellControl
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => ViewAction::Close,
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                self.toggle();
-                ViewAction::None
-            }
-            KeyCode::Char('b') | KeyCode::Char('B') => {
-                ViewAction::EmitAndClose(ViewEvent::ShellControlBackground)
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
-                ViewAction::EmitAndClose(ViewEvent::ShellControlCancel)
-            }
-            KeyCode::Enter => ViewAction::EmitAndClose(self.selected.event()),
-            _ => ViewAction::None,
-        }
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        use ratatui::{
-            style::Style,
-            text::{Line, Span},
-            widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
-        };
-
-        let popup_width = 62.min(area.width.saturating_sub(4));
-        let popup_height = 11.min(area.height.saturating_sub(2));
-
-        let popup_area = Rect {
-            x: (area.width - popup_width) / 2,
-            y: (area.height - popup_height) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
-
-        Clear.render(popup_area, buf);
-
-        let option_line = |choice: ShellControlChoice, key: &'static str, label: &'static str| {
-            let selected = self.selected == choice;
-            let style = if selected {
-                Style::default()
-                    .fg(palette::SELECTION_TEXT)
-                    .bg(palette::SELECTION_BG)
-            } else {
-                Style::default().fg(palette::TEXT_PRIMARY)
-            };
-            Line::from(vec![
-                Span::styled(if selected { "> " } else { "  " }, style),
-                Span::styled(format!("{key:<3}"), style.bold()),
-                Span::styled(label, style),
-            ])
-        };
-
-        let lines = vec![
-            Line::from(Span::styled(
-                "Foreground shell command is still running.",
-                Style::default().fg(palette::TEXT_PRIMARY),
-            )),
-            Line::from(""),
-            option_line(
-                ShellControlChoice::Background,
-                "B",
-                "Background - detach and keep the command running",
-            ),
-            option_line(
-                ShellControlChoice::Cancel,
-                "C",
-                "Cancel - stop the command and interrupt this turn",
-            ),
-        ];
-
-        let view = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title(Line::from(vec![Span::styled(
-                        " Shell command ",
-                        Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
-                    )]))
-                    .title_bottom(Line::from(Span::styled(
-                        " Enter select | Esc close ",
-                        Style::default().fg(palette::TEXT_MUTED),
-                    )))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(palette::BORDER_COLOR))
-                    .style(Style::default().bg(palette::DEEPSEEK_INK))
-                    .padding(Padding::uniform(1)),
-            )
-            .style(Style::default().fg(palette::TEXT_PRIMARY));
-
-        view.render(popup_area, buf);
     }
 }
 
@@ -2174,8 +2035,8 @@ fn truncate_view_text(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigListItem, ConfigSection, ConfigView, ModalKind, ModalView, ShellControlView,
-        ViewAction, ViewEvent, ViewStack, subagent_view_agents, truncate_view_text,
+        ConfigListItem, ConfigSection, ConfigView, HelpView, ModalKind, ModalView, ViewAction,
+        ViewEvent, ViewStack, subagent_view_agents, truncate_view_text,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -2811,30 +2672,6 @@ base_url = "https://api.xiaomimimo.com/v1"
         assert_eq!(view.status.as_deref(), Some("Edit cancelled"));
     }
 
-    #[test]
-    fn shell_control_view_defaults_to_background() {
-        let mut view = ShellControlView::new();
-
-        let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert!(matches!(
-            action,
-            ViewAction::EmitAndClose(ViewEvent::ShellControlBackground)
-        ));
-    }
-
-    #[test]
-    fn shell_control_view_can_select_cancel() {
-        let mut view = ShellControlView::new();
-
-        let action = view.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-
-        assert!(matches!(
-            action,
-            ViewAction::EmitAndClose(ViewEvent::ShellControlCancel)
-        ));
-    }
-
     /// A modal that doesn't override `handle_paste` must report
     /// "not consumed" so the host can fall through to the composer.
     /// Regression: views/mod.rs previously inverted the boolean, swallowing
@@ -2842,9 +2679,9 @@ base_url = "https://api.xiaomimimo.com/v1"
     #[test]
     fn default_modal_does_not_consume_paste() {
         let mut stack = ViewStack::new();
-        stack.push(ShellControlView::new());
+        stack.push(HelpView::new_for_locale(crate::localization::Locale::En));
         assert!(!stack.handle_paste("hello"));
-        assert_eq!(stack.top_kind(), Some(ModalKind::ShellControl));
+        assert_eq!(stack.top_kind(), Some(ModalKind::Help));
     }
 
     fn buffer_text(buf: &Buffer, area: Rect) -> String {

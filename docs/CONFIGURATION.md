@@ -462,6 +462,9 @@ Remaining variables:
 - `ARCEE_API_KEY`
 - `ARCEE_BASE_URL`
 - `ARCEE_MODEL`
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_MODEL`
 - `MOONSHOT_API_KEY` or `KIMI_API_KEY`
 - `MOONSHOT_BASE_URL` or `KIMI_BASE_URL`
 - `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, or `KIMI_MODEL`
@@ -612,7 +615,94 @@ receives the text produced by the previous hook. Hooks marked
 `background = true` are observer-only and cannot transform or block
 the message. Existing environment variables remain available.
 `shell_env` hooks keep their existing `KEY=VALUE` stdout contract;
-the JSON stdout contract applies only to `message_submit`.
+JSON stdout contracts exist for `message_submit` (above) and
+`tool_call_before` (below).
+
+### `tool_call_before` decision hooks
+
+`tool_call_before` hooks run before each tool call executes. In
+addition to the legacy hard deny (exit code `2`, which always wins
+regardless of stdout), a foreground hook may print a JSON decision on
+stdout with exit code `0`:
+
+```json
+{
+  "decision": "allow" | "deny" | "ask",
+  "reason": "human-readable explanation (used for deny)",
+  "updatedInput": { "command": "ls -la" },
+  "additionalContext": "text appended to the tool result for the model"
+}
+```
+
+All fields are optional. Empty stdout, non-JSON stdout, and JSON
+without a `decision` field behave exactly as before (allow). An
+unrecognized `decision` string logs a warning and is treated as allow.
+
+- `deny` blocks the tool; the model receives a permission-denied tool
+  result containing `reason`.
+- `ask` forces the interactive approval prompt even for tools that
+  would otherwise auto-run.
+- `updatedInput` must be a JSON object; it replaces the tool input
+  before execution. When several hooks supply it, the last hook wins.
+- `additionalContext` is appended to the tool result sent back to the
+  model as `[hook context] ...`. Multiple hooks' contexts are
+  concatenated.
+
+When multiple hooks match, precedence is deny > ask > allow. Hooks
+marked `background = true` cannot steer tool calls — they exit
+immediately without a captured result.
+
+Example deny hook:
+
+```toml
+[[hooks.hooks]]
+event = "tool_call_before"
+command = '''echo '{"decision":"deny","reason":"blocked by project policy"}' '''
+condition = { type = "tool_name", name = "exec_shell" }
+```
+
+Example ask hook (force approval for every MCP tool):
+
+```toml
+[[hooks.hooks]]
+event = "tool_call_before"
+command = '''echo '{"decision":"ask"}' '''
+condition = { type = "tool_name", name = "mcp__*" }
+```
+
+Example input rewrite:
+
+```toml
+[[hooks.hooks]]
+event = "tool_call_before"
+command = "~/.codewhale/hooks/clamp-shell-timeout.sh"
+condition = { type = "tool_name", name = "exec_shell" }
+```
+
+where the script reads the hook context, then prints
+`{"updatedInput": {...}}` with the adjusted arguments.
+
+`tool_name` conditions support `*` globs: `mcp__*` matches every MCP
+tool (e.g. `mcp__github__create_issue`) but not built-ins like
+`read_file`; exact names keep matching exactly. Other regex
+metacharacters in the pattern are matched literally.
+
+### Project-local hooks
+
+Repositories can ship policy in `<workspace>/.codewhale/hooks.toml`,
+using the same shape as the `[hooks]` table (top-level fields plus
+`[[hooks]]` entries). Project hooks are appended after global hooks
+from `config.toml`, so they run last and, for `updatedInput`, win
+ties. A malformed project file logs a warning and startup falls back
+to global hooks only.
+
+```toml
+# .codewhale/hooks.toml
+[[hooks]]
+event = "tool_call_before"
+command = '''echo '{"decision":"deny","reason":"no shell in this repo"}' '''
+condition = { type = "tool_name", name = "exec_shell" }
+```
 
 ### Turn-end observer hooks
 

@@ -1415,7 +1415,7 @@ fn build_chat_messages_with_reasoning(
                         },
                     }));
                 }
-                ContentBlock::Thinking { thinking } => thinking_parts.push(thinking.clone()),
+                ContentBlock::Thinking { thinking, .. } => thinking_parts.push(thinking.clone()),
                 ContentBlock::ToolUse {
                     id,
                     name,
@@ -1996,6 +1996,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Volcengine
             | ApiProvider::Arcee
             | ApiProvider::Sglang
+            | ApiProvider::Moonshot // #3016: Kimi thinking traces use reasoning_content
     )
 }
 
@@ -2044,6 +2045,7 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
         reasoning_field(message).filter(|reasoning| !reasoning.trim().is_empty())
     {
         content_blocks.push(ContentBlock::Thinking {
+            signature: None,
             thinking: reasoning.to_string(),
         });
     }
@@ -2142,7 +2144,7 @@ fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
                 }
                 events.push(StreamEvent::ContentBlockStop { index });
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 events.push(StreamEvent::ContentBlockStart {
                     index,
                     content_block: ContentBlockStart::Thinking {
@@ -2743,6 +2745,76 @@ mod stream_decoder_tests {
                 } if thinking == "plan...")),
             "should yield a ThinkingDelta carrying 'plan...'; got {events:?}"
         );
+    }
+
+    #[test]
+    fn decoder_streams_moonshot_multi_chunk_reasoning_as_thinking() {
+        // #3016: recorded shape from Moonshot's native endpoint — kimi-k2.6
+        // streams `reasoning_content` deltas before the answer text. The
+        // thinking deltas must accumulate into ONE thinking block and the
+        // answer must arrive as text, not be glued into the trace.
+        let chunks = [
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me check"}}]}"#,
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"reasoning_content":" the config."}}]}"#,
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"content":"The answer is 42."}}]}"#,
+        ];
+
+        let is_reasoning =
+            is_reasoning_model_for_stream(crate::config::ApiProvider::Moonshot, "kimi-k2.6");
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+        let mut events = Vec::new();
+        for chunk in chunks {
+            let value: Value = serde_json::from_str(chunk).expect("valid SSE JSON");
+            events.extend(parse_sse_chunk(
+                &value,
+                &mut content_index,
+                &mut text_started,
+                &mut thinking_started,
+                &mut tool_indices,
+                is_reasoning,
+            ));
+        }
+
+        let thinking: String = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { thinking },
+                    ..
+                } => Some(thinking.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking, "Let me check the config.");
+
+        let thinking_starts = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StreamEvent::ContentBlockStart {
+                        content_block: ContentBlockStart::Thinking { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(thinking_starts, 1, "one thinking block: {events:?}");
+
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::TextDelta { text },
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "The answer is 42.");
     }
 
     #[test]
@@ -3649,6 +3721,22 @@ mod alias_thinking_detection_tests {
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
         assert!(provider_accepts_reasoning_content(ApiProvider::XiaomiMimo));
         assert!(provider_accepts_reasoning_content(ApiProvider::Arcee));
+        // #3016: Moonshot's native endpoint streams Kimi thinking as
+        // reasoning_content.
+        assert!(provider_accepts_reasoning_content(ApiProvider::Moonshot));
+    }
+
+    #[test]
+    fn stream_classifies_moonshot_kimi_as_reasoning() {
+        // #3016: without this, kimi-k2.6 thinking leaked into answer text.
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Moonshot,
+            "kimi-k2.6"
+        ));
+        assert!(
+            !is_reasoning_model_for_stream(ApiProvider::Moonshot, "kimi-for-coding"),
+            "kimi-for-coding is Moonshot's documented non-thinking model"
+        );
     }
 
     #[test]

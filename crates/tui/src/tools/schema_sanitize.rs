@@ -75,6 +75,35 @@ pub fn sanitize_for_strict(schema: &mut Value) {
     enforce_strict_subset(schema);
 }
 
+/// Sanitize a schema for OpenAI Responses function tools.
+///
+/// The Responses API requires the top-level `parameters` schema to be an object
+/// and rejects top-level `oneOf` / `anyOf` / `allOf` / `enum` / `not`. Keep the
+/// schema permissive rather than changing tool semantics: merge any root
+/// alternative properties we can see, then remove the root-only composition
+/// keywords while preserving nested schemas.
+pub fn sanitize_for_responses(schema: &mut Value) {
+    sanitize(schema);
+
+    if !schema.is_object() {
+        *schema = Value::Object(Map::new());
+    }
+
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+
+    merge_root_composition_properties(obj);
+    obj.insert("type".into(), Value::String("object".to_string()));
+    obj.remove("oneOf");
+    obj.remove("anyOf");
+    obj.remove("allOf");
+    obj.remove("enum");
+    obj.remove("not");
+    ensure_properties_object(obj);
+    prune_dangling_required(schema);
+}
+
 fn strict_schema_supported(schema: &Value) -> bool {
     let mut normalized = schema.clone();
     sanitize(&mut normalized);
@@ -248,6 +277,32 @@ fn ensure_properties_object(obj: &mut Map<String, Value>) -> &mut Map<String, Va
     obj.get_mut("properties")
         .and_then(Value::as_object_mut)
         .expect("properties was just ensured as object")
+}
+
+fn merge_root_composition_properties(obj: &mut Map<String, Value>) {
+    let mut merged = Map::new();
+    for key in ["oneOf", "anyOf", "allOf"] {
+        let Some(items) = obj.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(properties) = item.get("properties").and_then(Value::as_object) else {
+                continue;
+            };
+            for (name, schema) in properties {
+                merged.entry(name.clone()).or_insert_with(|| schema.clone());
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        return;
+    }
+
+    let properties = ensure_properties_object(obj);
+    for (name, schema) in merged {
+        properties.entry(name).or_insert(schema);
+    }
 }
 
 #[cfg(test)]
@@ -602,6 +657,94 @@ mod tests {
         assert_eq!(tools[0].strict, Some(true));
         assert_eq!(tools[0].input_schema["required"], json!(["query"]));
         assert_eq!(tools[0].input_schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn responses_sanitize_removes_root_composition_from_apply_patch_shape() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "patch": {"type": "string"},
+                "changes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"}
+                        },
+                        "required": ["path", "content"]
+                    }
+                }
+            },
+            "oneOf": [
+                {"required": ["patch"]},
+                {"required": ["changes"]}
+            ]
+        });
+
+        sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("oneOf").is_none());
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema.get("allOf").is_none());
+        assert!(schema.get("enum").is_none());
+        assert!(schema.get("not").is_none());
+        assert!(schema["properties"].get("patch").is_some());
+        assert!(schema["properties"].get("changes").is_some());
+    }
+
+    #[test]
+    fn responses_sanitize_merges_root_alternative_properties() {
+        let mut schema = json!({
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"}
+                    },
+                    "required": ["url"]
+                }
+            ]
+        });
+
+        sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema["properties"].get("path").is_some());
+        assert!(schema["properties"].get("url").is_some());
+        assert!(schema.get("required").is_none());
+    }
+
+    #[test]
+    fn responses_sanitize_preserves_nested_alternatives() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "integer"}
+                    ]
+                }
+            }
+        });
+
+        sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema["properties"]["value"].get("anyOf").is_some());
     }
 }
 
