@@ -161,10 +161,7 @@ pub fn record_audio() -> Option<(Vec<i16>, Duration)> {
                     .collect();
 
                 // Simple RMS-based VAD
-                let rms = (chunk
-                    .iter()
-                    .map(|&s| (s as f64) * (s as f64))
-                    .sum::<f64>()
+                let rms = (chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
                     / chunk.len() as f64)
                     .sqrt();
                 let is_speech = rms > speech_threshold as f64;
@@ -213,9 +210,8 @@ pub fn record_audio() -> Option<(Vec<i16>, Duration)> {
 /// Re-export for use by the command handler: regular expression to match
 /// explicit send commands at the end of transcribed text.
 #[allow(dead_code)]
-pub static SEND_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?i)^(send\s*it|发送)\s*$").unwrap()
-});
+pub static SEND_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(send\s*it|发送)\s*$").unwrap());
 
 /// Send audio to the provider's API for transcription.
 ///
@@ -272,8 +268,9 @@ fn transcribe_internal(
         ));
     }
 
-    let data: serde_json::Value =
-        resp.json().map_err(|e| format!("Failed to parse response: {e}"))?;
+    let data: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
 
     data["choices"][0]["message"]["content"]
         .as_str()
@@ -352,15 +349,16 @@ pub fn process_voice_control(
         ));
     }
 
-    let data: serde_json::Value =
-        resp.json().map_err(|e| format!("Failed to parse response: {e}"))?;
+    let data: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
 
     let content = data["choices"][0]["message"]["content"]
         .as_str()
         .ok_or_else(|| "No response content".to_string())?;
 
-    let parsed: serde_json::Value =
-        serde_json::from_str(content).map_err(|e| format!("Failed to parse voice control JSON: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(content)
+        .map_err(|e| format!("Failed to parse voice control JSON: {e}"))?;
 
     let text = parsed["text"]
         .as_str()
@@ -467,9 +465,12 @@ fn record_and_transcribe(app: &mut App) -> Result<(String, Duration), String> {
     let _old_status = app.status_message.take();
     app.status_message = Some(tr(locale, MessageId::VoiceRecording).to_string());
 
-    let (samples, duration) = record_audio().ok_or_else(|| {
-        tr(locale, MessageId::VoiceErrNoRecorder).to_string()
-    })?;
+    // Check recorder availability first (gives a clear error vs. "too short").
+    if !is_available() {
+        return Err(tr(locale, MessageId::VoiceErrNoRecorder).to_string());
+    }
+    let (samples, duration) =
+        record_audio().ok_or_else(|| tr(locale, MessageId::VoiceErrTooShort).to_string())?;
 
     app.status_message = Some(tr(locale, MessageId::VoiceProcessing).to_string());
 

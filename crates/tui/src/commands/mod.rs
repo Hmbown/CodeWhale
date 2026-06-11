@@ -31,8 +31,8 @@ mod skills;
 mod stash;
 mod status;
 mod task;
-mod voice;
 pub mod user_commands;
+pub mod voice;
 
 use std::fmt::Write as _;
 
@@ -643,7 +643,9 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Voice commands
         "voice" | "yuyin" | "语音" => voice::voice(app),
         "voicesend" | "voice-send" | "yuyinsend" | "语音发送" => voice::voice_send(app),
-        "voicecontrol" | "voice-control" | "yuyincontrol" | "语音控制" => voice::voice_control(app),
+        "voicecontrol" | "voice-control" | "yuyincontrol" | "语音控制" => {
+            voice::voice_control(app)
+        }
 
         // Debug commands
         "translate" | "translation" | "transale" => core::translate(app),
