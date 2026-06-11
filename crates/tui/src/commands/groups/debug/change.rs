@@ -19,7 +19,7 @@ use super::CommandResult;
 /// If the changelog section exceeds this, we truncate and show a notice.
 /// 4096 chars is large enough for most version entries.
 const MAX_INLINE_CHANGELOG_CHARS: usize = 4096;
-const DEEPSEEK_TUI_CHANGELOG: &str = include_str!("../../CHANGELOG.md");
+const DEEPSEEK_TUI_CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
 
 /// Execute the `/change` command.
 ///
