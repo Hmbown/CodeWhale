@@ -600,7 +600,7 @@ fn tool_to_responses_function(tool: &Tool) -> Value {
     let constraint_note = schema_sanitize::sanitize_for_responses(&mut parameters);
     let description = match constraint_note {
         Some(note) if tool.description.trim().is_empty() => note,
-        Some(note) => format!("{}\n\n{}", tool.description, note),
+        Some(note) => format!("{}\n\n{}", tool.description.trim(), note),
         None => tool.description.clone(),
     };
     json!({
@@ -757,9 +757,41 @@ mod tests {
         assert!(parameters["properties"].get("changes").is_some());
         assert_eq!(
             payload["description"],
-            "Apply patch\n\nExactly one of these parameter groups must be provided: `patch` | `changes`."
+            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `patch`."
         );
         assert!(tool.input_schema.get("oneOf").is_some());
+    }
+
+    #[test]
+    fn responses_function_tool_trims_description_before_constraint_note() {
+        let tool = Tool {
+            tool_type: None,
+            name: "apply_patch".to_string(),
+            description: "Apply patch\n".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "patch": {"type": "string"},
+                    "changes": {"type": "array"}
+                },
+                "oneOf": [
+                    {"required": ["patch"]},
+                    {"required": ["changes"]}
+                ]
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        };
+
+        let payload = tool_to_responses_function(&tool);
+
+        assert_eq!(
+            payload["description"],
+            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `patch`."
+        );
     }
 
     #[test]
