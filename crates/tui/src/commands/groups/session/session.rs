@@ -156,7 +156,7 @@ pub fn new_session(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     let new_id = uuid::Uuid::new_v4().to_string();
-    super::core::reset_conversation_state(app);
+    crate::commands::groups::core::reset_conversation_state(app);
     app.clear_input();
     app.session_artifacts.clear();
     app.session_context_references.clear();

@@ -2,44 +2,21 @@
 //!
 //! This module provides a modular command system inspired by Codex-rs.
 //! Commands are organized by category and dispatched through a central registry.
+//! Built-in handlers live in group-owned areas under [`groups`]; this module
+//! keeps parsing, registry metadata, user-command precedence, and the
+//! fall-through behaviour.
 
-mod anchor;
-mod attachment;
-mod balance;
-mod change;
-mod config;
-mod core;
-mod debug;
-mod feedback;
-mod goal;
-mod hf;
-mod hooks;
-mod init;
-mod jobs;
-mod mcp;
-mod memory;
-mod network;
-mod note;
+mod groups;
 mod parse;
-mod provider;
-mod queue;
 mod registry;
-mod rename;
-mod restore;
-mod review;
-mod session;
-pub mod share;
-mod skills;
-mod stash;
-mod status;
-mod task;
 pub mod user_commands;
-
-use std::fmt::Write as _;
 
 use parse::parse_slash_command;
 use registry::suggest_command_names;
 pub use registry::{COMMANDS, get_command_info};
+
+// Long-standing public paths that predate the group layout.
+pub use groups::project::share;
 
 use crate::tui::app::{App, AppAction};
 
@@ -112,111 +89,26 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         return result;
     }
 
-    // Match command or alias
-    match command {
-        // Core commands
-        "anchor" | "maodian" => anchor::anchor(app, arg),
-        "help" | "?" | "bangzhu" | "帮助" => core::help(app, arg),
-        "clear" | "qingping" => core::clear(app),
-        "exit" | "quit" | "q" | "tuichu" => core::exit(),
-        "model" | "moxing" => core::model(app, arg),
-        "models" | "moxingliebiao" => core::models(app),
-        "provider" => provider::provider(app, arg),
-        "queue" | "queued" => queue::queue(app, arg),
-        "stash" | "park" => stash::stash(app, arg),
-        "hooks" | "hook" | "gouzi" => hooks::hooks(app, arg),
-        "subagents" | "agents" | "zhinengti" => core::subagents(app),
-        "agent" | "daili" => agent(app, arg),
-        "links" | "dashboard" | "api" | "lianjie" => core::deepseek_links(app),
-        "feedback" => feedback::feedback(app, arg),
-        "hf" | "huggingface" => hf::hf(app, arg),
-        "home" | "stats" | "overview" | "zhuye" | "shouye" => core::home_dashboard(app),
-        "workspace" | "cwd" => core::workspace_switch(app, arg),
-        "note" => note::note(app, arg),
-        "memory" => memory::memory(app, arg),
-        "attach" | "image" | "media" | "fujian" => attachment::attach(app, arg),
-        "task" | "tasks" => task::task(app, arg),
-        "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
-        "mcp" => mcp::mcp(app, arg),
-        "network" => network::network(app, arg),
-
-        // Session commands
-        "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
-        "save" => session::save(app, arg),
-        "fork" | "branch" => session::fork(app),
-        "new" => session::new_session(app, arg),
-        "sessions" | "resume" => session::sessions(app, arg),
-        "relay" | "batonpass" | "接力" => relay(app, arg),
-        "load" | "jiazai" => session::load(app, arg),
-        "compact" | "yasuo" => session::compact(app),
-        "purge" | "qingchu" => session::purge(app),
-        "export" | "daochu" => session::export(app, arg),
-
-        // Config commands
-        "config" => config::config_command(app, arg),
-        "sidebar" => config::sidebar(app, arg),
-        "settings" => config::show_settings(app),
-        "status" => status::status(app),
-        "statusline" => config::status_line(app),
-        "mode" => config::mode(app, arg),
-        "jihua" => config::mode(app, Some("plan")),
-        "zidong" => config::mode(app, Some("yolo")),
-        "theme" => config::theme(app, arg),
-        "verbose" => config::verbose(app, arg),
-        "trust" | "xinren" => config::trust(app, arg),
-        "logout" => config::logout(app),
-
-        // Debug commands
-        "translate" | "translation" | "transale" => core::translate(app),
-        "tokens" => debug::tokens(app),
-        "cost" => debug::cost(app),
-        "balance" => balance::balance(app),
-        "cache" => debug::cache(app, arg),
-
-        // Slop ledger (#2127)
-        "slop" | "canzha" => config::slop(app, arg),
-
-        // ChangeLog command
-        "change" => change::change(app, arg),
-        "system" | "xitong" => debug::system_prompt(app),
-        "context" | "ctx" => debug::context(app),
-        "edit" => debug::edit(app),
-        "diff" => debug::diff(app),
-        "undo" => {
-            // Try surgical patch-undo first; fall back to conversation undo
-            // if no snapshots are available or if the snapshot undo couldn't
-            // find anything useful.
-            let result = debug::patch_undo(app);
-            if result.message.as_deref().is_none_or(|m| {
-                m.starts_with("No snapshots found")
-                    || m.starts_with("No tool or pre-turn")
-                    || m.starts_with("Snapshot repo")
-            }) {
-                debug::undo_conversation(app)
-            } else {
-                result
-            }
+    // Built-in commands are owned by their group areas; each group claims
+    // the names it owns and returns None for everything else.
+    type GroupDispatcher = fn(&mut App, &str, Option<&str>) -> Option<CommandResult>;
+    let group_dispatchers: [GroupDispatcher; 8] = [
+        groups::core::dispatch,
+        groups::session::dispatch,
+        groups::config::dispatch,
+        groups::debug::dispatch,
+        groups::project::dispatch,
+        groups::skills::dispatch,
+        groups::memory::dispatch,
+        groups::utility::dispatch,
+    ];
+    for dispatch in group_dispatchers {
+        if let Some(result) = dispatch(app, command, arg) {
+            return result;
         }
-        "retry" | "chongshi" => debug::retry(app),
+    }
 
-        // Project commands
-        "init" => init::init(app),
-        "lsp" => config::lsp_command(app, arg),
-        "share" => share::share(app, arg),
-        "goal" | "hunt" | "mubiao" | "狩猎" => goal::hunt(app, arg),
-
-        // Skills commands
-        "skills" | "jinengliebiao" => skills::list_skills(app, arg),
-        "skill" | "jineng" => skills::run_skill(app, arg),
-        "review" | "shencha" => review::review(app, arg),
-        "restore" => restore::restore(app, arg),
-
-        // Profile switch (#390)
-        "profile" | "dangan" => core::profile_switch(app, arg),
-
-        // RLM command
-        "rlm" | "recursive" | "digui" => rlm(app, arg),
-
+    match command {
         // Legacy command migrations (kept out of registry/autocomplete intentionally).
         "set" => CommandResult::error(
             "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
@@ -228,7 +120,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         _ => {
             // Third source: skills (lowest precedence after native and user-config).
             // Try to run a skill whose name matches the command.
-            if let Some(result) = skills::run_skill_by_name(app, command, arg) {
+            if let Some(result) = groups::skills::run_skill_by_name(app, command, arg) {
                 return result;
             }
             let suggestions = suggest_command_names(command, 3);
@@ -252,267 +144,11 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 
 /// Update a configuration value programmatically (used by interactive UI views).
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
-    config::set_config_value(app, key, value, persist)
+    groups::config::config::set_config_value(app, key, value, persist)
 }
 
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
-    config::switch_mode(app, mode)
-}
-/// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
-/// Zhang et al. (arXiv:2512.24601).
-///
-/// The user's prompt text is passed as the argument. It will be stored
-/// in the REPL as the `PROMPT` variable. The root LLM will only see
-/// metadata about the REPL state, never the prompt text directly.
-pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let (max_depth, target) = match parse_depth_prefixed_arg(arg, 1) {
-        Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
-    };
-    let target = match target {
-        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
-        _ => {
-            return CommandResult::error(
-                "Usage: /rlm [N] <file_or_text>\n\n\
-                 Opens a persistent RLM context with sub_rlm depth N (0-3, default 1)."
-                    .to_string(),
-            );
-        }
-    };
-
-    let source_arg = if resolves_to_existing_file(app, &target) {
-        format!(r#"file_path: "{target}""#)
-    } else {
-        format!("content: {target:?}")
-    };
-    let message = format!(
-        "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
-    );
-
-    CommandResult::with_message_and_action(
-        format!("Opening persistent RLM context at depth {max_depth}..."),
-        AppAction::SendMessage(message),
-    )
-}
-
-/// Open a persistent sub-agent session from a slash command.
-pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
-    let (max_depth, task) = match parse_depth_prefixed_arg(arg, 1) {
-        Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
-    };
-    let task = match task {
-        Some(task) if !task.trim().is_empty() => task.trim().to_string(),
-        _ => {
-            return CommandResult::error(
-                "Usage: /agent [N] <task>\n\n\
-                 Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
-            );
-        }
-    };
-    let message = format!(
-        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {task:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success."
-    );
-    CommandResult::with_message_and_action(
-        format!("Opening persistent sub-agent at depth {max_depth}..."),
-        AppAction::SendMessage(message),
-    )
-}
-
-/// Ask the active model to write a compact relay artifact for the next thread.
-///
-/// The visible command is `/relay` (with `/接力` for Chinese users), but the
-/// durable file path remains `.deepseek/handoff.md` for compatibility with
-/// existing sessions and startup prompt loading.
-pub fn relay(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let focus = arg.map(str::trim).filter(|value| !value.is_empty());
-    let message = build_relay_instruction(app, focus);
-    CommandResult::with_message_and_action(
-        "Preparing session relay at .deepseek/handoff.md...",
-        AppAction::SendMessage(message),
-    )
-}
-
-fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "Create a compact session relay (接力) for a future CodeWhale thread."
-    );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
-    let _ = writeln!(
-        out,
-        "Keep the existing file path for compatibility, but title the artifact `# Session relay`."
-    );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "Current session snapshot:");
-    let _ = writeln!(out, "- Workspace: {}", app.workspace.display());
-    let _ = writeln!(out, "- Mode: {}", app.mode.label());
-    let _ = writeln!(out, "- Model: {}", app.model_display_label());
-    if let Some(focus) = focus {
-        let _ = writeln!(out, "- Requested relay focus: {focus}");
-    }
-    if let Some(quarry) = app.hunt.quarry.as_deref() {
-        let _ = writeln!(out, "- Hunt quarry: {quarry}");
-    }
-    if let Some(budget) = app.hunt.token_budget {
-        let _ = writeln!(out, "- Hunt token budget: {budget}");
-    }
-    if let Ok(todos) = app.todos.try_lock() {
-        let snapshot = todos.snapshot();
-        if !snapshot.items.is_empty() {
-            let _ = writeln!(
-                out,
-                "\nWork checklist (primary progress surface, {}% complete):",
-                snapshot.completion_pct
-            );
-            for item in snapshot.items {
-                let _ = writeln!(
-                    out,
-                    "- #{} [{}] {}",
-                    item.id,
-                    item.status.as_str(),
-                    item.content
-                );
-            }
-        }
-    } else {
-        let _ = writeln!(
-            out,
-            "\nWork checklist: unavailable because the checklist is busy."
-        );
-    }
-
-    if let Ok(plan) = app.plan_state.try_lock() {
-        let snapshot = plan.snapshot();
-        if !snapshot.is_empty() {
-            let _ = writeln!(out, "\nOptional strategy metadata from update_plan:");
-            write_plan_field(&mut out, "Title", snapshot.title.as_deref());
-            write_plan_field(&mut out, "Objective", snapshot.objective.as_deref());
-            write_plan_field(&mut out, "Context", snapshot.context_summary.as_deref());
-            write_plan_field(&mut out, "Explanation", snapshot.explanation.as_deref());
-            write_plan_list(&mut out, "Source", &snapshot.sources_used);
-            write_plan_list(&mut out, "Critical file", &snapshot.critical_files);
-            write_plan_list(&mut out, "Constraint", &snapshot.constraints);
-            write_plan_field(
-                &mut out,
-                "Recommended approach",
-                snapshot.recommended_approach.as_deref(),
-            );
-            write_plan_field(
-                &mut out,
-                "Verification plan",
-                snapshot.verification_plan.as_deref(),
-            );
-            write_plan_field(
-                &mut out,
-                "Risks and unknowns",
-                snapshot.risks_and_unknowns.as_deref(),
-            );
-            write_plan_field(
-                &mut out,
-                "Handoff packet",
-                snapshot.handoff_packet.as_deref(),
-            );
-            for item in snapshot.items {
-                let _ = writeln!(out, "- [{}] {}", plan_status_label(&item.status), item.step);
-            }
-        }
-    } else {
-        let _ = writeln!(
-            out,
-            "\nStrategy metadata: unavailable because plan state is busy."
-        );
-    }
-
-    let _ = writeln!(
-        out,
-        "\nBefore writing, inspect the current transcript context and any live tool evidence you need. Do not invent test results, file changes, blockers, or decisions."
-    );
-    let _ = writeln!(
-        out,
-        "\nUse this compact structure:\n\
-         # Session relay\n\
-         \n\
-         ## Goal\n\
-         [the user's objective and any explicit constraints]\n\
-         \n\
-         ## Current work\n\
-         [the active Work checklist item, progress, and what is mid-flight]\n\
-         \n\
-         ## Files and state\n\
-         [changed files, important paths, sub-agents/RLM sessions, commands run]\n\
-         \n\
-         ## Decisions\n\
-         [why key choices were made]\n\
-         \n\
-         ## Verification\n\
-         [what passed, what failed, what was not run]\n\
-         \n\
-         ## Next action\n\
-         [one concrete action for the next thread]"
-    );
-    let _ = writeln!(
-        out,
-        "\nKeep it under about 900 words unless the session genuinely needs more. After writing, report the path and the single next action."
-    );
-    out
-}
-
-fn write_plan_field(out: &mut String, label: &str, value: Option<&str>) {
-    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        let _ = writeln!(out, "- {label}: {value}");
-    }
-}
-
-fn write_plan_list(out: &mut String, label: &str, values: &[String]) {
-    for value in values {
-        let value = value.trim();
-        if !value.is_empty() {
-            let _ = writeln!(out, "- {label}: {value}");
-        }
-    }
-}
-
-fn plan_status_label(status: &crate::tools::plan::StepStatus) -> &'static str {
-    match status {
-        crate::tools::plan::StepStatus::Pending => "pending",
-        crate::tools::plan::StepStatus::InProgress => "in_progress",
-        crate::tools::plan::StepStatus::Completed => "completed",
-    }
-}
-
-fn parse_depth_prefixed_arg(
-    arg: Option<&str>,
-    default_depth: u32,
-) -> Result<(u32, Option<&str>), String> {
-    let Some(raw) = arg.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return Ok((default_depth, None));
-    };
-    let mut parts = raw.splitn(2, char::is_whitespace);
-    let first = parts.next().unwrap_or_default();
-    if first.chars().all(|ch| ch.is_ascii_digit()) {
-        let depth: u32 = first
-            .parse()
-            .map_err(|_| "Depth must be an integer from 0 to 3".to_string())?;
-        if depth > 3 {
-            return Err("Depth must be between 0 and 3".to_string());
-        }
-        Ok((depth, parts.next().map(str::trim)))
-    } else {
-        Ok((default_depth, Some(raw)))
-    }
-}
-
-fn resolves_to_existing_file(app: &App, input: &str) -> bool {
-    let path = std::path::Path::new(input);
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        app.workspace.join(path)
-    };
-    candidate.is_file()
+    groups::config::config::switch_mode(app, mode)
 }
 
 #[cfg(test)]
