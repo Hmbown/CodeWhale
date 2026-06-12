@@ -87,7 +87,7 @@ mod tests {
             content: Vec::new(),
             model: "test-model".to_string(),
             stop_reason: Some("end_turn".to_string()),
-            stop_sequence: None,
+
             container: None,
             usage: Usage {
                 input_tokens: 42,

@@ -307,7 +307,7 @@ impl DeepSeekClient {
                     content: Vec::new(),
                     model: model.clone(),
                     stop_reason: None,
-                    stop_sequence: None,
+
                     container: None,
                     usage: Usage {
                         input_tokens: 0,
@@ -2109,7 +2109,7 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
             .get("finish_reason")
             .and_then(Value::as_str)
             .map(str::to_string),
-        stop_sequence: None,
+
         container: None,
         usage,
     })
@@ -2197,7 +2197,6 @@ fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
     events.push(StreamEvent::MessageDelta {
         delta: MessageDelta {
             stop_reason: response.stop_reason.clone(),
-            stop_sequence: response.stop_sequence.clone(),
         },
         usage: Some(response.usage.clone()),
     });
@@ -2257,10 +2256,7 @@ pub(super) fn parse_sse_chunk(
         if let Some(usage_val) = chunk.get("usage") {
             let usage = parse_usage(Some(usage_val));
             events.push(StreamEvent::MessageDelta {
-                delta: MessageDelta {
-                    stop_reason: None,
-                    stop_sequence: None,
-                },
+                delta: MessageDelta { stop_reason: None },
                 usage: Some(usage),
             });
         }
@@ -2271,10 +2267,7 @@ pub(super) fn parse_sse_chunk(
         if let Some(usage_val) = chunk.get("usage") {
             let usage = parse_usage(Some(usage_val));
             events.push(StreamEvent::MessageDelta {
-                delta: MessageDelta {
-                    stop_reason: None,
-                    stop_sequence: None,
-                },
+                delta: MessageDelta { stop_reason: None },
                 usage: Some(usage),
             });
         }
@@ -2469,7 +2462,6 @@ pub(super) fn parse_sse_chunk(
             events.push(StreamEvent::MessageDelta {
                 delta: MessageDelta {
                     stop_reason: Some(reason),
-                    stop_sequence: None,
                 },
                 usage: chunk_usage,
             });

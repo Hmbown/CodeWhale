@@ -324,7 +324,7 @@ fn synthesize_message_response(turn: CannedTurn, model: &str) -> MessageResponse
         }],
         model: model.to_string(),
         stop_reason: stop_reason.or_else(|| Some("end_turn".to_string())),
-        stop_sequence: None,
+
         container: None,
         usage: Usage::default(),
     }
@@ -350,7 +350,7 @@ pub mod canned {
                 content: vec![],
                 model: "mock-model".to_string(),
                 stop_reason: None,
-                stop_sequence: None,
+
                 container: None,
                 usage: Usage::default(),
             },
@@ -427,7 +427,6 @@ pub mod canned {
         StreamEvent::MessageDelta {
             delta: MessageDelta {
                 stop_reason: Some(stop_reason.to_string()),
-                stop_sequence: None,
             },
             usage,
         }
@@ -579,7 +578,7 @@ mod tests {
             }],
             model: "mock-model".to_string(),
             stop_reason: Some("end_turn".to_string()),
-            stop_sequence: None,
+
             container: None,
             usage: Usage::default(),
         });

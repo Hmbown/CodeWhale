@@ -388,7 +388,7 @@ async fn compaction_non_streaming_returns_queued_message_response() {
         }],
         model: "deepseek-v4-pro".to_string(),
         stop_reason: Some("end_turn".to_string()),
-        stop_sequence: None,
+
         container: None,
         usage: Usage::default(),
     });
