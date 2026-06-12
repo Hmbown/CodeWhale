@@ -559,4 +559,43 @@ mod tests {
             "Failed to validate input: missing required field 'path'"
         );
     }
+
+    #[test]
+    fn required_u64_edge_cases() {
+        // Missing field
+        let input = json!({});
+        assert!(matches!(
+            required_u64(&input, "count"),
+            Err(ToolError::MissingField { .. })
+        ));
+
+        // Valid u64
+        let input = json!({"count": 42});
+        assert_eq!(required_u64(&input, "count").unwrap(), 42);
+
+        // Max u64
+        let input = json!({"count": u64::MAX});
+        assert_eq!(required_u64(&input, "count").unwrap(), u64::MAX);
+
+        // Negative number (not a u64)
+        let input = json!({"count": -1});
+        assert!(matches!(
+            required_u64(&input, "count"),
+            Err(ToolError::MissingField { .. })
+        ));
+
+        // Floating point number (not a u64)
+        let input = json!({"count": 3.14});
+        assert!(matches!(
+            required_u64(&input, "count"),
+            Err(ToolError::MissingField { .. })
+        ));
+
+        // String containing a number (not a u64)
+        let input = json!({"count": "42"});
+        assert!(matches!(
+            required_u64(&input, "count"),
+            Err(ToolError::MissingField { .. })
+        ));
+    }
 }
