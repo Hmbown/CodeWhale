@@ -2902,7 +2902,11 @@ mod tests {
     fn hook_gate_denies_with_exit_code_2() {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
-        let deny_cmd = if cfg!(windows) { "exit /b 2" } else { "exit 2" };
+        let deny_cmd = if cfg!(windows) {
+            "cmd /c \"exit /b 2\""
+        } else {
+            "sh -c \"exit 2\""
+        };
         let config = HooksConfig {
             enabled: true,
             hooks: vec![Hook::new(HookEvent::ToolCallBefore, deny_cmd)],
@@ -2922,7 +2926,11 @@ mod tests {
     fn hook_gate_allows_with_exit_code_0() {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
-        let allow_cmd = if cfg!(windows) { "exit /b 0" } else { "exit 0" };
+        let allow_cmd = if cfg!(windows) {
+            "cmd /c \"exit /b 0\""
+        } else {
+            "sh -c \"exit 0\""
+        };
         let config = HooksConfig {
             enabled: true,
             hooks: vec![Hook::new(HookEvent::ToolCallBefore, allow_cmd)],
@@ -2943,7 +2951,11 @@ mod tests {
     fn hook_gate_failure_exit_code_1_is_not_denial() {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
-        let fail_cmd = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let fail_cmd = if cfg!(windows) {
+            "cmd /c \"exit /b 1\""
+        } else {
+            "sh -c \"exit 1\""
+        };
         let config = HooksConfig {
             enabled: true,
             hooks: vec![Hook::new(HookEvent::ToolCallBefore, fail_cmd)],
@@ -2981,9 +2993,9 @@ mod tests {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
         let deny_cmd = if cfg!(windows) {
-            "echo Tool blocked by security policy & exit /b 2"
+            "cmd /c \"echo Tool blocked by security policy & exit /b 2\""
         } else {
-            "echo 'Tool blocked by security policy' && exit 2"
+            "sh -c \"echo 'Tool blocked by security policy' && exit 2\""
         };
         let config = HooksConfig {
             enabled: true,
@@ -3100,9 +3112,9 @@ mod tests {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
         let deny_cmd = if cfg!(windows) {
-            r#"echo {"decision":"deny","reason":"blocked by project policy"}"#
+            r#"cmd /c "echo {"decision":"deny","reason":"blocked by project policy"}""#
         } else {
-            r#"echo '{"decision":"deny","reason":"blocked by project policy"}'"#
+            r#"sh -c "echo '{\"decision\":\"deny\",\"reason\":\"blocked by project policy\"}'""#
         };
         let config = HooksConfig {
             enabled: true,
@@ -3126,9 +3138,9 @@ mod tests {
         use crate::hooks::{Hook, HookContext, HookEvent, HookExecutor, HooksConfig};
 
         let ask_cmd = if cfg!(windows) {
-            r#"echo {"decision":"ask"}"#
+            r#"cmd /c "echo {"decision":"ask"}""#
         } else {
-            r#"echo '{"decision":"ask"}'"#
+            r#"sh -c "echo '{\"decision\":\"ask\"}'""#
         };
         let config = HooksConfig {
             enabled: true,

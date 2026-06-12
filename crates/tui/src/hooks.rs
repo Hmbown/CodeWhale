@@ -117,7 +117,7 @@ pub struct Hook {
     /// The event that triggers this hook
     pub event: HookEvent,
 
-    /// Shell command to execute (platform shell: `sh -c` on Unix, `cmd /C` on Windows)
+    /// Command to execute (parsed with shlex to avoid shell injection vulnerabilities)
     pub command: String,
 
     /// Optional condition for when this hook should run
@@ -623,22 +623,17 @@ pub struct HookExecutor {
 }
 
 impl HookExecutor {
-    fn build_shell_command(command: &str) -> Command {
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt as _;
-            let mut cmd = Command::new("cmd");
-            // raw_arg: cmd.exe does not parse the CRT-style \" escapes that
-            // Command::arg would insert, so pass the command line verbatim.
-            cmd.arg("/C").raw_arg(command);
-            cmd
+    fn build_shell_command(command: &str) -> Option<Command> {
+        // We use shlex on all platforms to parse the command string securely without a shell.
+        // This ensures cross-platform consistency and eliminates shell injection risks.
+        // Note: On Windows, paths with backslashes should be quoted or use forward slashes.
+        let tokens = shlex::split(command)?;
+        if tokens.is_empty() {
+            return None;
         }
-        #[cfg(not(windows))]
-        {
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c").arg(command);
-            cmd
-        }
+        let mut cmd = Command::new(&tokens[0]);
+        cmd.args(&tokens[1..]);
+        Some(cmd)
     }
 
     /// Create a new `HookExecutor` with configuration
@@ -1086,7 +1081,20 @@ impl HookExecutor {
             }
         };
 
-        let mut command = Self::build_shell_command(&hook.command);
+        let mut command = match Self::build_shell_command(&hook.command) {
+            Some(cmd) => cmd,
+            None => {
+                return HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to parse hook command: {}", hook.command)),
+                };
+            }
+        };
         command
             .current_dir(&working_dir)
             .envs(env_vars)
@@ -1207,7 +1215,9 @@ impl HookExecutor {
 
         // Spawn in a detached thread (fire-and-forget hook execution).
         std::thread::spawn(move || {
-            let mut command = HookExecutor::build_shell_command(&cmd);
+            let Some(mut command) = HookExecutor::build_shell_command(&cmd) else {
+                return;
+            };
             command
                 .current_dir(&wd)
                 .envs(&env)
