@@ -29,17 +29,22 @@
 //! if the base section hash happens to collide (extremely unlikely with
 //! SHA-256, but cheap to guard against).
 
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::time::SystemTime;
 
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::logging;
 
 /// Metadata stored alongside a cached base section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
+#[cfg(test)]
 struct CacheMetadata {
     /// Absolute path to the workspace that produced this base section.
     workspace: PathBuf,
@@ -55,7 +60,7 @@ struct CacheMetadata {
 /// Return the directory where prompt caches are stored.
 ///
 /// Creates the directory if it doesn't exist.
-#[allow(dead_code)]
+#[cfg(test)]
 fn cache_dir() -> Option<PathBuf> {
     // Override hook so tests never touch the real ~/.codewhale cache (and
     // never race each other through it).
@@ -71,7 +76,7 @@ fn cache_dir() -> Option<PathBuf> {
 }
 
 /// Get the modification time of a directory as seconds since epoch.
-#[allow(dead_code)]
+#[cfg(test)]
 fn dir_mtime_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|m| m.modified())
@@ -85,7 +90,7 @@ fn dir_mtime_secs(path: &Path) -> u64 {
 ///
 /// Returns `Some(text)` if a valid cache entry exists for the given hash
 /// and workspace, or `None` if the cache is missing, stale, or corrupt.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn load_cached_base_section(base_hash: &str, workspace: &Path) -> Option<String> {
     let dir = cache_dir()?;
     let bin_path = dir.join(format!("{base_hash}.bin"));
@@ -128,7 +133,7 @@ pub fn load_cached_base_section(base_hash: &str, workspace: &Path) -> Option<Str
 ///
 /// The cache key is `base_hash` (SHA-256 of the base section text). The
 /// metadata includes the workspace path and its mtime for invalidation.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn save_cached_base_section(base_hash: &str, base_text: &str, workspace: &Path) {
     let dir = match cache_dir() {
         Some(d) => d,
@@ -165,7 +170,7 @@ pub fn save_cached_base_section(base_hash: &str, base_text: &str, workspace: &Pa
 /// Removes cache entries older than `max_age_secs` or whose workspace
 /// mtime no longer matches. This is a best-effort cleanup; it runs
 /// lazily when the cache is accessed.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn evict_stale_entries(max_age_secs: u64) {
     let dir = match cache_dir() {
         Some(d) => d,
