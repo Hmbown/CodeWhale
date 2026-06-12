@@ -32,6 +32,7 @@ mod stash;
 mod status;
 mod task;
 pub mod user_commands;
+pub mod voice;
 
 use std::fmt::Write as _;
 
@@ -552,6 +553,25 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/slop [query|export]",
         description_id: MessageId::CmdSlopDescription,
     },
+    // Voice commands
+    CommandInfo {
+        name: "voice",
+        aliases: &["yuyin", "语音"],
+        usage: "/voice",
+        description_id: MessageId::CmdVoiceDescription,
+    },
+    CommandInfo {
+        name: "voicesend",
+        aliases: &["voice-send", "yuyinsend", "语音发送"],
+        usage: "/voicesend",
+        description_id: MessageId::CmdVoiceSendDescription,
+    },
+    CommandInfo {
+        name: "voicecontrol",
+        aliases: &["voice-control", "yuyincontrol", "语音控制"],
+        usage: "/voicecontrol",
+        description_id: MessageId::CmdVoiceControlDescription,
+    },
 ];
 
 /// Execute a slash command
@@ -619,6 +639,13 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "verbose" => config::verbose(app, arg),
         "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),
+
+        // Voice commands
+        "voice" | "yuyin" | "语音" => voice::voice(app),
+        "voicesend" | "voice-send" | "yuyinsend" | "语音发送" => voice::voice_send(app),
+        "voicecontrol" | "voice-control" | "yuyincontrol" | "语音控制" => {
+            voice::voice_control(app)
+        }
 
         // Debug commands
         "translate" | "translation" | "transale" => core::translate(app),

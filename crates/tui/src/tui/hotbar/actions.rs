@@ -197,9 +197,13 @@ impl HotbarAction for AppHotbarAction {
     fn dispatch(&self, app: &mut App) -> Result<HotbarDispatch> {
         match self.kind {
             AppHotbarKind::VoiceToggle => {
-                app.status_message =
-                    Some("Voice input is not available in this terminal session yet.".to_string());
-                Ok(HotbarDispatch::Handled)
+                let result = crate::commands::voice::voice(app);
+                app.status_message = result.message;
+                if let Some(action) = result.action {
+                    Ok(HotbarDispatch::AppAction(action))
+                } else {
+                    Ok(HotbarDispatch::Handled)
+                }
             }
             AppHotbarKind::SessionCompact => {
                 if app.is_compacting {
@@ -513,11 +517,15 @@ mod tests {
         let mut app = test_app();
 
         assert!(!voice.is_active(&app));
-        assert_eq!(
-            voice.dispatch(&mut app).expect("dispatch voice"),
-            HotbarDispatch::Handled
-        );
-        assert_eq!(
+        // Voice toggle is wired to the /voice command. Without a real
+        // recorder or API key, it will fail gracefully with an error
+        // message rather than crash.
+        let result = voice.dispatch(&mut app).expect("dispatch voice");
+        assert!(matches!(result, HotbarDispatch::Handled));
+        // Should set a status message (either "enabled"/"disabled" or an error).
+        assert!(app.status_message.is_some());
+        // The old placeholder message must be gone — voice is now implemented.
+        assert_ne!(
             app.status_message.as_deref(),
             Some("Voice input is not available in this terminal session yet.")
         );
