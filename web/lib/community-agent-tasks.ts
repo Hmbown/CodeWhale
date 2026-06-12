@@ -97,8 +97,13 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
     let processed = 0;
     let skipped = 0;
 
-    for (const issue of newIssues) {
-      if (await hasFreshDraft(env.CURATED_KV, "issue", String(issue.number), issue.updated_at)) {
+    const draftChecks = await Promise.all(
+      newIssues.map((issue) => hasFreshDraft(env.CURATED_KV, "issue", String(issue.number), issue.updated_at))
+    );
+
+    for (let i = 0; i < newIssues.length; i++) {
+      const issue = newIssues[i];
+      if (draftChecks[i]) {
         skipped++;
         continue;
       }
@@ -162,8 +167,14 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
     let processed = 0;
     let skipped = 0;
 
-    for (const pr of prs.slice(0, 10)) {
-      if (await hasFreshDraft(env.CURATED_KV, "pr", String(pr.number), pr.updated_at)) {
+    const topPrs = prs.slice(0, 10);
+    const draftChecks = await Promise.all(
+      topPrs.map((pr) => hasFreshDraft(env.CURATED_KV, "pr", String(pr.number), pr.updated_at))
+    );
+
+    for (let i = 0; i < topPrs.length; i++) {
+      const pr = topPrs[i];
+      if (draftChecks[i]) {
         skipped++;
         continue;
       }
@@ -247,8 +258,14 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
     let processed = 0;
     let skipped = 0;
 
-    for (const issue of issues.slice(0, 10)) {
-      if (await hasFreshDraft(env.CURATED_KV, "stale", String(issue.number), issue.updated_at)) {
+    const topIssues = issues.slice(0, 10);
+    const draftChecks = await Promise.all(
+      topIssues.map((issue) => hasFreshDraft(env.CURATED_KV, "stale", String(issue.number), issue.updated_at))
+    );
+
+    for (let i = 0; i < topIssues.length; i++) {
+      const issue = topIssues[i];
+      if (draftChecks[i]) {
         skipped++;
         continue;
       }
