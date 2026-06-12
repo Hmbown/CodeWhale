@@ -12,3 +12,6 @@ reqwest = { workspace = true, features = ["blocking"] }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+serial_test = "3.1.1"

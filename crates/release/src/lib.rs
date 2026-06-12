@@ -434,3 +434,114 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+    use serial_test::serial;
+
+    fn clear_all_envs() {
+        unsafe {
+            std::env::remove_var(RELEASE_BASE_URL_ENV);
+            std::env::remove_var(LEGACY_RELEASE_BASE_URL_ENV);
+            std::env::remove_var(DEEPSEEK_RELEASE_BASE_URL_ENV);
+            std::env::remove_var(CNB_MIRROR_ENV);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn returns_none_when_no_vars_set() {
+        clear_all_envs();
+        assert_eq!(release_base_url_from_env("1.0.0"), None);
+    }
+
+    #[test]
+    #[serial]
+    fn prefers_primary_release_base_url() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "https://primary.example.com");
+            std::env::set_var(LEGACY_RELEASE_BASE_URL_ENV, "https://legacy.example.com");
+        }
+        assert_eq!(
+            release_base_url_from_env("1.0.0"),
+            Some("https://primary.example.com".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn falls_back_to_legacy_vars() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(LEGACY_RELEASE_BASE_URL_ENV, "https://legacy.example.com");
+            std::env::set_var(DEEPSEEK_RELEASE_BASE_URL_ENV, "https://deepseek.example.com");
+        }
+        assert_eq!(
+            release_base_url_from_env("1.0.0"),
+            Some("https://legacy.example.com".to_string())
+        );
+
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(DEEPSEEK_RELEASE_BASE_URL_ENV, "https://deepseek.example.com");
+        }
+        assert_eq!(
+            release_base_url_from_env("1.0.0"),
+            Some("https://deepseek.example.com".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn trims_whitespace_from_env_vars() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "  https://spaced.example.com  \n");
+        }
+        assert_eq!(
+            release_base_url_from_env("1.0.0"),
+            Some("https://spaced.example.com".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn ignores_empty_or_whitespace_only_vars() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "   ");
+            std::env::set_var(LEGACY_RELEASE_BASE_URL_ENV, "");
+            std::env::set_var(DEEPSEEK_RELEASE_BASE_URL_ENV, "\n");
+        }
+        assert_eq!(release_base_url_from_env("1.0.0"), None);
+    }
+
+    #[test]
+    #[serial]
+    fn falls_back_to_cnb_mirror() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(CNB_MIRROR_ENV, "1");
+        }
+        assert_eq!(
+            release_base_url_from_env("v1.2.3"),
+            Some("https://cnb.cool/Hmbown/CodeWhale/-/releases/v1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn explicit_url_overrides_cnb_mirror() {
+        clear_all_envs();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "https://explicit.example.com");
+            std::env::set_var(CNB_MIRROR_ENV, "1");
+        }
+        assert_eq!(
+            release_base_url_from_env("1.0.0"),
+            Some("https://explicit.example.com".to_string())
+        );
+    }
+}
