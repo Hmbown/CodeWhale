@@ -3865,6 +3865,7 @@ mod tests {
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
         let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
@@ -3900,6 +3901,7 @@ mod tests {
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
         let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
@@ -3938,6 +3940,7 @@ mod tests {
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
         let cmd = build_tui_command(&cli, &options, vec![]).expect("should graceful fallback");
