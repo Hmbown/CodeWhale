@@ -559,4 +559,14 @@ mod tests {
             "Failed to validate input: missing required field 'path'"
         );
     }
+
+    #[test]
+    fn test_tool_error_not_available() {
+        let err = ToolError::not_available("custom tool not found");
+        assert!(matches!(err, ToolError::NotAvailable { .. }));
+        assert_eq!(
+            err.to_string(),
+            "Failed to locate tool: custom tool not found"
+        );
+    }
 }
