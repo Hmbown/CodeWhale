@@ -350,6 +350,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_is_beta_tag() {
+        // True cases
+        assert!(is_beta_tag("beta"));
+        assert!(is_beta_tag("BETA"));
+        assert!(is_beta_tag("BeTa"));
+        assert!(is_beta_tag("v1.0.0-beta.1"));
+        assert!(is_beta_tag("v1.0.0-BETA.1"));
+        assert!(is_beta_tag("v2.0.0-beta"));
+        assert!(is_beta_tag("something-beta-something"));
+        assert!(is_beta_tag("beta-1.0"));
+
+        // False cases
+        assert!(!is_beta_tag("v1.0.0"));
+        assert!(!is_beta_tag("alpha"));
+        assert!(!is_beta_tag("rc"));
+        assert!(!is_beta_tag("bet"));
+        assert!(!is_beta_tag("v1.0.0-alpha.1"));
+        assert!(!is_beta_tag("v1.0.0-rc.1"));
+        assert!(!is_beta_tag(""));
+    }
+
+    #[test]
     fn cnb_release_base_url_includes_tag_directory() {
         assert_eq!(
             cnb_release_base_url("0.8.47"),
