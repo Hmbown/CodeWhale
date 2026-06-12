@@ -57,7 +57,6 @@ mod pricing;
 mod project_context;
 mod project_context_cache;
 mod project_doc;
-mod prompt_persist;
 mod prompt_zones;
 mod prompts;
 mod purge;
