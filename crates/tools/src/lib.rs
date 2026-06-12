@@ -541,6 +541,27 @@ mod tests {
     }
 
     #[test]
+    fn optional_str_behavior() {
+        let input = json!({
+            "valid": "string_value",
+            "number": 42,
+            "null_value": null
+        });
+
+        // Happy path
+        assert_eq!(optional_str(&input, "valid"), Some("string_value"));
+
+        // Missing field
+        assert_eq!(optional_str(&input, "missing"), None);
+
+        // Wrong type
+        assert_eq!(optional_str(&input, "number"), None);
+
+        // Null value
+        assert_eq!(optional_str(&input, "null_value"), None);
+    }
+
+    #[test]
     fn required_str_reports_provided_fields_on_missing_required_field() {
         let input = json!({"path": "src/lib.rs", "content": "new body"});
         let err = required_str(&input, "replace").expect_err("replace is missing");
