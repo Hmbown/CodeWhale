@@ -19,6 +19,7 @@ mod jobs;
 mod mcp;
 mod memory;
 mod network;
+mod plugins;
 mod note;
 mod provider;
 mod queue;
@@ -283,6 +284,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         usage: "/network [list|allow <host>|deny <host>|remove <host>|default <allow|deny|prompt>]",
         description_id: MessageId::CmdNetworkDescription,
+    },
+    CommandInfo {
+        name: "plugins",
+        aliases: &["plugin"],
+        usage: "/plugins [name]",
+        description_id: MessageId::CmdPluginDescription,
     },
     // Session commands
     CommandInfo {
@@ -593,6 +600,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
         "network" => network::network(app, arg),
+        "plugins" | "plugin" => plugins::plugins(app, arg),
 
         // Session commands
         "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
