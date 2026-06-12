@@ -1,0 +1,3 @@
+## 2024-06-12 - Avoid `sort_by_key` when keys involve heap allocations
+**Learning:** In Rust (and specifically seen in this codebase's UI rendering logic), `slice::sort_by_key(|item| (rank(item), item.id.clone()))` is an anti-pattern. Because `sort_by_key` evaluates the key function $O(n \log n)$ times, it clones `id` strings repeatedly, causing unnecessary heap allocations.
+**Action:** Replace `sort_by_key` with `sort_by` and use `.cmp().then_with(|| ...)` for multi-level sorting. This allows comparing fields without moving or cloning them, and defers the secondary comparison unless necessary.

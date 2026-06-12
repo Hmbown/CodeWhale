@@ -1506,7 +1506,11 @@ fn background_task_rows(app: &App, active_rows: &[SidebarToolRow]) -> Vec<TaskPa
         .filter(|task| !background_task_duplicates_live_tool(task, active_rows))
         .cloned()
         .collect();
-    rows.sort_by_key(|task| (task_status_rank(task.status.as_str()), task.id.clone()));
+    rows.sort_by(|a, b| {
+        task_status_rank(a.status.as_str())
+            .cmp(&task_status_rank(b.status.as_str()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     rows
 }
 
@@ -1517,7 +1521,11 @@ fn reasoning_task_rows(app: &App) -> Vec<TaskPanelEntry> {
         .filter(|task| task.kind == TaskPanelEntryKind::ModelReasoning)
         .cloned()
         .collect();
-    rows.sort_by_key(|task| (task_status_rank(task.status.as_str()), task.id.clone()));
+    rows.sort_by(|a, b| {
+        task_status_rank(a.status.as_str())
+            .cmp(&task_status_rank(b.status.as_str()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     rows
 }
 
