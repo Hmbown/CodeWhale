@@ -348,7 +348,6 @@ fn version_is_beta(version: &semver::Version) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     #[test]
     fn cnb_release_base_url_includes_tag_directory() {
@@ -433,54 +432,5 @@ mod tests {
             err.to_string().contains("no beta release found"),
             "unexpected error: {err:#}"
         );
-    }
-
-    struct EnvGuard {
-        key: &'static str,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn update_version_from_env_returns_version_if_set() {
-        let _guard = EnvGuard::set(UPDATE_VERSION_ENV, "v1.2.3");
-        assert_eq!(update_version_from_env().unwrap(), "1.2.3");
-        drop(_guard);
-
-        let _guard2 = EnvGuard::set(LEGACY_UPDATE_VERSION_ENV, "v1.2.4");
-        assert_eq!(update_version_from_env().unwrap(), "1.2.4");
-    }
-
-    #[test]
-    #[serial]
-    fn update_version_from_env_handles_whitespace() {
-        let _guard = EnvGuard::set(UPDATE_VERSION_ENV, "  v1.2.5  ");
-        assert_eq!(update_version_from_env().unwrap(), "1.2.5");
-    }
-
-    #[test]
-    #[serial]
-    fn update_version_from_env_returns_none_if_not_set() {
-        unsafe {
-            std::env::remove_var(UPDATE_VERSION_ENV);
-            std::env::remove_var(LEGACY_UPDATE_VERSION_ENV);
-        }
-        assert_eq!(update_version_from_env(), None);
     }
 }
