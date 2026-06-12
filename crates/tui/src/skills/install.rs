@@ -39,6 +39,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -587,12 +588,11 @@ pub async fn sync_registry(
         }
     };
 
-    let mut outcomes = Vec::new();
+    let futures = doc.skills.iter().map(|(name, entry)| {
+        sync_one_skill(name, entry, network, cache_dir, max_size)
+    });
 
-    for (name, entry) in &doc.skills {
-        let outcome = sync_one_skill(name, entry, network, cache_dir, max_size).await;
-        outcomes.push(outcome);
-    }
+    let outcomes = join_all(futures).await;
 
     Ok(SyncResult::Done { outcomes })
 }
