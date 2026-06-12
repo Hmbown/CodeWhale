@@ -127,7 +127,11 @@ impl DefaultKeyringStore {
         #[cfg(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         ))]
         {
             // `Entry::new` is enough to validate the native macOS/Windows
@@ -156,7 +160,11 @@ impl DefaultKeyringStore {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         )))]
         {
             let _ = &self.service;
@@ -170,7 +178,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
@@ -184,7 +196,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         )))]
         {
             let _ = key;
@@ -196,7 +212,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
@@ -208,7 +228,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         )))]
         {
             let _ = (key, value);
@@ -220,7 +244,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
@@ -233,7 +261,11 @@ impl KeyringStore for DefaultKeyringStore {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "windows",
-            all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
         )))]
         {
             let _ = key;
@@ -249,7 +281,11 @@ impl KeyringStore for DefaultKeyringStore {
 #[cfg(not(any(
     target_os = "macos",
     target_os = "windows",
-    all(target_os = "linux", not(target_env = "ohos"), not(target_env = "musl"))
+    all(
+        target_os = "linux",
+        not(target_env = "ohos"),
+        not(target_env = "musl")
+    )
 )))]
 fn unsupported_keyring_message() -> String {
     "system keyring backend is unsupported on this platform".to_string()
