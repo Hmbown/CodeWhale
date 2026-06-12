@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { lastPageFromLink, relativeTime } from "./github";
+import { lastPageFromLink, relativeTime, fetchRepoStats } from "./github";
 
 // We test the pure helper functions directly.
 // The async fetch functions require mocking the global fetch.
@@ -80,5 +80,157 @@ describe("lastPageFromLink", () => {
   it("returns undefined for invalid URL format", () => {
     const link = "not-a-valid-link-header; rel=last";
     expect(lastPageFromLink(link)).toBeUndefined();
+  });
+});
+
+
+// ── fetchRepoStats ────────────────────────────────────────────────────────
+
+describe("fetchRepoStats", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const mockDate = new Date("2026-06-01T12:00:00Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(mockDate);
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("fetches repo stats successfully", async () => {
+    // We need 4 fetches: repo, contributors, latest release, search PRs
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/repos/Hmbown/CodeWhale/contributors")) {
+        return {
+          ok: true,
+          headers: new Headers({
+            link: '<https://api.github.com/repositories/123/contributors?per_page=1&anon=true&page=200>; rel="last"',
+          }),
+          json: async () => [],
+        };
+      }
+      if (url.includes("/repos/Hmbown/CodeWhale/releases/latest")) {
+        return {
+          ok: true,
+          json: async () => ({
+            tag_name: "v1.0.0",
+            published_at: "2026-05-01T00:00:00Z",
+            html_url: "https://github.com/Hmbown/CodeWhale/releases/tag/v1.0.0",
+          }),
+        };
+      }
+      if (url.includes("/search/issues")) {
+        return {
+          ok: true,
+          json: async () => ({
+            total_count: 5,
+          }),
+        };
+      }
+      if (url.includes("/repos/Hmbown/CodeWhale")) {
+        return {
+          ok: true,
+          json: async () => ({
+            stargazers_count: 100,
+            forks_count: 20,
+            open_issues_count: 15,
+          }),
+        };
+      }
+      return { ok: false };
+    });
+
+    const stats = await fetchRepoStats("fake-token");
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    // Check if token is passed correctly
+    const calls = fetchMock.mock.calls;
+    expect(calls[0][1].headers.Authorization).toBe("Bearer fake-token");
+    expect(calls[0][1].headers.Accept).toBe("application/vnd.github+json");
+
+    expect(stats).toEqual({
+      stars: 100,
+      forks: 20,
+      openIssues: 10, // 15 total - 5 PRs
+      openPulls: 5,
+      contributors: 200,
+      latestRelease: {
+        tag: "v1.0.0",
+        publishedAt: "2026-05-01T00:00:00Z",
+        url: "https://github.com/Hmbown/CodeWhale/releases/tag/v1.0.0",
+      },
+      fetchedAt: mockDate.toISOString(),
+    });
+  });
+
+  it("handles failed API responses", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => { throw new Error("Should not be called"); },
+      headers: new Headers(),
+    });
+
+    const stats = await fetchRepoStats();
+
+    expect(stats).toEqual({
+      stars: 0,
+      forks: 0,
+      openIssues: 0,
+      openPulls: 0,
+      contributors: 141, // MIN_KNOWN_CONTRIBUTORS
+      latestRelease: undefined,
+      fetchedAt: mockDate.toISOString(),
+    });
+
+    // Check no token is passed
+    const calls = fetchMock.mock.calls;
+    expect(calls[0][1].headers.Authorization).toBeUndefined();
+  });
+
+  it("prevents openIssues from going below zero", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/search/issues")) {
+        return {
+          ok: true,
+          json: async () => ({ total_count: 10 }), // 10 PRs
+        };
+      }
+      if (url.includes("/repos/Hmbown/CodeWhale")) {
+        // Excludes contributors and releases strings matching exactly
+        if (url.endsWith("/Hmbown/CodeWhale")) {
+          return {
+            ok: true,
+            json: async () => ({ open_issues_count: 5 }), // 5 total issues
+          };
+        }
+      }
+      return { ok: false, headers: new Headers() };
+    });
+
+    const stats = await fetchRepoStats();
+    expect(stats.openIssues).toBe(0); // Math.max(0, 5 - 10)
+    expect(stats.openPulls).toBe(10);
+  });
+
+  it("extracts contributor count from array length if no link header", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/contributors")) {
+        return {
+          ok: true,
+          headers: new Headers(),
+          json: async () => new Array(150).fill({}), // Array of 150 items
+        };
+      }
+      return { ok: false, headers: new Headers() };
+    });
+
+    const stats = await fetchRepoStats();
+    expect(stats.contributors).toBe(150);
   });
 });
