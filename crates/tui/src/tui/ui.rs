@@ -4395,6 +4395,29 @@ async fn run_event_loop(
                     app.delete_word_backward();
                 }
                 KeyCode::Char('s') | KeyCode::Char('S')
+                    if key.modifiers == KeyModifiers::CONTROL
+                        && !app.queued_messages.is_empty() =>
+                {
+                    // Ctrl+S sends the next queued follow-up as a steer into
+                    // the current turn, letting the user manually flush the
+                    // queue without retyping it.
+                    let message = app.pop_queued_message().expect("queue non-empty");
+                    if let Err(err) = steer_user_message(app, &engine_handle, message.clone()).await
+                    {
+                        app.queued_messages.push_front(message);
+                        app.status_message = Some(format!(
+                            "Steer failed ({err}); {} queued — ↑ to edit, /queue list",
+                            app.queued_message_count()
+                        ));
+                    } else {
+                        app.push_status_toast(
+                            &format!("Steered queued message: {}", message.display),
+                            StatusToastLevel::Info,
+                            Some(3_000),
+                        );
+                    }
+                }
+                KeyCode::Char('s') | KeyCode::Char('S')
                     if key.modifiers == KeyModifiers::CONTROL && !app.input.is_empty() =>
                 {
                     // #440: park the current draft to the persistent
