@@ -463,10 +463,7 @@ fn resolve_exec_model(config: &Config, explicit_model: Option<&str>) -> String {
     // The CLI dispatcher forwards --model via CODEWHALE_MODEL env var.
     // ExecArgs.prompt has trailing_var_arg=true so --model is eaten as
     // prompt text; prefer the env var when the explicit arg is absent.
-    if let Some(model) = explicit_model
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-    {
+    if let Some(model) = explicit_model.map(str::trim).filter(|m| !m.is_empty()) {
         return model.to_owned();
     }
     if let Ok(env_model) = std::env::var("DEEPSEEK_MODEL") {
