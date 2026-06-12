@@ -307,14 +307,6 @@ Plain `codewhale exec` is a one-shot model response. Use `--auto` for
 non-interactive filesystem/shell tool use.
 ")]
 struct ExecArgs {
-    /// Prompt to send to the model
-    #[arg(
-        value_name = "PROMPT",
-        required = true,
-        trailing_var_arg = true,
-        allow_hyphen_values = true
-    )]
-    prompt: Vec<String>,
     /// Override model for this run
     #[arg(long)]
     model: Option<String>,
@@ -349,6 +341,14 @@ struct ExecArgs {
     /// Extra text appended to the system prompt for this run.
     #[arg(long)]
     append_system_prompt: Option<String>,
+    /// Prompt to send to the model
+    #[arg(
+        value_name = "PROMPT",
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    prompt: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -460,11 +460,22 @@ fn join_prompt_parts(parts: &[String]) -> String {
 }
 
 fn resolve_exec_model(config: &Config, explicit_model: Option<&str>) -> String {
-    explicit_model
+    // The CLI dispatcher forwards --model via CODEWHALE_MODEL env var.
+    // ExecArgs.prompt has trailing_var_arg=true so --model is eaten as
+    // prompt text; prefer the env var when the explicit arg is absent.
+    if let Some(model) = explicit_model
         .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| config.default_model())
+        .filter(|m| !m.is_empty())
+    {
+        return model.to_owned();
+    }
+    if let Ok(env_model) = std::env::var("DEEPSEEK_MODEL") {
+        let trimmed = env_model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+    config.default_model()
 }
 
 fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
