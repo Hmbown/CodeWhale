@@ -205,7 +205,7 @@ impl DeepSeekClient {
 
                     // `event:` lines are redundant (the data payload carries
                     // `type`) and comment/heartbeat lines are ignorable.
-                    let Some(data) = line.strip_prefix("data: ") else {
+                    let Some(data) = super::extract_sse_data_value(&line) else {
                         continue;
                     };
 

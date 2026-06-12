@@ -437,7 +437,7 @@ impl DeepSeekClient {
                         continue;
                     }
 
-                    if let Some(data) = line.strip_prefix("data: ") {
+                    if let Some(data) = super::extract_sse_data_value(&line) {
                         line_buf.push_str(data);
                     }
                     // Ignore other SSE fields (event:, id:, retry:)

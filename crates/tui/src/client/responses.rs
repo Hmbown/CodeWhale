@@ -167,7 +167,7 @@ impl DeepSeekClient {
                         continue;
                     }
 
-                    if let Some(data) = line.strip_prefix("data: ") {
+                    if let Some(data) = super::extract_sse_data_value(&line) {
                         if data == "[DONE]" {
                             done = true;
                             break;
