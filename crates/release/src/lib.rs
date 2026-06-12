@@ -350,6 +350,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn from_beta_flag_returns_correct_channel() {
+        assert_eq!(ReleaseChannel::from_beta_flag(true), ReleaseChannel::Beta);
+        assert_eq!(ReleaseChannel::from_beta_flag(false), ReleaseChannel::Stable);
+    }
+
+    #[test]
     fn cnb_release_base_url_includes_tag_directory() {
         assert_eq!(
             cnb_release_base_url("0.8.47"),
