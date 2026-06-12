@@ -559,4 +559,14 @@ mod tests {
             "Failed to validate input: missing required field 'path'"
         );
     }
+
+    #[test]
+    fn test_tool_error_execution_failed() {
+        let err = ToolError::execution_failed("process crashed");
+        assert!(matches!(err, ToolError::ExecutionFailed { ref message } if message == "process crashed"));
+        assert_eq!(
+            err.to_string(),
+            "Failed to execute tool: process crashed"
+        );
+    }
 }
