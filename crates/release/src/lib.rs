@@ -433,4 +433,24 @@ mod tests {
             "unexpected error: {err:#}"
         );
     }
+
+    #[test]
+    fn mirror_asset_url_formats_correctly() {
+        assert_eq!(
+            mirror_asset_url("https://example.com/assets", "file.zip"),
+            "https://example.com/assets/file.zip"
+        );
+        assert_eq!(
+            mirror_asset_url("https://example.com/assets/", "file.zip"),
+            "https://example.com/assets/file.zip"
+        );
+        assert_eq!(
+            mirror_asset_url("https://example.com/assets//", "file.zip"),
+            "https://example.com/assets/file.zip"
+        );
+        assert_eq!(
+            mirror_asset_url("", "file.zip"),
+            "/file.zip"
+        );
+    }
 }
