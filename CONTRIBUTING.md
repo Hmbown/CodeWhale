@@ -108,6 +108,21 @@ When this happens:
 - The auto-close workflow closes your PR with a templated thank-you and
   a link to the commit on `main`.
 
+When a maintainer closes a harvested PR by hand, the closing comment
+follows this template (the pattern set on PR #2634):
+
+```text
+Closing with harvest credit, @handle — <what landed> landed via
+<commit sha(s) or PR #N>. <If work remains:> The remainder is tracked
+in #NNN — follow-ups welcome there.
+Thank you for <one specific thing the contribution got right>.
+```
+
+Three required elements: the contributor's handle, the exact commits or
+PRs where their work landed, and — when the PR contained more than what
+landed — a tracking issue for the remainder. A harvested PR is never
+closed with a bare "superseded".
+
 To make a future contribution land via the faster Direct-Merge path
 instead of the Harvest path, the highest-leverage things you can do are:
 
@@ -170,6 +185,25 @@ Builds on:
 Issues:
 Validation:
 ```
+
+## The Stewardship Branch
+
+Large refactors and architecture work stage on
+`codex/v0.9.0-stewardship` before reaching `main`. The branch exists so
+that multi-layer series (like the command-group refactor) can land layer
+by layer against a stable base, get validated by their parity harnesses,
+and then flow to `main` in periodic stewardship merges — instead of each
+layer racing `main`'s daily churn.
+
+What this means for you:
+
+- **Base layered/EPIC-sized refactor PRs on `codex/v0.9.0-stewardship`**
+  and target the PR there (see #2888 for the model). Ordinary bug fixes
+  and features still target `main`.
+- Maintainers merge the stewardship branch into `main` periodically;
+  your work reaches `main` with its history and credit intact.
+- If you're unsure which base to use, ask in your tracking issue — the
+  default for anything that isn't a multi-PR series is `main`.
 
 ## Contribution Gate
 
