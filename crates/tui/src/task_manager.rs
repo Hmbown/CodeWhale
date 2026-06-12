@@ -441,6 +441,7 @@ impl TaskExecutor for EngineTaskExecutor {
                 archived: false,
                 system_prompt: None,
                 task_id: Some(task.id.clone()),
+                ..Default::default()
             })
             .await
         {
@@ -466,6 +467,7 @@ impl TaskExecutor for EngineTaskExecutor {
                     allow_shell: Some(task.allow_shell),
                     trust_mode: Some(task.trust_mode),
                     auto_approve: Some(task.auto_approve),
+                    ..Default::default()
                 },
             )
             .await

@@ -1,4 +1,4 @@
-//! Runtime HTTP/SSE API for local DeepSeek automation.
+//! Runtime HTTP/SSE API for local CodeWhale automation.
 
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
@@ -19,7 +19,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
+use codewhale_protocol::runtime::{
+    RUNTIME_API_VERSION, RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeCapabilities,
+    RuntimeEventEnvelope, RuntimeExperimentalCapabilities,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -77,11 +80,13 @@ pub struct RuntimeApiOptions {
     /// Additional CORS origins to allow on top of the built-in defaults
     /// (`http://localhost:{3000,1420}`, `http://127.0.0.1:{3000,1420}`,
     /// `tauri://localhost`). Populated by `--cors-origin` (repeatable),
-    /// `DEEPSEEK_CORS_ORIGINS` (comma-separated), and `[runtime_api]
-    /// cors_origins` in `config.toml`. Whalescale#255 / #561.
+    /// `CODEWHALE_CORS_ORIGINS` (comma-separated, `DEEPSEEK_CORS_ORIGINS`
+    /// as alias), and `[runtime_api] cors_origins` in `config.toml`.
+    /// Whalescale#255 / #561.
     pub cors_origins: Vec<String>,
     /// Optional bearer token required for `/v1/*` routes. If omitted here,
-    /// `run_http_server` also checks `DEEPSEEK_RUNTIME_TOKEN`.
+    /// `run_http_server` checks `CODEWHALE_RUNTIME_TOKEN`, then
+    /// `DEEPSEEK_RUNTIME_TOKEN` as an alias.
     pub auth_token: Option<String>,
     /// Allow `/v1/*` routes without auth when no token is configured.
     pub insecure_no_auth: bool,
@@ -144,7 +149,7 @@ fn first_nonblank_token(token: Option<String>) -> Option<String> {
 
 fn generate_runtime_token() -> String {
     format!(
-        "dst_{}{}",
+        "cwrt_{}{}",
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     )
@@ -359,10 +364,30 @@ struct SubmitUserInputResponse {
 
 #[derive(Debug, Serialize)]
 struct RuntimeInfoResponse {
+    service: &'static str,
+    runtime_api_version: &'static str,
+    codewhale_version: &'static str,
     bind_host: String,
     port: u16,
     auth_required: bool,
+    transports: Vec<&'static str>,
+    capabilities: RuntimeCapabilities,
+    experimental: RuntimeExperimentalCapabilities,
+    // Backward-compatible alias kept for existing clients.
     version: &'static str,
+}
+
+fn default_runtime_capabilities() -> RuntimeCapabilities {
+    RuntimeCapabilities {
+        threads: true,
+        turns: true,
+        turn_steer: true,
+        turn_interrupt: true,
+        event_replay: true,
+        external_tools: false,
+        environments: false,
+        worker_runtime: false,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -456,9 +481,12 @@ pub async fn run_http_server(
             .map(|h| h.join(".deepseek").join("sessions"))
             .unwrap_or_else(|| PathBuf::from(".deepseek").join("sessions"))
     });
+    let runtime_token_env = std::env::var("CODEWHALE_RUNTIME_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("DEEPSEEK_RUNTIME_TOKEN").ok());
     let resolved_auth = resolve_runtime_auth(
         options.auth_token.clone(),
-        std::env::var("DEEPSEEK_RUNTIME_TOKEN").ok(),
+        runtime_token_env,
         options.insecure_no_auth,
     );
     let runtime_token = resolved_auth.token.clone();
@@ -500,7 +528,7 @@ pub async fn run_http_server(
         if let Some(token) = runtime_token.as_deref() {
             println!("Runtime API auth: generated bearer token for this process.");
             println!("  Authorization: Bearer {token}");
-            println!("  Set DEEPSEEK_RUNTIME_TOKEN or pass --auth-token for a stable token.");
+            println!("  Set CODEWHALE_RUNTIME_TOKEN (or DEEPSEEK_RUNTIME_TOKEN as an alias) or pass --auth-token for a stable token.");
         }
     } else if auth_enabled {
         println!("Runtime API auth: bearer token required for /v1/* routes.");
@@ -638,6 +666,11 @@ fn request_has_runtime_token(req: &Request, expected: &str) -> bool {
         .and_then(|value| value.to_str().ok())
         .and_then(|raw| raw.strip_prefix("Bearer "))
         .is_some_and(|token| token == expected)
+        || req
+            .headers()
+            .get("x-codewhale-runtime-token")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|token| token == expected)
         || req
             .headers()
             .get("x-deepseek-runtime-token")
@@ -784,7 +817,7 @@ fn detect_lan_ip() -> Option<String> {
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        service: "deepseek-runtime-api",
+        service: "codewhale-runtime-api",
         mode: "local",
     })
 }
@@ -853,6 +886,7 @@ async fn resume_session_thread(
             archived: false,
             system_prompt: session.system_prompt.clone(),
             task_id: None,
+            ..Default::default()
         })
         .await
         .map_err(|e| ApiError::internal(format!("Failed to create thread: {e}")))?;
@@ -1396,11 +1430,18 @@ async fn submit_user_input(
 }
 
 async fn runtime_info(State(state): State<RuntimeApiState>) -> Json<RuntimeInfoResponse> {
+    let version = env!("CARGO_PKG_VERSION");
     Json(RuntimeInfoResponse {
+        service: "codewhale-runtime-api",
+        runtime_api_version: RUNTIME_API_VERSION,
+        codewhale_version: version,
         bind_host: state.bind_host.clone(),
         port: state.bind_port,
         auth_required: state.auth_required,
-        version: env!("CARGO_PKG_VERSION"),
+        transports: vec!["http", "sse"],
+        capabilities: default_runtime_capabilities(),
+        experimental: RuntimeExperimentalCapabilities::default(),
+        version,
     })
 }
 
@@ -1800,6 +1841,7 @@ async fn stream_turn(
             archived: true,
             system_prompt: None,
             task_id: None,
+            ..Default::default()
         })
         .await
         .map_err(|e| ApiError::internal(format!("Failed to create stream thread: {e}")))?;
@@ -1816,6 +1858,7 @@ async fn stream_turn(
                 allow_shell: Some(allow_shell),
                 trust_mode: Some(trust_mode),
                 auto_approve: Some(auto_approve),
+                ..Default::default()
             },
         )
         .await
@@ -2587,7 +2630,7 @@ mod tests {
         let auth = resolve_runtime_auth(None, None, false);
         assert!(auth.generated);
         let token = auth.token.expect("generated token");
-        assert!(token.starts_with("dst_"));
+        assert!(token.starts_with("cwrt_"));
         assert!(token.len() > 32);
     }
 
@@ -2891,6 +2934,7 @@ mod tests {
             .json()
             .await?;
         assert_eq!(health["status"], "ok");
+        assert_eq!(health["service"], "codewhale-runtime-api");
 
         let created: serde_json::Value = client
             .post(format!("http://{addr}/v1/tasks"))
@@ -2975,6 +3019,22 @@ mod tests {
             .await?
             .error_for_status()?;
         assert_eq!(query_token.status(), StatusCode::OK);
+
+        let codewhale_header = client
+            .get(format!("http://{addr}/v1/threads/summary"))
+            .header("x-codewhale-runtime-token", &token)
+            .send()
+            .await?
+            .error_for_status()?;
+        assert_eq!(codewhale_header.status(), StatusCode::OK);
+
+        let deepseek_header = client
+            .get(format!("http://{addr}/v1/threads/summary"))
+            .header("x-deepseek-runtime-token", &token)
+            .send()
+            .await?
+            .error_for_status()?;
+        assert_eq!(deepseek_header.status(), StatusCode::OK);
 
         handle.abort();
         Ok(())
@@ -4753,9 +4813,91 @@ mod tests {
             .error_for_status()?
             .json()
             .await?;
+        assert_eq!(info["service"], "codewhale-runtime-api");
+        assert_eq!(info["runtime_api_version"], "1.0");
+        assert_eq!(info["codewhale_version"], info["version"]);
         assert_eq!(info["bind_host"], "127.0.0.1");
         assert_eq!(info["auth_required"], false);
         assert!(info["version"].is_string());
+        assert_eq!(info["transports"], json!(["http", "sse"]));
+        assert_eq!(info["capabilities"]["threads"], true);
+        assert_eq!(info["capabilities"]["external_tools"], false);
+        assert!(info["experimental"].is_object());
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_thread_accepts_dynamic_tools_and_environments() -> Result<()> {
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let created: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "model": "test-model",
+                "dynamic_tools": [
+                    {
+                        "namespace": "tau_bench",
+                        "name": "get_reservation",
+                        "description": "Look up a reservation.",
+                        "input_schema": { "type": "object" }
+                    }
+                ],
+                "environments": [
+                    { "environment_id": "local", "cwd": "/workspace" }
+                ]
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert!(created["id"].is_string());
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_turn_accepts_dynamic_tools_and_environment_id() -> Result<()> {
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let created: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({ "model": "test-model" }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let thread_id = created["id"].as_str().context("missing thread id")?;
+
+        let started: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads/{thread_id}/turns"))
+            .json(&json!({
+                "prompt": "hello",
+                "dynamic_tools": [
+                    {
+                        "name": "simple_tool",
+                        "description": "A simple tool.",
+                        "input_schema": { "type": "object" }
+                    }
+                ],
+                "environment_id": "local"
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(started["turn"]["thread_id"], thread_id);
 
         handle.abort();
         Ok(())

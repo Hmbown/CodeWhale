@@ -39,6 +39,7 @@ use crate::tools::plan::new_shared_plan_state;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::new_shared_todo_list;
 use crate::tui::app::AppMode;
+use codewhale_protocol::runtime::{DynamicToolSpec, TurnEnvironmentParams};
 
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 const MAX_ACTIVE_THREADS_DEFAULT: usize = 8;
@@ -614,7 +615,7 @@ pub enum ThreadListFilter {
     ArchivedOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CreateThreadRequest {
     pub model: Option<String>,
     pub workspace: Option<PathBuf>,
@@ -628,6 +629,10 @@ pub struct CreateThreadRequest {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub task_id: Option<String>,
+    #[serde(default)]
+    pub dynamic_tools: Vec<DynamicToolSpec>,
+    #[serde(default)]
+    pub environments: Vec<TurnEnvironmentParams>,
 }
 
 /// Mutable fields accepted by `PATCH /v1/threads/{id}`.
@@ -648,7 +653,7 @@ pub struct UpdateThreadRequest {
     pub workspace: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StartTurnRequest {
     pub prompt: String,
     #[serde(default)]
@@ -658,6 +663,10 @@ pub struct StartTurnRequest {
     pub allow_shell: Option<bool>,
     pub trust_mode: Option<bool>,
     pub auto_approve: Option<bool>,
+    #[serde(default)]
+    pub dynamic_tools: Vec<DynamicToolSpec>,
+    #[serde(default)]
+    pub environment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3776,6 +3785,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -3836,6 +3846,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -3882,6 +3893,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -3906,6 +3918,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -3972,6 +3985,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4005,6 +4019,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4067,6 +4082,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4084,6 +4100,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: Some(true),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4110,6 +4127,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4127,6 +4145,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: Some(false),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4153,6 +4172,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4186,6 +4206,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4236,6 +4257,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4296,6 +4318,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4313,6 +4336,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4360,6 +4384,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4435,6 +4460,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4475,6 +4501,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4527,6 +4554,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4542,6 +4570,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: Some(true),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4613,6 +4642,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4628,6 +4658,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4708,6 +4739,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4723,6 +4755,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4788,6 +4821,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         let mut harness = install_mock_engine(&manager, &thread.id).await;
@@ -4803,6 +4837,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: Some(true),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4899,6 +4934,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         assert!(!manager.store.load_thread(&thread.id)?.auto_approve);
@@ -4915,6 +4951,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -4983,6 +5020,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -4998,6 +5036,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: Some(true),
                     auto_approve: Some(true),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -5068,6 +5107,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -5125,6 +5165,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -5177,6 +5218,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
 
@@ -5275,6 +5317,7 @@ mod tests {
                     allow_shell: None,
                     trust_mode: None,
                     auto_approve: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -5691,6 +5734,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         seed_turns_with_user_messages(&manager, &thread.id, &["first", "second", "third"])?;
@@ -5727,6 +5771,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         seed_turns_with_user_messages(&manager, &thread.id, &["a", "b", "c", "d"])?;
@@ -5756,6 +5801,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         seed_turns_with_user_messages(&manager, &thread.id, &["only"])?;
@@ -5782,6 +5828,7 @@ mod tests {
                 archived: false,
                 system_prompt: None,
                 task_id: None,
+            ..Default::default()
             })
             .await?;
         let turn_ids = seed_turns_with_user_messages(&manager, &thread.id, &["x", "y", "z"])?;

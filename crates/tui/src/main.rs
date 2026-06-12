@@ -696,12 +696,14 @@ struct ServeArgs {
     workers: usize,
     /// Additional CORS origin to allow (repeatable). Stacks on top of the
     /// built-in defaults (localhost:3000, localhost:1420, tauri://localhost).
-    /// Also reads `DEEPSEEK_CORS_ORIGINS` (comma-separated) and
-    /// `[runtime_api] cors_origins` from `config.toml`. Whalescale#255.
+    /// Also reads `CODEWHALE_CORS_ORIGINS` (comma-separated), then
+    /// `DEEPSEEK_CORS_ORIGINS` as an alias, and `[runtime_api] cors_origins`
+    /// from `config.toml`. Whalescale#255.
     #[arg(long = "cors-origin", value_name = "URL")]
     cors_origin: Vec<String>,
     /// Require this bearer token for `/v1/*` runtime API routes. Also reads
-    /// `DEEPSEEK_RUNTIME_TOKEN` when omitted.
+    /// `CODEWHALE_RUNTIME_TOKEN` when omitted, then `DEEPSEEK_RUNTIME_TOKEN`
+    /// as an alias.
     #[arg(long = "auth-token", value_name = "TOKEN")]
     auth_token: Option<String>,
     /// Disable runtime API auth when no token is configured. Only use on a trusted loopback.
@@ -1740,7 +1742,8 @@ fn init_plugins_dir(
 ///
 /// Sources, in priority order (later sources extend earlier ones):
 /// 1. `--cors-origin URL` flags (repeatable)
-/// 2. `DEEPSEEK_CORS_ORIGINS` env var (comma-separated)
+/// 2. `CODEWHALE_CORS_ORIGINS` env var (comma-separated),
+///    then `DEEPSEEK_CORS_ORIGINS` as an alias
 /// 3. `[runtime_api] cors_origins = [...]` in `config.toml`
 ///
 /// The runtime API always allows the built-in dev defaults
@@ -1761,7 +1764,9 @@ fn resolve_cors_origins(config: &Config, flag_origins: &[String]) -> Vec<String>
     for o in flag_origins {
         push(o);
     }
-    if let Ok(env_value) = std::env::var("DEEPSEEK_CORS_ORIGINS") {
+    if let Ok(env_value) = std::env::var("CODEWHALE_CORS_ORIGINS")
+        .or_else(|_| std::env::var("DEEPSEEK_CORS_ORIGINS"))
+    {
         for piece in env_value.split(',') {
             push(piece);
         }
