@@ -28,6 +28,13 @@ pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Re
 
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
+
+    // Detect pre-rebrand installs (deepseek / deepseek-tui) and print migration
+    // instructions instead of failing with a cryptic spawn error (#2960).
+    if is_legacy_binary(&current_exe) {
+        bail!("{}", legacy_binary_message(&current_exe));
+    }
+
     let targets = update_targets_for_exe(&current_exe);
     let channel = ReleaseChannel::from_beta_flag(beta);
     let current_version = env!("CARGO_PKG_VERSION");
@@ -187,12 +194,44 @@ pub(crate) fn release_arch_for_rust_arch(arch: &str) -> &str {
     }
 }
 
+/// Returns true when the binary name belongs to the pre-rebrand `deepseek-tui` era.
+pub(crate) fn is_legacy_binary(current_exe: &Path) -> bool {
+    let exe_name = current_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    exe_name.starts_with("deepseek")
+}
+
+fn legacy_binary_message(current_exe: &Path) -> String {
+    format!(
+        "\
+this binary ({exe}) is a pre-rebrand deepseek/deepseek-tui release.
+
+The package has been renamed to `codewhale`. Self-update cannot continue from the old binary.
+
+To migrate, reinstall using your original install method:
+
+  Cargo:    cargo install codewhale-cli
+  npm:      npm install -g @hmbown/codewhale-cli
+              (or uninstall the old package first: npm uninstall -g deepseek-tui)
+  Homebrew: brew install hmbown/tap/codewhale
+              (or: brew uninstall deepseek-tui && brew install hmbown/tap/codewhale)
+  Binary:   download from https://github.com/Hmbown/CodeWhale/releases/latest
+
+Once `codewhale` is on your PATH, run `codewhale update` for future updates.",
+        exe = current_exe.display(),
+    )
+}
+
 pub(crate) fn binary_prefix_for_exe(current_exe: &Path) -> &'static str {
     let exe_name = current_exe
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("codewhale");
-    if exe_name.contains("codewhale-tui") {
+        .unwrap_or("codewhale")
+        .to_ascii_lowercase();
+    if exe_name.contains("codewhale-tui") || exe_name.contains("deepseek-tui") {
         "codewhale-tui"
     } else {
         "codewhale"
@@ -620,6 +659,10 @@ mod tests {
             "codewhale-tui"
         );
         assert_eq!(
+            binary_prefix_for_exe(Path::new("CodeWhale-TUI.exe")),
+            "codewhale-tui"
+        );
+        assert_eq!(
             binary_prefix_for_exe(Path::new("/usr/local/bin/codewhale-tui")),
             "codewhale-tui"
         );
@@ -640,6 +683,35 @@ mod tests {
             binary_prefix_for_exe(Path::new("other-binary")),
             "codewhale"
         );
+
+        // Legacy deepseek-tui name maps to codewhale-tui prefix
+        assert_eq!(
+            binary_prefix_for_exe(Path::new("deepseek-tui")),
+            "codewhale-tui"
+        );
+        assert_eq!(
+            binary_prefix_for_exe(Path::new("/usr/local/bin/deepseek-tui")),
+            "codewhale-tui"
+        );
+        assert_eq!(
+            binary_prefix_for_exe(Path::new("DeepSeek-TUI.exe")),
+            "codewhale-tui"
+        );
+        // Legacy deepseek (dispatcher) maps to codewhale prefix
+        assert_eq!(binary_prefix_for_exe(Path::new("deepseek")), "codewhale");
+    }
+
+    #[test]
+    fn test_is_legacy_binary_detection() {
+        assert!(is_legacy_binary(Path::new("deepseek")));
+        assert!(is_legacy_binary(Path::new("deepseek-tui")));
+        assert!(is_legacy_binary(Path::new("/usr/local/bin/deepseek")));
+        assert!(is_legacy_binary(Path::new("/usr/local/bin/deepseek-tui")));
+        assert!(is_legacy_binary(Path::new("DeepSeek.exe")));
+        assert!(is_legacy_binary(Path::new("DeepSeek-TUI.exe")));
+        assert!(!is_legacy_binary(Path::new("codewhale")));
+        assert!(!is_legacy_binary(Path::new("codewhale-tui")));
+        assert!(!is_legacy_binary(Path::new("codew")));
     }
 
     #[test]
