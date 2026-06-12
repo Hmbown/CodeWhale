@@ -559,4 +559,54 @@ mod tests {
             "Failed to validate input: missing required field 'path'"
         );
     }
+
+    #[test]
+    fn tool_call_execution_subject_local_shell_with_cwd() {
+        let call = ToolCall {
+            name: "shell".to_string(),
+            payload: ToolPayload::LocalShell {
+                params: codewhale_protocol::LocalShellParams {
+                    command: "ls -l".to_string(),
+                    cwd: Some("/custom/dir".to_string()),
+                    timeout_ms: None,
+                },
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+        let subject = call.execution_subject("/fallback/dir");
+        assert_eq!(subject, ("ls -l".to_string(), "/custom/dir".to_string(), "shell"));
+    }
+
+    #[test]
+    fn tool_call_execution_subject_local_shell_without_cwd() {
+        let call = ToolCall {
+            name: "shell".to_string(),
+            payload: ToolPayload::LocalShell {
+                params: codewhale_protocol::LocalShellParams {
+                    command: "echo hello".to_string(),
+                    cwd: None,
+                    timeout_ms: None,
+                },
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+        let subject = call.execution_subject("/fallback/dir");
+        assert_eq!(subject, ("echo hello".to_string(), "/fallback/dir".to_string(), "shell"));
+    }
+
+    #[test]
+    fn tool_call_execution_subject_non_shell() {
+        let call = ToolCall {
+            name: "my_tool".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+        let subject = call.execution_subject("/fallback/dir");
+        assert_eq!(subject, ("my_tool".to_string(), "/fallback/dir".to_string(), "tool"));
+    }
 }
