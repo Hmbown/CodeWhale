@@ -336,7 +336,7 @@ mod tests {
             }],
             model: "mock-model".to_string(),
             stop_reason: Some("end_turn".to_string()),
-            stop_sequence: None,
+
             container: None,
             usage,
         }

@@ -197,7 +197,7 @@ pub struct MessageResponse {
     pub content: Vec<ContentBlock>,
     pub model: String,
     pub stop_reason: Option<String>,
-    pub stop_sequence: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<ContainerInfo>,
     pub usage: Usage,
@@ -431,7 +431,6 @@ pub fn auto_compact_default_for_model(model: &str) -> bool {
 
 // === Streaming Structures ===
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 /// Streaming event types for SSE responses.
@@ -461,7 +460,6 @@ pub enum StreamEvent {
     Error { error: serde_json::Value },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 /// Content block types used in streaming starts.
@@ -504,12 +502,10 @@ pub enum Delta {
     SignatureDelta { signature: String },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 /// Delta payload for message-level updates.
 pub struct MessageDelta {
     pub stop_reason: Option<String>,
-    pub stop_sequence: Option<String>,
 }
 
 #[cfg(test)]

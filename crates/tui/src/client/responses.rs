@@ -127,7 +127,7 @@ impl DeepSeekClient {
                     content: vec![],
                     model: request.model.clone(),
                     stop_reason: None,
-                    stop_sequence: None,
+
                     container: None,
                     usage: Usage::default(),
                 },
@@ -324,7 +324,7 @@ impl DeepSeekClient {
                                     yield Ok(StreamEvent::MessageDelta {
                                         delta: MessageDelta {
                                             stop_reason: Some(stop_reason.to_string()),
-                                            stop_sequence: None,
+
                                         },
                                         usage: usage_data.take(),
                                     });
@@ -382,7 +382,7 @@ impl DeepSeekClient {
             content: Vec::new(),
             model,
             stop_reason: None,
-            stop_sequence: None,
+
             container: None,
             usage: Usage::default(),
         };

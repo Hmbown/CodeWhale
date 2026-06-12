@@ -811,7 +811,7 @@ mod tests {
             }],
             model: "mock-model".to_string(),
             stop_reason: None,
-            stop_sequence: None,
+
             container: None,
             usage: Usage::default(),
         }
@@ -828,7 +828,7 @@ mod tests {
             }],
             model: "mock".to_string(),
             stop_reason: None,
-            stop_sequence: None,
+
             container: None,
             usage: Usage::default(),
         }
