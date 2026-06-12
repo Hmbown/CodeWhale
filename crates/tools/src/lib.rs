@@ -559,4 +559,17 @@ mod tests {
             "Failed to validate input: missing required field 'path'"
         );
     }
+
+    #[test]
+    fn tool_error_permission_denied_creates_correct_variant() {
+        let err = ToolError::permission_denied("unauthorized user");
+        assert!(matches!(
+            err,
+            ToolError::PermissionDenied { .. }
+        ));
+        assert_eq!(
+            err.to_string(),
+            "Failed to authorize tool execution: unauthorized user"
+        );
+    }
 }
