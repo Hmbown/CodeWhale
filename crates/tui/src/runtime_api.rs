@@ -1193,13 +1193,17 @@ async fn list_threads_summary(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut summaries = Vec::new();
-    for thread in threads {
-        let detail = state
+    let detail_futures = threads.iter().map(|thread| async {
+        state
             .runtime_threads
             .get_thread_detail(&thread.id)
             .await
-            .map_err(map_thread_err)?;
+            .map_err(map_thread_err)
+    });
+    let details = futures_util::future::try_join_all(detail_futures).await?;
+
+    let mut summaries = Vec::new();
+    for (thread, detail) in threads.into_iter().zip(details.into_iter()) {
         let latest_turn = detail.turns.last();
         let latest_status =
             latest_turn.map(|turn| format!("{:?}", turn.status).to_ascii_lowercase());
