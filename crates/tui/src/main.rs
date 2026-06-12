@@ -3305,12 +3305,47 @@ fn context_report_for_workspace(workspace: &Path) -> crate::context_report::Prom
 
     // Project context (AGENTS.md / README).
     let agents_path = workspace.join("AGENTS.md");
-    if agents_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&agents_path) {
+    if agents_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&agents_path)
+    {
+        let sz = content.len();
+        let max_bytes = 100 * 1024;
+        let truncated = if sz > max_bytes {
+            let head_end = (0..=max_bytes)
+                .rev()
+                .find(|&i| content.is_char_boundary(i))
+                .unwrap_or(0);
+            content[..head_end].to_string()
+        } else {
+            content
+        };
+        entries.push(SourceEntry {
+            source_kind: SourceKind::ProjectContext,
+            label: "Project context (AGENTS.md)".to_string(),
+            source_path: Some(agents_path.display().to_string()),
+            activation_reason: ActivationReason::FilePresent,
+            estimated_tokens: estimate_text_tokens_conservative(&truncated),
+            counting_confidence: CountingConfidence::High,
+            authority_tier: Some(5),
+            truncation_reason: if sz > max_bytes {
+                Some("truncated to 100 KB".to_string())
+            } else {
+                None
+            },
+        });
+    }
+
+    // Instructions files.
+    for (name, path) in &[
+        ("AGENTS.md", workspace.join("AGENTS.md")),
+        ("CLAUDE.md", workspace.join("CLAUDE.md")),
+    ] {
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(path)
+        {
             let sz = content.len();
-            let max_bytes = 100 * 1024;
-            let truncated = if sz > max_bytes {
-                let head_end = (0..=max_bytes)
+            let truncated = if sz > 100 * 1024 {
+                let head_end = (0..=100 * 1024)
                     .rev()
                     .find(|&i| content.is_char_boundary(i))
                     .unwrap_or(0);
@@ -3319,54 +3354,19 @@ fn context_report_for_workspace(workspace: &Path) -> crate::context_report::Prom
                 content
             };
             entries.push(SourceEntry {
-                source_kind: SourceKind::ProjectContext,
-                label: "Project context (AGENTS.md)".to_string(),
-                source_path: Some(agents_path.display().to_string()),
+                source_kind: SourceKind::InstructionsFile,
+                label: format!("Instructions file ({name})"),
+                source_path: Some(path.display().to_string()),
                 activation_reason: ActivationReason::FilePresent,
                 estimated_tokens: estimate_text_tokens_conservative(&truncated),
                 counting_confidence: CountingConfidence::High,
                 authority_tier: Some(5),
-                truncation_reason: if sz > max_bytes {
+                truncation_reason: if sz > 100 * 1024 {
                     Some("truncated to 100 KB".to_string())
                 } else {
                     None
                 },
             });
-        }
-    }
-
-    // Instructions files.
-    for (name, path) in &[
-        ("AGENTS.md", workspace.join("AGENTS.md")),
-        ("CLAUDE.md", workspace.join("CLAUDE.md")),
-    ] {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let sz = content.len();
-                let truncated = if sz > 100 * 1024 {
-                    let head_end = (0..=100 * 1024)
-                        .rev()
-                        .find(|&i| content.is_char_boundary(i))
-                        .unwrap_or(0);
-                    content[..head_end].to_string()
-                } else {
-                    content
-                };
-                entries.push(SourceEntry {
-                    source_kind: SourceKind::InstructionsFile,
-                    label: format!("Instructions file ({name})"),
-                    source_path: Some(path.display().to_string()),
-                    activation_reason: ActivationReason::FilePresent,
-                    estimated_tokens: estimate_text_tokens_conservative(&truncated),
-                    counting_confidence: CountingConfidence::High,
-                    authority_tier: Some(5),
-                    truncation_reason: if sz > 100 * 1024 {
-                        Some("truncated to 100 KB".to_string())
-                    } else {
-                        None
-                    },
-                });
-            }
         }
     }
 

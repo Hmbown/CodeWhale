@@ -429,25 +429,25 @@ pub fn build_context_report(app: &App, workspace: &Path) -> PromptSourceMap {
             workspace.join(".codewhale/instructions.md"),
         ),
     ] {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let truncated = truncate_if_needed(&content, 100 * 1024);
-                let was_truncated = content.len() > 100 * 1024;
-                entries.push(SourceEntry {
-                    source_kind: SourceKind::InstructionsFile,
-                    label: format!("Instructions file ({name})"),
-                    source_path: Some(path.display().to_string()),
-                    activation_reason: ActivationReason::FilePresent,
-                    estimated_tokens: estimate_text_tokens_conservative(&truncated),
-                    counting_confidence: CountingConfidence::High,
-                    authority_tier: Some(5),
-                    truncation_reason: if was_truncated {
-                        Some("truncated to 100 KB".to_string())
-                    } else {
-                        None
-                    },
-                });
-            }
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(path)
+        {
+            let truncated = truncate_if_needed(&content, 100 * 1024);
+            let was_truncated = content.len() > 100 * 1024;
+            entries.push(SourceEntry {
+                source_kind: SourceKind::InstructionsFile,
+                label: format!("Instructions file ({name})"),
+                source_path: Some(path.display().to_string()),
+                activation_reason: ActivationReason::FilePresent,
+                estimated_tokens: estimate_text_tokens_conservative(&truncated),
+                counting_confidence: CountingConfidence::High,
+                authority_tier: Some(5),
+                truncation_reason: if was_truncated {
+                    Some("truncated to 100 KB".to_string())
+                } else {
+                    None
+                },
+            });
         }
     }
 
@@ -487,19 +487,19 @@ pub fn build_context_report(app: &App, workspace: &Path) -> PromptSourceMap {
     }
 
     // Session goal.
-    if let Some(ref goal) = app.hunt.quarry {
-        if !goal.trim().is_empty() {
-            entries.push(SourceEntry {
-                source_kind: SourceKind::SessionGoal,
-                label: "Session goal".to_string(),
-                source_path: None,
-                activation_reason: ActivationReason::UserAction,
-                estimated_tokens: estimate_text_tokens_conservative(goal),
-                counting_confidence: CountingConfidence::High,
-                authority_tier: Some(2),
-                truncation_reason: None,
-            });
-        }
+    if let Some(ref goal) = app.hunt.quarry
+        && !goal.trim().is_empty()
+    {
+        entries.push(SourceEntry {
+            source_kind: SourceKind::SessionGoal,
+            label: "Session goal".to_string(),
+            source_path: None,
+            activation_reason: ActivationReason::UserAction,
+            estimated_tokens: estimate_text_tokens_conservative(goal),
+            counting_confidence: CountingConfidence::High,
+            authority_tier: Some(2),
+            truncation_reason: None,
+        });
     }
 
     // Handoff relay.
@@ -511,19 +511,19 @@ pub fn build_context_report(app: &App, workspace: &Path) -> PromptSourceMap {
         } else {
             legacy_path
         };
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                entries.push(SourceEntry {
-                    source_kind: SourceKind::HandoffRelay,
-                    label: "Handoff relay".to_string(),
-                    source_path: Some(path.display().to_string()),
-                    activation_reason: ActivationReason::FilePresent,
-                    estimated_tokens: estimate_text_tokens_conservative(&content),
-                    counting_confidence: CountingConfidence::High,
-                    authority_tier: Some(9),
-                    truncation_reason: None,
-                });
-            }
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            entries.push(SourceEntry {
+                source_kind: SourceKind::HandoffRelay,
+                label: "Handoff relay".to_string(),
+                source_path: Some(path.display().to_string()),
+                activation_reason: ActivationReason::FilePresent,
+                estimated_tokens: estimate_text_tokens_conservative(&content),
+                counting_confidence: CountingConfidence::High,
+                authority_tier: Some(9),
+                truncation_reason: None,
+            });
         }
     }
 
@@ -561,23 +561,22 @@ pub fn build_context_report(app: &App, workspace: &Path) -> PromptSourceMap {
     // MCP server schemas.
     {
         let mcp_config_path = &app.mcp_config_path;
-        if mcp_config_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(mcp_config_path) {
-                // Quick count of how many servers
-                let server_count =
-                    content.matches("\"command\"").count() + content.matches("\"url\"").count();
-                if server_count > 0 {
-                    entries.push(SourceEntry {
-                        source_kind: SourceKind::McpServerSchema,
-                        label: format!("MCP servers ({server_count} configured)"),
-                        source_path: Some(mcp_config_path.display().to_string()),
-                        activation_reason: ActivationReason::ConfigEnabled,
-                        estimated_tokens: server_count * 400,
-                        counting_confidence: CountingConfidence::Approximate,
-                        authority_tier: None,
-                        truncation_reason: None,
-                    });
-                }
+        if mcp_config_path.exists()
+            && let Ok(content) = std::fs::read_to_string(mcp_config_path)
+        {
+            let server_count =
+                content.matches("\"command\"").count() + content.matches("\"url\"").count();
+            if server_count > 0 {
+                entries.push(SourceEntry {
+                    source_kind: SourceKind::McpServerSchema,
+                    label: format!("MCP servers ({server_count} configured)"),
+                    source_path: Some(mcp_config_path.display().to_string()),
+                    activation_reason: ActivationReason::ConfigEnabled,
+                    estimated_tokens: server_count * 400,
+                    counting_confidence: CountingConfidence::Approximate,
+                    authority_tier: None,
+                    truncation_reason: None,
+                });
             }
         }
     }
@@ -585,32 +584,32 @@ pub fn build_context_report(app: &App, workspace: &Path) -> PromptSourceMap {
     // ── Per-request runtime context ────────────────────────────────────
 
     // User request (latest user message).
-    if let Some(last_msg) = app.api_messages.last() {
-        if last_msg.role == "user" {
-            let text: String = last_msg
-                .content
-                .iter()
-                .filter_map(|block| {
-                    if let crate::models::ContentBlock::Text { text, .. } = block {
-                        Some(text.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            if !text.is_empty() {
-                entries.push(SourceEntry {
-                    source_kind: SourceKind::UserRequest,
-                    label: "Current user request".to_string(),
-                    source_path: None,
-                    activation_reason: ActivationReason::PerRequest,
-                    estimated_tokens: estimate_text_tokens_conservative(&text),
-                    counting_confidence: CountingConfidence::High,
-                    authority_tier: Some(2),
-                    truncation_reason: None,
-                });
-            }
+    if let Some(last_msg) = app.api_messages.last()
+        && last_msg.role == "user"
+    {
+        let text: String = last_msg
+            .content
+            .iter()
+            .filter_map(|block| {
+                if let crate::models::ContentBlock::Text { text, .. } = block {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !text.is_empty() {
+            entries.push(SourceEntry {
+                source_kind: SourceKind::UserRequest,
+                label: "Current user request".to_string(),
+                source_path: None,
+                activation_reason: ActivationReason::PerRequest,
+                estimated_tokens: estimate_text_tokens_conservative(&text),
+                counting_confidence: CountingConfidence::High,
+                authority_tier: Some(2),
+                truncation_reason: None,
+            });
         }
     }
 

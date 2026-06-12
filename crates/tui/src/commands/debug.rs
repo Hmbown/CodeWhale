@@ -147,7 +147,13 @@ pub fn context(app: &mut App, arg: Option<&str>) -> CommandResult {
             let summary = context_summary(app);
             CommandResult::message(summary)
         }
-        "report" | "" | _ => {
+        "report" | "" => {
+            let workspace = app.workspace.clone();
+            let report = crate::context_report::build_context_report(app, &workspace);
+            let formatted = crate::context_report::format_context_report(&report);
+            CommandResult::message(formatted)
+        }
+        _ => {
             let workspace = app.workspace.clone();
             let report = crate::context_report::build_context_report(app, &workspace);
             let formatted = crate::context_report::format_context_report(&report);
