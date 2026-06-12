@@ -433,4 +433,22 @@ mod tests {
             "unexpected error: {err:#}"
         );
     }
+
+    #[test]
+    fn update_network_fallback_hint_contains_constants() {
+        let hint = update_network_fallback_hint();
+        assert!(hint.contains(CNB_REPO_URL), "Hint missing CNB_REPO_URL");
+        assert!(
+            hint.contains(RELEASE_BASE_URL_ENV),
+            "Hint missing RELEASE_BASE_URL_ENV"
+        );
+        assert!(
+            hint.contains(UPDATE_VERSION_ENV),
+            "Hint missing UPDATE_VERSION_ENV"
+        );
+        assert!(
+            hint.contains(CHECKSUM_MANIFEST_ASSET),
+            "Hint missing CHECKSUM_MANIFEST_ASSET"
+        );
+    }
 }
