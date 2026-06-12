@@ -1,0 +1,1 @@
+- N+1 query patterns in file-based storage can be mitigated by batching file reads using a `HashSet` or `HashMap` for ID lookups, transforming O(N * M) operations to O(M).

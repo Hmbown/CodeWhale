@@ -406,6 +406,40 @@ impl RuntimeThreadStore {
         Ok(out)
     }
 
+    pub fn list_items_for_turns_map(&self, turn_ids: &[String]) -> Result<std::collections::HashMap<String, Vec<TurnItemRecord>>> {
+        for turn_id in turn_ids {
+            validated_record_id(turn_id, "turn id")?;
+        }
+
+        let turn_ids_set: std::collections::HashSet<&str> =
+            turn_ids.iter().map(|s| s.as_str()).collect();
+        let mut out: std::collections::HashMap<String, Vec<TurnItemRecord>> = std::collections::HashMap::new();
+        for entry in fs::read_dir(&self.items_dir)
+            .with_context(|| format!("Failed to read {}", self.items_dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            let item: TurnItemRecord = serde_json::from_str(&raw)
+                .with_context(|| format!("Failed to parse {}", path.display()))?;
+            if item.schema_version > CURRENT_RUNTIME_SCHEMA_VERSION {
+                bail!(
+                    "Item schema v{} is newer than supported v{}",
+                    item.schema_version,
+                    CURRENT_RUNTIME_SCHEMA_VERSION
+                );
+            }
+            if turn_ids_set.contains(item.turn_id.as_str()) {
+                out.entry(item.turn_id.clone()).or_default().push(item);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn list_items_for_turn(&self, turn_id: &str) -> Result<Vec<TurnItemRecord>> {
         validated_record_id(turn_id, "turn id")?;
         let mut out = Vec::new();
@@ -1237,10 +1271,21 @@ impl RuntimeThreadManager {
     pub async fn get_thread_detail(&self, id: &str) -> Result<ThreadDetail> {
         let thread = self.get_thread(id).await?;
         let turns = self.store.list_turns_for_thread(id)?;
+        let turn_ids: Vec<String> = turns.iter().map(|t| t.id.clone()).collect();
+        let mut items_map = self.store.list_items_for_turns_map(&turn_ids)?;
+
         let mut items = Vec::new();
         for turn in &turns {
-            items.extend(self.store.list_items_for_turn(&turn.id)?);
+            if let Some(mut turn_items) = items_map.remove(&turn.id) {
+                turn_items.sort_by(|a, b| {
+                    let left = a.started_at.unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+                    let right = b.started_at.unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+                    left.cmp(&right)
+                });
+                items.extend(turn_items);
+            }
         }
+
         let latest_seq = self.store.current_seq().await;
         Ok(ThreadDetail {
             thread,
@@ -5667,6 +5712,100 @@ mod tests {
                 "turn {tid} must remain on disk"
             );
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+    use std::time::Instant;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn bench_get_thread_detail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let store = Arc::new(RuntimeThreadStore::open(dir.path().to_path_buf())?);
+
+        let thread_id = "thread_bench_1".to_string();
+        store.save_thread(&ThreadRecord {
+            schema_version: 2,
+            id: thread_id.clone(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            model: "test".to_string(),
+            workspace: dir.path().to_path_buf(),
+            mode: "test".to_string(),
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            latest_turn_id: None,
+            latest_response_bookmark: None,
+            archived: false,
+            system_prompt: None,
+            task_id: None,
+            title: None,
+            coherence_state: crate::core::coherence::CoherenceState::Healthy,
+        })?;
+
+        for i in 0..100 {
+            let turn_id = format!("turn_{}", i);
+            store.save_turn(&TurnRecord {
+                schema_version: 2,
+                id: turn_id.clone(),
+                thread_id: thread_id.clone(),
+                status: RuntimeTurnStatus::Completed,
+                input_summary: "test".to_string(),
+                created_at: chrono::Utc::now(),
+                started_at: None,
+                ended_at: None,
+                duration_ms: None,
+                usage: None,
+                error: None,
+                item_ids: vec![],
+                steer_count: 0,
+            })?;
+
+            for j in 0..10 {
+                let item_id = format!("item_{}_{}", i, j);
+                store.save_item(&TurnItemRecord {
+                    schema_version: 2,
+                    id: item_id,
+                    turn_id: turn_id.clone(),
+                    kind: TurnItemKind::UserMessage,
+                    status: TurnItemLifecycleStatus::Completed,
+                    summary: "test".to_string(),
+                    detail: None,
+                    metadata: None,
+                    artifact_refs: vec![],
+                    started_at: None,
+                    ended_at: None,
+                })?;
+            }
+        }
+
+        let _ = tempdir()?; // Not strictly needed
+        let manager = RuntimeThreadManager::open(
+            crate::config::Config::default(),
+            dir.path().to_path_buf(),
+            RuntimeThreadManagerConfig {
+                data_dir: dir.path().to_path_buf(),
+                task_data_dir: dir.path().to_path_buf(),
+                max_active_threads: 10,
+            },
+        )?;
+
+        let start = Instant::now();
+        let detail = manager.get_thread_detail(&thread_id).await?;
+        let elapsed = start.elapsed();
+
+        println!(
+            "Thread turns: {}, Thread items: {}",
+            detail.turns.len(),
+            detail.items.len()
+        );
+        println!("Elapsed time after fix: {:?}", elapsed);
+
         Ok(())
     }
 }
