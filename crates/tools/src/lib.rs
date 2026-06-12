@@ -522,6 +522,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_tool_result_success() {
+        let content = "operation completed successfully";
+        let result = ToolResult::success(content);
+
+        assert!(result.success);
+        assert_eq!(result.content, content);
+        assert!(result.metadata.is_none());
+    }
+
+    #[test]
     fn tool_result_json_round_trips_content() {
         let result = ToolResult::json(&json!({"ok": true})).expect("json");
         assert!(result.success);
