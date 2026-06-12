@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use crate::commands::CommandResult;
 use crate::config::Config;
 use crate::localization::{MessageId, tr};
-use crate::tui::app::App;
 use crate::tools::plugin::scan_plugin_dir;
+use crate::tui::app::App;
 
 /// List discovered plugins, or show details for a named plugin.
 pub fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -92,8 +92,7 @@ fn show_plugin_detail(
     ));
     out.push_str(&format!(
         "{}\n",
-        tr(app.ui_locale, MessageId::CmdPluginDetailApproval)
-            .replace("{approval}", approval)
+        tr(app.ui_locale, MessageId::CmdPluginDetailApproval).replace("{approval}", approval)
     ));
     out.push_str(&format!(
         "{}\n",
@@ -115,8 +114,9 @@ fn approval_label(approval: crate::tools::spec::ApprovalRequirement) -> &'static
 /// Resolve the configured plugin directory, defaulting to `~/.codewhale/tools`.
 fn plugin_dir_for(app: &App) -> Option<PathBuf> {
     let config = match &app.config_path {
-        Some(path) => Config::load(Some(path.clone()), app.config_profile.as_deref())
-            .unwrap_or_default(),
+        Some(path) => {
+            Config::load(Some(path.clone()), app.config_profile.as_deref()).unwrap_or_default()
+        }
         None => Config::default(),
     };
 
@@ -142,7 +142,9 @@ mod tests {
     fn create_test_app_with_plugin_dir(plugin_dir: &std::path::Path) -> (App, TempDir) {
         let tmp = TempDir::new().expect("tempdir");
         let config_path = tmp.path().join("config.toml");
-        let tools_dir = plugin_dir.canonicalize().unwrap_or_else(|_| plugin_dir.to_path_buf());
+        let tools_dir = plugin_dir
+            .canonicalize()
+            .unwrap_or_else(|_| plugin_dir.to_path_buf());
         std::fs::write(
             &config_path,
             format!(
