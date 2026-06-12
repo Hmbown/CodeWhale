@@ -638,7 +638,7 @@ fn message_has_tool_use(message: &Message) -> bool {
         .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
 }
 
-fn estimate_text_tokens_conservative(text: &str) -> usize {
+pub fn estimate_text_tokens_conservative(text: &str) -> usize {
     text.chars().count().div_ceil(3)
 }
 

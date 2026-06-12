@@ -29,6 +29,7 @@ mod composer_stash;
 mod config;
 mod config_persistence;
 mod config_ui;
+mod context_report;
 mod core;
 mod cost_status;
 mod deepseek_theme;
@@ -525,6 +526,9 @@ struct DoctorArgs {
     /// Emit machine-readable JSON output (skips live API connectivity check)
     #[arg(long, default_value_t = false)]
     json: bool,
+    /// Emit prompt source map as JSON (context-usage report, #3143)
+    #[arg(long, default_value_t = false)]
+    context_json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -943,7 +947,9 @@ async fn main() -> Result<()> {
             Commands::Doctor(args) => {
                 let config = load_config_from_cli(&cli)?;
                 let workspace = resolve_workspace(&cli);
-                if args.json {
+                if args.context_json {
+                    run_doctor_context_json(&config, &workspace, cli.config.as_deref())
+                } else if args.json {
                     run_doctor_json(&config, &workspace, cli.config.as_deref())
                 } else {
                     run_doctor(&config, &workspace, cli.config.as_deref()).await;
@@ -3207,6 +3213,186 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
 
 /// Machine-readable counterpart to `run_doctor`. Skips the live API call so it
 /// is safe to run in CI and from non-interactive scripts.
+/// Emit a machine-readable prompt source map as JSON (#3143).
+///
+/// This is the headless/API counterpart to `/context report` in the TUI.
+/// It emits the full `PromptSourceMap` as pretty-printed JSON to stdout.
+fn run_doctor_context_json(
+    _config: &Config,
+    workspace: &Path,
+    _config_path_override: Option<&Path>,
+) -> Result<()> {
+    // Build a minimal App-like state for the report.
+    // The report function inspects the filesystem (AGENTS.md, memory, skills, MCP)
+    // directly, so it works without a live TUI session.
+    let report = context_report_for_workspace(workspace);
+    let json =
+        serde_json::to_string_pretty(&report).context("failed to serialize context report")?;
+    println!("{json}");
+    Ok(())
+}
+
+/// Build a context report using only filesystem inspection (no App required).
+fn context_report_for_workspace(workspace: &Path) -> crate::context_report::PromptSourceMap {
+    let mut entries: Vec<crate::context_report::SourceEntry> = Vec::new();
+
+    use crate::compaction::estimate_text_tokens_conservative;
+    use crate::context_report::{ActivationReason, CountingConfidence, SourceEntry, SourceKind};
+
+    // Constitution (base.md compiled in).
+    let base_tokens = estimate_text_tokens_conservative(crate::prompts::BASE_PROMPT);
+    entries.push(SourceEntry {
+        source_kind: SourceKind::Constitution,
+        label: "Constitution (base.md)".to_string(),
+        source_path: Some("crates/tui/src/prompts/base.md".to_string()),
+        activation_reason: ActivationReason::AlwaysOn,
+        estimated_tokens: base_tokens,
+        counting_confidence: CountingConfidence::High,
+        authority_tier: Some(1),
+        truncation_reason: None,
+    });
+
+    // Personality + Mode + Approval + Tool taxonomy + Context mgmt + Compaction + Authority recap.
+    // These are always included in the agent path; provide approximate counts.
+    let static_always_on: &[(&str, SourceKind, u8, usize)] = &[
+        (
+            "Personality overlay (Calm)",
+            SourceKind::Personality,
+            8,
+            400,
+        ),
+        ("Mode delta (Agent)", SourceKind::ModeDelta, 2, 600),
+        ("Approval policy", SourceKind::ApprovalPolicy, 2, 500),
+        ("Tool taxonomy", SourceKind::ToolTaxonomy, 3, 3000),
+        ("Context Management", SourceKind::ContextManagement, 3, 1200),
+        (
+            "Compaction relay template",
+            SourceKind::CompactionRelayTemplate,
+            9,
+            400,
+        ),
+        ("Authority recap", SourceKind::AuthorityRecap, 1, 300),
+    ];
+    for (label, kind, tier, tokens) in static_always_on {
+        entries.push(SourceEntry {
+            source_kind: kind.clone(),
+            label: label.to_string(),
+            source_path: None,
+            activation_reason: ActivationReason::AlwaysOn,
+            estimated_tokens: *tokens,
+            counting_confidence: CountingConfidence::Approximate,
+            authority_tier: Some(*tier),
+            truncation_reason: None,
+        });
+    }
+
+    // Environment block.
+    let env_text = format!(
+        "## Environment\n\n- lang: en\n- deepseek_version: {}\n- platform: macos\n- shell: bash\n- pwd: {}",
+        env!("CARGO_PKG_VERSION"),
+        workspace.display()
+    );
+    entries.push(SourceEntry {
+        source_kind: SourceKind::EnvironmentBlock,
+        label: "Environment block".to_string(),
+        source_path: None,
+        activation_reason: ActivationReason::AlwaysOn,
+        estimated_tokens: estimate_text_tokens_conservative(&env_text),
+        counting_confidence: CountingConfidence::High,
+        authority_tier: None,
+        truncation_reason: None,
+    });
+
+    // Project context (AGENTS.md / README).
+    let agents_path = workspace.join("AGENTS.md");
+    if agents_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&agents_path) {
+            let sz = content.len();
+            let max_bytes = 100 * 1024;
+            let truncated = if sz > max_bytes {
+                let head_end = (0..=max_bytes)
+                    .rev()
+                    .find(|&i| content.is_char_boundary(i))
+                    .unwrap_or(0);
+                content[..head_end].to_string()
+            } else {
+                content
+            };
+            entries.push(SourceEntry {
+                source_kind: SourceKind::ProjectContext,
+                label: "Project context (AGENTS.md)".to_string(),
+                source_path: Some(agents_path.display().to_string()),
+                activation_reason: ActivationReason::FilePresent,
+                estimated_tokens: estimate_text_tokens_conservative(&truncated),
+                counting_confidence: CountingConfidence::High,
+                authority_tier: Some(5),
+                truncation_reason: if sz > max_bytes {
+                    Some("truncated to 100 KB".to_string())
+                } else {
+                    None
+                },
+            });
+        }
+    }
+
+    // Instructions files.
+    for (name, path) in &[
+        ("AGENTS.md", workspace.join("AGENTS.md")),
+        ("CLAUDE.md", workspace.join("CLAUDE.md")),
+    ] {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let sz = content.len();
+                let truncated = if sz > 100 * 1024 {
+                    content[..100 * 1024].to_string()
+                } else {
+                    content
+                };
+                entries.push(SourceEntry {
+                    source_kind: SourceKind::InstructionsFile,
+                    label: format!("Instructions file ({name})"),
+                    source_path: Some(path.display().to_string()),
+                    activation_reason: ActivationReason::FilePresent,
+                    estimated_tokens: estimate_text_tokens_conservative(&truncated),
+                    counting_confidence: CountingConfidence::High,
+                    authority_tier: Some(5),
+                    truncation_reason: if sz > 100 * 1024 {
+                        Some("truncated to 100 KB".to_string())
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+    }
+
+    // Project context pack.
+    if workspace.join("README.md").exists() {
+        entries.push(SourceEntry {
+            source_kind: SourceKind::ProjectContextPack,
+            label: "Project context pack".to_string(),
+            source_path: Some(workspace.join("README.md").display().to_string()),
+            activation_reason: ActivationReason::FilePresent,
+            estimated_tokens: 2000,
+            counting_confidence: CountingConfidence::Approximate,
+            authority_tier: Some(6),
+            truncation_reason: None,
+        });
+    }
+
+    let total: usize = entries.iter().map(|e| e.estimated_tokens).sum();
+    let window = crate::models::context_window_for_model("deepseek-v4-pro");
+    let pct = window.map(|w| (total as f64 / f64::from(w) * 100.0).clamp(0.0, 100.0));
+
+    crate::context_report::PromptSourceMap {
+        entries,
+        total_estimated_tokens: total,
+        context_window_tokens: window,
+        budget_used_percent: pct,
+        generated_at: "headless".to_string(),
+    }
+}
+
 fn run_doctor_json(
     config: &Config,
     workspace: &Path,

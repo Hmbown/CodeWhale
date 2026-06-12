@@ -342,7 +342,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "context",
         aliases: &["ctx"],
-        usage: "/context",
+        usage: "/context [report|json|summary]",
         description_id: MessageId::CmdContextDescription,
     },
     CommandInfo {
@@ -633,7 +633,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // ChangeLog command
         "change" => change::change(app, arg),
         "system" | "xitong" => debug::system_prompt(app),
-        "context" | "ctx" => debug::context(app),
+        "context" | "ctx" => debug::context(app, arg),
         "edit" => debug::edit(app),
         "diff" => debug::diff(app),
         "undo" => {
@@ -1398,14 +1398,14 @@ mod tests {
             .find(|cmd| cmd.name == "context")
             .expect("context command should exist");
         assert_eq!(context.aliases, &["ctx"]);
-        assert!(context.description_for(Locale::En).contains("inspector"));
+        assert!(
+            context.description_for(Locale::En).contains("context"),
+            "description should mention context"
+        );
 
         let mut app = create_test_app();
         let result = execute("/ctx", &mut app);
-        assert!(matches!(
-            result.action,
-            Some(AppAction::OpenContextInspector)
-        ));
+        assert!(result.message.is_some(), "/ctx should return a message");
     }
 
     #[test]

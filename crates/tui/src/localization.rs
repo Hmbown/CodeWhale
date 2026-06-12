@@ -1225,7 +1225,7 @@ fn english(id: MessageId) -> &'static str {
             "Let the agent surgically prune conversation history to free context space"
         }
         MessageId::CmdConfigDescription => "Open interactive configuration editor",
-        MessageId::CmdContextDescription => "Open compact session context inspector",
+        MessageId::CmdContextDescription => "Show prompt source map and context budget breakdown",
         MessageId::CmdCostDescription => "Show session cost breakdown",
         MessageId::CmdDiffDescription => "Show file changes since session start",
         MessageId::CmdEditDescription => "Revise and resubmit the last message",

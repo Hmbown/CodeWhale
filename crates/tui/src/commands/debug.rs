@@ -129,9 +129,66 @@ pub fn system_prompt(app: &mut App) -> CommandResult {
     ))
 }
 
-/// Show context window usage
-pub fn context(_app: &mut App) -> CommandResult {
-    CommandResult::action(AppAction::OpenContextInspector)
+/// Show context window usage and prompt source map (#3143).
+///
+/// Subcommands:
+///   /context          Alias for /context report
+///   /context report   Full prompt source map with token breakdown
+///   /context json     Machine-readable JSON output
+///   /context summary  Brief budget pressure summary
+pub fn context(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let sub = arg.unwrap_or("report").trim();
+    match sub {
+        "json" => {
+            let json = context_json(app);
+            CommandResult::message(json)
+        }
+        "summary" => {
+            let summary = context_summary(app);
+            CommandResult::message(summary)
+        }
+        "report" | "" | _ => {
+            let workspace = app.workspace.clone();
+            let report = crate::context_report::build_context_report(app, &workspace);
+            let formatted = crate::context_report::format_context_report(&report);
+            CommandResult::message(formatted)
+        }
+    }
+}
+
+/// Show the prompt source map as JSON (machine-readable).
+pub fn context_json(app: &mut App) -> String {
+    let workspace = app.workspace.clone();
+    let report = crate::context_report::build_context_report(app, &workspace);
+    serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("{{ \"error\": \"{e}\" }}"))
+}
+
+/// Show a brief budget pressure summary.
+pub fn context_summary(app: &mut App) -> String {
+    let workspace = app.workspace.clone();
+    let report = crate::context_report::build_context_report(app, &workspace);
+    let mut out = String::new();
+    use std::fmt::Write;
+    let _ = writeln!(
+        out,
+        "Context budget: {} tokens",
+        report.total_estimated_tokens
+    );
+    if let Some(window) = report.context_window_tokens {
+        let pct = report.budget_used_percent.unwrap_or(0.0);
+        let bar = if pct > 90.0 {
+            "CRITICAL"
+        } else if pct > 70.0 {
+            "HIGH"
+        } else if pct > 40.0 {
+            "MODERATE"
+        } else {
+            "LOW"
+        };
+        let _ = writeln!(out, "Window: {window} tokens ({pct:.1}% used — {bar})");
+    }
+    let _ = writeln!(out, "Sources: {} entries", report.entries.len());
+    out
 }
 
 /// Show per-turn DeepSeek prefix-cache telemetry for the last N turns (#263).
@@ -1422,12 +1479,13 @@ mod tests {
             content: "Hello".to_string(),
         });
 
-        let result = context(&mut app);
-        assert!(matches!(
-            result.action,
-            Some(AppAction::OpenContextInspector)
-        ));
-        assert!(result.message.is_none());
+        let result = context(&mut app, None);
+        assert!(result.message.is_some(), "/context should return a message");
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("Context Report"),
+            "should contain report title"
+        );
     }
 
     #[test]
