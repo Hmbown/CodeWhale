@@ -2497,13 +2497,7 @@ impl Engine {
 
         let loaded = crate::slop_ledger::SlopLedger::load()
             .ok()
-            .and_then(|ledger| {
-                if ledger.has_open_entries() {
-                    ledger.completion_gate_summary()
-                } else {
-                    None
-                }
-            });
+            .and_then(|ledger| ledger.completion_gate_summary());
         self.slop_ledger_gate_cache = Some((modified, loaded.clone()));
         loaded
     }

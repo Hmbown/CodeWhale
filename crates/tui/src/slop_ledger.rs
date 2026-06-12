@@ -970,23 +970,6 @@ fn redact_exported_text(text: &mut String) {
 }
 
 impl SlopLedger {
-    /// Completion-gate / verifier hook: returns `true` when there are
-    /// unresolved slop entries (status `Open` or `InProgress`) that the
-    /// agent should review before claiming the task is done.
-    ///
-    /// Tools and engine hooks can call this on claim-of-done to surface
-    /// architectural residue the agent may have overlooked.
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn has_open_entries(&self) -> bool {
-        self.entries.iter().any(|e| {
-            matches!(
-                e.status,
-                SlopEntryStatus::Open | SlopEntryStatus::InProgress
-            )
-        })
-    }
-
     /// Return a concise completion-gate summary suitable for a verifier
     /// sub-agent or the claim-of-done prompt. Returns `None` when all
     /// entries are resolved — the caller can then treat the gate as "pass".
