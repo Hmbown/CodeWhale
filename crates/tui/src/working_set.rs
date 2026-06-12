@@ -225,25 +225,26 @@ impl Workspace {
             .as_deref()
             .map(|c| c != self.root.as_path())
             .unwrap_or(false);
+        let mut ctx = SearchContext {
+            prefix_hits: &mut prefix_hits,
+            substring_hits: &mut substring_hits,
+            seen: &mut seen,
+            limit,
+        };
+
         if cwd_diverges && let Some(cwd) = self.cwd.as_deref() {
             walk_for_completions(
                 cwd,
                 cwd,
                 &needle,
-                limit,
-                &mut prefix_hits,
-                &mut substring_hits,
-                &mut seen,
+                &mut ctx,
                 self.completion_walk_depth,
             );
             add_local_reference_completions(
                 cwd,
                 cwd,
                 &needle,
-                limit,
-                &mut prefix_hits,
-                &mut substring_hits,
-                &mut seen,
+                &mut ctx,
                 self.completion_walk_depth,
             );
         }
@@ -251,20 +252,14 @@ impl Workspace {
             &self.root,
             &self.root,
             &needle,
-            limit,
-            &mut prefix_hits,
-            &mut substring_hits,
-            &mut seen,
+            &mut ctx,
             self.completion_walk_depth,
         );
         add_local_reference_completions(
             &self.root,
             &self.root,
             &needle,
-            limit,
-            &mut prefix_hits,
-            &mut substring_hits,
-            &mut seen,
+            &mut ctx,
             self.completion_walk_depth,
         );
 
@@ -389,6 +384,13 @@ const FILE_INDEX_MAX_ENTRIES: usize = 50_000;
 /// symlink following, depth-limited, custom `.deepseekignore` honored,
 /// and gitignore overrides for AI-tool dot-directories so `@`-completion
 /// finds them even when they're gitignored.
+struct SearchContext<'a> {
+    prefix_hits: &'a mut Vec<String>,
+    substring_hits: &'a mut Vec<String>,
+    seen: &'a mut HashSet<PathBuf>,
+    limit: usize,
+}
+
 fn discovery_walk_builder(root: &Path, max_depth: Option<usize>) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
     builder.hidden(true).follow_links(false);
@@ -402,15 +404,11 @@ fn discovery_walk_builder(root: &Path, max_depth: Option<usize>) -> WalkBuilder 
 /// Walk the AI-tool dot-directories (`.deepseek/`, `.cursor/`, `.claude/`,
 /// `.agents/`) with gitignore disabled so their contents are discoverable
 /// even when the project's `.gitignore` / `.ignore` excludes them.
-#[allow(clippy::too_many_arguments)]
 fn walk_always_discoverable_dirs(
     walk_root: &Path,
     display_root: &Path,
     needle: &str,
-    limit: usize,
-    prefix_hits: &mut Vec<String>,
-    substring_hits: &mut Vec<String>,
-    seen: &mut HashSet<PathBuf>,
+    ctx: &mut SearchContext<'_>,
     max_depth: Option<usize>,
 ) {
     for dir_name in DISCOVERY_ALWAYS_DIRS {
@@ -428,7 +426,7 @@ fn walk_always_discoverable_dirs(
             builder.max_depth(Some(depth.saturating_sub(1)));
         }
         for entry in builder.build().flatten() {
-            if prefix_hits.len() + substring_hits.len() >= limit {
+            if ctx.prefix_hits.len() + ctx.substring_hits.len() >= ctx.limit {
                 break;
             }
             let path = entry.path();
@@ -445,7 +443,7 @@ fn walk_always_discoverable_dirs(
                 continue;
             }
             let abs = path.to_path_buf();
-            if !seen.insert(abs) {
+            if !ctx.seen.insert(abs) {
                 continue;
             }
             let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
@@ -456,29 +454,25 @@ fn walk_always_discoverable_dirs(
             };
             let lower = candidate.to_lowercase();
             if needle.is_empty() || lower.starts_with(needle) {
-                prefix_hits.push(candidate);
+                ctx.prefix_hits.push(candidate);
             } else if lower.contains(needle) {
-                substring_hits.push(candidate);
+                ctx.substring_hits.push(candidate);
             }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn walk_for_completions(
     walk_root: &Path,
     display_root: &Path,
     needle: &str,
-    limit: usize,
-    prefix_hits: &mut Vec<String>,
-    substring_hits: &mut Vec<String>,
-    seen: &mut HashSet<PathBuf>,
+    ctx: &mut SearchContext<'_>,
     max_depth: Option<usize>,
 ) {
     let builder = discovery_walk_builder(walk_root, max_depth);
 
     for entry in builder.build().flatten() {
-        if prefix_hits.len() + substring_hits.len() >= limit {
+        if ctx.prefix_hits.len() + ctx.substring_hits.len() >= ctx.limit {
             break;
         }
         let path = entry.path();
@@ -492,7 +486,7 @@ fn walk_for_completions(
         // Dedup across the (cwd, workspace) double-walk by absolute path; we
         // want the cwd-relative display when both walks see the same file.
         let abs = path.to_path_buf();
-        if !seen.insert(abs) {
+        if !ctx.seen.insert(abs) {
             continue;
         }
         let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
@@ -503,9 +497,9 @@ fn walk_for_completions(
         };
         let lower = candidate.to_lowercase();
         if needle.is_empty() || lower.starts_with(needle) {
-            prefix_hits.push(candidate);
+            ctx.prefix_hits.push(candidate);
         } else if lower.contains(needle) {
-            substring_hits.push(candidate);
+            ctx.substring_hits.push(candidate);
         }
     }
 
@@ -515,25 +509,18 @@ fn walk_for_completions(
         walk_root,
         display_root,
         needle,
-        limit,
-        prefix_hits,
-        substring_hits,
-        seen,
+        ctx,
         max_depth,
     );
 }
 
 const LOCAL_REFERENCE_SCAN_LIMIT: usize = 4096;
 
-#[allow(clippy::too_many_arguments)]
 fn add_local_reference_completions(
     root: &Path,
     display_root: &Path,
     needle: &str,
-    limit: usize,
-    prefix_hits: &mut Vec<String>,
-    substring_hits: &mut Vec<String>,
-    seen: &mut HashSet<PathBuf>,
+    ctx: &mut SearchContext<'_>,
     max_depth: Option<usize>,
 ) {
     if !should_try_local_reference_completion(needle) {
@@ -541,21 +528,21 @@ fn add_local_reference_completions(
     }
 
     for path in local_reference_paths(root, LOCAL_REFERENCE_SCAN_LIMIT, max_depth) {
-        if prefix_hits.len() + substring_hits.len() >= limit {
+        if ctx.prefix_hits.len() + ctx.substring_hits.len() >= ctx.limit {
             break;
         }
         let Ok(rel) = path.strip_prefix(display_root) else {
             continue;
         };
         let rel_str = rel.to_string_lossy().replace('\\', "/");
-        if rel_str.is_empty() || !seen.insert(path.clone()) {
+        if rel_str.is_empty() || !ctx.seen.insert(path.clone()) {
             continue;
         }
         let lower = rel_str.to_lowercase();
         if needle.is_empty() || lower.starts_with(needle) {
-            prefix_hits.push(rel_str);
+            ctx.prefix_hits.push(rel_str);
         } else if lower.contains(needle) {
-            substring_hits.push(rel_str);
+            ctx.substring_hits.push(rel_str);
         }
     }
 }
