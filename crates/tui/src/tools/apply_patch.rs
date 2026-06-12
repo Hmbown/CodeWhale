@@ -243,49 +243,25 @@ impl ToolSpec for ApplyPatchTool {
         let create_if_missing = optional_bool(&input, "create_if_missing", false);
         let preflight = preflight_apply_patch_plan(&input)?;
 
-        if let Some(changes_value) = input.get("changes") {
-            let (pending, stats) = build_pending_writes_from_changes(changes_value, context)?;
-            apply_pending_writes(&pending)?;
-            // Resolve absolute paths for LSP diagnostics query.
-            let abs_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
-            let diag_block = lsp_diagnostics_for_paths(context, &abs_paths).await;
-            let result = PatchResult {
-                success: true,
-                files_applied: stats.stats.files_applied,
-                files_total: stats.stats.files_total,
-                hunks_applied: stats.stats.hunks_applied,
-                hunks_total: stats.stats.hunks_total,
-                fuzz_used: stats.stats.fuzz_used,
-                hunks_with_fuzz: stats.stats.hunks_with_fuzz,
-                touched_files: stats.touched_files.clone(),
-                file_summaries: stats.file_summaries.clone(),
-                message: build_summary_message(&stats),
-            };
-            let mut tool_result = ToolResult::json(&result)
-                .map_err(|e| ToolError::execution_failed(e.to_string()))?;
-            tool_result =
-                tool_result.with_metadata(apply_patch_preflight_metadata(&preflight.summary));
-            if !diag_block.is_empty() {
-                tool_result.content.push('\n');
-                tool_result.content.push_str(&diag_block);
-            }
-            return Ok(tool_result);
-        }
-
-        let file_patches = match preflight.kind {
+        let (pending, mut stats) = match preflight.kind {
             ApplyPatchPreflightKind::Changes => {
-                unreachable!("changes input returned before patch execution")
+                let changes_value = input.get("changes").unwrap();
+                build_pending_writes_from_changes(changes_value, context)?
             }
-            ApplyPatchPreflightKind::PathOverride { path, hunks } => vec![FilePatch {
-                path,
-                hunks,
-                delete_after: false,
-                create_if_missing,
-            }],
-            ApplyPatchPreflightKind::FilePatches(file_patches) => file_patches,
+            ApplyPatchPreflightKind::PathOverride { path, hunks } => {
+                let file_patches = vec![FilePatch {
+                    path,
+                    hunks,
+                    delete_after: false,
+                    create_if_missing,
+                }];
+                build_pending_writes_from_patches(file_patches, context, fuzz)?
+            }
+            ApplyPatchPreflightKind::FilePatches(file_patches) => {
+                build_pending_writes_from_patches(file_patches, context, fuzz)?
+            }
         };
 
-        let (pending, mut stats) = build_pending_writes_from_patches(file_patches, context, fuzz)?;
         stats.header_path_mismatch = preflight.summary.header_path_mismatch.clone();
         apply_pending_writes(&pending)?;
         // Resolve absolute paths for LSP diagnostics query.
