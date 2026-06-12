@@ -348,6 +348,154 @@ fn version_is_beta(version: &semver::Version) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    fn clear_env() {
+        unsafe {
+            std::env::remove_var(RELEASE_BASE_URL_ENV);
+            std::env::remove_var(LEGACY_RELEASE_BASE_URL_ENV);
+            std::env::remove_var(DEEPSEEK_RELEASE_BASE_URL_ENV);
+            std::env::remove_var(CNB_MIRROR_ENV);
+            std::env::remove_var(UPDATE_VERSION_ENV);
+            std::env::remove_var(LEGACY_UPDATE_VERSION_ENV);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_default() {
+        clear_env();
+
+        let query_stable = resolve_release_query(ReleaseChannel::Stable);
+        assert_eq!(
+            query_stable,
+            ReleaseQuery::GitHubLatest {
+                url: LATEST_RELEASE_URL
+            }
+        );
+
+        let query_beta = resolve_release_query(ReleaseChannel::Beta);
+        assert_eq!(
+            query_beta,
+            ReleaseQuery::GitHubReleaseList {
+                url: RELEASES_URL
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_mirror_env() {
+        clear_env();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "https://example.com/mirror");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        let default_version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: "https://example.com/mirror".to_string(),
+                version: default_version.to_string()
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_mirror_legacy_env() {
+        clear_env();
+        unsafe {
+            std::env::set_var(LEGACY_RELEASE_BASE_URL_ENV, "https://legacy.com/mirror");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        let default_version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: "https://legacy.com/mirror".to_string(),
+                version: default_version.to_string()
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_mirror_deepseek_env() {
+        clear_env();
+        unsafe {
+            std::env::set_var(DEEPSEEK_RELEASE_BASE_URL_ENV, "https://deepseek.com/mirror");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        let default_version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: "https://deepseek.com/mirror".to_string(),
+                version: default_version.to_string()
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_cnb_mirror() {
+        clear_env();
+        unsafe {
+            std::env::set_var(CNB_MIRROR_ENV, "1");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        let default_version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: cnb_release_base_url(default_version),
+                version: default_version.to_string()
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_pinned_version() {
+        clear_env();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "https://example.com/mirror");
+            std::env::set_var(UPDATE_VERSION_ENV, "v1.2.3");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: "https://example.com/mirror".to_string(),
+                version: "1.2.3".to_string()
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_release_query_legacy_pinned_version() {
+        clear_env();
+        unsafe {
+            std::env::set_var(RELEASE_BASE_URL_ENV, "https://example.com/mirror");
+            std::env::set_var(LEGACY_UPDATE_VERSION_ENV, "v1.2.3-legacy");
+        }
+
+        let query = resolve_release_query(ReleaseChannel::Stable);
+        assert_eq!(
+            query,
+            ReleaseQuery::Mirror {
+                base_url: "https://example.com/mirror".to_string(),
+                version: "1.2.3-legacy".to_string()
+            }
+        );
+    }
 
     #[test]
     fn cnb_release_base_url_includes_tag_directory() {
