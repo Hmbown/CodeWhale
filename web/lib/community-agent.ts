@@ -239,9 +239,13 @@ export async function getDraft(kv: KVNamespace | undefined, key: string): Promis
 export async function listDrafts(kv: KVNamespace | undefined, prefix = "draft:"): Promise<AgentDraft[]> {
   if (!kv) return [];
   const listed = await kv.list({ prefix, limit: 100 });
+
+  const rawValues = await Promise.all(
+    listed.keys.map(k => kv.get(k.name))
+  );
+
   const drafts: AgentDraft[] = [];
-  for (const k of listed.keys) {
-    const raw = await kv.get(k.name);
+  for (const raw of rawValues) {
     if (raw) {
       try {
         drafts.push(JSON.parse(raw) as AgentDraft);
