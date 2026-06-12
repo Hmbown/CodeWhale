@@ -56,6 +56,11 @@ pub trait Provider: Send + Sync {
     /// TOML table key under `[providers.<key>]`.
     fn provider_config_key(&self) -> &'static str;
 
+    /// Alternate names accepted during provider resolution.
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Wire format used by the provider.
     fn wire(&self) -> WireFormat {
         WireFormat::ChatCompletions
@@ -66,16 +71,22 @@ macro_rules! provider {
     (
         $struct_name:ident,
         $kind:ident,
+        $id:literal,
         $display_name:literal,
         $base_url:ident,
         $model:ident,
         [$($env_var:literal),* $(,)?],
-        $config_key:literal
+        $config_key:literal,
+        aliases: [$($alias:literal),* $(,)?]
     ) => {
         /// Zero-sized metadata entry for this built-in provider.
         pub struct $struct_name;
 
         impl Provider for $struct_name {
+            fn id(&self) -> &'static str {
+                $id
+            }
+
             fn kind(&self) -> ProviderKind {
                 ProviderKind::$kind
             }
@@ -99,6 +110,10 @@ macro_rules! provider {
             fn provider_config_key(&self) -> &'static str {
                 $config_key
             }
+
+            fn aliases(&self) -> &'static [&'static str] {
+                &[$($alias),*]
+            }
         }
     };
 }
@@ -106,42 +121,51 @@ macro_rules! provider {
 provider!(
     Deepseek,
     Deepseek,
+    "deepseek",
     "DeepSeek",
     DEFAULT_DEEPSEEK_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
     ["DEEPSEEK_API_KEY"],
-    "deepseek"
+    "deepseek",
+    aliases: ["deep-seek", "deepseek-cn", "deepseek_china", "deepseekcn", "deepseek-china"]
 );
 provider!(
     NvidiaNim,
     NvidiaNim,
+    "nvidia-nim",
     "NVIDIA NIM",
     DEFAULT_NVIDIA_NIM_BASE_URL,
     DEFAULT_NVIDIA_NIM_MODEL,
     ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
-    "nvidia_nim"
+    "nvidia_nim",
+    aliases: ["nvidia", "nvidia_nim", "nim"]
 );
 provider!(
     Openai,
     Openai,
+    "openai",
     "OpenAI-compatible",
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENAI_MODEL,
     ["OPENAI_API_KEY"],
-    "openai"
+    "openai",
+    aliases: ["open-ai"]
 );
 provider!(
     Atlascloud,
     Atlascloud,
+    "atlascloud",
     "AtlasCloud",
     DEFAULT_ATLASCLOUD_BASE_URL,
     DEFAULT_ATLASCLOUD_MODEL,
     ["ATLASCLOUD_API_KEY"],
-    "atlascloud"
+    "atlascloud",
+    aliases: ["atlas-cloud", "atlas_cloud", "atlas"]
 );
 provider!(
     WanjieArk,
     WanjieArk,
+    "wanjie-ark",
     "Wanjie Ark",
     DEFAULT_WANJIE_ARK_BASE_URL,
     DEFAULT_WANJIE_ARK_MODEL,
@@ -150,11 +174,13 @@ provider!(
         "WANJIE_API_KEY",
         "WANJIE_MAAS_API_KEY"
     ],
-    "wanjie_ark"
+    "wanjie_ark",
+    aliases: ["wanjie", "wanjie_ark", "ark-wanjie", "ark_wanjie", "wanjieark", "wanjie-maas", "wanjie_maas", "wanjiemaas"]
 );
 provider!(
     Volcengine,
     Volcengine,
+    "volcengine",
     "Volcengine Ark",
     DEFAULT_VOLCENGINE_BASE_URL,
     DEFAULT_VOLCENGINE_MODEL,
@@ -163,20 +189,24 @@ provider!(
         "VOLCENGINE_ARK_API_KEY",
         "ARK_API_KEY"
     ],
-    "volcengine"
+    "volcengine",
+    aliases: ["volcengine-ark", "volcengine_ark", "ark", "volc-ark", "volcengineark"]
 );
 provider!(
     Openrouter,
     Openrouter,
+    "openrouter",
     "OpenRouter",
     DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_OPENROUTER_MODEL,
     ["OPENROUTER_API_KEY"],
-    "openrouter"
+    "openrouter",
+    aliases: ["open_router"]
 );
 provider!(
     XiaomiMimo,
     XiaomiMimo,
+    "xiaomi-mimo",
     "Xiaomi MiMo",
     DEFAULT_XIAOMI_MIMO_BASE_URL,
     DEFAULT_XIAOMI_MIMO_MODEL,
@@ -187,112 +217,145 @@ provider!(
         "XIAOMI_API_KEY",
         "MIMO_API_KEY",
     ],
-    "xiaomi_mimo"
+    "xiaomi_mimo",
+    aliases: ["xiaomi_mimo", "xiaomimimo", "mimo", "xiaomi"]
 );
 provider!(
     Novita,
     Novita,
-    "Novita",
+    "novita",
+    "Novita AI",
     DEFAULT_NOVITA_BASE_URL,
     DEFAULT_NOVITA_MODEL,
     ["NOVITA_API_KEY"],
-    "novita"
+    "novita",
+    aliases: []
 );
 provider!(
     Fireworks,
     Fireworks,
-    "Fireworks",
+    "fireworks",
+    "Fireworks AI",
     DEFAULT_FIREWORKS_BASE_URL,
     DEFAULT_FIREWORKS_MODEL,
     ["FIREWORKS_API_KEY"],
-    "fireworks"
+    "fireworks",
+    aliases: ["fireworks-ai"]
 );
 provider!(
     Siliconflow,
     Siliconflow,
+    "siliconflow",
     "SiliconFlow",
     DEFAULT_SILICONFLOW_BASE_URL,
     DEFAULT_SILICONFLOW_MODEL,
     ["SILICONFLOW_API_KEY"],
-    "siliconflow"
+    "siliconflow",
+    aliases: ["silicon-flow", "silicon_flow"]
 );
 provider!(
     SiliconflowCN,
     SiliconflowCN,
-    "SiliconFlow CN",
+    "siliconflow-CN",
+    "SiliconFlow (China)",
     DEFAULT_SILICONFLOW_CN_BASE_URL,
     DEFAULT_SILICONFLOW_MODEL,
     ["SILICONFLOW_API_KEY"],
-    "siliconflow"
+    "siliconflow",
+    aliases: [
+        "silicon-flow-cn",
+        "silicon-flow-CN",
+        "silicon_flow_cn",
+        "silicon_flow_CN",
+        "siliconflow-china",
+    ]
 );
 provider!(
     Arcee,
     Arcee,
-    "Arcee",
+    "arcee",
+    "Arcee AI",
     DEFAULT_ARCEE_BASE_URL,
     DEFAULT_ARCEE_MODEL,
     ["ARCEE_API_KEY"],
-    "arcee"
+    "arcee",
+    aliases: ["arcee-ai", "arcee_ai"]
 );
 provider!(
     Moonshot,
     Moonshot,
-    "Moonshot",
+    "moonshot",
+    "Moonshot/Kimi",
     DEFAULT_MOONSHOT_BASE_URL,
     DEFAULT_MOONSHOT_MODEL,
     ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-    "moonshot"
+    "moonshot",
+    aliases: ["moonshot-ai", "kimi", "kimi-k2"]
 );
 provider!(
     Sglang,
     Sglang,
+    "sglang",
     "SGLang",
     DEFAULT_SGLANG_BASE_URL,
     DEFAULT_SGLANG_MODEL,
     ["SGLANG_API_KEY"],
-    "sglang"
+    "sglang",
+    aliases: ["sg-lang"]
 );
 provider!(
     Vllm,
     Vllm,
+    "vllm",
     "vLLM",
     DEFAULT_VLLM_BASE_URL,
     DEFAULT_VLLM_MODEL,
     ["VLLM_API_KEY"],
-    "vllm"
+    "vllm",
+    aliases: ["v-llm"]
 );
 provider!(
     Ollama,
     Ollama,
+    "ollama",
     "Ollama",
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_MODEL,
     ["OLLAMA_API_KEY"],
-    "ollama"
+    "ollama",
+    aliases: ["ollama-local"]
 );
 provider!(
     Huggingface,
     Huggingface,
+    "huggingface",
     "Hugging Face",
     DEFAULT_HUGGINGFACE_BASE_URL,
     DEFAULT_HUGGINGFACE_MODEL,
     ["HUGGINGFACE_API_KEY", "HF_TOKEN"],
-    "huggingface"
+    "huggingface",
+    aliases: ["hugging-face", "hugging_face", "hf"]
 );
 provider!(
     Together,
     Together,
+    "together",
     "Together AI",
     DEFAULT_TOGETHER_BASE_URL,
     DEFAULT_TOGETHER_MODEL,
     ["TOGETHER_API_KEY"],
-    "together"
+    "together",
+    aliases: ["together-ai", "together_ai"]
 );
 
 /// OpenAI Codex / ChatGPT OAuth provider using the Responses API.
 pub struct OpenaiCodex;
 
 impl Provider for OpenaiCodex {
+    fn id(&self) -> &'static str {
+        "openai-codex"
+    }
+
     fn kind(&self) -> ProviderKind {
         ProviderKind::OpenaiCodex
     }
@@ -317,6 +380,18 @@ impl Provider for OpenaiCodex {
         "openai_codex"
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "openai_codex",
+            "openaicodex",
+            "codex",
+            "chatgpt",
+            "chatgpt-codex",
+            "chatgpt_codex",
+            "chatgptcodex",
+        ]
+    }
+
     fn wire(&self) -> WireFormat {
         WireFormat::Responses
     }
@@ -326,6 +401,10 @@ impl Provider for OpenaiCodex {
 pub struct Anthropic;
 
 impl Provider for Anthropic {
+    fn id(&self) -> &'static str {
+        "anthropic"
+    }
+
     fn kind(&self) -> ProviderKind {
         ProviderKind::Anthropic
     }
@@ -389,8 +468,8 @@ static PROVIDER_REGISTRY: [&dyn Provider; 21] = [
     &NOVITA,
     &FIREWORKS,
     &SILICONFLOW,
-    &SILICONFLOW_CN,
     &ARCEE,
+    &SILICONFLOW_CN,
     &MOONSHOT,
     &SGLANG,
     &VLLM,
@@ -426,27 +505,9 @@ pub fn resolve_provider(id_or_alias: &str) -> Option<&'static dyn Provider> {
 /// Return metadata for a known provider kind.
 #[must_use]
 pub fn provider_for_kind(kind: ProviderKind) -> &'static dyn Provider {
-    match kind {
-        ProviderKind::Deepseek => &DEEPSEEK,
-        ProviderKind::NvidiaNim => &NVIDIA_NIM,
-        ProviderKind::Openai => &OPENAI,
-        ProviderKind::Atlascloud => &ATLASCLOUD,
-        ProviderKind::WanjieArk => &WANJIE_ARK,
-        ProviderKind::Volcengine => &VOLCENGINE,
-        ProviderKind::Openrouter => &OPENROUTER,
-        ProviderKind::XiaomiMimo => &XIAOMI_MIMO,
-        ProviderKind::Novita => &NOVITA,
-        ProviderKind::Fireworks => &FIREWORKS,
-        ProviderKind::Siliconflow => &SILICONFLOW,
-        ProviderKind::SiliconflowCN => &SILICONFLOW_CN,
-        ProviderKind::Arcee => &ARCEE,
-        ProviderKind::Moonshot => &MOONSHOT,
-        ProviderKind::Sglang => &SGLANG,
-        ProviderKind::Vllm => &VLLM,
-        ProviderKind::Ollama => &OLLAMA,
-        ProviderKind::Huggingface => &HUGGINGFACE,
-        ProviderKind::Together => &TOGETHER,
-        ProviderKind::OpenaiCodex => &OPENAI_CODEX,
-        ProviderKind::Anthropic => &ANTHROPIC,
-    }
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|p| p.kind() == kind)
+        .copied()
+        .expect("ProviderKind variant missing from PROVIDER_REGISTRY")
 }

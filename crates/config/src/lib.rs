@@ -171,8 +171,8 @@ impl ProviderKind {
         Self::Novita,
         Self::Fireworks,
         Self::Siliconflow,
-        Self::SiliconflowCN,
         Self::Arcee,
+        Self::SiliconflowCN,
         Self::Moonshot,
         Self::Sglang,
         Self::Vllm,
@@ -185,63 +185,19 @@ impl ProviderKind {
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Deepseek => "deepseek",
-            Self::NvidiaNim => "nvidia-nim",
-            Self::Openai => "openai",
-            Self::Atlascloud => "atlascloud",
-            Self::WanjieArk => "wanjie-ark",
-            Self::Volcengine => "volcengine",
-            Self::Openrouter => "openrouter",
-            Self::XiaomiMimo => "xiaomi-mimo",
-            Self::Novita => "novita",
-            Self::Fireworks => "fireworks",
-            Self::Siliconflow => "siliconflow",
-            Self::SiliconflowCN => "siliconflow-CN",
-            Self::Arcee => "arcee",
-            Self::Moonshot => "moonshot",
-            Self::Sglang => "sglang",
-            Self::Vllm => "vllm",
-            Self::Ollama => "ollama",
-            Self::Huggingface => "huggingface",
-            Self::Together => "together",
-            Self::OpenaiCodex => "openai-codex",
-            Self::Anthropic => "anthropic",
-        }
+        self.provider().id()
     }
 
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
-            | "deepseek-china" => Some(Self::Deepseek),
-            "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
-            "openai" | "open-ai" => Some(Self::Openai),
-            "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
-            "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
-            | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
-            "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark"
-            | "volcengineark" => Some(Self::Volcengine),
-            "openrouter" | "open_router" => Some(Self::Openrouter),
-            "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => {
-                Some(Self::XiaomiMimo)
-            }
-            "novita" => Some(Self::Novita),
-            "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
-            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
-            "siliconflow-cn" | "siliconflow-CN" => Some(Self::SiliconflowCN),
-            "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
-            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
-            "sglang" | "sg-lang" => Some(Self::Sglang),
-            "vllm" | "v-llm" => Some(Self::Vllm),
-            "ollama" | "ollama-local" => Some(Self::Ollama),
-            "huggingface" | "hugging-face" | "hugging_face" | "hf" => Some(Self::Huggingface),
-            "together" | "together-ai" | "together_ai" => Some(Self::Together),
-            "anthropic" | "claude" => Some(Self::Anthropic),
-            "openai-codex" | "openai_codex" | "openaicodex" | "codex" | "chatgpt"
-            | "chatgpt-codex" | "chatgpt_codex" | "chatgptcodex" => Some(Self::OpenaiCodex),
-            _ => None,
-        }
+        let trimmed = value.trim();
+        provider::all_providers()
+            .iter()
+            .find(|p| {
+                trimmed.eq_ignore_ascii_case(p.id())
+                    || p.aliases().iter().any(|a| trimmed.eq_ignore_ascii_case(a))
+            })
+            .map(|p| p.kind())
     }
 
     #[must_use]

@@ -212,126 +212,105 @@ impl ApiProvider {
 
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "deepseek" | "deep-seek" => Some(Self::Deepseek),
-            "deepseek-cn" | "deepseek_china" | "deepseekcn" | "deepseek-china" => {
-                Some(Self::DeepseekCN)
-            }
-            "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
-            "openai" | "open-ai" => Some(Self::Openai),
-            "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
-            "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
-            | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
-            "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark"
-            | "volcengineark" => Some(Self::Volcengine),
-            "openrouter" | "open_router" => Some(Self::Openrouter),
-            "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => {
-                Some(Self::XiaomiMimo)
-            }
-            "novita" => Some(Self::Novita),
-            "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
-            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
-            "siliconflow-cn" | "siliconflow-CN" | "silicon-flow-cn" | "silicon-flow-CN"
-            | "silicon_flow_cn" | "silicon_flow_CN" | "siliconflow-china" => {
-                Some(Self::SiliconflowCn)
-            }
-            "arcee" | "arcee-ai" | "arcee_ai" => Some(Self::Arcee),
-            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
-            "sglang" | "sg-lang" => Some(Self::Sglang),
-            "vllm" | "v-llm" => Some(Self::Vllm),
-            "ollama" | "ollama-local" => Some(Self::Ollama),
-            "huggingface" | "hugging-face" | "hugging_face" | "hf" => Some(Self::Huggingface),
-            "together" | "together-ai" | "together_ai" => Some(Self::Together),
-            "anthropic" | "claude" => Some(Self::Anthropic),
-            "openai-codex" | "openai_codex" | "openaicodex" | "codex" | "chatgpt"
-            | "chatgpt-codex" | "chatgpt_codex" | "chatgptcodex" => Some(Self::OpenaiCodex),
-            _ => None,
+        let trimmed = value.trim();
+        // ApiProvider-specific: "deepseek-cn" is a legacy variant here,
+        // while ProviderKind treats it as a Deepseek alias.
+        if trimmed.eq_ignore_ascii_case("deepseek-cn")
+            || trimmed.eq_ignore_ascii_case("deepseek_china")
+            || trimmed.eq_ignore_ascii_case("deepseekcn")
+            || trimmed.eq_ignore_ascii_case("deepseek-china")
+        {
+            return Some(Self::DeepseekCN);
         }
+        codewhale_config::ProviderKind::parse(value).map(Self::from_kind)
     }
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Deepseek => "deepseek",
-            Self::DeepseekCN => "deepseek-cn",
-            Self::NvidiaNim => "nvidia-nim",
-            Self::Openai => "openai",
-            Self::Atlascloud => "atlascloud",
-            Self::WanjieArk => "wanjie-ark",
-            Self::Volcengine => "volcengine",
-            Self::Openrouter => "openrouter",
-            Self::XiaomiMimo => "xiaomi-mimo",
-            Self::Novita => "novita",
-            Self::Fireworks => "fireworks",
-            Self::Siliconflow => "siliconflow",
-            Self::SiliconflowCn => "siliconflow-CN",
-            Self::Arcee => "arcee",
-            Self::Moonshot => "moonshot",
-            Self::Sglang => "sglang",
-            Self::Vllm => "vllm",
-            Self::Ollama => "ollama",
-            Self::Huggingface => "huggingface",
-            Self::Together => "together",
-            Self::OpenaiCodex => "openai-codex",
-            Self::Anthropic => "anthropic",
+        match self.kind() {
+            Some(kind) => kind.as_str(),
+            None => "deepseek-cn",
         }
     }
 
     /// Human-friendly label for picker UIs / status chips.
     #[must_use]
     pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Deepseek => "DeepSeek",
-            Self::DeepseekCN => "DeepSeek (legacy alias)",
-            Self::NvidiaNim => "NVIDIA NIM",
-            Self::Openai => "OpenAI-compatible",
-            Self::Atlascloud => "AtlasCloud",
-            Self::WanjieArk => "Wanjie Ark",
-            Self::Volcengine => "Volcengine Ark",
-            Self::Openrouter => "OpenRouter",
-            Self::XiaomiMimo => "Xiaomi MiMo",
-            Self::Novita => "Novita AI",
-            Self::Fireworks => "Fireworks AI",
-            Self::Siliconflow => "SiliconFlow",
-            Self::SiliconflowCn => "SiliconFlow (China)",
-            Self::Arcee => "Arcee AI",
-            Self::Moonshot => "Moonshot/Kimi",
-            Self::Sglang => "SGLang",
-            Self::Vllm => "vLLM",
-            Self::Ollama => "Ollama",
-            Self::Huggingface => "Hugging Face",
-            Self::Together => "Together AI",
-            Self::OpenaiCodex => "OpenAI Codex (ChatGPT)",
-            Self::Anthropic => "Anthropic",
+        match self.kind() {
+            Some(kind) => kind.provider().display_name(),
+            None => "DeepSeek (legacy alias)",
         }
     }
 
     /// All providers, in the order shown in the picker.
     #[must_use]
     pub fn all() -> &'static [Self] {
-        &[
-            Self::Deepseek,
-            Self::NvidiaNim,
-            Self::Openai,
-            Self::Atlascloud,
-            Self::WanjieArk,
-            Self::Volcengine,
-            Self::Openrouter,
-            Self::XiaomiMimo,
-            Self::Novita,
-            Self::Fireworks,
-            Self::Siliconflow,
-            Self::SiliconflowCn,
-            Self::Arcee,
-            Self::Moonshot,
-            Self::Sglang,
-            Self::Vllm,
-            Self::Ollama,
-            Self::Huggingface,
-            Self::Together,
-            Self::OpenaiCodex,
-            Self::Anthropic,
-        ]
+        &Self::FROM_KIND_LOOKUP
+    }
+
+    /// `ApiProvider` discriminant → `ProviderKind` lookup.
+    /// Index 1 is `None` for the legacy `DeepseekCN` variant.
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 22] = [
+        Some(codewhale_config::ProviderKind::Deepseek),
+        None, // DeepseekCN
+        Some(codewhale_config::ProviderKind::NvidiaNim),
+        Some(codewhale_config::ProviderKind::Openai),
+        Some(codewhale_config::ProviderKind::Atlascloud),
+        Some(codewhale_config::ProviderKind::WanjieArk),
+        Some(codewhale_config::ProviderKind::Volcengine),
+        Some(codewhale_config::ProviderKind::Openrouter),
+        Some(codewhale_config::ProviderKind::XiaomiMimo),
+        Some(codewhale_config::ProviderKind::Novita),
+        Some(codewhale_config::ProviderKind::Fireworks),
+        Some(codewhale_config::ProviderKind::Siliconflow),
+        Some(codewhale_config::ProviderKind::SiliconflowCN),
+        Some(codewhale_config::ProviderKind::Arcee),
+        Some(codewhale_config::ProviderKind::Moonshot),
+        Some(codewhale_config::ProviderKind::Sglang),
+        Some(codewhale_config::ProviderKind::Vllm),
+        Some(codewhale_config::ProviderKind::Ollama),
+        Some(codewhale_config::ProviderKind::Huggingface),
+        Some(codewhale_config::ProviderKind::Together),
+        Some(codewhale_config::ProviderKind::OpenaiCodex),
+        Some(codewhale_config::ProviderKind::Anthropic),
+    ];
+
+    /// `ProviderKind` discriminant → `ApiProvider` lookup.
+    const FROM_KIND_LOOKUP: [Self; 21] = [
+        Self::Deepseek,
+        Self::NvidiaNim,
+        Self::Openai,
+        Self::Atlascloud,
+        Self::WanjieArk,
+        Self::Volcengine,
+        Self::Openrouter,
+        Self::XiaomiMimo,
+        Self::Novita,
+        Self::Fireworks,
+        Self::Siliconflow,
+        Self::Arcee,
+        Self::SiliconflowCn,
+        Self::Moonshot,
+        Self::Sglang,
+        Self::Vllm,
+        Self::Ollama,
+        Self::Huggingface,
+        Self::Together,
+        Self::OpenaiCodex,
+        Self::Anthropic,
+    ];
+
+    /// Map to the config-level `ProviderKind`.
+    /// Returns `None` for the legacy `DeepseekCN` variant.
+    #[must_use]
+    pub fn kind(self) -> Option<codewhale_config::ProviderKind> {
+        Self::KIND_LOOKUP[self as usize]
+    }
+
+    /// Construct from a config-level `ProviderKind`.
+    #[must_use]
+    pub fn from_kind(kind: codewhale_config::ProviderKind) -> Self {
+        Self::FROM_KIND_LOOKUP[kind as usize]
     }
 }
 
