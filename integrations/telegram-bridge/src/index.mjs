@@ -709,7 +709,7 @@ async function streamTurnEvents(chatId, threadId, turnId, sinceSeq, options = {}
       if (record.event === "turn.lifecycle") {
         const status = record.payload?.turn?.status || record.payload?.status;
         if (["failed", "canceled", "interrupted"].includes(status)) {
-      await sendText(chatId, `Turn ${status}.`, { replyMarkup: controlKeyboard() });
+          await sendText(chatId, `Turn ${status}.`, { replyMarkup: controlKeyboard() });
           return;
         }
       }
