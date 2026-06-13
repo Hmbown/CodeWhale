@@ -37,6 +37,7 @@ mod error_taxonomy;
 mod eval;
 mod execpolicy;
 mod features;
+mod fleet;
 mod handoff;
 mod hooks;
 mod llm_client;
