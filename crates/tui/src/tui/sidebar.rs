@@ -2339,23 +2339,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
     )));
 
     // ── Session cost ─────────────────────────────────────────────
-    let displayed_total = app.displayed_session_cost_for_currency(app.cost_currency);
-    let session_cost = app.session_cost_for_currency(app.cost_currency);
-    let agent_cost = app.subagent_cost_for_currency(app.cost_currency);
-    let real_total = session_cost + agent_cost;
-    // Only show the additive breakdown when it matches the displayed
-    // total; when the high-water mark is in effect (post-reconciliation),
-    // the breakdown would not sum to the displayed value (#244).
-    let cost_line = if (displayed_total - real_total).abs() < COST_EQ_TOLERANCE {
-        format!(
-            "cost: {} (session {} + agents {})",
-            app.format_cost_amount(displayed_total),
-            app.format_cost_amount(session_cost),
-            app.format_cost_amount(agent_cost)
-        )
-    } else {
-        format!("cost: {}", app.format_cost_amount(displayed_total))
-    };
+    let cost_line = context_panel_cost_line(app);
     lines.push(Line::from(Span::styled(
         cost_line,
         Style::default().fg(theme.text_muted),
@@ -2405,6 +2389,30 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     render_sidebar_section(f, area, "Session", lines, Vec::new(), Vec::new(), app);
+}
+
+fn context_panel_cost_line(app: &App) -> String {
+    let displayed_total = app.displayed_session_cost_for_currency(app.cost_currency);
+    if displayed_total == 0.0 && !crate::pricing::has_pricing_for_model(&app.model) {
+        return format!("cost: n/a (no pricing data for {})", app.model);
+    }
+
+    let session_cost = app.session_cost_for_currency(app.cost_currency);
+    let agent_cost = app.subagent_cost_for_currency(app.cost_currency);
+    let real_total = session_cost + agent_cost;
+    // Only show the additive breakdown when it matches the displayed
+    // total; when the high-water mark is in effect (post-reconciliation),
+    // the breakdown would not sum to the displayed value (#244).
+    if (displayed_total - real_total).abs() < COST_EQ_TOLERANCE {
+        format!(
+            "cost: {} (session {} + agents {})",
+            app.format_cost_amount(displayed_total),
+            app.format_cost_amount(session_cost),
+            app.format_cost_amount(agent_cost)
+        )
+    } else {
+        format!("cost: {}", app.format_cost_amount(displayed_total))
+    }
 }
 
 fn spans_to_text(spans: &[Span<'_>]) -> String {
@@ -2536,8 +2544,8 @@ mod tests {
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, SidebarAgentRow, SidebarHoverRow, SidebarHoverSection, SidebarHoverState,
         SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
-        normalize_activity_text, sidebar_hover_rows, sidebar_work_summary,
+        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, context_panel_cost_line,
+        editorial_tool_rows, normalize_activity_text, sidebar_hover_rows, sidebar_work_summary,
         subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
         task_panel_hover_texts, task_panel_lines, task_panel_rows, work_panel_empty_hint,
         work_panel_hover_texts, work_panel_lines,
@@ -2600,6 +2608,33 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    #[test]
+    fn context_panel_cost_line_shows_na_for_unpriced_zero_cost_model() {
+        let mut app = create_test_app();
+        app.model = "unknown-provider/unknown-model".to_string();
+
+        assert_eq!(
+            context_panel_cost_line(&app),
+            "cost: n/a (no pricing data for unknown-provider/unknown-model)"
+        );
+    }
+
+    #[test]
+    fn context_panel_cost_line_uses_usd_for_usd_only_model_in_cny_mode() {
+        let mut app = create_test_app();
+        app.model = "kimi-k2.6".to_string();
+        app.cost_currency = crate::pricing::CostCurrency::Cny;
+        app.accrue_session_cost_estimate(crate::pricing::CostEstimate::usd_only(0.42));
+
+        let line = context_panel_cost_line(&app);
+
+        assert!(line.contains("$0.42"), "expected USD amount, got {line:?}");
+        assert!(
+            !line.contains('¥'),
+            "must not render CNY zero, got {line:?}"
+        );
     }
 
     #[test]

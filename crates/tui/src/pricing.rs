@@ -1,6 +1,7 @@
-//! Cost estimation for DeepSeek API usage.
+//! Cost estimation for API usage.
 //!
-//! Pricing based on DeepSeek's published rates (per million tokens).
+//! Pricing is stored per million tokens. DeepSeek/Xiaomi MiMo rows include
+//! their published CNY rates; OpenRouter-curated rows are USD-only.
 
 #[cfg(test)]
 use chrono::TimeZone;
@@ -32,7 +33,7 @@ impl CostCurrency {
     }
 }
 
-/// Cost estimate in the two official DeepSeek pricing currencies.
+/// Cost estimate in displayable currencies.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CostEstimate {
     pub usd: f64,
@@ -98,16 +99,22 @@ struct CurrencyPricing {
     output_per_million: f64,
 }
 
-/// Per-million-token pricing for a model in both official currencies.
+/// Per-million-token pricing for a model.
 #[derive(Debug, Clone, Copy)]
 struct ModelPricing {
     usd: CurrencyPricing,
-    cny: CurrencyPricing,
+    cny: Option<CurrencyPricing>,
 }
 
 /// Look up pricing for a model name.
 fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     pricing_for_model_at(model, Utc::now())
+}
+
+/// Return whether a model has a row in the pricing table.
+#[must_use]
+pub fn has_pricing_for_model(model: &str) -> bool {
+    pricing_for_model(model).is_some()
 }
 
 fn pricing_for_model_at(model: &str, _now: DateTime<Utc>) -> Option<ModelPricing> {
@@ -117,10 +124,8 @@ fn pricing_for_model_at(model: &str, _now: DateTime<Utc>) -> Option<ModelPricing
         // DeepSeek Platform pricing. Avoid showing misleading DeepSeek costs.
         return None;
     }
-    match lower.as_str() {
-        "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => return Some(deepseek_v4_pro_pricing()),
-        "xiaomi/mimo-v2.5" | "mimo-v2.5" => return Some(deepseek_v4_flash_pricing()),
-        _ => {}
+    if let Some(pricing) = known_pricing_for_model(&lower) {
+        return Some(pricing);
     }
     if lower.contains("deepseek") {
         if lower.contains("v4-pro") || lower.contains("v4pro") {
@@ -136,6 +141,55 @@ fn pricing_for_model_at(model: &str, _now: DateTime<Utc>) -> Option<ModelPricing
     }
 }
 
+fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
+    match model_lower {
+        "xiaomi/mimo-v2.5-pro" | "mimo-v2.5-pro" => Some(deepseek_v4_pro_pricing()),
+        "xiaomi/mimo-v2.5" | "mimo-v2.5" => Some(deepseek_v4_flash_pricing()),
+
+        // USD rows below mirror the curated OpenRouter catalog. Prices are
+        // sourced from OpenRouter's per-token API fields and multiplied to the
+        // per-million-token units this module uses.
+        "moonshotai/kimi-k2.6" | "kimi-k2.6" => Some(usd_only_pricing(0.34, 0.68, 3.41)),
+        "z-ai/glm-5.1" | "glm-5.1" => Some(usd_only_pricing(0.182, 0.98, 3.08)),
+        "minimax/minimax-m3" | "minimax-m3" => Some(usd_only_pricing(0.06, 0.30, 1.20)),
+        "arcee-ai/trinity-large-thinking" | "trinity-large-thinking" => {
+            Some(usd_only_pricing(0.06, 0.22, 0.85))
+        }
+        "openai/gpt-5.5" | "gpt-5.5" => Some(usd_only_pricing(0.50, 5.00, 30.00)),
+        "openai/gpt-5.5-pro" | "gpt-5.5-pro" => Some(usd_only_pricing(30.00, 30.00, 180.00)),
+
+        "qwen/qwen3.6-flash" => Some(usd_only_pricing(0.1875, 0.1875, 1.125)),
+        "qwen/qwen3.6-35b-a3b" => Some(usd_only_pricing(0.05, 0.15, 1.00)),
+        "qwen/qwen3.6-max-preview" => Some(usd_only_pricing(1.04, 1.04, 6.24)),
+        "qwen/qwen3.6-27b" => Some(usd_only_pricing(0.2885, 0.2885, 3.17)),
+        "qwen/qwen3.6-plus" => Some(usd_only_pricing(0.325, 0.325, 1.95)),
+        "qwen/qwen3.7-max" => Some(usd_only_pricing(0.25, 1.25, 3.75)),
+
+        "google/gemma-4-31b-it" => Some(usd_only_pricing(0.09, 0.12, 0.35)),
+        "google/gemma-4-26b-a4b-it" => Some(usd_only_pricing(0.06, 0.06, 0.33)),
+        "tencent/hy3-preview" => Some(usd_only_pricing(0.021, 0.063, 0.21)),
+        "nvidia/nemotron-3-ultra-550b-a55b" | "nvidia/nemotron-3-ultra" => {
+            Some(usd_only_pricing(0.15, 0.50, 2.50))
+        }
+        _ => None,
+    }
+}
+
+fn usd_only_pricing(
+    input_cache_hit_per_million: f64,
+    input_cache_miss_per_million: f64,
+    output_per_million: f64,
+) -> ModelPricing {
+    ModelPricing {
+        usd: CurrencyPricing {
+            input_cache_hit_per_million,
+            input_cache_miss_per_million,
+            output_per_million,
+        },
+        cny: None,
+    }
+}
+
 fn deepseek_v4_pro_pricing() -> ModelPricing {
     ModelPricing {
         usd: CurrencyPricing {
@@ -143,11 +197,11 @@ fn deepseek_v4_pro_pricing() -> ModelPricing {
             input_cache_miss_per_million: 0.435,
             output_per_million: 0.87,
         },
-        cny: CurrencyPricing {
+        cny: Some(CurrencyPricing {
             input_cache_hit_per_million: 0.025,
             input_cache_miss_per_million: 3.0,
             output_per_million: 6.0,
-        },
+        }),
     }
 }
 
@@ -158,11 +212,11 @@ fn deepseek_v4_flash_pricing() -> ModelPricing {
             input_cache_miss_per_million: 0.14,
             output_per_million: 0.28,
         },
-        cny: CurrencyPricing {
+        cny: Some(CurrencyPricing {
             input_cache_hit_per_million: 0.02,
             input_cache_miss_per_million: 1.0,
             output_per_million: 2.0,
-        },
+        }),
     }
 }
 
@@ -201,7 +255,10 @@ pub fn calculate_turn_cost_estimate(
     let pricing = pricing_for_model(model)?;
     Some(CostEstimate {
         usd: calculate_turn_cost_with_pricing(pricing.usd, input_tokens, output_tokens),
-        cny: calculate_turn_cost_with_pricing(pricing.cny, input_tokens, output_tokens),
+        cny: pricing
+            .cny
+            .map(|pricing| calculate_turn_cost_with_pricing(pricing, input_tokens, output_tokens))
+            .unwrap_or(0.0),
     })
 }
 
@@ -227,7 +284,10 @@ pub fn calculate_turn_cost_estimate_from_usage(model: &str, usage: &Usage) -> Op
     let pricing = pricing_for_model(model)?;
     Some(CostEstimate {
         usd: calculate_turn_cost_from_usage_with_pricing(pricing.usd, usage),
-        cny: calculate_turn_cost_from_usage_with_pricing(pricing.cny, usage),
+        cny: pricing
+            .cny
+            .map(|pricing| calculate_turn_cost_from_usage_with_pricing(pricing, usage))
+            .unwrap_or(0.0),
     })
 }
 
@@ -262,8 +322,13 @@ pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<Cos
     Some(CostEstimate {
         usd: tokens
             * (pricing.usd.input_cache_miss_per_million - pricing.usd.input_cache_hit_per_million),
-        cny: tokens
-            * (pricing.cny.input_cache_miss_per_million - pricing.cny.input_cache_hit_per_million),
+        cny: pricing
+            .cny
+            .map(|pricing| {
+                tokens
+                    * (pricing.input_cache_miss_per_million - pricing.input_cache_hit_per_million)
+            })
+            .unwrap_or(0.0),
     })
 }
 
@@ -326,7 +391,35 @@ mod tests {
     #[test]
     fn input_cost_note_unknown_model_returns_none() {
         assert!(input_cost_note("llama3.3:70b").is_none());
-        assert!(input_cost_note("moonshotai/kimi-k2.6").is_none());
+    }
+
+    #[test]
+    fn curated_usd_only_models_have_pricing_and_accrue_cost() {
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 500_000,
+            prompt_cache_hit_tokens: Some(250_000),
+            prompt_cache_miss_tokens: Some(750_000),
+            ..Default::default()
+        };
+        for (model, hit, miss, output) in [
+            ("kimi-k2.6", 0.34, 0.68, 3.41),
+            ("z-ai/glm-5.1", 0.182, 0.98, 3.08),
+            ("qwen/qwen3.6-plus", 0.325, 0.325, 1.95),
+            ("trinity-large-thinking", 0.06, 0.22, 0.85),
+            ("gpt-5.5", 0.50, 5.00, 30.00),
+        ] {
+            let pricing = pricing_for_model_at(model, Utc::now()).expect(model);
+            assert_eq!(pricing.usd.input_cache_hit_per_million, hit);
+            assert_eq!(pricing.usd.input_cache_miss_per_million, miss);
+            assert_eq!(pricing.usd.output_per_million, output);
+            assert!(pricing.cny.is_none());
+            assert!(has_pricing_for_model(model));
+
+            let estimate = calculate_turn_cost_estimate_from_usage(model, &usage).expect(model);
+            assert!(estimate.usd > 0.0, "expected positive USD for {model}");
+            assert_eq!(estimate.cny, 0.0);
+        }
     }
 
     #[test]
@@ -340,9 +433,10 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.435);
         assert_eq!(pricing.usd.output_per_million, 0.87);
-        assert_eq!(pricing.cny.input_cache_hit_per_million, 0.025);
-        assert_eq!(pricing.cny.input_cache_miss_per_million, 3.0);
-        assert_eq!(pricing.cny.output_per_million, 6.0);
+        let cny = pricing.cny.expect("DeepSeek pricing has CNY");
+        assert_eq!(cny.input_cache_hit_per_million, 0.025);
+        assert_eq!(cny.input_cache_miss_per_million, 3.0);
+        assert_eq!(cny.output_per_million, 6.0);
     }
 
     #[test]
@@ -353,9 +447,10 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.435);
         assert_eq!(pricing.usd.output_per_million, 0.87);
-        assert_eq!(pricing.cny.input_cache_hit_per_million, 0.025);
-        assert_eq!(pricing.cny.input_cache_miss_per_million, 3.0);
-        assert_eq!(pricing.cny.output_per_million, 6.0);
+        let cny = pricing.cny.expect("DeepSeek pricing has CNY");
+        assert_eq!(cny.input_cache_hit_per_million, 0.025);
+        assert_eq!(cny.input_cache_miss_per_million, 3.0);
+        assert_eq!(cny.output_per_million, 6.0);
     }
 
     #[test]
@@ -378,9 +473,10 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.0028);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.14);
         assert_eq!(pricing.usd.output_per_million, 0.28);
-        assert_eq!(pricing.cny.input_cache_hit_per_million, 0.02);
-        assert_eq!(pricing.cny.input_cache_miss_per_million, 1.0);
-        assert_eq!(pricing.cny.output_per_million, 2.0);
+        let cny = pricing.cny.expect("DeepSeek pricing has CNY");
+        assert_eq!(cny.input_cache_hit_per_million, 0.02);
+        assert_eq!(cny.input_cache_miss_per_million, 1.0);
+        assert_eq!(cny.output_per_million, 2.0);
     }
 
     #[test]
@@ -391,17 +487,19 @@ mod tests {
         assert_eq!(pro_pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pro_pricing.usd.input_cache_miss_per_million, 0.435);
         assert_eq!(pro_pricing.usd.output_per_million, 0.87);
-        assert_eq!(pro_pricing.cny.input_cache_hit_per_million, 0.025);
-        assert_eq!(pro_pricing.cny.input_cache_miss_per_million, 3.0);
-        assert_eq!(pro_pricing.cny.output_per_million, 6.0);
+        let pro_cny = pro_pricing.cny.expect("MiMo pricing has CNY");
+        assert_eq!(pro_cny.input_cache_hit_per_million, 0.025);
+        assert_eq!(pro_cny.input_cache_miss_per_million, 3.0);
+        assert_eq!(pro_cny.output_per_million, 6.0);
 
         let flash_pricing = pricing_for_model_at("xiaomi/mimo-v2.5", now).unwrap();
         assert_eq!(flash_pricing.usd.input_cache_hit_per_million, 0.0028);
         assert_eq!(flash_pricing.usd.input_cache_miss_per_million, 0.14);
         assert_eq!(flash_pricing.usd.output_per_million, 0.28);
-        assert_eq!(flash_pricing.cny.input_cache_hit_per_million, 0.02);
-        assert_eq!(flash_pricing.cny.input_cache_miss_per_million, 1.0);
-        assert_eq!(flash_pricing.cny.output_per_million, 2.0);
+        let flash_cny = flash_pricing.cny.expect("MiMo pricing has CNY");
+        assert_eq!(flash_cny.input_cache_hit_per_million, 0.02);
+        assert_eq!(flash_cny.input_cache_miss_per_million, 1.0);
+        assert_eq!(flash_cny.output_per_million, 2.0);
     }
 
     #[test]

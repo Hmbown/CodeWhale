@@ -2609,7 +2609,7 @@ impl App {
 
     /// Read the visible session+sub-agent cost in the chosen currency.
     pub fn displayed_session_cost_for_currency(&self, currency: CostCurrency) -> f64 {
-        match currency {
+        match self.cost_display_currency(currency) {
             CostCurrency::Usd => {
                 let current = self.session.session_cost + self.session.subagent_cost;
                 current.max(self.session.displayed_cost_high_water)
@@ -2622,25 +2622,43 @@ impl App {
     }
 
     pub fn session_cost_for_currency(&self, currency: CostCurrency) -> f64 {
-        match currency {
+        match self.cost_display_currency(currency) {
             CostCurrency::Usd => self.session.session_cost,
             CostCurrency::Cny => self.session.session_cost_cny,
         }
     }
 
     pub fn subagent_cost_for_currency(&self, currency: CostCurrency) -> f64 {
-        match currency {
+        match self.cost_display_currency(currency) {
             CostCurrency::Usd => self.session.subagent_cost,
             CostCurrency::Cny => self.session.subagent_cost_cny,
         }
     }
 
     pub fn format_cost_amount(&self, amount: f64) -> String {
-        crate::pricing::format_cost_amount(amount, self.cost_currency)
+        crate::pricing::format_cost_amount(amount, self.cost_display_currency(self.cost_currency))
     }
 
     pub fn format_cost_amount_precise(&self, amount: f64) -> String {
-        crate::pricing::format_cost_amount_precise(amount, self.cost_currency)
+        crate::pricing::format_cost_amount_precise(
+            amount,
+            self.cost_display_currency(self.cost_currency),
+        )
+    }
+
+    fn cost_display_currency(&self, currency: CostCurrency) -> CostCurrency {
+        if currency == CostCurrency::Cny
+            && self.session.session_cost_cny == 0.0
+            && self.session.subagent_cost_cny == 0.0
+            && self.session.displayed_cost_high_water_cny == 0.0
+            && (self.session.session_cost > 0.0
+                || self.session.subagent_cost > 0.0
+                || self.session.displayed_cost_high_water > 0.0)
+        {
+            CostCurrency::Usd
+        } else {
+            currency
+        }
     }
 
     /// Estimated cost saved by the last turn's cache-hit tokens in the
@@ -2651,6 +2669,9 @@ impl App {
         let estimate = crate::pricing::calculate_cache_savings(&self.model, hit_tokens)?;
         Some(match self.cost_currency {
             crate::pricing::CostCurrency::Usd => estimate.usd,
+            crate::pricing::CostCurrency::Cny if estimate.cny == 0.0 && estimate.usd > 0.0 => {
+                estimate.usd
+            }
             crate::pricing::CostCurrency::Cny => estimate.cny,
         })
     }
@@ -5512,6 +5533,44 @@ mod tests {
         assert!(!app.auto_compact);
         assert!(app.auto_compact_user_configured);
         assert_eq!(app.compact_threshold, 209_715);
+    }
+
+    #[test]
+    fn cny_display_falls_back_to_usd_for_usd_only_costs() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.accrue_session_cost_estimate(CostEstimate::usd_only(0.42));
+
+        let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
+
+        assert_eq!(displayed, 0.42);
+        assert_eq!(app.session_cost_for_currency(CostCurrency::Cny), 0.42);
+        assert_eq!(app.format_cost_amount(displayed), "$0.42");
+    }
+
+    #[test]
+    fn cny_display_keeps_cny_when_costs_have_cny_rates() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.accrue_session_cost_estimate(CostEstimate {
+            usd: 0.42,
+            cny: 2.5,
+        });
+
+        let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
+
+        assert_eq!(displayed, 2.5);
+        assert_eq!(app.format_cost_amount(displayed), "¥2.50");
+    }
+
+    #[test]
+    fn cny_cache_savings_falls_back_to_usd_for_usd_only_models() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.model = "kimi-k2.6".to_string();
+        app.session.last_prompt_cache_hit_tokens = Some(1_000_000);
+
+        assert_eq!(app.last_turn_cache_savings(), Some(0.34));
     }
 
     #[test]
