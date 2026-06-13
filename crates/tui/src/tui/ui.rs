@@ -7451,7 +7451,7 @@ fn render(f: &mut Frame, app: &mut App) {
 
             let handle_style = if app.sidebar_resizing {
                 Style::default()
-                    .bg(palette::DEEPSEEK_BLUE)
+                    .bg(palette::WHALE_ACCENT_PRIMARY)
                     .fg(palette::TEXT_PRIMARY)
             } else if mouse_over {
                 Style::default()
@@ -7514,7 +7514,7 @@ fn render(f: &mut Frame, app: &mut App) {
                         .block(
                             Block::default()
                                 .borders(ratatui::widgets::Borders::ALL)
-                                .border_style(Style::default().fg(palette::DEEPSEEK_BLUE))
+                                .border_style(Style::default().fg(palette::WHALE_ACCENT_PRIMARY))
                                 .style(
                                     Style::default()
                                         .bg(palette::SURFACE_ELEVATED)

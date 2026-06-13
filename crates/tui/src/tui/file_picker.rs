@@ -338,7 +338,7 @@ impl ModalView for FilePickerView {
         let title = Line::from(vec![Span::styled(
             " File Picker ",
             Style::default()
-                .fg(palette::DEEPSEEK_BLUE)
+                .fg(palette::WHALE_ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )]);
         let footer_text = format!(

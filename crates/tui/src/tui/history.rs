@@ -1266,7 +1266,7 @@ impl ReviewCell {
         lines.push(Line::from(Span::styled(
             "Issues",
             Style::default()
-                .fg(palette::DEEPSEEK_BLUE)
+                .fg(palette::WHALE_ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )));
         if output.issues.is_empty() {
@@ -1300,7 +1300,7 @@ impl ReviewCell {
         lines.push(Line::from(Span::styled(
             "Suggestions",
             Style::default()
-                .fg(palette::DEEPSEEK_BLUE)
+                .fg(palette::WHALE_ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )));
         if output.suggestions.is_empty() {
@@ -3025,11 +3025,11 @@ fn is_cycle_boundary(content: &str) -> bool {
 }
 
 /// Render a cycle-boundary system message with distinct visual styling (#395):
-/// full-width line with DEEPSEEK_BLUE text and bold weight, plus a thin
+/// full-width line with primary accent text and bold weight, plus a thin
 /// horizontal rule above for visual separation.
 fn render_cycle_boundary(content: &str, width: u16) -> Vec<Line<'static>> {
     let style = Style::default()
-        .fg(palette::DEEPSEEK_BLUE)
+        .fg(palette::WHALE_ACCENT_PRIMARY)
         .add_modifier(Modifier::BOLD);
     let rule_style = Style::default().fg(palette::TEXT_DIM);
     let content_width = usize::from(width.saturating_sub(2).max(1));
@@ -3086,7 +3086,7 @@ fn file_line_style(text: &str) -> Option<Style> {
 fn diff_line_style(text: &str) -> Option<Style> {
     let trimmed = text.trim_start();
     if trimmed.starts_with("@@") {
-        Some(Style::default().fg(palette::DEEPSEEK_BLUE))
+        Some(Style::default().fg(palette::WHALE_ACCENT_PRIMARY))
     } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
         Some(Style::default().fg(palette::DIFF_ADDED))
     } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {

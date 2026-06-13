@@ -81,21 +81,27 @@ fn verify_status_success_uses_success_token() {
     );
     assert_ne!(
         palette::STATUS_SUCCESS,
-        palette::DEEPSEEK_BLUE,
-        "STATUS_SUCCESS should not regress to deprecated blue"
+        palette::WHALE_ACCENT_PRIMARY,
+        "STATUS_SUCCESS should not regress to the primary accent"
     );
 }
 
 #[test]
+#[allow(deprecated)]
 fn verify_brand_aliases_follow_whale_tokens() {
     assert_eq!(palette::WHALE_ACCENT_PRIMARY_RGB, (246, 196, 83));
     assert_eq!(palette::WHALE_INFO_RGB, (106, 174, 242));
     assert_eq!(palette::WHALE_ERROR_RGB, (255, 92, 122));
+    assert_eq!(
+        color_to_rgb(palette::WHALE_ACCENT_PRIMARY),
+        palette::WHALE_ACCENT_PRIMARY_RGB
+    );
 
     assert_eq!(
         palette::DEEPSEEK_BLUE_RGB,
         palette::WHALE_ACCENT_PRIMARY_RGB
     );
+    assert_eq!(palette::DEEPSEEK_BLUE, palette::WHALE_ACCENT_PRIMARY);
     assert_eq!(palette::DEEPSEEK_SKY_RGB, palette::WHALE_INFO_RGB);
     assert_eq!(palette::DEEPSEEK_RED_RGB, palette::WHALE_ERROR_RGB);
 }

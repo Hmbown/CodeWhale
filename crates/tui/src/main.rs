@@ -2268,14 +2268,16 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     use crate::palette;
     use colored::Colorize;
 
-    let (blue_r, blue_g, blue_b) = palette::DEEPSEEK_BLUE_RGB;
+    let (accent_r, accent_g, accent_b) = palette::WHALE_ACCENT_PRIMARY_RGB;
     let (sky_r, sky_g, sky_b) = palette::DEEPSEEK_SKY_RGB;
     let (aqua_r, aqua_g, aqua_b) = palette::DEEPSEEK_SKY_RGB;
     let (red_r, red_g, red_b) = palette::DEEPSEEK_RED_RGB;
 
     println!(
         "{}",
-        "codewhale Doctor".truecolor(blue_r, blue_g, blue_b).bold()
+        "codewhale Doctor"
+            .truecolor(accent_r, accent_g, accent_b)
+            .bold()
     );
     println!("{}", "==================".truecolor(sky_r, sky_g, sky_b));
     println!();
@@ -3959,7 +3961,7 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     use colored::Colorize;
     use session_manager::{SessionManager, format_session_line};
 
-    let (blue_r, blue_g, blue_b) = palette::DEEPSEEK_BLUE_RGB;
+    let (accent_r, accent_g, accent_b) = palette::WHALE_ACCENT_PRIMARY_RGB;
     let (sky_r, sky_g, sky_b) = palette::DEEPSEEK_SKY_RGB;
     let (aqua_r, aqua_g, aqua_b) = palette::DEEPSEEK_SKY_RGB;
 
@@ -3975,14 +3977,16 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
         println!("{}", "No sessions found.".truecolor(sky_r, sky_g, sky_b));
         println!(
             "Start a new session with: {}",
-            "codewhale".truecolor(blue_r, blue_g, blue_b)
+            "codewhale".truecolor(accent_r, accent_g, accent_b)
         );
         return Ok(());
     }
 
     println!(
         "{}",
-        "Saved Sessions".truecolor(blue_r, blue_g, blue_b).bold()
+        "Saved Sessions"
+            .truecolor(accent_r, accent_g, accent_b)
+            .bold()
     );
     println!("{}", "==============".truecolor(sky_r, sky_g, sky_b));
     println!();
@@ -4008,12 +4012,12 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     println!();
     println!(
         "Resume with: {} {}",
-        sessions_resume_command().truecolor(blue_r, blue_g, blue_b),
+        sessions_resume_command().truecolor(accent_r, accent_g, accent_b),
         "<session-id>".dimmed()
     );
     println!(
         "Continue latest in this workspace: {}",
-        "codewhale --continue".truecolor(blue_r, blue_g, blue_b)
+        "codewhale --continue".truecolor(accent_r, accent_g, accent_b)
     );
 
     Ok(())

@@ -189,7 +189,7 @@ impl ModalView for ContextMenuView {
                 let style = if idx == self.selected {
                     Style::default()
                         .fg(palette::TEXT_PRIMARY)
-                        .bg(palette::DEEPSEEK_BLUE)
+                        .bg(palette::WHALE_ACCENT_PRIMARY)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()

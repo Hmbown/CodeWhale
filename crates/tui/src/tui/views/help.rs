@@ -441,7 +441,7 @@ impl ModalView for HelpView {
                         lines.push(Line::from(Span::styled(
                             format!("  {} ({})", section.label(self.locale), count),
                             Style::default()
-                                .fg(palette::DEEPSEEK_BLUE)
+                                .fg(palette::WHALE_ACCENT_PRIMARY)
                                 .add_modifier(Modifier::BOLD),
                         )));
                     }
@@ -451,7 +451,7 @@ impl ModalView for HelpView {
                         let style = if is_selected {
                             Style::default()
                                 .fg(palette::SELECTION_TEXT)
-                                .bg(palette::DEEPSEEK_BLUE)
+                                .bg(palette::WHALE_ACCENT_PRIMARY)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(palette::TEXT_PRIMARY)
@@ -470,7 +470,7 @@ impl ModalView for HelpView {
             .title(Line::from(vec![Span::styled(
                 format!(" {} ", self.tr(MessageId::HelpTitle)),
                 Style::default()
-                    .fg(palette::DEEPSEEK_BLUE)
+                    .fg(palette::WHALE_ACCENT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             )]))
             .title_bottom(Line::from(vec![
@@ -699,7 +699,7 @@ mod tests {
                 let cell = &buf[(x, y)];
                 row.push_str(cell.symbol());
                 row_has_highlight |=
-                    cell.bg == palette::DEEPSEEK_BLUE && cell.fg == palette::SELECTION_TEXT;
+                    cell.bg == palette::WHALE_ACCENT_PRIMARY && cell.fg == palette::SELECTION_TEXT;
             }
             if row_has_highlight && row.contains(&selected_label) {
                 highlighted_label = true;
@@ -724,7 +724,7 @@ mod tests {
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 let cell = &buf[(x, y)];
-                if cell.bg == palette::DEEPSEEK_BLUE && cell.fg == palette::SELECTION_TEXT {
+                if cell.bg == palette::WHALE_ACCENT_PRIMARY && cell.fg == palette::SELECTION_TEXT {
                     found_highlight = true;
                     break;
                 }
@@ -733,7 +733,7 @@ mod tests {
 
         assert!(
             found_highlight,
-            "selected row should use a strong blue highlight"
+            "selected row should use a strong primary-accent highlight"
         );
     }
 
