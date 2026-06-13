@@ -3386,10 +3386,11 @@ async fn run_event_loop(
             }
 
             // Ctrl+P opens the fuzzy file-picker overlay. Bound only when the
-            // composer is focused (no other modal on top of the stack) and the
+            // composer is focused (no other modal or inline popup on top) and the
             // engine is not actively streaming a turn.
             if key.code == KeyCode::Char('p')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
+                && visible_slash_menu_entries(app, SLASH_MENU_LIMIT).is_empty()
                 && app.view_stack.is_empty()
                 && !app.is_loading
             {
