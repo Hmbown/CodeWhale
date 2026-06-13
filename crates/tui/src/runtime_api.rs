@@ -547,7 +547,9 @@ pub fn build_router(state: RuntimeApiState) -> Router {
     let api_routes = Router::new()
         .route(
             "/v1/sessions",
-            get(list_sessions).post(create_session_from_thread),
+            get(list_sessions)
+                .post(create_session_from_thread)
+                .put(save_current_session),
         )
         .route("/v1/sessions/{id}", get(get_session).delete(delete_session))
         .route(
@@ -998,6 +1000,129 @@ fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message> {
     }
 
     messages
+}
+
+// ── Session save (engine-snapshot path) ────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct SaveSessionRequest {
+    /// Thread ID to save as a session. If omitted, saves the most recently
+    /// active thread.
+    #[serde(default)]
+    thread_id: Option<String>,
+    /// If provided, update the existing session with this ID instead of
+    /// creating a new one. This matches TUI's `build_session_snapshot`
+    /// behavior where it updates the current session in-place.
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SaveSessionResponse {
+    session_id: String,
+    session: SessionDetailResponse,
+}
+
+/// `PUT /v1/sessions` — save a thread's current engine state as a session.
+///
+/// Unlike `POST /v1/sessions` (which reconstructs messages from stored turn
+/// items), this endpoint asks the engine for its live session snapshot so
+/// token counts and message ordering are authoritative.
+async fn save_current_session(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<SaveSessionRequest>,
+) -> Result<Json<SaveSessionResponse>, ApiError> {
+    // Find the thread to save.
+    let thread_id = match req.thread_id {
+        Some(id) => id,
+        None => {
+            // Find the most recently updated thread.
+            let threads = state
+                .runtime_threads
+                .list_threads(ThreadListFilter::IncludeArchived, Some(100))
+                .await
+                .map_err(map_thread_err)?;
+            threads
+                .into_iter()
+                .max_by_key(|t| t.updated_at)
+                .map(|t| t.id)
+                .ok_or_else(|| ApiError::bad_request("No threads to save"))?
+        }
+    };
+
+    // Get the engine handle (loads the thread into an engine if needed),
+    // then request a session snapshot. This reuses the same code path as
+    // TUI's `build_session_snapshot`: the engine holds the authoritative
+    // messages and token usage, so we don't need to reconstruct from turns.
+    let engine = state
+        .runtime_threads
+        .get_engine(&thread_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to get engine for thread: {e}")))?;
+
+    let snapshot = engine
+        .get_session_snapshot()
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to get session snapshot: {e}")))?;
+
+    let manager = SessionManager::new(state.sessions_dir.clone())
+        .map_err(|e| ApiError::internal(format!("Failed to open sessions dir: {e}")))?;
+
+    // Build or update the session, mirroring TUI's `build_session_snapshot`.
+    // Only `io::ErrorKind::NotFound` falls back to creating a new session;
+    // other I/O errors (e.g. PermissionDenied) are propagated so callers
+    // don't silently overwrite a corrupt or inaccessible session file.
+    let session = if let Some(ref existing_id) = req.session_id {
+        match manager.load_session(existing_id) {
+            Ok(existing) => {
+                let mut updated = crate::session_manager::update_session(
+                    existing,
+                    &snapshot.messages,
+                    snapshot.total_tokens,
+                    snapshot.system_prompt.as_ref(),
+                );
+                updated.metadata.model = snapshot.model.clone();
+                updated.metadata.mode = Some(snapshot.mode.clone());
+                updated
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    crate::session_manager::create_saved_session_with_id_and_mode(
+                        existing_id.clone(),
+                        &snapshot.messages,
+                        &snapshot.model,
+                        &snapshot.workspace,
+                        snapshot.total_tokens,
+                        snapshot.system_prompt.as_ref(),
+                        Some(snapshot.mode.as_str()),
+                    )
+                } else {
+                    return Err(ApiError::internal(format!(
+                        "Failed to load session {existing_id}: {e}"
+                    )));
+                }
+            }
+        }
+    } else {
+        crate::session_manager::create_saved_session_with_mode(
+            &snapshot.messages,
+            &snapshot.model,
+            &snapshot.workspace,
+            snapshot.total_tokens,
+            snapshot.system_prompt.as_ref(),
+            Some(snapshot.mode.as_str()),
+        )
+    };
+
+    // Save the session.
+    manager
+        .save_session(&session)
+        .map_err(|e| ApiError::internal(format!("Failed to save session: {e}")))?;
+
+    Ok(Json(SaveSessionResponse {
+        session_id: session.metadata.id.clone(),
+        session: session_to_detail(session),
+    }))
 }
 
 fn total_tokens_from_thread_detail(detail: &ThreadDetail) -> u64 {

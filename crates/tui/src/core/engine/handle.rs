@@ -128,4 +128,14 @@ impl EngineHandle {
         self.tx_steer.send(content.into()).await?;
         Ok(())
     }
+
+    /// Request a snapshot of the current session state.
+    /// Returns the snapshot directly via a oneshot channel, avoiding
+    /// competition with the SSE event stream on the mpsc receiver.
+    pub async fn get_session_snapshot(&self) -> Result<crate::core::ops::SessionSnapshot> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+        self.send(Op::GetSessionSnapshot { tx }).await?;
+        rx.await.map_err(|_| anyhow::anyhow!("Engine dropped session snapshot oneshot"))
+    }
 }

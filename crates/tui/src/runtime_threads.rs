@@ -2136,6 +2136,13 @@ impl RuntimeThreadManager {
         Ok(engine)
     }
 
+    /// Get the engine handle for a thread, loading it if necessary.
+    /// Public wrapper around the private `ensure_engine_loaded`.
+    pub async fn get_engine(&self, thread_id: &str) -> Result<EngineHandle> {
+        let thread = self.get_thread(thread_id).await?;
+        self.ensure_engine_loaded(&thread).await
+    }
+
     fn reconstruct_messages_from_turns(&self, turns: &[TurnRecord]) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
         for turn in turns {
