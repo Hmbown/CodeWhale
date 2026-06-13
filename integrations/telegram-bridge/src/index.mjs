@@ -157,15 +157,17 @@ const config = {
 };
 
 const threadStore = await ThreadStore.open(config.threadMapPath);
+const activeTurnTasks = new Map();
 let stopping = false;
 let updateOffset = Number(process.env.TELEGRAM_UPDATE_OFFSET || 0);
 
-process.once("SIGINT", () => {
+function requestStop() {
   stopping = true;
-});
-process.once("SIGTERM", () => {
-  stopping = true;
-});
+  abortActiveTurnStreams();
+}
+
+process.once("SIGINT", requestStop);
+process.once("SIGTERM", requestStop);
 
 console.log("Starting CodeWhale Telegram bridge");
 console.log(`Runtime: ${config.runtimeUrl}`);
@@ -301,7 +303,7 @@ async function handleCommand(chatId, command) {
       await setChatModel(chatId, action.modelName);
       return;
     case "prompt":
-      await runPrompt(chatId, action.prompt);
+      startPromptTurn(chatId, action.prompt);
       return;
     default:
       await sendText(chatId, helpText(), { replyMarkup: controlKeyboard() });
@@ -339,7 +341,9 @@ async function handleCallbackQuery(query) {
     return;
   }
 
-  await answerCallback(query.id, "Working...");
+  answerCallback(query.id, "Working...").catch((error) => {
+    console.warn("failed to acknowledge Telegram callback", error);
+  });
   await handleModalAction(identity.chatId, action, query);
 }
 
@@ -451,7 +455,67 @@ async function ensureThread(chatId, { forceNew = false } = {}) {
   return state;
 }
 
-async function runPrompt(chatId, prompt) {
+function startPromptTurn(chatId, prompt) {
+  if (activeTurnTasks.has(chatId)) {
+    void sendText(chatId, "Thread already has an active turn. Wait for it to finish or send /interrupt.", {
+      replyMarkup: activeTurnKeyboard()
+    }).catch((error) => {
+      console.error("failed to report active Telegram bridge turn", error);
+    });
+    return;
+  }
+
+  const controller = new AbortController();
+  const task = { controller };
+  activeTurnTasks.set(chatId, task);
+  void runPrompt(chatId, prompt, { signal: controller.signal })
+    .catch((error) => {
+      console.error("failed to run Telegram bridge prompt", error);
+    })
+    .finally(() => {
+      if (activeTurnTasks.get(chatId) === task) {
+        activeTurnTasks.delete(chatId);
+      }
+    });
+}
+
+function abortActiveTurnStreams() {
+  for (const task of activeTurnTasks.values()) {
+    task.controller?.abort();
+  }
+}
+
+async function clearActiveTurn(chatId) {
+  await threadStore.patchChat(chatId, {
+    activeTurnId: null,
+    updatedAt: new Date().toISOString()
+  }).catch((error) => {
+    console.error("failed to clear Telegram bridge active turn", error);
+  });
+}
+
+function startTrackedTurnStream(chatId, threadId, turnId, sinceSeq) {
+  if (activeTurnTasks.has(chatId)) return false;
+
+  const controller = new AbortController();
+  const task = { controller };
+  activeTurnTasks.set(chatId, task);
+  void streamTurnEvents(chatId, threadId, turnId, sinceSeq, { signal: controller.signal })
+    .catch((error) => {
+      console.error("failed to stream Telegram bridge turn", error);
+    })
+    .finally(async () => {
+      if (activeTurnTasks.get(chatId) === task) {
+        activeTurnTasks.delete(chatId);
+      }
+      if (!stopping) {
+        await clearActiveTurn(chatId);
+      }
+    });
+  return true;
+}
+
+async function runPrompt(chatId, prompt, options = {}) {
   if (!prompt.trim()) {
     await sendText(chatId, helpText(), { replyMarkup: controlKeyboard() });
     return;
@@ -500,12 +564,11 @@ async function runPrompt(chatId, prompt) {
   });
 
   try {
-    await streamTurnEvents(chatId, state.threadId, turnId, sinceSeq);
+    await streamTurnEvents(chatId, state.threadId, turnId, sinceSeq, options);
   } finally {
-    await threadStore.patchChat(chatId, {
-      activeTurnId: null,
-      updatedAt: new Date().toISOString()
-    });
+    if (!stopping) {
+      await clearActiveTurn(chatId);
+    }
   }
 }
 
@@ -535,20 +598,23 @@ async function reattachActiveTurns() {
       chatId,
       `Bridge restarted. Reattaching to active turn ${turnId} from seq ${sinceSeq}.`
     );
-    try {
-      await streamTurnEvents(chatId, state.threadId, turnId, sinceSeq);
-    } finally {
-      await threadStore.patchChat(chatId, {
-        activeTurnId: null,
-        updatedAt: new Date().toISOString()
-      });
-    }
+    startTrackedTurnStream(chatId, state.threadId, turnId, sinceSeq);
   }
 }
 
-async function streamTurnEvents(chatId, threadId, turnId, sinceSeq) {
+async function streamTurnEvents(chatId, threadId, turnId, sinceSeq, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.turnTimeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, config.turnTimeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (options.signal?.aborted) {
+    controller.abort();
+  } else {
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
   let responseText = "";
   let latestSeq = sinceSeq;
   let sentProgressAt = Date.now();
@@ -650,12 +716,17 @@ async function streamTurnEvents(chatId, threadId, turnId, sinceSeq) {
     }
   } catch (error) {
     if (error.name === "AbortError") {
-      await sendText(chatId, `Turn timed out after ${Math.round(config.turnTimeoutMs / 1000)}s.`);
+      if (timedOut) {
+        await sendText(chatId, `Turn timed out after ${Math.round(config.turnTimeoutMs / 1000)}s.`);
+      } else if (!stopping) {
+        await sendText(chatId, "Turn stream aborted.");
+      }
       return;
     }
     throw error;
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
