@@ -515,7 +515,9 @@ mod tests {
                 "Hugging Face",
                 "Together AI",
                 "OpenAI Codex (ChatGPT)",
-                "Anthropic"
+                "Anthropic",
+                "Z.ai (GLM Coding)",
+                "StepFun / StepFlash"
             ]
         );
     }
@@ -550,7 +552,7 @@ mod tests {
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
         picker.handle_key(key(KeyCode::Up));
-        assert_eq!(picker.selected_provider(), ApiProvider::Anthropic);
+        assert_eq!(picker.selected_provider(), ApiProvider::Stepfun);
 
         picker.handle_key(key(KeyCode::Down));
         assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);
