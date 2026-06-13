@@ -41,6 +41,7 @@ pub enum Op {
         /// Hook executor for control-plane hooks.
         /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
         hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
+        verbosity: Option<String>,
     },
 
     /// Execute a user-submitted composer shell command (`! <command>`) without
@@ -77,12 +78,15 @@ pub enum Op {
     #[allow(dead_code)]
     ChangeMode { mode: AppMode },
 
-    /// Update the model being used and refresh the prompt for the current mode.
+    /// Update the model being used and refresh stable prompt context.
     #[allow(dead_code)]
     SetModel { model: String, mode: AppMode },
 
     /// Update auto-compaction settings
     SetCompaction { config: CompactionConfig },
+
+    /// Update the SSE idle timeout used for subsequent streamed turns.
+    SetStreamChunkTimeout { timeout_secs: u64 },
 
     /// Sync engine session state (used for resume/load)
     SyncSession {

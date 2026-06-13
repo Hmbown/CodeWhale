@@ -15,33 +15,28 @@ path = "src/main.rs"
 name = "codew"
 path = "src/bin/codew_legacy_shim.rs"
 
-# Legacy alias — forwards to `codewhale` and prints a deprecation notice.
-# Will be removed in v0.9.0.
-[[bin]]
-name = "deepseek"
-path = "src/bin/deepseek_legacy_shim.rs"
-
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.53" }
-codewhale-app-server = { path = "../app-server", version = "0.8.53" }
-codewhale-config = { path = "../config", version = "0.8.53" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.53" }
-codewhale-mcp = { path = "../mcp", version = "0.8.53" }
-codewhale-release = { path = "../release", version = "0.8.53" }
-codewhale-secrets = { path = "../secrets", version = "0.8.53" }
-codewhale-state = { path = "../state", version = "0.8.53" }
+codewhale-agent = { path = "../agent", version = "0.8.58" }
+codewhale-app-server = { path = "../app-server", version = "0.8.58" }
+codewhale-config = { path = "../config", version = "0.8.58" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.58" }
+codewhale-mcp = { path = "../mcp", version = "0.8.58" }
+codewhale-release = { path = "../release", version = "0.8.58" }
+codewhale-secrets = { path = "../secrets", version = "0.8.58" }
+codewhale-state = { path = "../state", version = "0.8.58" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
+rustls.workspace = true
 semver.workspace = true
 tokio.workspace = true
 sha2.workspace = true
-tempfile = "3.16"
+tempfile = "3.27"
 tracing.workspace = true
 
 [dev-dependencies]

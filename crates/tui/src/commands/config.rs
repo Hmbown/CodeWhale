@@ -1,25 +1,25 @@
 //! Config commands: config, settings, mode switches, trust, logout
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
 use super::CommandResult;
-use crate::client::DeepSeekClient;
 use crate::config::{
-    ApiProvider, COMMON_DEEPSEEK_MODELS, Config, DEFAULT_XIAOMI_MIMO_BASE_URL,
-    XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL, clear_active_provider_api_key, effective_home_dir,
-    expand_path, normalize_model_name_for_provider,
+    ApiProvider, COMMON_DEEPSEEK_MODELS, Config, DEFAULT_STREAM_CHUNK_TIMEOUT_SECS,
+    DEFAULT_XIAOMI_MIMO_BASE_URL, MAX_STREAM_CHUNK_TIMEOUT_SECS, MIN_STREAM_CHUNK_TIMEOUT_SECS,
+    XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL, clear_active_provider_api_key,
+    normalize_model_name_for_provider,
+};
+use crate::config_persistence::{
+    persist_provider_base_url_key, persist_root_bool_key, persist_root_string_key,
+    persist_tui_integer_key,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
-use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
-use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
 use crate::tui::app::{
     App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
 };
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// Open the interactive config editor.
 ///
@@ -152,6 +152,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             };
             Some(config.deepseek_base_url())
         }
+        "stream_chunk_timeout_secs" => Some(app.stream_chunk_timeout_secs.to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "theme" | "ui_theme" => {
             Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
@@ -201,9 +202,15 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             .to_string(),
         ),
         "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
+        "pro_plan_profile" | "pro_plan" | "proplan" => {
+            Some(app.pro_plan_profile_enabled.to_string())
+        }
         "max_history" | "history" => Some(app.max_input_history.to_string()),
         "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
         "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
+        "tool_collapse" | "tool_collapse_mode" | "collapse" => {
+            Some(app.tool_collapse_mode.as_setting().to_string())
+        }
         "context_panel" | "context" | "session_panel" => {
             Some(if app.context_panel { "true" } else { "false" }.to_string())
         }
@@ -304,184 +311,67 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     })
 }
 
-/// Persist `tui.status_items` to `~/.codewhale/config.toml` without disturbing
-/// the rest of the file. We round-trip through `toml::Value` so any keys we
-/// don't know about (provider blocks, MCP, etc.) survive the write
-/// untouched.
+/// Toggle or focus the right sidebar.
 ///
-/// Returns the path written so the caller can surface it in a status toast.
-pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    use std::fs;
-
-    let path = config_toml_path(None)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+/// Bare `/sidebar` toggles between hidden and auto. Explicit values mirror
+/// `sidebar_focus` so users have a discoverable copy-friendly path that does
+/// not depend on terminal-specific key translations.
+pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let raw = arg.map(str::trim).unwrap_or("");
+    let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
+    let persist = matches!(tokens.last(), Some(&"--save" | &"-s"));
+    if persist {
+        tokens.pop();
     }
 
-    let mut doc: toml::Value = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?
-    } else {
-        toml::Value::Table(toml::value::Table::new())
-    };
-
-    let table = doc
-        .as_table_mut()
-        .context("config.toml root must be a table")?;
-    let tui_entry = table
-        .entry("tui".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-    let tui_table = tui_entry
-        .as_table_mut()
-        .context("`tui` section in config.toml must be a table")?;
-    let array = items
-        .iter()
-        .map(|item| toml::Value::String(item.key().to_string()))
-        .collect::<Vec<_>>();
-    tui_table.insert("status_items".to_string(), toml::Value::Array(array));
-
-    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
-    Ok(path)
-}
-
-pub fn persist_root_string_key(
-    config_path: Option<&Path>,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    use std::fs;
-
-    let path = config_toml_path(config_path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
-
-    let mut doc: toml::Value = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?
-    } else {
-        toml::Value::Table(toml::value::Table::new())
-    };
-    let table = doc
-        .as_table_mut()
-        .context("config.toml root must be a table")?;
-    table.insert(key.to_string(), toml::Value::String(value.to_string()));
-    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
-    Ok(path)
-}
-
-fn persist_root_bool_key(
-    config_path: Option<&Path>,
-    key: &str,
-    value: bool,
-) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    use std::fs;
-
-    let path = config_toml_path(config_path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
-
-    let mut doc: toml::Value = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?
-    } else {
-        toml::Value::Table(toml::value::Table::new())
-    };
-    let table = doc
-        .as_table_mut()
-        .context("config.toml root must be a table")?;
-    table.insert(key.to_string(), toml::Value::Boolean(value));
-    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
-    Ok(path)
-}
-
-fn persist_provider_base_url_key(
-    config_path: Option<&Path>,
-    provider: ApiProvider,
-    value: &str,
-) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    use std::fs;
-
-    let path = config_toml_path(config_path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
-
-    let mut doc: toml::Value = if path.exists() {
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?
-    } else {
-        toml::Value::Table(toml::value::Table::new())
-    };
-    let table = doc
-        .as_table_mut()
-        .context("config.toml root must be a table")?;
-    let providers = table
-        .entry("providers".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
-        .as_table_mut()
-        .context("`providers` must be a table")?;
-    let provider_key = provider_base_url_table_key(provider)?;
-    let entry = providers
-        .entry(provider_key.to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
-        .as_table_mut()
-        .with_context(|| format!("`providers.{provider_key}` must be a table"))?;
-    entry.insert(
-        "base_url".to_string(),
-        toml::Value::String(value.to_string()),
-    );
-
-    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
-    Ok(path)
-}
-
-fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static str> {
-    match provider {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
-            anyhow::bail!("DeepSeek uses the root base_url setting")
+    let target = match tokens.as_slice() {
+        [] | ["toggle"] => {
+            if app.sidebar_focus == SidebarFocus::Hidden {
+                SidebarFocus::Auto
+            } else {
+                SidebarFocus::Hidden
+            }
         }
-        ApiProvider::NvidiaNim => Ok("nvidia_nim"),
-        ApiProvider::Openai => Ok("openai"),
-        ApiProvider::Atlascloud => Ok("atlascloud"),
-        ApiProvider::WanjieArk => Ok("wanjie_ark"),
-        ApiProvider::Volcengine => Ok("volcengine"),
-        ApiProvider::Openrouter => Ok("openrouter"),
-        ApiProvider::XiaomiMimo => Ok("xiaomi_mimo"),
-        ApiProvider::Novita => Ok("novita"),
-        ApiProvider::Fireworks => Ok("fireworks"),
-        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => Ok("siliconflow"),
-        ApiProvider::Arcee => Ok("arcee"),
-        ApiProvider::Huggingface => Ok("huggingface"),
-        ApiProvider::Moonshot => Ok("moonshot"),
-        ApiProvider::Sglang => Ok("sglang"),
-        ApiProvider::Vllm => Ok("vllm"),
-        ApiProvider::Ollama => Ok("ollama"),
+        [value] => match value.to_ascii_lowercase().as_str() {
+            "on" | "show" | "visible" => SidebarFocus::Auto,
+            "off" | "hide" | "hidden" | "closed" | "none" => SidebarFocus::Hidden,
+            "auto" => SidebarFocus::Auto,
+            "work" | "plan" | "todos" => SidebarFocus::Work,
+            "tasks" => SidebarFocus::Tasks,
+            "agents" | "subagents" | "sub-agents" => SidebarFocus::Agents,
+            "context" | "session" => SidebarFocus::Context,
+            _ => {
+                return CommandResult::error(
+                    "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+                );
+            }
+        },
+        _ => {
+            return CommandResult::error(
+                "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+            );
+        }
+    };
+
+    if persist {
+        let result = set_config_value(app, "sidebar_focus", target.as_setting(), true);
+        if result.is_error {
+            return result;
+        }
+    } else {
+        app.set_sidebar_focus(target);
+    }
+
+    app.needs_redraw = true;
+    let message = sidebar_status_message(target).to_string();
+    CommandResult::message(message)
+}
+
+fn sidebar_status_message(focus: SidebarFocus) -> &'static str {
+    if focus == SidebarFocus::Hidden {
+        "Sidebar is hidden"
+    } else {
+        "Sidebar is visible"
     }
 }
 
@@ -522,37 +412,12 @@ fn parse_config_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-/// Resolve the path to `~/.codewhale/config.toml` (or
-/// `$CODEWHALE_CONFIG_PATH` / `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
-/// never write to a different file than the one we read.
-pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    if let Some(path) = config_path {
-        return Ok(expand_path(path.to_string_lossy().as_ref()));
+fn stream_chunk_timeout_value_label(raw: u64, resolved: u64) -> String {
+    if raw == 0 {
+        format!("0 (default {resolved})")
+    } else {
+        resolved.to_string()
     }
-    if let Ok(env) = std::env::var("CODEWHALE_CONFIG_PATH") {
-        let trimmed = env.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
-    }
-    if let Ok(env) = std::env::var("DEEPSEEK_CONFIG_PATH") {
-        let trimmed = env.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
-    }
-    let home =
-        effective_home_dir().context("failed to resolve home directory for config.toml path")?;
-    let primary = home.join(".codewhale").join("config.toml");
-    if primary.exists() {
-        return Ok(primary);
-    }
-    let legacy = home.join(".deepseek").join("config.toml");
-    if legacy.exists() {
-        return Ok(legacy);
-    }
-    Ok(primary)
 }
 
 /// Modify a setting at runtime
@@ -726,6 +591,55 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 "provider_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
             );
         }
+        "stream_chunk_timeout_secs" => {
+            let raw = match value.trim().parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    return CommandResult::error(
+                        "stream_chunk_timeout_secs must be a whole number",
+                    );
+                }
+            };
+            if raw != 0
+                && !(MIN_STREAM_CHUNK_TIMEOUT_SECS..=MAX_STREAM_CHUNK_TIMEOUT_SECS).contains(&raw)
+            {
+                return CommandResult::error(format!(
+                    "stream_chunk_timeout_secs must be 0 or {}..={}",
+                    MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS
+                ));
+            }
+            let resolved = if raw == 0 {
+                DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
+            } else {
+                raw
+            };
+            app.stream_chunk_timeout_secs = resolved;
+            let value_label = stream_chunk_timeout_value_label(raw, resolved);
+            if persist {
+                match persist_tui_integer_key(
+                    app.config_path.as_deref(),
+                    "stream_chunk_timeout_secs",
+                    raw,
+                ) {
+                    Ok(path) => {
+                        return CommandResult::with_message_and_action(
+                            format!(
+                                "stream_chunk_timeout_secs = {value_label} (saved to {}; affects subsequent turns in this session)",
+                                path.display()
+                            ),
+                            AppAction::UpdateStreamChunkTimeout(resolved),
+                        );
+                    }
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            }
+            return CommandResult::with_message_and_action(
+                format!(
+                    "stream_chunk_timeout_secs = {value_label} (session only; affects subsequent turns in this session)"
+                ),
+                AppAction::UpdateStreamChunkTimeout(resolved),
+            );
+        }
         _ => {}
     }
 
@@ -847,9 +761,22 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 crate::tui::app::TranscriptSpacing::from_setting(&settings.transcript_spacing);
             app.mark_history_updated();
         }
+        "tool_collapse" | "tool_collapse_mode" | "collapse" => {
+            app.tool_collapse_mode =
+                crate::tui::app::ToolCollapseMode::from_setting(&settings.tool_collapse_mode);
+            app.expanded_tool_runs.clear();
+            app.mark_history_updated();
+        }
         "default_mode" | "mode" => {
             let mode = AppMode::from_setting(&settings.default_mode);
             app.set_mode(mode);
+        }
+        "pro_plan_profile" | "pro_plan" | "proplan" => {
+            app.pro_plan_profile_enabled = settings.pro_plan_profile;
+            if !app.pro_plan_profile_enabled && app.mode == AppMode::ProPlan {
+                app.set_mode(AppMode::Plan);
+            }
+            app.needs_redraw = true;
         }
         "max_history" | "history" => {
             app.max_input_history = settings.max_input_history;
@@ -896,6 +823,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     let display_value = match key.as_str() {
         "default_mode" | "mode" => settings.default_mode.clone(),
+        "pro_plan_profile" | "pro_plan" | "proplan" => settings.pro_plan_profile.to_string(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
         "theme" | "ui_theme" => settings.theme.clone(),
         "synchronized_output" | "sync_output" | "sync" => settings.synchronized_output.clone(),
@@ -927,40 +855,6 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     }
 }
 
-/// Modify a setting at runtime
-#[allow(dead_code)]
-pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
-    let Some(args) = args else {
-        let available = Settings::available_settings()
-            .iter()
-            .map(|(k, d)| format!("  {k}: {d}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return CommandResult::message(format!(
-            "Usage: /set <key> <value>\n\n\
-             Available settings:\n{available}\n\n\
-             Session-only settings:\n  \
-             model: Current model\n  \
-             approval_mode: auto | suggest | never\n\n\
-             Add --save to persist to settings file."
-        ));
-    };
-
-    let parts: Vec<&str> = args.splitn(2, ' ').collect();
-    if parts.len() < 2 {
-        return CommandResult::error("Usage: /set <key> <value>");
-    }
-
-    let key = parts[0].to_lowercase();
-    let (value, should_save) = if parts[1].ends_with(" --save") {
-        (parts[1].trim_end_matches(" --save").trim(), true)
-    } else {
-        (parts[1].trim(), false)
-    };
-
-    set_config_value(app, &key, value, should_save)
-}
-
 /// Select the TUI operating mode.
 pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(arg) = arg.filter(|value| !value.trim().is_empty()) else {
@@ -968,6 +862,11 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
     match parse_mode_arg(arg) {
         Some(mode) => {
+            if mode == AppMode::ProPlan && !app.pro_plan_profile_enabled {
+                return CommandResult::error(
+                    "Pro Plan profile is disabled. Enable it with `/config pro_plan_profile true --save`, then run `/mode pro-plan`.",
+                );
+            }
             let (message, changed) = switch_mode_with_status(app, mode);
             if changed {
                 CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
@@ -975,7 +874,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
                 CommandResult::message(message)
             }
         }
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|pro-plan|1|2|3]"),
+        None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
     }
 }
 
@@ -984,6 +883,12 @@ pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
 }
 
 fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
+    if mode == AppMode::ProPlan && !app.pro_plan_profile_enabled {
+        return (
+            "Pro Plan profile is disabled. Enable it with `/config pro_plan_profile true --save`, then run `/mode pro-plan`.".to_string(),
+            false,
+        );
+    }
     if app.set_mode(mode) {
         (
             format!("Switched to {} mode.", mode_display_name(mode)),
@@ -1181,393 +1086,6 @@ fn expand_tilde(raw: &str) -> String {
     raw.to_string()
 }
 
-/// Auto-select a model based on request complexity.
-///
-/// Short messages (<100 chars) → Flash (fast & cheap).
-/// Long messages (>500 chars) → Pro (powerful reasoning).
-/// Messages with complex keywords → Pro.
-/// Default → Flash (cost savings).
-pub fn auto_model_heuristic(input: &str, _current_model: &str) -> String {
-    auto_model_heuristic_with_bias(input, _current_model, false)
-}
-
-/// `auto_model_heuristic` parameterised by the `[auto] cost_saving` opt-in
-/// (#1207). When `cost_saving` is `true` the keyword set drops the borderline
-/// triggers (`implement`, `analyze`) and the long-message length threshold
-/// goes from 500 to 1000 — both shifts let "looks involved but might be a
-/// one-liner" requests stay on Flash unless they actually look agentic.
-pub fn auto_model_heuristic_with_bias(
-    input: &str,
-    _current_model: &str,
-    cost_saving: bool,
-) -> String {
-    auto_model_heuristic_selection_with_bias(input, _current_model, cost_saving).model
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutoModelHeuristicConfidence {
-    Decisive,
-    Ambiguous,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AutoModelHeuristicSelection {
-    model: String,
-    confidence: AutoModelHeuristicConfidence,
-}
-
-fn auto_model_heuristic_selection_with_bias(
-    input: &str,
-    _current_model: &str,
-    cost_saving: bool,
-) -> AutoModelHeuristicSelection {
-    let len = input.chars().count();
-    let lower = input.to_lowercase();
-    let borderline_pro_keywords: &[&str] = &[
-        "implement",
-        "analyze",
-        "\u{5b9e}\u{73b0}", // 实现
-        "\u{5206}\u{6790}", // 分析
-        "\u{5be6}\u{73fe}", // 實現
-    ];
-    let strong_match = COMPLEX_KEYWORDS
-        .iter()
-        .any(|kw| !borderline_pro_keywords.contains(kw) && lower.contains(kw));
-    let borderline_match = borderline_pro_keywords.iter().any(|kw| lower.contains(kw));
-    let pro_match = strong_match || (!cost_saving && borderline_match);
-    if pro_match {
-        return AutoModelHeuristicSelection {
-            model: "deepseek-v4-pro".to_string(),
-            confidence: AutoModelHeuristicConfidence::Decisive,
-        };
-    }
-    // Short messages → Flash
-    if len < 100 {
-        return AutoModelHeuristicSelection {
-            model: "deepseek-v4-flash".to_string(),
-            confidence: AutoModelHeuristicConfidence::Decisive,
-        };
-    }
-    // Long complex requests → Pro. Cost-saving raises the threshold so that
-    // long-but-routine requests (pasted logs, CSV-style data) don't escalate.
-    let long_threshold = if cost_saving { 1_000 } else { 500 };
-    if len > long_threshold {
-        return AutoModelHeuristicSelection {
-            model: "deepseek-v4-pro".to_string(),
-            confidence: AutoModelHeuristicConfidence::Decisive,
-        };
-    }
-    // Grey-zone default branch: Flash is the deterministic fallback, but the
-    // Flash router can still add value here because there was no strong local
-    // signal.
-    AutoModelHeuristicSelection {
-        model: "deepseek-v4-flash".to_string(),
-        confidence: AutoModelHeuristicConfidence::Ambiguous,
-    }
-}
-
-/// Keywords that escalate `auto`-mode model selection to
-/// `deepseek-v4-pro`. The Latin entries are lowercase (the caller
-/// lowercases the message); CJK has no case so the literal form
-/// matches as-is.
-///
-/// Without the CJK entries, a Chinese-speaking user typing
-/// "帮我重构这个模块" or "审计安全漏洞" silently fell through to the
-/// short/long-message threshold and usually landed on Flash even
-/// for tasks that obviously need Pro-grade reasoning.
-const COMPLEX_KEYWORDS: &[&str] = &[
-    // English (unchanged from the original list).
-    "refactor",
-    "architecture",
-    "design",
-    "debug",
-    "security",
-    "review",
-    "audit",
-    "migrate",
-    "optimize",
-    "rewrite",
-    "implement",
-    "analyze",
-    // Simplified Chinese.
-    "\u{91cd}\u{6784}", // 重构
-    "\u{67b6}\u{6784}", // 架构
-    "\u{8bbe}\u{8ba1}", // 设计
-    "\u{8c03}\u{8bd5}", // 调试
-    "\u{5b89}\u{5168}", // 安全
-    "\u{5ba1}\u{67e5}", // 审查
-    "\u{5ba1}\u{8ba1}", // 审计
-    "\u{8fc1}\u{79fb}", // 迁移
-    "\u{4f18}\u{5316}", // 优化
-    "\u{91cd}\u{5199}", // 重写
-    "\u{5b9e}\u{73b0}", // 实现
-    "\u{5206}\u{6790}", // 分析
-    // Traditional Chinese variants where they differ.
-    "\u{91cd}\u{69cb}", // 重構
-    "\u{67b6}\u{69cb}", // 架構
-    "\u{8a2d}\u{8a08}", // 設計
-    "\u{8abf}\u{8a66}", // 調試
-    "\u{5be9}\u{67e5}", // 審查
-    "\u{5be9}\u{8a08}", // 審計
-    "\u{9077}\u{79fb}", // 遷移
-    "\u{512a}\u{5316}", // 優化
-    "\u{91cd}\u{5beb}", // 重寫
-    "\u{5be6}\u{73fe}", // 實現
-];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AutoRouteRecommendation {
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutoRouteSource {
-    FlashRouter,
-    Heuristic,
-}
-
-impl AutoRouteSource {
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            AutoRouteSource::FlashRouter => "flash-router",
-            AutoRouteSource::Heuristic => "heuristic",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AutoRouteSelection {
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub source: AutoRouteSource,
-}
-
-pub const AUTO_MODEL_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the codewhale auto-routing classifier. Return only compact JSON: \
-{\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
-Use deepseek-v4-flash for trivial, conversational, status, or single-step work. \
-Use deepseek-v4-pro for coding, debugging, release work, multi-step tasks, high-risk decisions, \
-tool-heavy work, ambiguous requests, or anything that benefits from deeper reasoning. \
-Use thinking off only for trivial no-tool answers, high for ordinary reasoning, and max for \
-agentic, coding, multi-file, release, architecture, debugging, security, tool-heavy, or uncertain work.";
-
-/// Bias appended to the auto-router's system prompt when the user opts in to
-/// `[auto] cost_saving = true` (#1207). Reverses the default tie-breaker for
-/// genuinely ambiguous requests so Pro is reserved for tasks that clearly
-/// require it; ordinary tweaks, config edits, and short reads stay on Flash.
-pub const AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM: &str = "\
-\n\nCost-saving mode is ON. Prefer deepseek-v4-flash for any request that is \
-not unmistakably agentic, multi-step, architecture/design, security review, \
-debugging, or otherwise clearly out of Flash's capability. Resolve ambiguous \
-cases in favour of deepseek-v4-flash, not deepseek-v4-pro.";
-
-/// Parse the Flash router's JSON-only response.
-///
-/// The runtime treats classifier output as untrusted: only known V4 model IDs
-/// and supported reasoning tiers are accepted. Anything else falls back to the
-/// deterministic heuristic.
-pub fn parse_auto_route_recommendation(raw: &str) -> Option<AutoRouteRecommendation> {
-    let json = extract_first_json_object(raw)?;
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let model = value.get("model").and_then(serde_json::Value::as_str)?;
-    let model = normalize_auto_route_model(model)?;
-    let reasoning_effort = value
-        .get("thinking")
-        .or_else(|| value.get("reasoning_effort"))
-        .or_else(|| value.get("effort"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(parse_auto_route_reasoning_effort);
-
-    Some(AutoRouteRecommendation {
-        model: model.to_string(),
-        reasoning_effort,
-    })
-}
-
-fn extract_first_json_object(raw: &str) -> Option<&str> {
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    (end >= start).then_some(&raw[start..=end])
-}
-
-fn normalize_auto_route_model(model: &str) -> Option<&'static str> {
-    match model.trim().to_ascii_lowercase().as_str() {
-        "deepseek-v4-pro" | "v4-pro" | "pro" => Some("deepseek-v4-pro"),
-        "deepseek-v4-flash" | "v4-flash" | "flash" => Some("deepseek-v4-flash"),
-        _ => None,
-    }
-}
-
-fn parse_auto_route_reasoning_effort(effort: &str) -> Option<ReasoningEffort> {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "off" | "disabled" | "none" | "false" => Some(ReasoningEffort::Off),
-        "low" | "minimal" | "medium" | "mid" => Some(ReasoningEffort::High),
-        "high" => Some(ReasoningEffort::High),
-        "max" | "maximum" | "xhigh" => Some(ReasoningEffort::Max),
-        _ => None,
-    }
-}
-
-#[must_use]
-pub fn normalize_auto_route_effort(effort: ReasoningEffort) -> ReasoningEffort {
-    match effort {
-        ReasoningEffort::Low | ReasoningEffort::Medium => ReasoningEffort::High,
-        other => other,
-    }
-}
-
-pub async fn resolve_auto_route_with_flash(
-    config: &crate::config::Config,
-    latest_request: &str,
-    recent_context: &str,
-    selected_model_mode: &str,
-    selected_thinking_mode: &str,
-) -> AutoRouteSelection {
-    let cost_saving = config.auto_cost_saving();
-    let heuristic =
-        auto_model_heuristic_selection_with_bias(latest_request, selected_model_mode, cost_saving);
-    if heuristic.confidence == AutoModelHeuristicConfidence::Decisive {
-        return auto_route_from_heuristic(latest_request, heuristic);
-    }
-
-    match auto_route_flash_recommendation(
-        config,
-        latest_request,
-        recent_context,
-        selected_model_mode,
-        selected_thinking_mode,
-    )
-    .await
-    {
-        Ok(Some(recommendation)) => AutoRouteSelection {
-            model: recommendation.model,
-            reasoning_effort: recommendation.reasoning_effort,
-            source: AutoRouteSource::FlashRouter,
-        },
-        Ok(None) | Err(_) => auto_route_from_heuristic(latest_request, heuristic),
-    }
-}
-
-fn auto_route_from_heuristic(
-    latest_request: &str,
-    heuristic: AutoModelHeuristicSelection,
-) -> AutoRouteSelection {
-    AutoRouteSelection {
-        model: heuristic.model,
-        reasoning_effort: Some(normalize_auto_route_effort(crate::auto_reasoning::select(
-            false,
-            latest_request,
-        ))),
-        source: AutoRouteSource::Heuristic,
-    }
-}
-
-async fn auto_route_flash_recommendation(
-    config: &crate::config::Config,
-    latest_request: &str,
-    recent_context: &str,
-    selected_model_mode: &str,
-    selected_thinking_mode: &str,
-) -> Result<Option<AutoRouteRecommendation>> {
-    if cfg!(test) {
-        return Ok(None);
-    }
-
-    let client = DeepSeekClient::new(config)?;
-    let mut router_system = AUTO_MODEL_ROUTER_SYSTEM_PROMPT.to_string();
-    if config.auto_cost_saving() {
-        router_system.push_str(AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM);
-    }
-    let request = MessageRequest {
-        model: "deepseek-v4-flash".to_string(),
-        messages: vec![Message {
-            role: "user".to_string(),
-            content: vec![ContentBlock::Text {
-                text: auto_route_prompt(
-                    latest_request,
-                    recent_context,
-                    selected_model_mode,
-                    selected_thinking_mode,
-                ),
-                cache_control: None,
-            }],
-        }],
-        max_tokens: 96,
-        system: Some(SystemPrompt::Text(router_system)),
-        tools: None,
-        tool_choice: None,
-        metadata: None,
-        thinking: None,
-        reasoning_effort: Some("off".to_string()),
-        stream: Some(false),
-        temperature: Some(0.0),
-        top_p: None,
-    };
-
-    let response =
-        tokio::time::timeout(Duration::from_secs(4), client.create_message(request)).await??;
-    Ok(parse_auto_route_recommendation(&message_response_text(
-        &response,
-    )))
-}
-
-fn auto_route_prompt(
-    latest_request: &str,
-    recent_context: &str,
-    selected_model_mode: &str,
-    selected_thinking_mode: &str,
-) -> String {
-    format!(
-        "Session mode: agent\nSelected model mode: {}\nSelected thinking mode: {}\n\nRecent context:\n{}\n\nLatest user request:\n{}\n\nReturn JSON only.",
-        selected_model_mode,
-        selected_thinking_mode,
-        if recent_context.trim().is_empty() {
-            "No prior context."
-        } else {
-            recent_context
-        },
-        truncate_for_auto_router(latest_request, 4_000)
-    )
-}
-
-fn message_response_text(response: &MessageResponse) -> String {
-    let mut out = String::new();
-    for block in &response.content {
-        match block {
-            ContentBlock::Text { text, .. } | ContentBlock::ToolResult { content: text, .. } => {
-                append_router_text(&mut out, text);
-            }
-            ContentBlock::Thinking { thinking } => {
-                append_router_text(&mut out, thinking);
-            }
-            ContentBlock::ToolUse { name, .. } => {
-                append_router_text(&mut out, &format!("[tool call: {name}]"));
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-fn append_router_text(out: &mut String, text: &str) {
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    out.push_str(text);
-}
-
-fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
-    let mut chars = text.chars();
-    let truncated: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
-    }
-}
-
 /// Toggle LSP diagnostics on/off or show status.
 ///
 /// - `/lsp on` — enable inline LSP diagnostics
@@ -1757,6 +1275,7 @@ mod tests {
         app.auto_model = false;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
+        app.pro_plan_profile_enabled = false;
         app
     }
 
@@ -1790,6 +1309,17 @@ mod tests {
         let result = mode(&mut app, Some("4"));
         assert!(result.is_error);
         assert_eq!(app.mode, AppMode::Yolo);
+        let result = mode(&mut app, Some("proplan"));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Pro Plan profile is disabled")
+        );
+        assert_eq!(app.mode, AppMode::Yolo);
+
+        app.pro_plan_profile_enabled = true;
         let result = mode(&mut app, Some("proplan"));
         assert_eq!(
             result.action,
@@ -1841,20 +1371,10 @@ mod tests {
     }
 
     #[test]
-    fn test_set_without_args_shows_usage() {
-        let mut app = create_test_app();
-        let result = set_config(&mut app, None);
-        assert!(result.message.is_some());
-        let msg = result.message.unwrap();
-        assert!(msg.contains("Usage: /set"));
-        assert!(msg.contains("Available settings:"));
-    }
-
-    #[test]
-    fn test_set_model_updates_app_state() {
+    fn config_model_updates_app_state() {
         let mut app = create_test_app();
         let _old_model = app.model.clone();
-        let result = set_config(&mut app, Some("model deepseek-v4-flash"));
+        let result = config_command(&mut app, Some("model deepseek-v4-flash"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("model = deepseek-v4-flash"));
@@ -1866,11 +1386,11 @@ mod tests {
     }
 
     #[test]
-    fn test_set_model_auto_enables_auto_thinking() {
+    fn config_model_auto_enables_auto_thinking() {
         let mut app = create_test_app();
         app.reasoning_effort = ReasoningEffort::Off;
 
-        let result = set_config(&mut app, Some("model auto"));
+        let result = config_command(&mut app, Some("model auto"));
 
         assert!(result.message.is_some());
         assert!(app.auto_model);
@@ -1881,9 +1401,9 @@ mod tests {
     }
 
     #[test]
-    fn test_set_model_accepts_future_deepseek_model_id() {
+    fn config_model_accepts_future_deepseek_model_id() {
         let mut app = create_test_app();
-        let result = set_config(&mut app, Some("model deepseek-v4"));
+        let result = config_command(&mut app, Some("model deepseek-v4"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("model = deepseek-v4"));
@@ -1891,229 +1411,16 @@ mod tests {
     }
 
     #[test]
-    fn test_set_model_with_save_flag() {
+    fn config_model_with_save_flag() {
         let mut app = create_test_app();
-        let _result = set_config(&mut app, Some("model deepseek-v4-flash --save"));
+        let _result = config_command(&mut app, Some("model deepseek-v4-flash --save"));
         // Note: This test may fail in environments where settings can't be saved
         // The important thing is that the model is updated
         assert_eq!(app.model, "deepseek-v4-flash");
     }
 
     #[test]
-    fn auto_model_heuristic_chinese_keywords_route_to_pro() {
-        // Without these keywords, a Chinese user typing
-        // "帮我重构这个模块" (37 chars in chars().count() terms after
-        // the leading helper text) fell through to the short-message
-        // Flash branch even though the intent is obviously Pro-tier.
-        for msg in [
-            "\u{5e2e}\u{6211}\u{91cd}\u{6784}\u{8fd9}\u{4e2a}\u{6a21}\u{5757}", // 帮我重构这个模块
-            "\u{8bbe}\u{8ba1}\u{6570}\u{636e}\u{5e93}\u{67b6}\u{6784}",         // 设计数据库架构
-            "\u{8c03}\u{8bd5}\u{5d29}\u{6e83}\u{95ee}\u{9898}",                 // 调试崩溃问题
-            "\u{5ba1}\u{8ba1}\u{5b89}\u{5168}\u{6f0f}\u{6d1e}",                 // 审计安全漏洞
-            "\u{8fc1}\u{79fb}\u{5230}\u{65b0}\u{6846}\u{67b6}",                 // 迁移到新框架
-            "\u{4f18}\u{5316}\u{6027}\u{80fd}\u{74f6}\u{9888}",                 // 优化性能瓶颈
-            "\u{5206}\u{6790}\u{8fd9}\u{6bb5}\u{4ee3}\u{7801}",                 // 分析这段代码
-        ] {
-            assert_eq!(
-                auto_model_heuristic(msg, "auto"),
-                "deepseek-v4-pro",
-                "expected Pro for `{msg}`",
-            );
-        }
-    }
-
-    #[test]
-    fn auto_model_heuristic_traditional_chinese_keywords_route_to_pro() {
-        for msg in [
-            "\u{8acb}\u{91cd}\u{69cb}\u{6b64}\u{6a21}\u{7d44}", // 請重構此模組
-            "\u{67b6}\u{69cb}\u{8a2d}\u{8a08}",                 // 架構設計
-            "\u{4ee3}\u{78bc}\u{8abf}\u{8a66}",                 // 代碼調試
-            "\u{5be9}\u{8a08}\u{6f0f}\u{6d1e}",                 // 審計漏洞
-            "\u{9077}\u{79fb}\u{5230}\u{65b0}\u{67b6}\u{69cb}", // 遷移到新架構
-            "\u{512a}\u{5316}\u{6027}\u{80fd}",                 // 優化性能
-            "\u{91cd}\u{5beb}\u{4ee3}\u{78bc}",                 // 重寫代碼
-            "\u{5be6}\u{73fe}\u{65b0}\u{529f}\u{80fd}",         // 實現新功能
-        ] {
-            assert_eq!(
-                auto_model_heuristic(msg, "auto"),
-                "deepseek-v4-pro",
-                "expected Pro for `{msg}`",
-            );
-        }
-    }
-
-    #[test]
-    fn auto_model_heuristic_short_chinese_chat_stays_on_flash() {
-        // Sanity: a short non-keyword Chinese message still falls
-        // through to the cost-saving Flash branch.
-        // "你好" (2 chars) — well under the 100-char Flash floor.
-        assert_eq!(
-            auto_model_heuristic("\u{4f60}\u{597d}", "auto"),
-            "deepseek-v4-flash",
-        );
-    }
-
-    #[test]
-    fn auto_heuristic_selection_marks_short_and_complex_routes_decisive() {
-        let short = auto_model_heuristic_selection_with_bias("yes", "auto", false);
-        assert_eq!(short.model, "deepseek-v4-flash");
-        assert_eq!(
-            short.confidence,
-            AutoModelHeuristicConfidence::Decisive,
-            "trivial replies should skip the Flash router"
-        );
-
-        let complex = auto_model_heuristic_selection_with_bias(
-            "Please review the auth migration",
-            "auto",
-            false,
-        );
-        assert_eq!(complex.model, "deepseek-v4-pro");
-        assert_eq!(
-            complex.confidence,
-            AutoModelHeuristicConfidence::Decisive,
-            "strong complexity keywords should skip the Flash router"
-        );
-    }
-
-    #[test]
-    fn auto_heuristic_selection_leaves_default_branch_ambiguous_for_router() {
-        let request =
-            "Please update the configuration notes so each option has a clearer label. ".repeat(3);
-        assert!(
-            (100..500).contains(&request.chars().count()),
-            "test request must stay in the default grey zone"
-        );
-
-        let selection = auto_model_heuristic_selection_with_bias(&request, "auto", false);
-        assert_eq!(selection.model, "deepseek-v4-flash");
-        assert_eq!(
-            selection.confidence,
-            AutoModelHeuristicConfidence::Ambiguous,
-            "only the grey-zone default branch should invoke the Flash router"
-        );
-    }
-
-    #[test]
-    fn auto_route_recommendation_parses_strict_json() {
-        let rec =
-            parse_auto_route_recommendation(r#"{"model":"deepseek-v4-pro","thinking":"max"}"#)
-                .expect("valid router response should parse");
-
-        assert_eq!(rec.model, "deepseek-v4-pro");
-        assert_eq!(rec.reasoning_effort, Some(ReasoningEffort::Max));
-    }
-
-    #[test]
-    fn auto_route_recommendation_accepts_wrapped_json_aliases() {
-        let rec =
-            parse_auto_route_recommendation(r#"route: {"model":"flash","reasoning_effort":"off"}"#)
-                .expect("wrapped router response should parse");
-
-        assert_eq!(rec.model, "deepseek-v4-flash");
-        assert_eq!(rec.reasoning_effort, Some(ReasoningEffort::Off));
-    }
-
-    #[test]
-    fn auto_route_recommendation_normalizes_legacy_low_medium_to_high() {
-        let rec = parse_auto_route_recommendation(
-            r#"{"model":"deepseek-v4-pro","reasoning_effort":"medium"}"#,
-        )
-        .expect("medium should parse for back-compat");
-
-        assert_eq!(rec.model, "deepseek-v4-pro");
-        assert_eq!(rec.reasoning_effort, Some(ReasoningEffort::High));
-    }
-
-    #[test]
-    fn auto_route_recommendation_rejects_unknown_model() {
-        assert!(
-            parse_auto_route_recommendation(r#"{"model":"some-other-model","thinking":"max"}"#,)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn auto_heuristic_default_routes_implement_to_pro() {
-        // Default (no cost-saving): "implement" is one of the borderline
-        // keywords that escalates to Pro.
-        assert_eq!(
-            auto_model_heuristic_with_bias("Please implement a binary search", "auto", false),
-            "deepseek-v4-pro"
-        );
-    }
-
-    #[test]
-    fn auto_heuristic_cost_saving_keeps_borderline_keywords_on_flash() {
-        // Cost-saving: "implement" / "analyze" are no longer enough to escalate.
-        assert_eq!(
-            auto_model_heuristic_with_bias("Please implement a binary search", "auto", true),
-            "deepseek-v4-flash"
-        );
-        assert_eq!(
-            auto_model_heuristic_with_bias("analyze this snippet", "auto", true),
-            "deepseek-v4-flash"
-        );
-    }
-
-    #[test]
-    fn auto_heuristic_strong_keywords_still_route_to_pro_under_cost_saving() {
-        // Cost-saving must NOT swallow obviously Pro-grade work.
-        for kw in [
-            "refactor",
-            "architecture",
-            "design",
-            "debug",
-            "security",
-            "review",
-            "audit",
-            "migrate",
-            "optimize",
-            "rewrite",
-        ] {
-            let req = format!("Please {kw} this module");
-            assert_eq!(
-                auto_model_heuristic_with_bias(&req, "auto", true),
-                "deepseek-v4-pro",
-                "expected Pro for strong keyword `{kw}` even in cost-saving mode"
-            );
-        }
-    }
-
-    #[test]
-    fn auto_heuristic_cost_saving_raises_long_message_threshold() {
-        // 600-char request is "long" by default (>500) → Pro,
-        // but stays Flash under cost-saving (threshold 1000).
-        let body = "filler sentence. ".repeat(40); // ~680 chars
-        assert_eq!(
-            auto_model_heuristic_with_bias(&body, "auto", false),
-            "deepseek-v4-pro"
-        );
-        assert_eq!(
-            auto_model_heuristic_with_bias(&body, "auto", true),
-            "deepseek-v4-flash"
-        );
-    }
-
-    #[test]
-    fn config_auto_cost_saving_defaults_to_false() {
-        let cfg = crate::config::Config::default();
-        assert!(!cfg.auto_cost_saving());
-    }
-
-    #[test]
-    fn config_auto_cost_saving_reads_table() {
-        let cfg = crate::config::Config {
-            auto: Some(crate::config::AutoConfig {
-                cost_saving: Some(true),
-            }),
-            ..Default::default()
-        };
-        assert!(cfg.auto_cost_saving());
-    }
-
-    #[test]
-    fn test_set_default_mode_normal_save_reports_normalized_value() {
+    fn config_default_mode_normal_save_reports_normalized_value() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2127,7 +1434,7 @@ mod tests {
         let _guard = EnvGuard::new(&temp_root);
 
         let mut app = create_test_app();
-        let result = set_config(&mut app, Some("default_mode normal --save"));
+        let result = config_command(&mut app, Some("default_mode normal --save"));
         let msg = result.message.unwrap();
         assert_eq!(msg, "default_mode = agent (saved)");
         assert_eq!(app.mode, AppMode::Agent);
@@ -2183,7 +1490,7 @@ mod tests {
             Some("base_url https://example.internal.local/v1 --save"),
         );
         let msg = result.message.unwrap();
-        let saved_path = config_toml_path(None).unwrap();
+        let saved_path = crate::config_persistence::config_toml_path(None).unwrap();
         let saved = fs::read_to_string(&saved_path).unwrap();
 
         assert_eq!(
@@ -2215,10 +1522,12 @@ mod tests {
     #[test]
     fn config_command_provider_rejects_unknown_provider() {
         let mut app = create_test_app();
-        let result = config_command(&mut app, Some("provider anthropic"));
+        // "anthropic" became a real provider in #3014; probe with an id that
+        // stays unknown.
+        let result = config_command(&mut app, Some("provider not-a-provider"));
         assert!(result.is_error);
         let msg = result.message.unwrap();
-        assert!(msg.contains("Unknown provider 'anthropic'"));
+        assert!(msg.contains("Unknown provider 'not-a-provider'"));
         assert!(msg.contains("openrouter"));
         assert!(msg.contains("xiaomi-mimo"));
     }
@@ -2374,6 +1683,112 @@ mod tests {
     }
 
     #[test]
+    fn config_command_stream_chunk_timeout_session_query_uses_live_value() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 90"));
+        assert!(!result.is_error);
+        assert_eq!(app.stream_chunk_timeout_secs, 90);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateStreamChunkTimeout(90))
+        ));
+
+        let query = config_command(&mut app, Some("stream_chunk_timeout_secs"));
+        assert_eq!(
+            query.message.as_deref(),
+            Some("stream_chunk_timeout_secs = 90")
+        );
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_save_persists_tui_key() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-stream-timeout-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join("custom-config.toml");
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 120 --save"));
+        let msg = result.message.unwrap();
+        let saved = fs::read_to_string(&config_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "stream_chunk_timeout_secs = 120 (saved to {}; affects subsequent turns in this session)",
+                config_path.display()
+            )
+        );
+        assert!(saved.contains("[tui]"));
+        assert!(saved.contains("stream_chunk_timeout_secs = 120"));
+        assert_eq!(app.stream_chunk_timeout_secs, 120);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateStreamChunkTimeout(120))
+        ));
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_rejects_invalid_input() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+
+        let text = config_command(&mut app, Some("stream_chunk_timeout_secs abc"));
+        assert!(text.is_error);
+        assert!(
+            text.message
+                .unwrap()
+                .contains("stream_chunk_timeout_secs must be a whole number")
+        );
+
+        let high = config_command(&mut app, Some("stream_chunk_timeout_secs 3601"));
+        assert!(high.is_error);
+        assert!(
+            high.message
+                .unwrap()
+                .contains("stream_chunk_timeout_secs must be 0 or 1..=3600")
+        );
+    }
+
+    #[test]
+    fn config_command_stream_chunk_timeout_zero_reports_effective_default() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+
+        let result = config_command(&mut app, Some("stream_chunk_timeout_secs 0"));
+
+        assert!(!result.is_error);
+        assert_eq!(
+            app.stream_chunk_timeout_secs,
+            DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
+        );
+        assert_eq!(
+            result.message.as_deref(),
+            Some(
+                "stream_chunk_timeout_secs = 0 (default 300) (session only; affects subsequent turns in this session)"
+            )
+        );
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateStreamChunkTimeout(
+                DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
+            ))
+        ));
+    }
+
+    #[test]
     fn config_command_provider_url_token_plan_persists_provider_base_url() {
         let temp_root = env::temp_dir().join(format!(
             "codewhale-provider-url-save-app-path-test-{}",
@@ -2455,7 +1870,7 @@ mod tests {
         let _guard = EnvGuard::new(&temp_root);
 
         let mut app = create_test_app();
-        let result = set_config(&mut app, Some("theme grayscale --save"));
+        let result = config_command(&mut app, Some("theme grayscale --save"));
         let msg = result.message.unwrap();
 
         assert_eq!(msg, "theme = grayscale (saved)");
@@ -2467,50 +1882,50 @@ mod tests {
     }
 
     #[test]
-    fn test_set_approval_mode_valid_values() {
+    fn config_approval_mode_valid_values() {
         let mut app = create_test_app();
         // Test auto
-        let result = set_config(&mut app, Some("approval_mode auto"));
+        let result = config_command(&mut app, Some("approval_mode auto"));
         assert!(result.message.is_some());
         assert_eq!(app.approval_mode, ApprovalMode::Auto);
 
         // Test suggest
-        let result = set_config(&mut app, Some("approval_mode suggest"));
+        let result = config_command(&mut app, Some("approval_mode suggest"));
         assert!(result.message.is_some());
         assert_eq!(app.approval_mode, ApprovalMode::Suggest);
 
         // Test never
-        let result = set_config(&mut app, Some("approval_mode never"));
+        let result = config_command(&mut app, Some("approval_mode never"));
         assert!(result.message.is_some());
         assert_eq!(app.approval_mode, ApprovalMode::Never);
     }
 
     #[test]
-    fn test_set_approval_mode_invalid_value() {
+    fn config_approval_mode_invalid_value() {
         let mut app = create_test_app();
-        let result = set_config(&mut app, Some("approval_mode invalid"));
+        let result = config_command(&mut app, Some("approval_mode invalid"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("Invalid approval_mode"));
     }
 
     #[test]
-    fn test_set_without_save_flag() {
+    fn config_without_save_flag() {
         let _lock = lock_test_env();
         let mut app = create_test_app();
-        let result = set_config(&mut app, Some("auto_compact true"));
+        let result = config_command(&mut app, Some("auto_compact true"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("(session only"));
     }
 
     #[test]
-    fn test_set_composer_border_updates_live_app() {
+    fn config_composer_border_updates_live_app() {
         let _lock = lock_test_env();
         let mut app = create_test_app();
         app.composer_border = true;
 
-        let result = set_config(&mut app, Some("composer_border false"));
+        let result = config_command(&mut app, Some("composer_border false"));
 
         assert!(result.message.is_some());
         assert!(!app.composer_border);
@@ -2572,166 +1987,5 @@ mod tests {
 
         let updated = fs::read_to_string(config_path).unwrap();
         assert!(!updated.contains("api_key"));
-    }
-
-    #[test]
-    fn test_set_invalid_setting() {
-        let _lock = lock_test_env();
-        let mut app = create_test_app();
-        let _result = set_config(&mut app, Some("nonexistent value"));
-        // Should either error or handle as session setting
-        // The current implementation tries to set it in Settings
-        // which may succeed or fail depending on Settings implementation
-    }
-
-    #[test]
-    fn test_set_key_without_value() {
-        let mut app = create_test_app();
-        let result = set_config(&mut app, Some("model"));
-        assert!(result.message.is_some());
-        let msg = result.message.unwrap();
-        assert!(msg.contains("Usage: /set"));
-    }
-
-    #[test]
-    fn persist_status_items_writes_tui_section_to_config_toml() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-statusline-persist-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let _guard = EnvGuard::new(&temp_root);
-
-        let items = vec![
-            crate::config::StatusItem::Mode,
-            crate::config::StatusItem::Model,
-            crate::config::StatusItem::Cost,
-        ];
-
-        let path = persist_status_items(&items).expect("persist should succeed");
-        let body = fs::read_to_string(&path).expect("written file should be readable");
-        assert!(body.contains("[tui]"), "expected [tui] section in {body}");
-        assert!(
-            body.contains("status_items"),
-            "expected status_items key in {body}"
-        );
-        assert!(body.contains("\"mode\""), "expected mode key in {body}");
-        assert!(body.contains("\"cost\""), "expected cost key in {body}");
-    }
-
-    #[test]
-    fn config_toml_path_uses_codewhale_home_for_fresh_installs() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-config-path-fresh-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let _guard = EnvGuard::new(&temp_root);
-
-        unsafe {
-            env::remove_var("DEEPSEEK_CONFIG_PATH");
-        }
-
-        assert_eq!(
-            config_toml_path(None).unwrap(),
-            temp_root.join(".codewhale").join("config.toml")
-        );
-    }
-
-    #[test]
-    fn config_toml_path_preserves_legacy_config_when_it_exists() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-config-path-legacy-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        let legacy_config = temp_root.join(".deepseek").join("config.toml");
-        fs::create_dir_all(legacy_config.parent().unwrap()).unwrap();
-        fs::write(&legacy_config, "").unwrap();
-        let _guard = EnvGuard::new(&temp_root);
-
-        unsafe {
-            env::remove_var("DEEPSEEK_CONFIG_PATH");
-        }
-
-        assert_eq!(config_toml_path(None).unwrap(), legacy_config);
-    }
-
-    #[test]
-    fn config_toml_path_prefers_codewhale_env_over_legacy_env() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-config-path-env-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let _guard = EnvGuard::new(&temp_root);
-        let preferred = temp_root.join("preferred.toml");
-        let legacy = temp_root.join("legacy.toml");
-
-        unsafe {
-            env::set_var("CODEWHALE_CONFIG_PATH", &preferred);
-            env::set_var("DEEPSEEK_CONFIG_PATH", &legacy);
-        }
-
-        assert_eq!(config_toml_path(None).unwrap(), preferred);
-    }
-
-    #[test]
-    fn persist_status_items_preserves_existing_unrelated_keys() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-statusline-preserve-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
-        let _guard = EnvGuard::new(&temp_root);
-
-        let path = temp_root.join(".deepseek").join("config.toml");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Seed the config with a sentinel key the picker MUST NOT clobber.
-        fs::write(
-            &path,
-            "api_key = \"sentinel-key\"\nmodel = \"deepseek-v4-pro\"\n",
-        )
-        .unwrap();
-
-        let written = persist_status_items(&[crate::config::StatusItem::Mode])
-            .expect("persist should succeed");
-        let body = fs::read_to_string(&written).expect("written file should be readable");
-        assert!(
-            body.contains("api_key = \"sentinel-key\""),
-            "round-trip lost api_key: {body}"
-        );
-        assert!(
-            body.contains("model = \"deepseek-v4-pro\""),
-            "round-trip lost model: {body}"
-        );
-        assert!(
-            body.contains("status_items"),
-            "expected status_items in {body}"
-        );
     }
 }

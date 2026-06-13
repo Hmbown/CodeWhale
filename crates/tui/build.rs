@@ -121,11 +121,9 @@ fn configure_windows_stack() {
     match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
         Ok("msvc") => {
             println!("cargo:rustc-link-arg-bin=codewhale-tui=/STACK:8388608");
-            println!("cargo:rustc-link-arg-bin=deepseek-tui=/STACK:8388608");
         }
         Ok("gnu") => {
             println!("cargo:rustc-link-arg-bin=codewhale-tui=-Wl,--stack,8388608");
-            println!("cargo:rustc-link-arg-bin=deepseek-tui=-Wl,--stack,8388608");
         }
         _ => {}
     }

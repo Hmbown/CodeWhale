@@ -3,7 +3,7 @@
 //!
 //! Usage: `/change [version]`
 //!
-//! Uses the DeepSeek-TUI changelog embedded at compile time. With no argument,
+//! Uses the CodeWhale changelog embedded at compile time. With no argument,
 //! extracts the most recent section. With a version argument like `0.8.32`,
 //! extracts that specific version's section. When the UI locale is not
 //! English and the current session can reach a model, the command also fires a
@@ -19,7 +19,7 @@ use super::CommandResult;
 /// If the changelog section exceeds this, we truncate and show a notice.
 /// 4096 chars is large enough for most version entries.
 const MAX_INLINE_CHANGELOG_CHARS: usize = 4096;
-const DEEPSEEK_TUI_CHANGELOG: &str = include_str!("../../CHANGELOG.md");
+const CODEWHALE_CHANGELOG: &str = include_str!("../../CHANGELOG.md");
 
 /// Execute the `/change` command.
 ///
@@ -29,12 +29,12 @@ pub fn change(app: &mut App, version: Option<&str>) -> CommandResult {
     let section = if let Some(ver) = version {
         let ver = ver.trim();
         if ver.is_empty() {
-            extract_latest_changelog_section(DEEPSEEK_TUI_CHANGELOG)
+            extract_latest_changelog_section(CODEWHALE_CHANGELOG)
         } else {
-            extract_changelog_section_by_version(DEEPSEEK_TUI_CHANGELOG, ver)
+            extract_changelog_section_by_version(CODEWHALE_CHANGELOG, ver)
         }
     } else {
-        extract_latest_changelog_section(DEEPSEEK_TUI_CHANGELOG)
+        extract_latest_changelog_section(CODEWHALE_CHANGELOG)
     };
 
     let latest_section = match section {
@@ -43,16 +43,14 @@ pub fn change(app: &mut App, version: Option<&str>) -> CommandResult {
             let msg = if let Some(ver) = version {
                 let ver = ver.trim();
                 if ver.is_empty() {
-                    "Could not find a version section in the bundled DeepSeek-TUI changelog. \
+                    "Could not find a version section in the bundled CodeWhale changelog. \
                      Expected a line starting with `## [`."
                         .to_string()
                 } else {
-                    format!(
-                        "Could not find version \"{ver}\" in the bundled DeepSeek-TUI changelog."
-                    )
+                    format!("Could not find version \"{ver}\" in the bundled CodeWhale changelog.")
                 }
             } else {
-                "Could not find a version section in the bundled DeepSeek-TUI changelog. \
+                "Could not find a version section in the bundled CodeWhale changelog. \
                  Expected a line starting with `## [`."
                     .to_string()
             };
@@ -63,7 +61,7 @@ pub fn change(app: &mut App, version: Option<&str>) -> CommandResult {
     let locale = app.ui_locale;
     let header = tr(locale, MessageId::CmdChangeHeader);
 
-    let prev_hint = if let Some(prev_ver) = previous_version_hint(DEEPSEEK_TUI_CHANGELOG, version) {
+    let prev_hint = if let Some(prev_ver) = previous_version_hint(CODEWHALE_CHANGELOG, version) {
         let template = tr(locale, MessageId::CmdChangePreviousVersion);
         format!("\n\n{}", template.replace("{version}", &prev_ver))
     } else {
@@ -130,7 +128,7 @@ fn inline_changelog_section(section: &str) -> String {
     format!(
         "{truncated}\n\
 \n\
-[... {} characters omitted from the bundled DeepSeek-TUI changelog]",
+[... {} characters omitted from the bundled CodeWhale changelog]",
         section.len() - MAX_INLINE_CHANGELOG_CHARS
     )
 }
@@ -437,7 +435,7 @@ Previous release.\n";
         let result = change(&mut app, None);
         assert!(!result.is_error);
         let msg = result.message.expect("should have a message");
-        let expected = extract_latest_changelog_section(DEEPSEEK_TUI_CHANGELOG)
+        let expected = extract_latest_changelog_section(CODEWHALE_CHANGELOG)
             .expect("bundled changelog should have a release section");
         assert!(msg.contains(expected.lines().next().unwrap()));
     }
@@ -465,7 +463,7 @@ Previous release.\n";
         let result = change(&mut app, None);
         assert!(!result.is_error);
         let msg = result.message.expect("should have a message");
-        let expected = extract_latest_changelog_section(DEEPSEEK_TUI_CHANGELOG)
+        let expected = extract_latest_changelog_section(CODEWHALE_CHANGELOG)
             .expect("bundled changelog should have a release section");
         assert!(msg.contains(expected.lines().next().unwrap()));
         assert!(
@@ -493,10 +491,10 @@ Previous release.\n";
                 result.action
             );
             if let Some(AppAction::SendMessage(prompt)) = &result.action {
-                let expected = extract_latest_changelog_section(DEEPSEEK_TUI_CHANGELOG)
+                let expected = extract_latest_changelog_section(CODEWHALE_CHANGELOG)
                     .expect("bundled changelog should have a release section");
                 assert!(prompt.contains(expected.lines().next().unwrap()));
-                let prev_ver = extract_previous_version_number(DEEPSEEK_TUI_CHANGELOG)
+                let prev_ver = extract_previous_version_number(CODEWHALE_CHANGELOG)
                     .expect("bundled changelog should have a previous release");
                 assert!(
                     prompt.contains(&prev_ver),
@@ -869,11 +867,18 @@ Older release.\n";
     fn change_with_explicit_version_includes_previous_hint() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut app = make_app(&tmp, Locale::En, false);
-        let result = change(&mut app, Some("0.8.32"));
+        // Derive versions from the bundled changelog: it only embeds a recent
+        // slice of releases, so hardcoded versions would age out of it.
+        let explicit = extract_previous_version_number(CODEWHALE_CHANGELOG)
+            .expect("bundled changelog should have a previous release");
+        let expected_prev =
+            extract_previous_version_number_after_version(CODEWHALE_CHANGELOG, &explicit)
+                .expect("bundled changelog should have at least three releases");
+        let result = change(&mut app, Some(&explicit));
         assert!(!result.is_error);
         let msg = result.message.as_deref().unwrap_or("");
         assert!(
-            msg.contains("Previous version:") && msg.contains("0.8.31"),
+            msg.contains("Previous version:") && msg.contains(&expected_prev),
             "explicit version should show previous-version hint: {msg}"
         );
     }

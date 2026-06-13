@@ -7,6 +7,7 @@
 //! - Mode changes
 //! - Message submission
 //! - Error events
+//! - Turn completion
 //!
 //! Configuration is done via `[[hooks.hooks]]` in config.toml.
 
@@ -41,6 +42,8 @@ pub enum HookEvent {
     ModeChange,
     /// Triggered when an error occurs
     OnError,
+    /// Triggered after a turn completes and post-turn state has been updated
+    TurnEnd,
     /// Triggered when a sub-agent is spawned
     SubagentSpawn,
     /// Triggered when a sub-agent reaches a terminal state
@@ -66,6 +69,7 @@ impl HookEvent {
             HookEvent::ToolCallAfter => "tool_call_after",
             HookEvent::ModeChange => "mode_change",
             HookEvent::OnError => "on_error",
+            HookEvent::TurnEnd => "turn_end",
             HookEvent::SubagentSpawn => "subagent_spawn",
             HookEvent::SubagentComplete => "subagent_complete",
             HookEvent::ShellEnv => "shell_env",
@@ -213,6 +217,30 @@ fn default_enabled() -> bool {
 }
 
 impl HooksConfig {
+    /// Load global hooks merged with project-local `.codewhale/hooks.toml` (#3026).
+    ///
+    /// Project hooks are appended after global hooks.  A malformed project file
+    /// logs a warning and falls back to global-only.
+    pub fn load_with_project(global: HooksConfig, workspace: &std::path::Path) -> HooksConfig {
+        let project_path = workspace.join(".codewhale").join("hooks.toml");
+        let Ok(contents) = std::fs::read_to_string(&project_path) else {
+            return global;
+        };
+        let project: HooksConfig = match toml::from_str(&contents) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse project hooks at {}: {e}; falling back to global hooks only",
+                    project_path.display()
+                );
+                return global;
+            }
+        };
+        let mut merged = global;
+        merged.hooks.extend(project.hooks);
+        merged
+    }
+
     /// Get hooks for a specific event
     pub fn hooks_for_event(&self, event: HookEvent) -> Vec<&Hook> {
         if !self.enabled {
@@ -480,6 +508,112 @@ enum MessageSubmitStdout {
     Invalid(String),
 }
 
+/// Parsed stdout from a `tool_call_before` hook (#3026).
+///
+/// Hooks may emit a JSON decision on stdout:
+/// `{"decision": "allow"|"deny"|"ask", "reason": "...",
+///   "updatedInput": {...}, "additionalContext": "..."}`
+/// Non-JSON or empty stdout → legacy passthrough (allow).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallBeforeStdout {
+    pub decision: Option<ToolCallDecision>,
+    pub reason: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
+    pub additional_context: Option<String>,
+}
+
+/// Decision a hook can return for a tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallDecision {
+    Allow,
+    Deny,
+    Ask,
+}
+
+pub(crate) fn parse_tool_call_before_stdout(stdout: &str) -> ToolCallBeforeStdout {
+    let passthrough = ToolCallBeforeStdout {
+        decision: None,
+        reason: None,
+        updated_input: None,
+        additional_context: None,
+    };
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return passthrough;
+    }
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        // Non-JSON stdout → legacy passthrough (allow).
+        Err(_) => return passthrough,
+    };
+    let Some(obj) = value.as_object() else {
+        tracing::warn!(
+            "tool_call_before hook stdout is JSON but not an object; \
+             ignoring it (legacy passthrough)"
+        );
+        return passthrough;
+    };
+    let decision = obj
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "allow" => Some(ToolCallDecision::Allow),
+            "deny" => Some(ToolCallDecision::Deny),
+            "ask" => Some(ToolCallDecision::Ask),
+            other => {
+                tracing::warn!(
+                    "tool_call_before hook returned unrecognized decision \
+                     '{other}' (expected allow|deny|ask); treating as allow"
+                );
+                None
+            }
+        });
+    let reason = obj
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let updated_input = obj.get("updatedInput").cloned().filter(|v| {
+        if v.is_object() {
+            true
+        } else {
+            tracing::warn!("tool_call_before hook updatedInput must be a JSON object; ignoring");
+            false
+        }
+    });
+    let additional_context = obj
+        .get("additionalContext")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    ToolCallBeforeStdout {
+        decision,
+        reason,
+        updated_input,
+        additional_context,
+    }
+}
+
+/// Post-turn accumulated totals included in the `turn_end` observer payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnEndTotals {
+    pub session_tokens: u32,
+    pub conversation_tokens: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+/// Input used to build the structured `turn_end` observer payload.
+pub struct TurnEndPayloadInput<'a> {
+    pub context: &'a HookContext,
+    pub turn_id: Option<&'a str>,
+    pub status: &'a str,
+    pub error: Option<&'a str>,
+    pub duration: Duration,
+    pub usage: &'a crate::models::Usage,
+    pub totals: TurnEndTotals,
+    pub tool_count: usize,
+    pub queued_message_count: usize,
+}
+
 /// Executor for running hooks
 #[derive(Debug, Clone)]
 pub struct HookExecutor {
@@ -492,8 +626,11 @@ impl HookExecutor {
     fn build_shell_command(command: &str) -> Command {
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt as _;
             let mut cmd = Command::new("cmd");
-            cmd.arg("/C").arg(command);
+            // raw_arg: cmd.exe does not parse the CRT-style \" escapes that
+            // Command::arg would insert, so pass the command line verbatim.
+            cmd.arg("/C").raw_arg(command);
             cmd
         }
         #[cfg(not(windows))]
@@ -836,13 +973,30 @@ impl HookExecutor {
         results
     }
 
+    /// Check whether a tool name matches a condition pattern with `*` glob support.
+    fn tool_name_matches_condition(tool_name: &str, pattern: &str) -> bool {
+        if !pattern.contains('*') {
+            return tool_name == pattern;
+        }
+        // Escape regex metacharacters except `*`, which becomes `.*`.
+        let escaped = regex::escape(pattern);
+        let regex_pattern = escaped.replace(r"\*", ".*");
+        let anchored = format!("^{regex_pattern}$");
+        regex::Regex::new(&anchored).is_ok_and(|re| re.is_match(tool_name))
+    }
+
     /// Check if a hook's condition matches the context
     #[allow(clippy::only_used_in_recursion)]
     fn matches_condition(&self, hook: &Hook, context: &HookContext) -> bool {
         match &hook.condition {
             None | Some(HookCondition::Always) => true,
             Some(HookCondition::ToolName { name }) => {
-                context.tool_name.as_ref().is_some_and(|n| n == name)
+                // #3026: Support `*` globs in tool_name conditions so
+                // `mcp__*` matches all MCP tools.  Exact names keep working.
+                context
+                    .tool_name
+                    .as_ref()
+                    .is_some_and(|n| Self::tool_name_matches_condition(n, name))
             }
             Some(HookCondition::ToolCategory { category }) => {
                 // Map tool names to categories
@@ -1051,7 +1205,7 @@ impl HookExecutor {
         let env = env_vars.clone();
         let wd = working_dir.clone();
 
-        // Spawn in a detached thread
+        // Spawn in a detached thread (fire-and-forget hook execution).
         std::thread::spawn(move || {
             let mut command = HookExecutor::build_shell_command(&cmd);
             command
@@ -1119,6 +1273,41 @@ fn message_submit_payload(context: &HookContext, text: &str) -> serde_json::Valu
         "model": context.model.as_deref(),
         "total_tokens": context.total_tokens,
     })
+}
+
+pub fn turn_end_payload(input: TurnEndPayloadInput<'_>) -> serde_json::Value {
+    json!({
+        "event": HookEvent::TurnEnd.as_str(),
+        "session_id": input.context.session_id.as_deref(),
+        "workspace": input.context.workspace.as_ref().map(|path| path.display().to_string()),
+        "mode": input.context.mode.as_deref(),
+        "model": input.context.model.as_deref(),
+        "turn_id": input.turn_id,
+        "status": input.status,
+        "error": input.error,
+        "duration_ms": duration_ms_saturating(input.duration),
+        "usage": {
+            "input_tokens": input.usage.input_tokens,
+            "output_tokens": input.usage.output_tokens,
+            "prompt_cache_hit_tokens": input.usage.prompt_cache_hit_tokens,
+            "prompt_cache_miss_tokens": input.usage.prompt_cache_miss_tokens,
+            "reasoning_tokens": input.usage.reasoning_tokens,
+            "reasoning_replay_tokens": input.usage.reasoning_replay_tokens,
+        },
+        "totals": {
+            "session_tokens": input.totals.session_tokens,
+            "conversation_tokens": input.totals.conversation_tokens,
+            "input_tokens": input.totals.input_tokens,
+            "output_tokens": input.totals.output_tokens,
+        },
+        "tool_count": input.tool_count,
+        "queued_message_count": input.queued_message_count,
+        "stop_hook_active": false,
+    })
+}
+
+fn duration_ms_saturating(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn parse_message_submit_stdout(stdout: &str) -> MessageSubmitStdout {
@@ -1343,8 +1532,68 @@ NOEQUAL line dropped
         assert_eq!(HookEvent::SessionStart.as_str(), "session_start");
         assert_eq!(HookEvent::ToolCallAfter.as_str(), "tool_call_after");
         assert_eq!(HookEvent::ModeChange.as_str(), "mode_change");
+        assert_eq!(HookEvent::TurnEnd.as_str(), "turn_end");
         assert_eq!(HookEvent::SubagentSpawn.as_str(), "subagent_spawn");
         assert_eq!(HookEvent::SubagentComplete.as_str(), "subagent_complete");
+    }
+
+    #[test]
+    fn turn_end_payload_contains_post_turn_observer_fields() {
+        let context = HookContext::new()
+            .with_session_id("sess_test")
+            .with_workspace(PathBuf::from("/tmp/codewhale"))
+            .with_mode("agent")
+            .with_model("deepseek-v4")
+            .with_tokens(125);
+        let usage = crate::models::Usage {
+            input_tokens: 40,
+            output_tokens: 9,
+            prompt_cache_hit_tokens: Some(10),
+            prompt_cache_miss_tokens: Some(30),
+            reasoning_tokens: Some(4),
+            reasoning_replay_tokens: Some(2),
+            server_tool_use: None,
+        };
+
+        let payload = super::turn_end_payload(TurnEndPayloadInput {
+            context: &context,
+            turn_id: Some("turn_123"),
+            status: "completed",
+            error: None,
+            duration: Duration::from_millis(321),
+            usage: &usage,
+            totals: TurnEndTotals {
+                session_tokens: 125,
+                conversation_tokens: 100,
+                input_tokens: 100,
+                output_tokens: 25,
+            },
+            tool_count: 2,
+            queued_message_count: 1,
+        });
+
+        assert_eq!(payload["event"], "turn_end");
+        assert_eq!(payload["session_id"], "sess_test");
+        assert_eq!(payload["workspace"], "/tmp/codewhale");
+        assert_eq!(payload["mode"], "agent");
+        assert_eq!(payload["model"], "deepseek-v4");
+        assert_eq!(payload["turn_id"], "turn_123");
+        assert_eq!(payload["status"], "completed");
+        assert_eq!(payload["error"], serde_json::Value::Null);
+        assert_eq!(payload["duration_ms"], 321);
+        assert_eq!(payload["usage"]["input_tokens"], 40);
+        assert_eq!(payload["usage"]["output_tokens"], 9);
+        assert_eq!(payload["usage"]["prompt_cache_hit_tokens"], 10);
+        assert_eq!(payload["usage"]["prompt_cache_miss_tokens"], 30);
+        assert_eq!(payload["usage"]["reasoning_tokens"], 4);
+        assert_eq!(payload["usage"]["reasoning_replay_tokens"], 2);
+        assert_eq!(payload["totals"]["session_tokens"], 125);
+        assert_eq!(payload["totals"]["conversation_tokens"], 100);
+        assert_eq!(payload["totals"]["input_tokens"], 100);
+        assert_eq!(payload["totals"]["output_tokens"], 25);
+        assert_eq!(payload["tool_count"], 2);
+        assert_eq!(payload["queued_message_count"], 1);
+        assert_eq!(payload["stop_hook_active"], false);
     }
 
     #[test]
@@ -1576,6 +1825,76 @@ cat > "{}"
         assert_eq!(captured["agent_id"], "agent_123");
         assert_eq!(captured["prompt_preview"], "inspect this");
         assert_eq!(captured["prompt_truncated"], false);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn turn_end_observer_hook_receives_stdin_json_and_ignores_stdout_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("turn_end.json");
+        let command = write_hook_script(
+            &dir,
+            "capture_turn_end.sh",
+            &format!(
+                r#"#!/bin/sh
+cat > "{}"
+printf '%s\n' '{{"text":"stdout is not a mutation contract"}}'
+"#,
+                out.display()
+            ),
+        );
+        let executor = HookExecutor::new(
+            HooksConfig {
+                enabled: true,
+                hooks: vec![Hook::new(HookEvent::TurnEnd, &command)],
+                ..Default::default()
+            },
+            dir.path().to_path_buf(),
+        );
+        let usage = crate::models::Usage {
+            input_tokens: 12,
+            output_tokens: 3,
+            prompt_cache_hit_tokens: None,
+            prompt_cache_miss_tokens: None,
+            reasoning_tokens: None,
+            reasoning_replay_tokens: None,
+            server_tool_use: None,
+        };
+        let context = submit_context(&dir).with_tokens(15);
+        let payload = super::turn_end_payload(TurnEndPayloadInput {
+            context: &context,
+            turn_id: Some("turn_observed"),
+            status: "completed",
+            error: None,
+            duration: Duration::from_millis(7),
+            usage: &usage,
+            totals: TurnEndTotals {
+                session_tokens: 15,
+                conversation_tokens: 15,
+                input_tokens: 12,
+                output_tokens: 3,
+            },
+            tool_count: 0,
+            queued_message_count: 0,
+        });
+
+        let results = executor.execute_json_observer(HookEvent::TurnEnd, &context, &payload);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+        assert!(
+            results[0]
+                .stdout
+                .contains("stdout is not a mutation contract"),
+            "stdout is still captured for diagnostics"
+        );
+        let captured: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out).expect("payload written"))
+                .expect("valid JSON payload");
+        assert_eq!(captured["event"], "turn_end");
+        assert_eq!(captured["turn_id"], "turn_observed");
+        assert_eq!(captured["totals"]["input_tokens"], 12);
+        assert_eq!(captured["totals"]["output_tokens"], 3);
     }
 
     #[cfg(not(windows))]
@@ -1912,6 +2231,7 @@ exit 7
             HookEvent::ToolCallAfter,
             HookEvent::ModeChange,
             HookEvent::OnError,
+            HookEvent::TurnEnd,
             HookEvent::SubagentSpawn,
             HookEvent::SubagentComplete,
         ] {
@@ -1954,5 +2274,217 @@ exit 7
         assert!(!executor.has_hooks_for_event(HookEvent::ToolCallAfter));
         assert!(!executor.has_hooks_for_event(HookEvent::OnError));
         assert!(!executor.has_hooks_for_event(HookEvent::ModeChange));
+    }
+
+    // ── #3026: tool_call_before stdout decision contract ──────────────────
+
+    #[test]
+    fn tool_call_before_stdout_parses_deny_with_reason() {
+        let parsed =
+            parse_tool_call_before_stdout(r#"{"decision":"deny","reason":"blocked by policy"}"#);
+        assert_eq!(parsed.decision, Some(ToolCallDecision::Deny));
+        assert_eq!(parsed.reason.as_deref(), Some("blocked by policy"));
+        assert!(parsed.updated_input.is_none());
+        assert!(parsed.additional_context.is_none());
+    }
+
+    #[test]
+    fn tool_call_before_stdout_parses_ask_and_allow() {
+        let ask = parse_tool_call_before_stdout(r#"{"decision":"ask"}"#);
+        assert_eq!(ask.decision, Some(ToolCallDecision::Ask));
+
+        let allow = parse_tool_call_before_stdout(r#"{"decision":"allow"}"#);
+        assert_eq!(allow.decision, Some(ToolCallDecision::Allow));
+    }
+
+    #[test]
+    fn tool_call_before_stdout_parses_updated_input_object() {
+        let parsed =
+            parse_tool_call_before_stdout(r#"{"updatedInput":{"command":"ls -la","timeout":5}}"#);
+        assert!(parsed.decision.is_none());
+        assert_eq!(
+            parsed.updated_input,
+            Some(serde_json::json!({"command":"ls -la","timeout":5}))
+        );
+    }
+
+    #[test]
+    fn tool_call_before_stdout_rejects_non_object_updated_input() {
+        let parsed = parse_tool_call_before_stdout(r#"{"updatedInput":"rm -rf /"}"#);
+        assert!(
+            parsed.updated_input.is_none(),
+            "updatedInput must be a JSON object"
+        );
+        let parsed = parse_tool_call_before_stdout(r#"{"updatedInput":[1,2]}"#);
+        assert!(parsed.updated_input.is_none());
+    }
+
+    #[test]
+    fn tool_call_before_stdout_parses_additional_context() {
+        let parsed =
+            parse_tool_call_before_stdout(r#"{"additionalContext":"remember the style guide"}"#);
+        assert_eq!(
+            parsed.additional_context.as_deref(),
+            Some("remember the style guide")
+        );
+    }
+
+    #[test]
+    fn tool_call_before_stdout_empty_and_non_json_are_passthrough() {
+        for stdout in ["", "   \n  ", "ok, proceeding", "exit code zero"] {
+            let parsed = parse_tool_call_before_stdout(stdout);
+            assert!(parsed.decision.is_none(), "stdout {stdout:?}");
+            assert!(parsed.reason.is_none());
+            assert!(parsed.updated_input.is_none());
+            assert!(parsed.additional_context.is_none());
+        }
+    }
+
+    #[test]
+    fn tool_call_before_stdout_json_without_decision_is_passthrough() {
+        let parsed = parse_tool_call_before_stdout(r#"{"status":"fine"}"#);
+        assert!(parsed.decision.is_none());
+    }
+
+    #[test]
+    fn tool_call_before_stdout_non_object_json_is_passthrough() {
+        for stdout in [r#""deny""#, "[1,2,3]", "42", "true"] {
+            let parsed = parse_tool_call_before_stdout(stdout);
+            assert!(parsed.decision.is_none(), "stdout {stdout:?}");
+        }
+    }
+
+    #[test]
+    fn tool_call_before_stdout_unknown_decision_treated_as_allow() {
+        let parsed = parse_tool_call_before_stdout(r#"{"decision":"block"}"#);
+        assert!(parsed.decision.is_none());
+    }
+
+    // ── #3026: glob matchers for tool_name conditions ──────────────────────
+
+    #[test]
+    fn tool_name_glob_matches_mcp_prefix() {
+        assert!(HookExecutor::tool_name_matches_condition(
+            "mcp__github__create_issue",
+            "mcp__*"
+        ));
+        assert!(!HookExecutor::tool_name_matches_condition(
+            "read_file",
+            "mcp__*"
+        ));
+    }
+
+    #[test]
+    fn tool_name_exact_match_still_works() {
+        assert!(HookExecutor::tool_name_matches_condition(
+            "read_file",
+            "read_file"
+        ));
+        assert!(!HookExecutor::tool_name_matches_condition(
+            "read_files",
+            "read_file"
+        ));
+    }
+
+    #[test]
+    fn tool_name_glob_escapes_regex_metacharacters() {
+        // Without escaping, `.` would match any character.
+        assert!(!HookExecutor::tool_name_matches_condition(
+            "mcpXgithub",
+            "mcp.git*"
+        ));
+        assert!(HookExecutor::tool_name_matches_condition(
+            "mcp.github",
+            "mcp.git*"
+        ));
+        // `+` and parens must be literal too.
+        assert!(HookExecutor::tool_name_matches_condition(
+            "weird+tool(name)",
+            "weird+tool(*)"
+        ));
+    }
+
+    #[test]
+    fn tool_name_glob_supports_infix_and_suffix_positions() {
+        assert!(HookExecutor::tool_name_matches_condition(
+            "mcp__github__create_issue",
+            "mcp__*__create_issue"
+        ));
+        assert!(HookExecutor::tool_name_matches_condition(
+            "task_shell_start",
+            "*_shell_start"
+        ));
+        assert!(!HookExecutor::tool_name_matches_condition(
+            "task_shell_wait",
+            "*_shell_start"
+        ));
+    }
+
+    // ── #3026: project-local hooks ─────────────────────────────────────────
+
+    #[test]
+    fn load_with_project_missing_file_keeps_global() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let global = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, "echo global")],
+            ..HooksConfig::default()
+        };
+
+        let merged = HooksConfig::load_with_project(global.clone(), dir.path());
+        assert_eq!(merged.hooks.len(), 1);
+        assert_eq!(merged.hooks[0].command, "echo global");
+    }
+
+    #[test]
+    fn load_with_project_appends_project_hooks_after_global() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_dir = dir.path().join(".codewhale");
+        std::fs::create_dir_all(&project_dir).expect("mkdir .codewhale");
+        std::fs::write(
+            project_dir.join("hooks.toml"),
+            r#"
+[[hooks]]
+event = "tool_call_before"
+command = "echo project"
+"#,
+        )
+        .expect("write hooks.toml");
+
+        let global = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, "echo global")],
+            ..HooksConfig::default()
+        };
+
+        let merged = HooksConfig::load_with_project(global, dir.path());
+        assert_eq!(merged.hooks.len(), 2);
+        assert_eq!(
+            merged.hooks[0].command, "echo global",
+            "global hooks run first"
+        );
+        assert_eq!(
+            merged.hooks[1].command, "echo project",
+            "project hooks are appended after global"
+        );
+    }
+
+    #[test]
+    fn load_with_project_malformed_file_falls_back_to_global() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_dir = dir.path().join(".codewhale");
+        std::fs::create_dir_all(&project_dir).expect("mkdir .codewhale");
+        std::fs::write(project_dir.join("hooks.toml"), "this is [ not toml")
+            .expect("write hooks.toml");
+
+        let global = HooksConfig {
+            enabled: true,
+            hooks: vec![Hook::new(HookEvent::ToolCallBefore, "echo global")],
+            ..HooksConfig::default()
+        };
+
+        let merged = HooksConfig::load_with_project(global, dir.path());
+        assert_eq!(merged.hooks.len(), 1, "malformed project file is ignored");
+        assert_eq!(merged.hooks[0].command, "echo global");
     }
 }

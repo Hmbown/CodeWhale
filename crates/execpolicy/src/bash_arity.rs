@@ -359,8 +359,9 @@ impl BashArityDict {
             return true;
         }
 
-        // Fallback: plain normalised prefix match for patterns not in the table
-        // (preserves backward compatibility with exact-match allow rules).
+        // Fallback: word-boundary prefix match for patterns not in the arity table.
+        // Matches the exact pattern or the pattern followed by a space (i.e., at
+        // word boundary), so "ls" matches "ls" and "ls -la" but NOT "lsof".
         let command_lower = command.trim().to_ascii_lowercase();
         // Normalise whitespace in both sides before comparing.
         let pattern_norm: String = pattern_lower
@@ -371,7 +372,9 @@ impl BashArityDict {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        command_norm == pattern_norm || command_norm.starts_with(&format!("{pattern_norm} "))
+        command_norm == pattern_norm
+            || (command_norm.starts_with(&pattern_norm)
+                && command_norm.as_bytes().get(pattern_norm.len()) == Some(&b' '))
     }
 
     /// Iterate over all entries in the dictionary.

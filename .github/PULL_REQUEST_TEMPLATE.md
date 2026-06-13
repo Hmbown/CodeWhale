@@ -11,3 +11,4 @@
 - [ ] Updated docs or comments as needed
 - [ ] Added or updated tests where relevant
 - [ ] Verified TUI behavior manually if UI changes
+- [ ] Harvested/co-authored credit uses a GitHub numeric noreply address

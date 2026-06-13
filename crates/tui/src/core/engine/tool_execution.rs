@@ -125,14 +125,30 @@ pub(super) fn emit_tool_audit(event: serde_json::Value) {
     };
     let line = match serde_json::to_string(&event) {
         Ok(line) => line,
-        Err(_) => return,
+        Err(e) => {
+            tracing::error!("Failed to serialize tool audit event: {e}");
+            return;
+        }
     };
     let path = PathBuf::from(path);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::error!(
+            "Failed to create audit log directory {}: {e}",
+            parent.display()
+        );
+        return;
     }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{line}");
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut file) => {
+            if let Err(e) = writeln!(file, "{line}") {
+                tracing::error!("Failed to write to audit log {}: {e}", path.display());
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to open audit log {}: {e}", path.display());
+        }
     }
 }
 

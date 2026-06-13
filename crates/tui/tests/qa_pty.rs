@@ -48,6 +48,7 @@ fn spawn_minimal(
 ) -> anyhow::Result<(qa_harness::harness::SealedWorkspace, Harness)> {
     let h = Harness::builder(Harness::cargo_bin("codewhale-tui"))
         .cwd(ws.workspace())
+        .clear_env()
         .seal_home(ws.home())
         // Provide a stub key so the onboarding screen is bypassed and the TUI
         // boots straight into the composer. The harness never makes a live
@@ -179,6 +180,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
 
     let mut h = Harness::builder(Harness::cargo_bin("codewhale-tui"))
         .cwd(ws.workspace())
+        .clear_env()
         .seal_home(ws.home())
         .env("DEEPSEEK_API_KEY", "ci-test-key-not-real")
         .env("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")

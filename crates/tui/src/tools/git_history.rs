@@ -518,6 +518,7 @@ mod tests {
 
     fn init_git_repo(root: &Path) {
         run_git(root, &["init", "-q"]);
+        run_git(root, &["config", "core.autocrlf", "false"]);
         run_git(root, &["config", "user.email", "test@example.com"]);
         run_git(root, &["config", "user.name", "Test User"]);
     }

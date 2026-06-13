@@ -1,7 +1,12 @@
 # codewhale
 
-Install and run CodeWhale, the agentic terminal for open-source and open-weight coding
-models, from GitHub release artifacts.
+Install and run CodeWhale, the agentic terminal for DeepSeek and other
+OpenAI-compatible coding models, from GitHub release artifacts.
+
+This npm package is a small launcher: it downloads the matching native
+CodeWhale binaries for your platform and exposes the `codewhale` and
+`codewhale-tui` commands. The application state and credentials still live in
+CodeWhale's normal config files, not inside `node_modules`.
 
 > Previously published as `deepseek-tui`. See `docs/REBRAND.md` in the upstream
 > repository for the migration notes; the legacy `deepseek-tui` npm package is
@@ -22,10 +27,9 @@ npm install codewhale
 npx codewhale --help
 ```
 
-`postinstall` tries to download platform binaries into `bin/downloads/` and
-exposes `codewhale` and `codewhale-tui` commands. If GitHub release assets are
-temporarily unreachable, install continues and the wrapper retries the download
-on first run.
+`postinstall` tries to download platform binaries into `bin/downloads/`. If
+GitHub release assets are temporarily unreachable, install continues and the
+wrapper retries the download on first run.
 
 ## First run
 
@@ -75,19 +79,17 @@ compatibility problems still fail with a clear error pointing you at
 [docs/INSTALL.md](https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md)
 build-from-source guide.
 
-## Configuration
+## Wrapper configuration
 
-- Default binary version comes from `codewhaleBinaryVersion` in `package.json`
-  (with `deepseekBinaryVersion` as a backward-compat fallback).
-- Set `DEEPSEEK_TUI_VERSION` or `DEEPSEEK_VERSION` to override the release version.
-- Set `DEEPSEEK_TUI_GITHUB_REPO` or `DEEPSEEK_GITHUB_REPO` to override the source repo (defaults to `Hmbown/CodeWhale`).
-- Set `DEEPSEEK_TUI_RELEASE_BASE_URL` to use an internal or mirrored
-  release-asset directory when GitHub Releases is unavailable. The directory
-  must contain `codewhale-artifacts-sha256.txt` and the platform binaries.
-- Set `DEEPSEEK_TUI_FORCE_DOWNLOAD=1` to force download even when the cached binary is already present.
-- Set `DEEPSEEK_TUI_DISABLE_INSTALL=1` to skip install-time download.
-- Set `DEEPSEEK_TUI_OPTIONAL_INSTALL=1` to make install-time retryable download
-  failures warn and exit `0` instead of failing `npm install`.
+| Setting | What it does |
+| --- | --- |
+| `codewhaleBinaryVersion` in `package.json` | Default native binary version. `deepseekBinaryVersion` is still read as a backward-compat fallback. |
+| `DEEPSEEK_TUI_VERSION` or `DEEPSEEK_VERSION` | Override the GitHub release version to download. |
+| `DEEPSEEK_TUI_GITHUB_REPO` or `DEEPSEEK_GITHUB_REPO` | Override the source repo. Defaults to `Hmbown/CodeWhale`. |
+| `DEEPSEEK_TUI_RELEASE_BASE_URL` | Use an internal or mirrored release-asset directory when GitHub Releases is unavailable. The directory must contain `codewhale-artifacts-sha256.txt` and the platform binaries. |
+| `DEEPSEEK_TUI_FORCE_DOWNLOAD=1` | Force download even when the cached binary is already present. |
+| `DEEPSEEK_TUI_DISABLE_INSTALL=1` | Skip install-time download. |
+| `DEEPSEEK_TUI_OPTIONAL_INSTALL=1` | Make install-time retryable download failures warn and exit `0` instead of failing `npm install`. |
 
 ## Release integrity
 

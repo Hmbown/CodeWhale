@@ -27,12 +27,16 @@ jobs:
           node-version: 20
       - name: Check version drift
         run: ./scripts/release/check-versions.sh
+      - name: Check OHOS dependency graph
+        run: ./scripts/release/check-ohos-deps.sh
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -50,6 +54,22 @@ jobs:
         run: cargo clippy --workspace --all-features --locked -- -D warnings
       - name: Check provider registry drift
         run: python3 scripts/check-provider-registry.py
+      - name: Check harvested contributor credit
+        if: github.event_name != 'schedule'
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            RANGE="origin/${{ github.base_ref }}..HEAD"
+          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          else
+            RANGE="HEAD~1..HEAD"
+          fi
+          python3 scripts/check-coauthor-trailers.py \
+            --author-map .github/AUTHOR_MAP \
+            --range "$RANGE" \
+            --check-authors
       - name: Linux clippy location
         run: echo "Linux clippy/test gates run on CNB for mirrored fix/*, rebrand/*, work/v*, and main branches."
 

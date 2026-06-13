@@ -20,7 +20,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface | together | openai-codex | anthropic
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -89,6 +89,26 @@ check_for_updates = true
 # update_uri = "https://internal.mirror.example/codewhale/releases/latest"
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Hotbar slots (#2061 / #2064)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Optional 1-8 sidebar hotbar bindings. When no [[hotbar]] tables are present,
+# the TUI uses built-in defaults:
+#   1 voice.toggle      2 session.compact   3 mode.plan        4 mode.agent
+#   5 mode.yolo         6 palette.open      7 sidebar.toggle   8 trust.toggle
+#
+# Invalid slots are skipped with a warning, duplicate slots use the last entry,
+# and unknown actions are preserved so the UI can show a disabled placeholder.
+#
+# [[hotbar]]
+# slot = 1
+# label = "voice"
+# action = "voice.toggle"
+#
+# [[hotbar]]
+# slot = 2
+# action = "session.compact"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────────
 # New installs write product state under ~/.codewhale/. Existing ~/.deepseek/
@@ -144,11 +164,12 @@ memory_path = "~/.codewhale/memory.md"
 allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
+# prompt_suggestion = true  # opt-in: show ghost-text follow-up question in composer after each turn
 
 # Typed permission rules live in a sibling `permissions.toml` file, not in
-# config.toml. This schema slice is ask-only and is parsed for follow-up
-# approval-flow wiring; allow/deny records and UI persistence are intentionally
-# out of scope here.
+# config.toml. This shape is ask-only and feeds the execution policy engine;
+# allow/deny records, glob expansion, and UI persistence are intentionally out
+# of scope here.
 #
 # Example ~/.codewhale/permissions.toml:
 #
@@ -239,7 +260,7 @@ max_subagents = 10 # optional (1-20)
 #   Volcengine Ark: VOLCENGINE_API_KEY (or VOLCENGINE_ARK_API_KEY / ARK_API_KEY), VOLCENGINE_BASE_URL, VOLCENGINE_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
 #   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or XIAOMI_API_KEY / MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
-#                Token Plan keys (`tp-...`) default to https://token-plan-sgp.xiaomimimo.com/v1.
+#                Token Plan: XIAOMI_MIMO_TOKEN_PLAN_API_KEY (or MIMO_TOKEN_PLAN_API_KEY), XIAOMI_MIMO_MODE/MIMO_MODE
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
@@ -248,7 +269,7 @@ max_subagents = 10 # optional (1-20)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
-#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL, HUGGINGFACE_MODEL
+#   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL (or HF_BASE_URL), HUGGINGFACE_MODEL (or HF_MODEL)
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
 # set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
@@ -274,6 +295,7 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 # path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
+# insecure_skip_tls_verify = true # last resort for private gateways; prefer SSL_CERT_FILE
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
 [providers.nvidia_nim]
@@ -292,6 +314,7 @@ max_subagents = 10 # optional (1-20)
 # Gateway example:
 # base_url = "https://gateway.example/v1"
 # model = "your-deepseek-compatible-model"
+# insecure_skip_tls_verify = true # last resort for private gateways; prefer SSL_CERT_FILE
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]
@@ -317,10 +340,10 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://openrouter.ai/api/v1"
 # model = "deepseek/deepseek-v4-pro"
 # Recent large model IDs also accepted here include arcee-ai/trinity-large-thinking,
-# xiaomi/mimo-v2.5-pro, qwen/qwen3.6-flash, qwen/qwen3.6-35b-a3b,
-# qwen/qwen3.6-max-preview, qwen/qwen3.6-27b, qwen/qwen3.6-plus,
-# google/gemma-4-31b-it, z-ai/glm-5.1, moonshotai/kimi-k2.6, and
-# nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free.
+# minimax/minimax-m3, minimax/minimax-2.7, xiaomi/mimo-v2.5-pro, qwen/qwen3.6-flash,
+# qwen/qwen3.6-35b-a3b, qwen/qwen3.6-max-preview, qwen/qwen3.6-27b, qwen/qwen3.6-plus,
+# qwen/qwen3.7-max, google/gemma-4-31b-it, z-ai/glm-5.1, moonshotai/kimi-k2.6,
+# nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, and nvidia/nemotron-3-ultra.
 
 # Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
 [providers.xiaomi_mimo]
@@ -329,6 +352,11 @@ max_subagents = 10 # optional (1-20)
 # # base_url = "https://api.xiaomimimo.com/v1"           # Pay-as-you-go / sk- keys
 # model = "mimo-v2.5-pro"              # chat/reasoning
 # Chat model IDs: mimo-v2.5-pro, mimo-v2.5
+# Token Plan subscriptions use separate tp-* API keys plus api-key auth.
+# mode = "token-plan-sgp"              # default Token Plan endpoint
+# mode = "token-plan-cn"               # China cluster
+# mode = "token-plan-ams"              # Europe cluster
+# mode = "pay-as-you-go"               # standard API / sk- keys
 # TTS aliases are also accepted by `codewhale speech`: tts, voice-design, voice-clone
 # TTS model IDs: mimo-v2.5-tts, mimo-v2.5-tts-voicedesign, mimo-v2.5-tts-voiceclone, mimo-v2-tts
 
@@ -349,6 +377,13 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_SILICONFLOW_API_KEY"
 # base_url = "https://api.siliconflow.com/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# SiliconFlow China-hosted DeepSeek V4 (https://siliconflow.cn)
+# Falls back to [providers.siliconflow] for api_key / base_url / model when unset.
+[providers.siliconflow-CN]
+# api_key = "YOUR_SILICONFLOW_API_KEY"
+# base_url = "https://api.siliconflow.cn/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"
 
 # Arcee AI direct OpenAI-compatible endpoint (https://docs.arcee.ai)
 [providers.arcee]
@@ -385,10 +420,43 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
 
 # Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
+# Env var aliases: HUGGINGFACE_API_KEY / HF_TOKEN, HUGGINGFACE_BASE_URL / HF_BASE_URL,
+#                  HUGGINGFACE_MODEL / HF_MODEL
 [providers.huggingface]
 # api_key = "YOUR_HF_TOKEN"
 # base_url = "https://router.huggingface.co/v1"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Together AI Provider (https://www.together.ai/)
+# Env var aliases: TOGETHER_API_KEY, TOGETHER_BASE_URL, TOGETHER_MODEL
+[providers.together]
+# api_key = "YOUR_TOGETHER_API_KEY"
+# base_url = "https://api.together.xyz/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# OpenAI Codex (ChatGPT) Provider — EXPERIMENTAL
+# Reuses your existing ChatGPT/Codex CLI OAuth login. Run `codex login` first;
+# CodeWhale reads and refreshes the access token from ~/.codex/auth.json. No API
+# key is stored here. Talks to the OpenAI Responses API at /codex/responses.
+# Env var aliases: OPENAI_CODEX_ACCESS_TOKEN / CODEX_ACCESS_TOKEN (token override),
+#   OPENAI_CODEX_BASE_URL / CODEX_BASE_URL, OPENAI_CODEX_MODEL / CODEX_MODEL,
+#   OPENAI_CODEX_ACCOUNT_ID / CODEX_ACCOUNT_ID, OPENAI_CODEX_AUTH_FILE, CODEX_HOME
+[providers.openai_codex]
+# base_url = "https://chatgpt.com/backend-api"
+# model = "gpt-5.5"
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Anthropic Provider (native Messages API)
+# Talks to https://api.anthropic.com/v1/messages with x-api-key auth — not an
+# OpenAI-compatible route. Models: claude-opus-4-8, claude-sonnet-4-6 (default),
+# claude-haiku-4-5. Env vars: ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL,
+# ANTHROPIC_MODEL.
+[providers.anthropic]
+# api_key = "sk-ant-..."
+# base_url = "https://api.anthropic.com"
+# model = "claude-sonnet-4-6"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
@@ -399,7 +467,7 @@ max_subagents = 10 # optional (1-20)
 # API-backed search.
 #
 # [search]
-# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine | sofya
 #                            # duckduckgo: HTML scrape with Bing fallback
 #                            # bing:       HTML scrape, no API key
 #                            # tavily:     https://tavily.com — AI search, needs api_key
@@ -409,15 +477,22 @@ max_subagents = 10 # optional (1-20)
 #                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
 #                            # volcengine: 火山引擎 Ark web_search (免费 2 万次/月), 需 api_key
 #                            #             也回退到 VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY 环境变量
-# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, and baidu; optional for metaso
+#                            # sofya:      https://sofya.co — AI search returning full page
+#                            #             content (not snippets), needs api_key (ay_live_...);
+#                            #             also falls back to the SOFYA_API_KEY env var
+# base_url = "https://search.example/html/" # optional DuckDuckGo-compatible HTML endpoint
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, baidu, volcengine, and sofya; optional for metaso
 #                             # WARNING: treat config.toml like a secret file when
 #                             # storing API keys. Prefer env vars for local smoke tests.
 #
 # Env-var overrides:
 #   DEEPSEEK_SEARCH_PROVIDER → search.provider
 #   DEEPSEEK_SEARCH_API_KEY  → search.api_key
+#   CODEWHALE_SEARCH_BASE_URL → search.base_url
+#   DEEPSEEK_SEARCH_BASE_URL  → search.base_url (legacy alias)
 #   METASO_API_KEY           → metaso key fallback
 #   BAIDU_SEARCH_API_KEY     → baidu key fallback
+#   SOFYA_API_KEY            → sofya key fallback
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
@@ -469,6 +544,7 @@ max_subagents = 10 # optional (1-20)
 alternate_screen = "auto"   # auto/always use the TUI screen; never uses terminal scrollback
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
+stream_chunk_timeout_secs = 300 # optional SSE idle timeout per chunk (0 = default, 1-3600)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
 # Ordered footer chips shown in the TUI status line. Omit the key to use the
 # built-in default; set [] to hide all configurable chips. You can also edit
@@ -589,6 +665,26 @@ deepseek_v4_flash_prior = 4.2
 fallback_default_prior = 3.8
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Harness Profiles (preview schema; runtime consumption follows later)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Harness profiles let future CodeWhale runtime slices select model-specific
+# prompt, context, tool, and subagent posture. v0.9 parses, validates, and can
+# resolve profiles for tests/status plumbing, but normal Agent and WhaleFlow
+# runs do not silently promote or mutate behavior from these profiles yet.
+#
+# [[harness_profiles]]
+# provider_route = "deepseek"
+# model_pattern = "deepseek-v4.*"
+#
+# [harness_profiles.posture]
+# kind = "cache-heavy"          # standard | cache-heavy | lean | custom
+# max_subagents = 10            # 0 means runtime default
+# prefer_codebase_search = false
+# compaction_strategy = "prefix-cache" # default | prefix-cache | aggressive
+# tool_surface = "full"              # full | read-only | auto
+# safety_posture = "standard"        # standard | strict | permissive
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Profile Example (for multiple environments)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Select a profile with `deepseek --profile <name>` or `DEEPSEEK_PROFILE=<name>`.
@@ -617,21 +713,20 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # method        = "auto"   # auto | osc9 | bel | off
 #                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm.
 #                       On macOS / Linux, falls back to BEL.
-#                       On Windows, falls back to "off" — BEL maps to the
-#                       system error chime (SystemAsterisk / MB_OK), which
-#                       sounds like an error popup. Set method = "bel"
-#                       explicitly to opt back in (#583).
+#                       On Windows, BEL is routed through MessageBeep(MB_OK).
 #                 osc9: \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification)
 #                 bel:  plain \x07 beep
 #                 off:  disable entirely
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
-# completion_sound = "beep" # off | beep | bell — sound on turn completion (✅ marker)
+# completion_sound = "beep" # off | beep | bell | file — sound on turn completion (✅ marker)
+# sound_file = "E:\\google\\downloads\\notify.wav" # WAV used when completion_sound = "file" (Windows)
 [notifications]
 # method = "auto"
 # threshold_secs = 30
 # include_summary = false
 # completion_sound = "beep"
+# sound_file = "E:\\google\\downloads\\notify.wav"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workspace Snapshots (#137)

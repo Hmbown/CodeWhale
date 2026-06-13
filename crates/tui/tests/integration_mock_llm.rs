@@ -79,6 +79,7 @@ fn assistant_thinking(thinking: &str, text: &str) -> Message {
         content: vec![
             ContentBlock::Thinking {
                 thinking: thinking.to_string(),
+                signature: None,
             },
             ContentBlock::Text {
                 text: text.to_string(),
@@ -246,7 +247,7 @@ async fn reasoning_replay_required_on_subsequent_turn() {
         .content
         .iter()
         .find_map(|b| match b {
-            ContentBlock::Thinking { thinking } => Some(thinking.clone()),
+            ContentBlock::Thinking { thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .expect("Thinking block present");

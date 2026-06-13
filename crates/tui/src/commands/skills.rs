@@ -13,8 +13,30 @@ use crate::tui::history::HistoryCell;
 
 use super::CommandResult;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_HOME_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(test))]
 fn discover_visible_skills(app: &App) -> SkillRegistry {
     crate::skills::discover_for_workspace_and_dir(&app.workspace, &app.skills_dir)
+}
+
+#[cfg(test)]
+fn discover_visible_skills(app: &App) -> SkillRegistry {
+    TEST_HOME_DIR.with(|home| {
+        if let Some(home) = home.borrow().as_deref() {
+            crate::skills::discover_for_workspace_and_dir_with_home(
+                &app.workspace,
+                &app.skills_dir,
+                Some(home),
+            )
+        } else {
+            crate::skills::discover_for_workspace_and_dir(&app.workspace, &app.skills_dir)
+        }
+    })
 }
 
 fn render_skill_warnings(registry: &SkillRegistry) -> String {
@@ -601,6 +623,7 @@ mod tests {
         _lock: std::sync::MutexGuard<'static, ()>,
         home_prev: Option<OsString>,
         userprofile_prev: Option<OsString>,
+        test_home_prev: Option<std::path::PathBuf>,
     }
 
     impl IsolatedHome {
@@ -616,10 +639,12 @@ mod tests {
                 std::env::set_var("HOME", &home);
                 std::env::set_var("USERPROFILE", &home);
             }
+            let test_home_prev = TEST_HOME_DIR.with(|slot| slot.replace(Some(home)));
             Self {
                 _lock: lock,
                 home_prev,
                 userprofile_prev,
+                test_home_prev,
             }
         }
 
@@ -634,6 +659,9 @@ mod tests {
 
     impl Drop for IsolatedHome {
         fn drop(&mut self) {
+            TEST_HOME_DIR.with(|slot| {
+                *slot.borrow_mut() = self.test_home_prev.take();
+            });
             // SAFETY: the shared test env mutex is still held while Drop runs.
             unsafe {
                 Self::restore_var("HOME", self.home_prev.take());

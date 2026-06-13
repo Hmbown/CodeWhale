@@ -27,6 +27,9 @@ pub(super) fn refresh_if_needed(app: &mut App, now: Instant, allow_refresh: bool
     if let Ok(mut cell) = app.workspace_context_cell.lock()
         && let Some(ctx) = cell.take()
     {
+        if app.workspace_context.as_deref() != Some(ctx.as_str()) {
+            app.needs_redraw = true;
+        }
         app.workspace_context = Some(ctx);
     }
 
@@ -61,6 +64,17 @@ pub(super) fn refresh_if_needed(app: &mut App, now: Instant, allow_refresh: bool
         app.workspace_context = collect(&app.workspace);
     }
     app.workspace_context_refreshed_at = Some(now);
+}
+
+/// Force a workspace-context re-query on the next render tick, bypassing the
+/// normal TTL. Keeps the current value visible while the background git query
+/// is running.
+pub(super) fn refresh_now(app: &mut App, now: Instant) {
+    if let Ok(mut cell) = app.workspace_context_cell.lock() {
+        *cell = None;
+    }
+    app.workspace_context_refreshed_at = None;
+    refresh_if_needed(app, now, true);
 }
 
 #[derive(Debug, Default, Clone, Copy)]

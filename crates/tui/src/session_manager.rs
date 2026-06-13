@@ -1003,6 +1003,8 @@ fn format_age(dt: &DateTime<Utc>) -> String {
 mod tests {
     use super::*;
     use crate::models::ContentBlock;
+    use crate::tools::plan::StepStatus;
+    use crate::tui::history::{HistoryCell, ToolCell, history_cells_from_message};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1104,6 +1106,63 @@ mod tests {
         let loaded = manager.load_session(&session_id).expect("load");
         assert_eq!(loaded.metadata.id, session_id);
         assert_eq!(loaded.messages.len(), 2);
+    }
+
+    #[test]
+    fn save_and_load_session_preserves_rich_update_plan_tool_payload() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let messages = vec![
+            make_test_message("user", "plan this carefully"),
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "plan-1".to_string(),
+                    name: "update_plan".to_string(),
+                    input: serde_json::json!({
+                        "objective": "Make Plan mode reviewable",
+                        "sources_used": ["gh issue view 2691"],
+                        "critical_files": ["crates/tui/src/tools/plan.rs"],
+                        "constraints": ["Preserve legacy update_plan payloads"],
+                        "verification_plan": "Run focused plan tests",
+                        "handoff_packet": "Next agent should inspect replay",
+                        "plan": [
+                            { "step": "render replay card", "status": "completed" }
+                        ]
+                    }),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "plan-1".to_string(),
+                    content: "Plan updated".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        let session = create_saved_session(&messages, "deepseek-v4-flash", tmp.path(), 42, None);
+        let session_id = session.metadata.id.clone();
+
+        manager.save_session(&session).expect("save");
+        let loaded = manager.load_session(&session_id).expect("load");
+
+        assert_eq!(loaded.messages.len(), 3);
+        let cells = history_cells_from_message(&loaded.messages[1]);
+        let Some(HistoryCell::Tool(ToolCell::PlanUpdate(cell))) = cells.first() else {
+            panic!("expected loaded update_plan to replay as a PlanUpdate cell");
+        };
+        assert_eq!(
+            cell.snapshot.objective.as_deref(),
+            Some("Make Plan mode reviewable")
+        );
+        assert_eq!(
+            cell.snapshot.critical_files,
+            vec!["crates/tui/src/tools/plan.rs"]
+        );
+        assert_eq!(cell.snapshot.items[0].status, StepStatus::Completed);
     }
 
     #[test]

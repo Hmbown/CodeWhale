@@ -1,5 +1,5 @@
 {
-  "name": "DeepSeek TUI",
+  "name": "CodeWhale",
   "dockerFile": "../Dockerfile",
   "build": {
     "args": {
@@ -23,12 +23,12 @@
     "DEEPSEEK_API_KEY": "${localEnv:DEEPSEEK_API_KEY}"
   },
   "mounts": [
-    "source=${localEnv:HOME}/.deepseek,target=/home/deepseek/.deepseek,type=bind,consistency=cached"
+    "source=${localEnv:HOME}/.codewhale,target=/home/codewhale/.codewhale,type=bind,consistency=cached"
   ],
   "features": {
     "ghcr.io/devcontainers/features/rust:1": {},
     "ghcr.io/devcontainers/features/git:1": {}
   },
   "postCreateCommand": "cargo build",
-  "remoteUser": "deepseek"
+  "remoteUser": "codewhale"
 }

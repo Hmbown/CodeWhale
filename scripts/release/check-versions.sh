@@ -61,10 +61,10 @@ if [[ -n "${internal_dep_drift}" ]]; then
   fail=1
 fi
 
-# 4) Packaged TUI changelog copy.
-if ! cmp -s CHANGELOG.md crates/tui/CHANGELOG.md; then
-  echo "::error::crates/tui/CHANGELOG.md must match root CHANGELOG.md for crates.io packaging." >&2
-  echo "Run: cp CHANGELOG.md crates/tui/CHANGELOG.md" >&2
+# 4) Packaged TUI changelog slice (recent releases embedded in the binary).
+if ! ./scripts/sync-changelog.sh --check >/dev/null 2>&1; then
+  echo "::error::crates/tui/CHANGELOG.md is out of date with the root CHANGELOG.md slice." >&2
+  echo "Run: ./scripts/sync-changelog.sh" >&2
   fail=1
 fi
 
@@ -96,10 +96,22 @@ if [[ -z "${compare_line}" ]]; then
   fail=1
 fi
 
+unreleased_section="$(
+  awk '
+    index($0, "## [Unreleased]") == 1 { in_section = 1; print; next }
+    in_section && /^## \[/ { exit }
+    in_section { print }
+  ' CHANGELOG.md
+)"
+credit_sections="${current_section}
+${unreleased_section}"
+
 # 6) Contributor-credit cross-check for README additions on the release branch.
 # This cannot prove every external PR author has been credited, but it does
 # catch the common release-polish failure mode: adding a README contributor row
-# without mentioning that credit/correction in the current release entry.
+# without mentioning that credit/correction in the current release entry. While
+# a release branch is still unbumped, `[Unreleased]` is also a valid credit
+# surface.
 previous_tag=""
 current_tag="v${workspace_version}"
 if [[ "${compare_line}" =~ compare/(v[0-9]+\.[0-9]+\.[0-9]+)\.\.\.${current_tag} ]]; then
@@ -114,8 +126,8 @@ if [[ -n "${previous_tag}" ]]; then
       [[ -z "${line}" ]] && continue
       handle="$(sed -E 's#.*github.com/([^)/]+).*#\1#' <<<"${line}")"
       if [[ -n "${handle}" && "${handle}" != "${line}" ]]; then
-        if ! grep -Fq "github.com/${handle}" <<<"${current_section}" && ! grep -Fq "@${handle}" <<<"${current_section}"; then
-          echo "::error::README.md adds contributor @${handle}, but CHANGELOG.md ${workspace_version} does not mention that credit." >&2
+        if ! grep -Fq "github.com/${handle}" <<<"${credit_sections}" && ! grep -Fq "@${handle}" <<<"${credit_sections}"; then
+          echo "::error::README.md adds contributor @${handle}, but CHANGELOG.md ${workspace_version} or [Unreleased] does not mention that credit." >&2
           fail=1
         fi
       fi
@@ -137,7 +149,24 @@ if grep -qF "hmbown.dev@gmail.com" SECURITY.md; then
   fail=1
 fi
 
-# 8) Cargo.lock in sync.
+# 8) Generated web facts carry the workspace version.
+facts_version="$(grep -oE '"version": "[0-9]+\.[0-9]+\.[0-9]+"' web/lib/facts.generated.ts | head -n1 | sed -E 's/.*"([0-9.]+)".*/\1/')"
+if [[ "${facts_version}" != "${workspace_version}" ]]; then
+  echo "::error::web/lib/facts.generated.ts version (${facts_version}) does not match workspace (${workspace_version}). Run: node web/scripts/derive-facts.mjs" >&2
+  fail=1
+fi
+
+# 9) README install-tag examples point at the current release.
+for readme in README.md README.zh-CN.md README.ja-JP.md README.vi.md; do
+  stale_tags="$(grep -nE -- "--tag v[0-9]+\.[0-9]+\.[0-9]+" "${readme}" | grep -v -- "--tag v${workspace_version}" || true)"
+  if [[ -n "${stale_tags}" ]]; then
+    echo "::error::${readme} has install examples pinned to an old tag (want v${workspace_version}):" >&2
+    echo "${stale_tags}" >&2
+    fail=1
+  fi
+done
+
+# 10) Cargo.lock in sync.
 if ! cargo metadata --locked --format-version 1 --no-deps >/dev/null 2>&1; then
   echo "::error::Cargo.lock is out of sync with the manifests. Run 'cargo update -p codewhale-tui' or 'cargo build' and commit the result." >&2
   fail=1

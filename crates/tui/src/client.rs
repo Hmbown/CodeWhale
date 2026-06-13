@@ -61,7 +61,10 @@ pub(super) fn from_api_tool_name(name: &str) -> String {
                     break;
                 }
             }
-            if let Ok(code) = u32::from_str_radix(&hex, 16)
+            // Only decode if we got exactly 6 hex digits (matching encoder output).
+            // Fewer digits means a truncated/malformed sequence — pass through as-is.
+            if hex.len() == 6
+                && let Ok(code) = u32::from_str_radix(&hex, 16)
                 && let Some(decoded) = std::char::from_u32(code)
             {
                 if let Some('-') = iter.peek().copied() {
@@ -158,6 +161,7 @@ pub struct DeepSeekClient {
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
     path_suffix: Option<String>,
+    pub(super) stream_idle_timeout: Duration,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -325,6 +329,7 @@ impl Clone for DeepSeekClient {
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
             path_suffix: self.path_suffix.clone(),
+            stream_idle_timeout: self.stream_idle_timeout,
         }
     }
 }
@@ -581,7 +586,9 @@ impl DeepSeekClient {
         validate_base_url_security(&base_url)?;
         let retry = config.retry_policy();
         let default_model = config.default_model();
+        let stream_idle_timeout = Duration::from_secs(config.stream_chunk_timeout_secs());
         let http_headers = config.http_headers();
+        let insecure_skip_tls_verify = config.insecure_skip_tls_verify();
         let path_suffix = config
             .provider_config_for(api_provider)
             .and_then(|p| p.path_suffix.clone());
@@ -597,12 +604,24 @@ impl DeepSeekClient {
                 http_headers.len()
             ));
         }
+        if insecure_skip_tls_verify {
+            logging::warn(format!(
+                "TLS certificate verification is disabled for provider {}; prefer SSL_CERT_FILE with a trusted custom CA bundle when possible",
+                api_provider.as_str()
+            ));
+        }
         logging::info(format!(
             "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client = Self::build_http_client(&api_key, &http_headers)?;
+        let http_client = Self::build_http_client(
+            &api_key,
+            &http_headers,
+            api_provider,
+            &base_url,
+            insecure_skip_tls_verify,
+        )?;
 
         Ok(Self {
             http_client,
@@ -614,21 +633,37 @@ impl DeepSeekClient {
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
             path_suffix,
+            stream_idle_timeout,
         })
     }
 
     fn build_http_client(
         api_key: &str,
         extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
+        insecure_skip_tls_verify: bool,
     ) -> Result<reqwest::Client> {
-        let headers = build_default_headers(api_key, extra_headers)?;
-        let mut builder = reqwest::Client::builder()
-            .default_headers(headers)
-            .user_agent(concat!(
+        let headers = build_default_headers(api_key, extra_headers, api_provider, base_url)?;
+        // The ChatGPT Codex backend sits behind Cloudflare bot protection that
+        // only admits the Codex CLI's user agent; present a codex_cli_rs UA on
+        // that path so the request is handled like the official client.
+        let user_agent: &str = if api_provider == ApiProvider::OpenaiCodex {
+            concat!(
+                "codex_cli_rs/0.137.0 (CodeWhale ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            )
+        } else {
+            concat!(
                 "Mozilla/5.0 (compatible; codewhale/",
                 env!("CARGO_PKG_VERSION"),
                 "; +https://github.com/Hmbown/CodeWhale)"
-            ))
+            )
+        };
+        let mut builder = crate::tls::reqwest_client_builder()
+            .default_headers(headers)
+            .user_agent(user_agent)
             .connect_timeout(Duration::from_secs(30))
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .http2_keep_alive_interval(Some(Duration::from_secs(15)))
@@ -643,6 +678,9 @@ impl DeepSeekClient {
         {
             builder = add_extra_root_certs(builder, &cert_path);
         }
+        if insecure_skip_tls_verify {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
         builder.build().map_err(Into::into)
     }
 
@@ -651,21 +689,63 @@ impl DeepSeekClient {
         api_key: &str,
         extra_headers: &HashMap<String, String>,
     ) -> Result<HeaderMap> {
-        build_default_headers(api_key, extra_headers)
+        build_default_headers(
+            api_key,
+            extra_headers,
+            ApiProvider::Deepseek,
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+        )
+    }
+
+    #[cfg(test)]
+    fn default_headers_for_provider(
+        api_key: &str,
+        extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
+    ) -> Result<HeaderMap> {
+        build_default_headers(api_key, extra_headers, api_provider, base_url)
     }
 }
 
 fn build_default_headers(
     api_key: &str,
     extra_headers: &HashMap<String, String>,
+    api_provider: ApiProvider,
+    base_url: &str,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    if !api_key.trim().is_empty() {
+    let api_key = api_key.trim();
+    if api_provider == ApiProvider::Anthropic {
+        // #3014: the Messages API authenticates with `x-api-key` (never
+        // `Authorization: Bearer`) and pins the wire contract via
+        // `anthropic-version`.
         headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_key}"))?,
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static("2023-06-01"),
         );
+    }
+    let auth_header_name = if !api_key.is_empty() && api_provider == ApiProvider::Anthropic {
+        Some(HeaderName::from_static("x-api-key"))
+    } else if !api_key.is_empty()
+        && api_provider == ApiProvider::XiaomiMimo
+        && (xiaomi_mimo_base_url_uses_token_plan(base_url)
+            || xiaomi_mimo_api_key_uses_token_plan(api_key))
+    {
+        Some(HeaderName::from_static("api-key"))
+    } else if !api_key.is_empty() {
+        Some(AUTHORIZATION)
+    } else {
+        None
+    };
+    if let Some(header_name) = auth_header_name.as_ref() {
+        let header_value = if *header_name == AUTHORIZATION {
+            HeaderValue::from_str(&format!("Bearer {api_key}"))?
+        } else {
+            HeaderValue::from_str(api_key)?
+        };
+        headers.insert(header_name.clone(), header_value);
     }
     for (name, value) in extra_headers {
         let name = name.trim();
@@ -674,12 +754,33 @@ fn build_default_headers(
             continue;
         }
         let header_name = HeaderName::from_bytes(name.as_bytes())?;
-        if header_name == AUTHORIZATION || header_name == CONTENT_TYPE {
+        if header_name == AUTHORIZATION
+            || header_name == CONTENT_TYPE
+            || auth_header_name.as_ref() == Some(&header_name)
+        {
             continue;
         }
         headers.insert(header_name, HeaderValue::from_str(value)?);
     }
     Ok(headers)
+}
+
+fn xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
+    let normalized = base_url.trim().to_ascii_lowercase();
+    let without_scheme = normalized
+        .strip_prefix("https://")
+        .or_else(|| normalized.strip_prefix("http://"))
+        .unwrap_or(&normalized);
+    let host = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = host.split(':').next().unwrap_or(host);
+    host.starts_with("token-plan-") && host.ends_with(".xiaomimimo.com")
+}
+
+fn xiaomi_mimo_api_key_uses_token_plan(api_key: &str) -> bool {
+    api_key.trim_start().starts_with("tp-")
 }
 
 impl DeepSeekClient {
@@ -771,7 +872,10 @@ impl DeepSeekClient {
             );
             anyhow::bail!("Failed to list models: HTTP {status}: {error_text}");
         }
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read models response body")?;
 
         parse_models_response(&response_text)
     }
@@ -852,7 +956,10 @@ impl DeepSeekClient {
             anyhow::bail!("Speech synthesis failed: HTTP {status}: {error_text}");
         }
 
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read speech synthesis response body")?;
         let payload: Value = serde_json::from_str(&response_text)
             .context("Failed to parse speech synthesis response JSON")?;
         let (audio_bytes, transcript) = parse_speech_audio_response(&payload)?;
@@ -904,6 +1011,8 @@ impl DeepSeekClient {
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
+                // Consume the response body so the connection can be returned to the pool.
+                let _ = resp.text().await;
                 self.mark_request_success().await;
                 logging::info("Recovery probe succeeded");
             }
@@ -1021,6 +1130,8 @@ impl LlmClient for DeepSeekClient {
         let response = self.http_client.get(health_url).send().await;
         match response {
             Ok(resp) if resp.status().is_success() => {
+                // Consume the response body so the connection can be returned to the pool.
+                let _ = resp.text().await;
                 self.mark_request_success().await;
                 Ok(true)
             }
@@ -1038,6 +1149,12 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
+        if self.api_provider == ApiProvider::OpenaiCodex {
+            return self.handle_responses_message(request).await;
+        }
+        if self.api_provider == ApiProvider::Anthropic {
+            return self.handle_anthropic_message(request).await;
+        }
         self.create_message_chat(&request).await
     }
 
@@ -1045,6 +1162,12 @@ impl LlmClient for DeepSeekClient {
         &self,
         request: MessageRequest,
     ) -> Result<crate::llm_client::StreamEventBox> {
+        if self.api_provider == ApiProvider::OpenaiCodex {
+            return self.handle_responses_stream(request).await;
+        }
+        if self.api_provider == ApiProvider::Anthropic {
+            return self.handle_anthropic_stream(request).await;
+        }
         self.handle_chat_completion_stream(request).await
     }
 }
@@ -1119,8 +1242,13 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
-            | ApiProvider::Volcengine => {
+            | ApiProvider::Volcengine
+            | ApiProvider::Together
+            | ApiProvider::Atlascloud => {
                 body["thinking"] = json!({ "type": "disabled" });
+            }
+            ApiProvider::OpenaiCodex => {
+                // OpenAI Codex uses Responses API — thinking handled differently
             }
             ApiProvider::Fireworks => {}
             // vLLM is an OpenAI-protocol server, not an Anthropic-protocol one.
@@ -1138,12 +1266,22 @@ pub(super) fn apply_reasoning_effort(
                 });
             }
             ApiProvider::Openai
-            | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Arcee
-            | ApiProvider::Huggingface
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            | ApiProvider::Huggingface => {}
+            ApiProvider::Moonshot => {
+                // #3024: Kimi models accept thinking enable/disable.
+                body["thinking"] = json!({ "type": "disabled" });
+            }
+            ApiProvider::Ollama => {
+                // #3024: Ollama OpenAI-compat endpoint accepts think param.
+                body["think"] = json!(false);
+            }
+            ApiProvider::Anthropic => {
+                // #3014: thinking/effort shaping happens natively inside
+                // client/anthropic.rs (adaptive thinking + output_config),
+                // not via OpenAI-dialect fields.
+            }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,
@@ -1157,14 +1295,15 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
-            | ApiProvider::Volcengine => {
+            | ApiProvider::Volcengine
+            | ApiProvider::Atlascloud => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            // OpenRouter/Novita: pass through the actual user-chosen value.
+            // OpenRouter/Novita/Together: pass through the actual user-chosen value.
             // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
             // DeepSeek models hosted there accept those directly.
-            ApiProvider::Openrouter | ApiProvider::Novita => {
+            ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
                 let value = match normalized.as_str() {
                     "low" | "minimal" => "low",
                     "medium" | "mid" => "medium",
@@ -1201,11 +1340,20 @@ pub(super) fn apply_reasoning_effort(
                 };
                 body["reasoning_effort"] = json!(value);
             }
-            ApiProvider::Openai
-            | ApiProvider::Atlascloud
-            | ApiProvider::WanjieArk
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            ApiProvider::Openai | ApiProvider::WanjieArk | ApiProvider::OpenaiCodex => {}
+            ApiProvider::Moonshot => {
+                // #3024: Kimi models accept thinking enable.
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Ollama => {
+                // #3024: Ollama think param.
+                body["think"] = json!(true);
+            }
+            ApiProvider::Anthropic => {
+                // #3014: thinking/effort shaping happens natively inside
+                // client/anthropic.rs (adaptive thinking + output_config),
+                // not via OpenAI-dialect fields.
+            }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -1219,11 +1367,12 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
-            | ApiProvider::Volcengine => {
+            | ApiProvider::Volcengine
+            | ApiProvider::Atlascloud => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Openrouter | ApiProvider::Novita => {
+            ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
                 body["reasoning_effort"] = json!("xhigh");
                 body["thinking"] = json!({ "type": "enabled" });
             }
@@ -1244,11 +1393,20 @@ pub(super) fn apply_reasoning_effort(
                 // "max" to "high" instead of sending an invalid value.
                 body["reasoning_effort"] = json!("high");
             }
-            ApiProvider::Openai
-            | ApiProvider::Atlascloud
-            | ApiProvider::WanjieArk
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            ApiProvider::Openai | ApiProvider::WanjieArk | ApiProvider::OpenaiCodex => {}
+            ApiProvider::Moonshot => {
+                // #3024: Kimi models accept thinking enable.
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Ollama => {
+                // #3024: Ollama think param.
+                body["think"] = json!(true);
+            }
+            ApiProvider::Anthropic => {
+                // #3014: thinking/effort shaping happens natively inside
+                // client/anthropic.rs (adaptive thinking + output_config),
+                // not via OpenAI-dialect fields.
+            }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -1320,8 +1478,8 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
     });
 
     Usage {
-        input_tokens: input_tokens as u32,
-        output_tokens: output_tokens as u32,
+        input_tokens: input_tokens.min(u64::from(u32::MAX)) as u32,
+        output_tokens: output_tokens.min(u64::from(u32::MAX)) as u32,
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
         reasoning_tokens,
@@ -1360,7 +1518,10 @@ impl DeepSeekClient {
             );
             anyhow::bail!("FIM API error: HTTP {status}: {error_text}");
         }
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read FIM API response body")?;
         let value: serde_json::Value =
             serde_json::from_str(&response_text).context("Failed to parse FIM API response")?;
         let text = value
@@ -1371,7 +1532,9 @@ impl DeepSeekClient {
     }
 }
 
+mod anthropic;
 mod chat;
+mod responses;
 
 pub(crate) use chat::{CacheWarmupKey, PromptInspection};
 
@@ -1629,11 +1792,115 @@ mod tests {
     }
 
     #[test]
+    fn build_http_client_accepts_default_tls_verification() {
+        let client = DeepSeekClient::build_http_client(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::Deepseek,
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+            false,
+        );
+
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn build_http_client_accepts_provider_scoped_tls_skip_verify() {
+        let client = DeepSeekClient::build_http_client(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::Openai,
+            crate::config::DEFAULT_OPENAI_BASE_URL,
+            true,
+        );
+
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn client_stream_idle_timeout_uses_tui_config() {
+        let client = DeepSeekClient::new(&Config {
+            api_key: Some("sk-test".to_string()),
+            tui: Some(crate::config::TuiConfig {
+                stream_chunk_timeout_secs: Some(777),
+                ..crate::config::TuiConfig::default()
+            }),
+            ..Config::default()
+        })
+        .expect("client");
+
+        assert_eq!(client.stream_idle_timeout, Duration::from_secs(777));
+    }
+
+    #[test]
+    fn xiaomi_mimo_token_plan_endpoint_uses_api_key_header() {
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "tp-test",
+            &HashMap::new(),
+            ApiProvider::XiaomiMimo,
+            crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers.get("api-key").and_then(|value| value.to_str().ok()),
+            Some("tp-test")
+        );
+        assert!(
+            headers.get(AUTHORIZATION).is_none(),
+            "Token Plan requires api-key instead of Authorization Bearer"
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_tp_key_uses_api_key_header_with_custom_base_url() {
+        let mut extra = HashMap::new();
+        extra.insert("api-key".to_string(), "wrong".to_string());
+        extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "tp-custom",
+            &extra,
+            ApiProvider::XiaomiMimo,
+            "https://proxy.example.test/mimo/v1",
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers.get("api-key").and_then(|value| value.to_str().ok()),
+            Some("tp-custom")
+        );
+        assert!(
+            headers.get(AUTHORIZATION).is_none(),
+            "tp-* Token Plan keys should use api-key auth even through custom gateways"
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_pay_as_you_go_endpoint_keeps_bearer_header() {
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "sk-test",
+            &HashMap::new(),
+            ApiProvider::XiaomiMimo,
+            crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer sk-test")
+        );
+        assert!(headers.get("api-key").is_none());
+    }
+
+    #[test]
     fn chat_messages_keep_current_turn_reasoning_content() {
         let message = Message {
             role: "assistant".to_string(),
             content: vec![
                 ContentBlock::Thinking {
+                    signature: None,
                     thinking: "plan".to_string(),
                 },
                 ContentBlock::Text {
@@ -1672,6 +1939,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "plan".to_string(),
                     },
                     ContentBlock::Text {
@@ -1721,6 +1989,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Need to call a tool".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -1772,6 +2041,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Need to call a tool".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -1842,6 +2112,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Internal explanation plan".to_string(),
                     },
                     ContentBlock::Text {
@@ -1885,6 +2156,7 @@ mod tests {
             role: "assistant".to_string(),
             content: vec![
                 ContentBlock::Thinking {
+                    signature: None,
                     thinking: "I should explain step by step.".to_string(),
                 },
                 ContentBlock::Text {
@@ -2321,6 +2593,69 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_off_is_omitted_for_strict_openai_like_providers() {
+        for provider in [
+            ApiProvider::Openai,
+            ApiProvider::WanjieArk,
+            ApiProvider::Arcee,
+            ApiProvider::Huggingface,
+            ApiProvider::Fireworks,
+        ] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), provider);
+
+            assert_eq!(
+                body,
+                json!({}),
+                "provider {provider:?} should not receive unsupported reasoning-off fields"
+            );
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_atlascloud_speaks_deepseek_dialect() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Atlascloud);
+        assert_eq!(
+            body,
+            json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } })
+        );
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Atlascloud);
+        assert_eq!(
+            body,
+            json!({ "reasoning_effort": "max", "thinking": { "type": "enabled" } })
+        );
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Atlascloud);
+        assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+    }
+
+    #[test]
+    fn reasoning_effort_moonshot_toggles_thinking() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Moonshot);
+        assert_eq!(body, json!({ "thinking": { "type": "enabled" } }));
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Moonshot);
+        assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+    }
+
+    #[test]
+    fn reasoning_effort_ollama_toggles_think_flag() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Ollama);
+        assert_eq!(body, json!({ "think": true }));
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Ollama);
+        assert_eq!(body, json!({ "think": false }));
+    }
+
+    #[test]
     fn reasoning_effort_uses_nvidia_nim_chat_template_kwargs() {
         let mut body = json!({});
         apply_reasoning_effort(&mut body, Some("max"), ApiProvider::NvidiaNim);
@@ -2464,7 +2799,7 @@ mod tests {
 
         assert!(matches!(
             response.content.first(),
-            Some(ContentBlock::Thinking { thinking }) if thinking == "thinking via NIM"
+            Some(ContentBlock::Thinking { thinking, .. }) if thinking == "thinking via NIM"
         ));
         assert!(matches!(
             response.content.get(1),
@@ -2606,6 +2941,7 @@ mod tests {
         let message = Message {
             role: "assistant".to_string(),
             content: vec![ContentBlock::Thinking {
+                signature: None,
                 thinking: "plan".to_string(),
             }],
         };
@@ -2749,6 +3085,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Need to inspect the directory".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -2789,6 +3126,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Need to search".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -2878,6 +3216,7 @@ mod tests {
                 role: "assistant".to_string(),
                 content: vec![
                     ContentBlock::Thinking {
+                        signature: None,
                         thinking: "Need to list files".to_string(),
                     },
                     ContentBlock::ToolUse {

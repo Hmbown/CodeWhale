@@ -37,7 +37,7 @@ Model notes: DeepSeek V4 models emit *thinking tokens* (`ContentBlock::Thinking`
 
 ## Toolbox (fast reference — tool descriptions are authoritative)
 
-- **Planning / tracking**: `checklist_write` (primary Work progress under the active task/thread), `checklist_add` / `checklist_update` / `checklist_list`, `update_plan` (optional high-level strategy metadata for complex initiatives), `task_create` / `task_list` / `task_read` / `task_cancel` (durable work objects), `todo_*` aliases (legacy compatibility), `note` (persistent memory).
+- **Planning / tracking**: `checklist_write` (primary Work progress under the active task/thread), `checklist_add` / `checklist_update` / `checklist_list`, `update_plan` (optional high-level strategy metadata for complex initiatives), `task_create` / `task_list` / `task_read` / `task_cancel` (durable work objects), `note` (persistent memory).
 - **File I/O**: `read_file` (PDFs auto-extracted), `list_dir`, `write_file`, `edit_file`, `apply_patch`, `retrieve_tool_result` for prior spilled large tool outputs.
 - **Shell**: `task_shell_start` + `task_shell_wait` for long-running commands, diagnostics, tests, searches, and servers; `exec_shell` for bounded cancellable foreground commands; `exec_shell_wait`, `exec_shell_interact`.
 - **Task evidence**: `task_gate_run` for verification gates; `pr_attempt_record` / `pr_attempt_list` / `pr_attempt_read` / `pr_attempt_preflight`; for GitHub issue/PR/release triage, prefer the native `gh ... --json` CLI through shell because it is authenticated, structured, and reproducible; `github_issue_context` / `github_pr_context` are read-only fallbacks when the CLI route is unavailable; `github_comment` / `github_close_issue` require approval + evidence; `automation_*` scheduling tools.

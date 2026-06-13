@@ -64,6 +64,13 @@ Non-goals:
 - no blocking of user input
 - no transcript mutation from `turn_end`
 
+Implementation note for the v0.9 branch: the narrow #2578 harvest uses the
+shared structured observer path introduced for sub-agent lifecycle hooks. It
+fires before queued follow-up dispatch, after queue-recovery state is known, so
+the payload can report the queued-message count without letting a hook change
+what gets sent next. Stdout is ignored for `turn_end`; only `message_submit`
+has a stdout mutation contract.
+
 ### PR 3: Subagent lifecycle observer hooks
 
 Expose subagent start and completion as observer-only hook events.
@@ -251,7 +258,9 @@ transcript content in the first version.
 - Existing observer-only hooks keep working.
 - Existing env vars remain available.
 - `shell_env` keeps its existing stdout `KEY=VALUE` contract.
-- Structured stdout is interpreted only by `message_submit` in PR 1.
+- Structured stdout is interpreted only by `message_submit` in PR 1. Structured
+  observer hooks such as `turn_end`, `subagent_spawn`, and `subagent_complete`
+  receive JSON on stdin, but their stdout is ignored by the caller.
 
 ## 6. Review checkpoints
 

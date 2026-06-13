@@ -162,7 +162,7 @@ pub fn build_entries(
     tool_entries.sort_by(|a, b| a.label.cmp(&b.label));
     entries.extend(tool_entries);
 
-    entries.extend(build_mcp_entries(mcp_config_path, mcp_snapshot));
+    entries.extend(build_mcp_entries(workspace, mcp_config_path, mcp_snapshot));
 
     entries.sort_by(|a, b| a.label.cmp(&b.label));
     entries.sort_by_key(|entry| entry.section);
@@ -170,11 +170,13 @@ pub fn build_entries(
 }
 
 fn build_mcp_entries(
+    workspace: &Path,
     mcp_config_path: &Path,
     mcp_snapshot: Option<&crate::mcp::McpManagerSnapshot>,
 ) -> Vec<CommandPaletteEntry> {
     let owned_snapshot = if mcp_snapshot.is_none() {
-        crate::mcp::manager_snapshot_from_config(mcp_config_path, false).ok()
+        crate::mcp::manager_snapshot_from_config_with_workspace(mcp_config_path, workspace, false)
+            .ok()
     } else {
         None
     };
@@ -1142,6 +1144,58 @@ mod tests {
         assert!(!command_labels.contains(&"/voice"));
         assert!(!command_labels.contains(&"/set"));
         assert!(!command_labels.contains(&"/deepseek"));
+    }
+
+    #[test]
+    fn command_palette_has_one_entry_for_every_registered_command() {
+        let tmp = TempDir::new().expect("tempdir");
+        let skills_dir = tmp.path().join("skills");
+        let mcp_config_path = tmp.path().join("mcp.json");
+        let entries = build_entries(
+            Locale::En,
+            skills_dir.as_path(),
+            tmp.path(),
+            mcp_config_path.as_path(),
+            None,
+        );
+
+        let command_entries = entries
+            .iter()
+            .filter(|entry| entry.section == PaletteSection::Command)
+            .collect::<Vec<_>>();
+        assert_eq!(command_entries.len(), commands::COMMANDS.len());
+
+        for command in commands::COMMANDS {
+            let label = format!("/{}", command.name);
+            let matching = command_entries
+                .iter()
+                .filter(|entry| entry.label == label)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching.len(),
+                1,
+                "expected one palette entry for /{}",
+                command.name
+            );
+
+            let entry = matching[0];
+            assert_eq!(entry.command, command.palette_command());
+            assert!(
+                entry
+                    .description
+                    .contains(command.description_for(Locale::En)),
+                "/{} palette description should include command help text",
+                command.name
+            );
+            if command.requires_argument() {
+                assert!(
+                    entry.description.contains(command.usage),
+                    "/{} palette description should include usage {:?}",
+                    command.name,
+                    command.usage
+                );
+            }
+        }
     }
 
     #[test]

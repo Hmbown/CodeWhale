@@ -8,9 +8,6 @@ It complements the local install path. If you only want to use `codewhale` on a
 laptop, start with the README quickstart. If you want "CodeWhale as a remote
 workbench I can control from my phone", start here.
 
-For US-based users who do not need Tencent/CNB/Feishu, start with
-`docs/REMOTE_VM_US.md` instead.
-
 ## Default Stack
 
 ```text

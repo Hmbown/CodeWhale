@@ -42,19 +42,20 @@ pub fn report(model: &str, usage: &Usage) {
     if !cost.is_positive() {
         return;
     }
-    if let Ok(mut pending) = cell().lock() {
-        pending.usd += cost.usd;
-        pending.cny += cost.cny;
-    }
+    // Recover from poisoned lock — a previous holder panicked but the
+    // accumulated data is still valid.
+    let mut pending = cell().lock().unwrap_or_else(|e| e.into_inner());
+    pending.usd += cost.usd;
+    pending.cny += cost.cny;
 }
 
 /// Drain the pending cost. Returns the accumulated amount and resets
 /// the pool to zero. Called by the TUI render / event loop on each
 /// frame; any non-zero result gets folded into `accrue_subagent_cost_estimate`.
 pub fn drain() -> CostEstimate {
-    let Ok(mut pending) = cell().lock() else {
-        return CostEstimate::default();
-    };
+    // Recover from poisoned lock — a previous holder panicked but the
+    // accumulated data is still valid.
+    let mut pending = cell().lock().unwrap_or_else(|e| e.into_inner());
     std::mem::take(&mut *pending)
 }
 
@@ -63,9 +64,8 @@ pub fn drain() -> CostEstimate {
 /// state. Production code should always use [`drain`].
 #[cfg(test)]
 pub fn reset_for_tests() {
-    if let Ok(mut pending) = cell().lock() {
-        *pending = CostEstimate::default();
-    }
+    let mut pending = cell().lock().unwrap_or_else(|e| e.into_inner());
+    *pending = CostEstimate::default();
 }
 
 #[cfg(test)]

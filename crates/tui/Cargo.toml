@@ -18,20 +18,13 @@ toml = ["schemaui/toml"]
 name = "codewhale-tui"
 path = "src/main.rs"
 
-# Legacy alias — forwards to `codewhale-tui` and prints a deprecation
-# notice. Will be removed in v0.9.0.
-[[bin]]
-name = "deepseek-tui"
-path = "src/bin/deepseek_tui_legacy_shim.rs"
-
 [dependencies]
 anyhow = "1.0.100"
-arboard = "3.4"
-codewhale-config = { path = "../config", version = "0.8.53" }
-codewhale-protocol = { path = "../protocol", version = "0.8.53" }
-codewhale-release = { path = "../release", version = "0.8.53" }
-codewhale-secrets = { path = "../secrets", version = "0.8.53" }
-codewhale-tools = { path = "../tools", version = "0.8.53" }
+codewhale-config = { path = "../config", version = "0.8.58" }
+codewhale-protocol = { path = "../protocol", version = "0.8.58" }
+codewhale-release = { path = "../release", version = "0.8.58" }
+codewhale-secrets = { path = "../secrets", version = "0.8.58" }
+codewhale-tools = { path = "../tools", version = "0.8.58" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -47,10 +40,10 @@ fd-lock = "4.0.4"
 futures-util = "0.3.31"
 ratatui = "0.30"
 regex = "1.11"
-reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls", "http2", "gzip", "brotli"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls-no-provider", "http2", "gzip", "brotli"] }
+rustls.workspace = true
 qrcode = { version = "0.14", default-features = false }
 similar = "2"
-rustyline = "15.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 schemars = { version = "1.2.1", features = ["derive", "preserve_order"] }
@@ -62,27 +55,26 @@ unicode-width = "0.2"
 unicode-segmentation = "1.12"
 uuid = { version = "1.11", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-tempfile = "3.16"
+tempfile = "3.27"
 thiserror = "2.0"
 tracing = "0.1"
-tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 tower-http = { version = "0.6", features = ["cors"] }
 wait-timeout = "0.2"
 multimap = "0.10.0"
 shlex = "1.3.0"
-starlark = "0.13.0"
 tiny_http = "0.12"
-portable-pty = "0.9"
-zeroize = "1.8.2"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
-pdf-extract = "0.7"
+lru = "0.16"
+parking_lot = "0.12"
+pdf-extract = "0.10"
 tar = "0.4"
 flate2 = "1.1"
 sha2 = "0.10"
 
 [dev-dependencies]
+cucumber = "0.23.0"
 wiremock = "0.6"
 pretty_assertions = "1.4"
 vt100 = "0.15"
@@ -90,9 +82,16 @@ vt100 = "0.15"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+arboard = "3.4"
+
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+portable-pty = "0.9"
+starlark = "0.13.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

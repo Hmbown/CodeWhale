@@ -1,3 +1,4 @@
+#[cfg(not(target_env = "ohos"))]
 use starlark::Error as StarlarkError;
 use thiserror::Error;
 
@@ -23,6 +24,9 @@ pub enum Error {
     },
     #[error("expected example to not match rule `{rule}`: {example}")]
     ExampleDidMatch { rule: String, example: String },
+    #[error("{0}")]
+    UnsupportedPlatform(String),
     #[error("starlark error: {0}")]
+    #[cfg(not(target_env = "ohos"))]
     Starlark(StarlarkError),
 }

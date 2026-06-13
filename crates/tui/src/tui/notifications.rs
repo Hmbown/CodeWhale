@@ -17,9 +17,18 @@ use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE;
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT};
+#[cfg(target_os = "windows")]
+use windows::core::PCWSTR;
 
 /// Notification delivery method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -354,18 +363,31 @@ pub fn reset_title_on_interaction() {
     }
 }
 
-/// Completion sound mode (0 = off, 1 = beep, 2 = bell).
+/// Completion sound mode (0 = off, 1 = beep, 2 = bell, 3 = file).
 static COMPLETION_SOUND_MODE: AtomicU8 = AtomicU8::new(1);
+static COMPLETION_SOUND_FILE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+#[cfg(not(target_os = "windows"))]
+static COMPLETION_SOUND_FILE_UNSUPPORTED_WARNED: AtomicBool = AtomicBool::new(false);
+static COMPLETION_SOUND_FILE_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
 
-/// Set the completion sound mode from config.
-/// Call once at startup or on `/settings` change.
-pub fn set_completion_sound_mode(mode: crate::config::CompletionSound) {
+fn completion_sound_file_slot() -> &'static Mutex<Option<PathBuf>> {
+    COMPLETION_SOUND_FILE.get_or_init(|| Mutex::new(None))
+}
+
+fn set_completion_sound(mode: crate::config::CompletionSound, sound_file: Option<PathBuf>) {
     let val = match mode {
         crate::config::CompletionSound::Off => 0u8,
         crate::config::CompletionSound::Beep => 1u8,
         crate::config::CompletionSound::Bell => 2u8,
+        crate::config::CompletionSound::File => 3u8,
     };
     COMPLETION_SOUND_MODE.store(val, Ordering::SeqCst);
+    if let Ok(mut slot) = completion_sound_file_slot().lock() {
+        if sound_file.is_some() {
+            COMPLETION_SOUND_FILE_MISSING_WARNED.store(false, Ordering::SeqCst);
+        }
+        *slot = sound_file;
+    }
 }
 
 /// Play the configured completion sound (if not `Off`).
@@ -377,6 +399,9 @@ pub fn play_completion_sound() {
         }
         2 => {
             bell_sound();
+        }
+        3 => {
+            file_sound();
         }
         _ => {}
     }
@@ -400,6 +425,54 @@ fn beep_sound() {
 /// Pure terminal BEL character.
 fn bell_sound() {
     let _ = io::stdout().write_all(b"\x07");
+}
+
+fn configured_sound_file() -> Option<PathBuf> {
+    completion_sound_file_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+}
+
+#[cfg(target_os = "windows")]
+fn play_sound_file(path: &Path) {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Best-effort and async: notification sound failure should not block or
+    // fail a completed agent turn.
+    unsafe {
+        let _ = PlaySoundW(
+            PCWSTR(wide.as_ptr()),
+            None,
+            SND_FILENAME | SND_ASYNC | SND_NODEFAULT,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn play_sound_file(_path: &Path) {
+    if !COMPLETION_SOUND_FILE_UNSUPPORTED_WARNED.swap(true, Ordering::SeqCst) {
+        tracing::warn!("completion_sound = \"file\" is currently supported on Windows only");
+    }
+}
+
+fn file_sound() {
+    if let Some(path) = configured_sound_file() {
+        play_sound_file(&path);
+    } else if !COMPLETION_SOUND_FILE_MISSING_WARNED.swap(true, Ordering::SeqCst) {
+        tracing::warn!("completion_sound = \"file\" requires [notifications].sound_file");
+    }
+}
+
+#[cfg(test)]
+fn completion_sound_state_for_tests() -> (crate::config::CompletionSound, Option<PathBuf>) {
+    let mode = match COMPLETION_SOUND_MODE.load(Ordering::SeqCst) {
+        0 => crate::config::CompletionSound::Off,
+        1 => crate::config::CompletionSound::Beep,
+        2 => crate::config::CompletionSound::Bell,
+        3 => crate::config::CompletionSound::File,
+        _ => crate::config::CompletionSound::Off,
+    };
+    (mode, configured_sound_file())
 }
 
 /// Show a macOS Notification Center alert via `osascript`.
@@ -585,7 +658,7 @@ use crate::tui::app::App;
 pub fn settings(config: &crate::config::Config) -> Option<(Method, Duration, bool)> {
     let notif = config.notifications_config();
     // Initialize completion sound mode from config.
-    set_completion_sound_mode(notif.completion_sound);
+    set_completion_sound(notif.completion_sound, notif.sound_file);
     let method = match notif.method {
         crate::config::NotificationMethod::Auto => Method::Auto,
         crate::config::NotificationMethod::Osc9 => Method::Osc9,
@@ -1186,5 +1259,49 @@ mod tests {
             humanize_duration(Duration::from_secs(3 * 604_800 + 2 * 86_400 + 17 * 3600)),
             "3w 2d"
         );
+    }
+
+    #[test]
+    fn settings_installs_custom_completion_sound_file() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+            [notifications]
+            completion_sound = "file"
+            sound_file = "E:\\google\\downloads\\xm4114.wav"
+            "#,
+        )
+        .expect("custom completion sound config should parse");
+
+        let _ = settings(&config);
+
+        let (mode, file) = completion_sound_state_for_tests();
+        assert_eq!(mode, crate::config::CompletionSound::File);
+        assert_eq!(
+            file.as_deref(),
+            Some(std::path::Path::new("E:\\google\\downloads\\xm4114.wav"))
+        );
+    }
+
+    #[test]
+    fn setting_valid_sound_file_resets_missing_file_warning_latch() {
+        let _lock = env_lock();
+        COMPLETION_SOUND_FILE_MISSING_WARNED.store(true, Ordering::SeqCst);
+
+        set_completion_sound(
+            crate::config::CompletionSound::File,
+            Some(std::path::PathBuf::from(
+                "E:\\google\\downloads\\xm4114.wav",
+            )),
+        );
+
+        assert!(!COMPLETION_SOUND_FILE_MISSING_WARNED.load(Ordering::SeqCst));
+
+        set_completion_sound(crate::config::CompletionSound::File, None);
+        file_sound();
+
+        assert!(COMPLETION_SOUND_FILE_MISSING_WARNED.load(Ordering::SeqCst));
+
+        set_completion_sound(crate::config::CompletionSound::Beep, None);
+        COMPLETION_SOUND_FILE_MISSING_WARNED.store(false, Ordering::SeqCst);
     }
 }

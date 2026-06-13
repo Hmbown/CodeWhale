@@ -21,6 +21,8 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+const BACKGROUND_COMPLETION_WAIT_MS: u64 = 30_000;
+
 #[cfg(windows)]
 const JOB_OBJECT_QUERY_ACCESS: u32 = 0x0004;
 
@@ -133,7 +135,7 @@ fn failed_network_shell_result(stdout: &str, stderr: &str) -> ShellResult {
 }
 
 fn wait_for_completed_shell(manager: &mut ShellManager, task_id: &str) -> ShellResult {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_millis(BACKGROUND_COMPLETION_WAIT_MS);
 
     loop {
         let result = manager
@@ -285,7 +287,7 @@ fn test_write_stdin_streams_output() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, not(target_env = "ohos")))]
 fn background_tty_command_has_controlling_terminal() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = ShellManager::new(tmp.path().to_path_buf());
@@ -641,6 +643,17 @@ async fn test_exec_shell_foreground_timeout_guides_background_rerun() {
     );
 }
 
+#[test]
+fn test_exec_shell_schema_guides_gt_five_second_work_to_background() {
+    let schema = ExecShellTool.input_schema();
+    let description = schema["properties"]["background"]["description"]
+        .as_str()
+        .expect("background description");
+    assert!(description.contains(">5 seconds"), "{description}");
+    assert!(description.contains("task_shell_start"), "{description}");
+    assert!(description.contains("exec_shell_wait"), "{description}");
+}
+
 #[tokio::test]
 async fn test_exec_shell_foreground_cancel_kills_process() {
     let tmp = tempdir().expect("tempdir");
@@ -801,7 +814,7 @@ async fn test_completed_background_shell_releases_process_handles() {
             json!({
                 "task_id": task_id.clone(),
                 "wait": true,
-                "timeout_ms": 5_000
+                "timeout_ms": BACKGROUND_COMPLETION_WAIT_MS
             }),
             &ctx,
         )

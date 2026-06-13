@@ -155,18 +155,18 @@ fn probe_git(workspace: &Path) -> GitProbe {
 }
 
 fn probe_bwrap_available() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         crate::sandbox::bwrap::is_available()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
     {
         false
     }
 }
 
 fn probe_cgroup_version() -> Option<u8> {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         let path = std::path::Path::new("/sys/fs/cgroup/cgroup.controllers");
         if path.exists() {
@@ -178,7 +178,7 @@ fn probe_cgroup_version() -> Option<u8> {
         }
         None
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
     {
         None
     }
@@ -243,6 +243,7 @@ mod tests {
             assert!(status.success(), "git {args:?} failed");
         };
         run(&["init", "-q"]);
+        run(&["config", "core.autocrlf", "false"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test User"]);
         fs::write(root.join("README.md"), "init\n").expect("write");

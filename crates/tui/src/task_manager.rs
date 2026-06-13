@@ -1512,14 +1512,34 @@ fn load_state(
                 );
             }
             if task.status == TaskStatus::Running {
-                task.status = TaskStatus::Queued;
-                task.started_at = None;
-                task.ended_at = None;
-                task.duration_ms = None;
+                let now = Utc::now();
+                let duration_ms = task.started_at.and_then(|started| {
+                    u64::try_from(now.signed_duration_since(started).num_milliseconds()).ok()
+                });
+                task.status = TaskStatus::Failed;
+                task.ended_at = Some(now);
+                task.duration_ms = duration_ms;
+                task.error = Some(
+                    "Interrupted by process restart; prior process is not attached".to_string(),
+                );
+                for tool in &mut task.tool_calls {
+                    if tool.status == TaskToolStatus::Running {
+                        tool.status = TaskToolStatus::Failed;
+                        tool.ended_at = Some(now);
+                        tool.duration_ms = duration_ms.or_else(|| {
+                            u64::try_from(
+                                now.signed_duration_since(tool.started_at)
+                                    .num_milliseconds(),
+                            )
+                            .ok()
+                        });
+                    }
+                }
                 task.timeline.push(TaskTimelineEntry {
-                    timestamp: Utc::now(),
+                    timestamp: now,
                     kind: "recovered".to_string(),
-                    summary: "Recovered from restart and re-queued".to_string(),
+                    summary: "Interrupted by process restart; prior process is not attached"
+                        .to_string(),
                     detail_path: None,
                 });
             }
@@ -1787,6 +1807,98 @@ mod tests {
         assert_eq!(loaded.status, TaskStatus::Completed);
         assert!(!loaded.timeline.is_empty());
         assert_eq!(loaded.checklist.items[0].content, "read fixture");
+        Ok(())
+    }
+
+    #[test]
+    fn running_tasks_are_not_requeued_after_restart() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let tasks_dir = root.join("tasks");
+        fs::create_dir_all(&tasks_dir)?;
+        let queue_path = root.join("queue.json");
+        let task_id = "task_stale_running".to_string();
+        let started_at = Utc::now() - chrono::Duration::seconds(30);
+        let task = TaskRecord {
+            schema_version: CURRENT_TASK_SCHEMA_VERSION,
+            id: task_id.clone(),
+            prompt: "long-running shell work".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            workspace: PathBuf::from("."),
+            mode: "agent".to_string(),
+            allow_shell: true,
+            trust_mode: false,
+            auto_approve: false,
+            status: TaskStatus::Running,
+            created_at: started_at,
+            started_at: Some(started_at),
+            ended_at: None,
+            duration_ms: None,
+            result_summary: None,
+            result_detail_path: None,
+            error: None,
+            thread_id: Some("thr_stale".to_string()),
+            turn_id: Some("turn_stale".to_string()),
+            runtime_event_count: 0,
+            checklist: TaskChecklistState::default(),
+            gates: Vec::new(),
+            attempts: Vec::new(),
+            artifacts: Vec::new(),
+            github_events: Vec::new(),
+            tool_calls: vec![TaskToolCallSummary {
+                id: "tool_shell".to_string(),
+                name: "task_shell_start".to_string(),
+                status: TaskToolStatus::Running,
+                started_at,
+                ended_at: None,
+                duration_ms: None,
+                input_summary: Some("shell: sleep 999".to_string()),
+                output_summary: None,
+                detail_path: None,
+                patch_ref: None,
+            }],
+            timeline: vec![TaskTimelineEntry {
+                timestamp: started_at,
+                kind: "running".to_string(),
+                summary: "Task started".to_string(),
+                detail_path: None,
+            }],
+        };
+        fs::write(
+            tasks_dir.join(format!("{task_id}.json")),
+            serde_json::to_string_pretty(&task)?,
+        )?;
+        fs::write(
+            &queue_path,
+            serde_json::to_string_pretty(&QueueFile {
+                queue: vec![task_id.clone()],
+            })?,
+        )?;
+
+        let (tasks, queue) = load_state(&tasks_dir, &queue_path)?;
+        let recovered = tasks.get(&task_id).expect("task loaded");
+
+        assert!(queue.is_empty(), "stale running task must not be requeued");
+        assert_eq!(recovered.status, TaskStatus::Failed);
+        assert!(
+            recovered
+                .error
+                .as_deref()
+                .is_some_and(|err| err.contains("prior process is not attached")),
+            "recovered task should explain stale process ownership: {recovered:?}"
+        );
+        assert!(recovered.ended_at.is_some());
+        assert!(recovered.duration_ms.is_some());
+        assert_eq!(recovered.tool_calls[0].status, TaskToolStatus::Failed);
+        assert!(recovered.tool_calls[0].ended_at.is_some());
+        assert!(
+            recovered
+                .timeline
+                .iter()
+                .any(|entry| entry.kind == "recovered"
+                    && entry.summary.contains("prior process is not attached")),
+            "recovery timeline should explain why the task is terminal: {:?}",
+            recovered.timeline
+        );
         Ok(())
     }
 

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -263,6 +263,9 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
     pub url: Option<String>,
     /// Optional explicit HTTP transport override.
     ///
@@ -585,6 +588,8 @@ pub struct SseTransport {
     endpoint_url: Option<String>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<SseInbound>,
     pending_messages: VecDeque<Vec<u8>>,
+    #[allow(dead_code)]
+    sse_task: tokio::task::JoinHandle<()>,
 }
 
 enum SseInbound {
@@ -644,7 +649,7 @@ impl SseTransport {
         let headers_clone = headers.clone();
         let wait_cancel_token = cancel_token.clone();
 
-        tokio::spawn(async move {
+        let sse_task = tokio::spawn(async move {
             if cancel_token.is_cancelled() {
                 return;
             }
@@ -683,6 +688,7 @@ impl SseTransport {
             endpoint_url: None,
             receiver: rx,
             pending_messages: VecDeque::new(),
+            sse_task,
         };
         transport
             .wait_for_endpoint(&wait_cancel_token, endpoint_timeout)
@@ -1126,6 +1132,7 @@ fn is_connection_closed_error_text(err: &str) -> bool {
         || err.contains("connection reset")
         || err.contains("broken pipe")
         || err.contains("unexpected eof")
+        || err.contains("forcibly closed")
 }
 
 fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
@@ -1319,8 +1326,8 @@ impl McpConnection {
             // local Clash / Shadowsocks tunnel, etc. previously had MCP
             // HTTP traffic bypass the proxy entirely while every other
             // tool on the box (curl, npm, …) used it.
-            let mut client_builder =
-                reqwest::Client::builder().timeout(Duration::from_secs(connect_timeout_secs));
+            let mut client_builder = crate::tls::reqwest_client_builder()
+                .timeout(Duration::from_secs(connect_timeout_secs));
             let env_proxy_url = std::env::var("HTTPS_PROXY")
                 .or_else(|_| std::env::var("https_proxy"))
                 .or_else(|_| std::env::var("HTTP_PROXY"))
@@ -1391,6 +1398,9 @@ impl McpConnection {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .kill_on_drop(true);
+            if let Some(cwd) = &config.cwd {
+                cmd.current_dir(cwd);
+            }
 
             // MCP stdio servers are user-configured integrations. Use the
             // wider MCP allowlist so common Node/Python/proxy/CA-bundle
@@ -1899,19 +1909,18 @@ pub struct McpPool {
     connections: HashMap<String, McpConnection>,
     config: McpConfig,
     network_policy: Option<NetworkPolicyDecider>,
-    /// Source path the config was loaded from, when `from_config_path` was
-    /// used. `None` for pools constructed directly via `new` (tests, ad-hoc
-    /// snapshots). Drives the lazy-reload check (#1267 part 2): when the
-    /// file's mtime moves, the pool re-reads the config and compares its
-    /// content hash to decide whether to drop existing connections.
-    config_source: Option<std::path::PathBuf>,
+    /// Source paths the config was loaded from. Empty for pools constructed
+    /// directly via `new` (tests, ad-hoc snapshots). Workspace-aware pools
+    /// track both global and project-level MCP config paths so lazy reload sees
+    /// either file appear or change.
+    config_sources: Vec<PathBuf>,
+    workspace: Option<PathBuf>,
     /// 64-bit content hash of the active config (`hash_mcp_config`). Compared
     /// against the freshly-loaded config after an mtime change to skip
     /// reloading when the file was merely touched.
     config_hash: u64,
-    /// Most recently observed mtime of `config_source`. Updated whenever the
-    /// reload check runs (whether or not it triggered a reload).
-    last_mtime: Option<std::time::SystemTime>,
+    /// Most recently observed mtime for `config_sources`.
+    last_mtimes: Vec<Option<std::time::SystemTime>>,
 }
 
 impl McpPool {
@@ -1922,27 +1931,41 @@ impl McpPool {
             connections: HashMap::new(),
             config,
             network_policy: None,
-            config_source: None,
+            config_sources: Vec::new(),
+            workspace: None,
             config_hash,
-            last_mtime: None,
+            last_mtimes: Vec::new(),
         }
     }
 
-    /// Create a pool from a configuration file path
+    /// Create a pool from a configuration file path.
+    #[cfg(test)]
     pub fn from_config_path(path: &std::path::Path) -> Result<Self> {
-        validate_mcp_config_path(path)?;
-        let config = if path.exists() {
-            let contents = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read MCP config: {}", path.display()))?;
-            serde_json::from_str(&contents)
-                .with_context(|| format!("Failed to parse MCP config: {}", path.display()))?
-        } else {
-            McpConfig::default()
-        };
-        let last_mtime = mcp_config_mtime(path);
+        let config = load_config(path)?;
         let mut pool = Self::new(config);
-        pool.config_source = Some(path.to_path_buf());
-        pool.last_mtime = last_mtime;
+        pool.config_sources = vec![path.to_path_buf()];
+        pool.last_mtimes = vec![mcp_config_mtime(path)];
+        Ok(pool)
+    }
+
+    /// Create a pool from global MCP config plus workspace-local
+    /// `.codewhale/mcp.json`. Project servers override same-name global
+    /// servers and default stdio `cwd` to the workspace root.
+    pub fn from_config_path_with_workspace(
+        path: &std::path::Path,
+        workspace: &Path,
+    ) -> Result<Self> {
+        let config = load_config_with_workspace(path, workspace)?;
+        let mut pool = Self::new(config);
+        pool.config_sources = vec![path.to_path_buf(), workspace_mcp_config_path(workspace)];
+        pool.config_sources
+            .extend(crate::config::workspace_trust_config_candidate_paths());
+        pool.last_mtimes = pool
+            .config_sources
+            .iter()
+            .map(|source| mcp_config_mtime(source))
+            .collect();
+        pool.workspace = Some(workspace.to_path_buf());
         Ok(pool)
     }
 
@@ -1967,29 +1990,31 @@ impl McpPool {
     /// or remote filesystems where mtime granularity is poor, the hash
     /// compare keeps us from churning connections on every check.
     pub async fn reload_if_config_changed(&mut self) -> Result<bool> {
-        let Some(path) = self.config_source.clone() else {
+        if self.config_sources.is_empty() {
             return Ok(false);
-        };
-        let current_mtime = match mcp_config_mtime(&path) {
-            Some(m) => m,
-            None => return Ok(false),
-        };
-        if Some(current_mtime) == self.last_mtime {
+        }
+        let current_mtimes: Vec<_> = self
+            .config_sources
+            .iter()
+            .map(|path| mcp_config_mtime(path))
+            .collect();
+        if current_mtimes == self.last_mtimes {
             return Ok(false);
         }
         // mtime moved — we owe a re-read.
-        let new_config: McpConfig = if path.exists() {
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to re-read MCP config: {}", path.display()))?;
-            serde_json::from_str(&contents)
-                .with_context(|| format!("Failed to re-parse MCP config: {}", path.display()))?
+        let primary = self
+            .config_sources
+            .first()
+            .context("MCP config source list unexpectedly empty")?;
+        let new_config = if let Some(workspace) = self.workspace.as_deref() {
+            load_config_with_workspace(primary, workspace)?
         } else {
-            McpConfig::default()
+            load_config(primary)?
         };
         let new_hash = hash_mcp_config(&new_config);
-        // Always advance last_mtime so a touched-but-unchanged file doesn't
+        // Always advance mtimes so a touched-but-unchanged file doesn't
         // make us re-read on every subsequent call.
-        self.last_mtime = Some(current_mtime);
+        self.last_mtimes = current_mtimes;
         if new_hash == self.config_hash {
             return Ok(false);
         }
@@ -2004,11 +2029,11 @@ impl McpPool {
     /// Get or create a connection to a server
     pub async fn get_or_connect(&mut self, server_name: &str) -> Result<&mut McpConnection> {
         // Lazy auto-reload (#1267 part 2): cheap mtime-then-hash check before
-        // each connection lookup. Errors from the reload check (stat failure,
-        // partial config parse) are swallowed here so a transient FS hiccup
-        // can't take down the whole tool dispatch — the user still gets the
-        // existing connection to respond to.
-        let _ = self.reload_if_config_changed().await;
+        // each connection lookup. Transient FS errors are logged but not
+        // propagated so a brief hiccup can't take down the whole tool dispatch.
+        if let Err(e) = self.reload_if_config_changed().await {
+            tracing::warn!("MCP config reload check failed: {e:#}");
+        }
 
         let is_ready = self
             .connections
@@ -2148,7 +2173,10 @@ impl McpPool {
             return Ok(resources);
         }
 
-        let _ = self.connect_all().await;
+        let errors = self.connect_all().await;
+        for (server, err) in errors {
+            tracing::warn!("Failed to connect MCP server '{server}' for resources: {err:#}");
+        }
         let mut items = Vec::new();
         for (server, conn) in &self.connections {
             for resource in conn.resources() {
@@ -2186,7 +2214,12 @@ impl McpPool {
             return Ok(templates);
         }
 
-        let _ = self.connect_all().await;
+        let errors = self.connect_all().await;
+        for (server, err) in errors {
+            tracing::warn!(
+                "Failed to connect MCP server '{server}' for resource templates: {err:#}"
+            );
+        }
         let mut items = Vec::new();
         for (server, conn) in &self.connections {
             for template in conn.resource_templates() {
@@ -2240,11 +2273,34 @@ impl McpPool {
     }
 
     /// Parse a prefixed name into (server_name, tool_name)
-    fn parse_prefixed_name<'a>(&self, prefixed_name: &'a str) -> Result<(&'a str, &'a str)> {
-        if !prefixed_name.starts_with("mcp_") {
+    pub(crate) fn parse_prefixed_name<'a>(
+        &self,
+        prefixed_name: &'a str,
+    ) -> Result<(&'a str, &'a str)> {
+        let Some(rest) = prefixed_name.strip_prefix("mcp_") else {
             anyhow::bail!("Invalid MCP tool name: {prefixed_name}");
+        };
+
+        let mut best_match: Option<(&str, &str)> = None;
+        for server in self.connections.keys().chain(self.config.servers.keys()) {
+            let Some(tool) = rest
+                .strip_prefix(server)
+                .and_then(|tail| tail.strip_prefix('_'))
+            else {
+                continue;
+            };
+            if tool.is_empty() {
+                continue;
+            }
+            if best_match.is_none_or(|(matched, _)| server.len() > matched.len()) {
+                best_match = Some((&rest[..server.len()], tool));
+            }
         }
-        let rest = &prefixed_name[4..];
+
+        if let Some((server, tool)) = best_match {
+            return Ok((server, tool));
+        }
+
         let Some((server, tool)) = rest.split_once('_') else {
             anyhow::bail!("Invalid MCP tool name format: {prefixed_name}");
         };
@@ -2584,6 +2640,95 @@ pub fn load_config(path: &Path) -> Result<McpConfig> {
         .with_context(|| format!("Failed to parse MCP config {}", path.display()))
 }
 
+pub fn workspace_mcp_config_path(workspace: &Path) -> PathBuf {
+    normalize_workspace_path(workspace)
+        .join(".codewhale")
+        .join("mcp.json")
+}
+
+pub fn load_config_with_workspace(global_path: &Path, workspace: &Path) -> Result<McpConfig> {
+    let mut merged = load_config(global_path)?;
+    let workspace = normalize_workspace_path(workspace);
+    let project_path = workspace_mcp_config_path(&workspace);
+    if !project_path.exists() || paths_refer_to_same_config(global_path, &project_path) {
+        return Ok(merged);
+    }
+    // Workspace-local MCP can spawn stdio servers, so it is only honored after
+    // the user has trusted this workspace in user-owned config. Do not accept
+    // project-local legacy trust markers here: a repository could carry those
+    // files itself and silently reintroduce the project-scope `mcp_config_path`
+    // risk denied in #417.
+    if !workspace_allows_project_mcp_config(&workspace) {
+        return Ok(merged);
+    }
+
+    let mut project = load_config(&project_path)?;
+    for server in project.servers.values_mut() {
+        if server.command.is_some() && server.url.is_none() {
+            let cwd = match server.cwd.as_deref() {
+                Some(cwd) if cwd.is_relative() => normalize_path_components(&workspace.join(cwd)),
+                Some(cwd) => normalize_path_components(cwd),
+                None => workspace.to_path_buf(),
+            };
+            if !cwd.starts_with(&workspace) {
+                anyhow::bail!(
+                    "Project MCP server cwd must stay within workspace: {}",
+                    cwd.display()
+                );
+            }
+            server.cwd = Some(cwd);
+        }
+    }
+    merged.servers.extend(project.servers);
+    Ok(merged)
+}
+
+fn workspace_allows_project_mcp_config(workspace: &Path) -> bool {
+    crate::config::is_workspace_trusted(workspace)
+}
+
+fn normalize_workspace_path(workspace: &Path) -> PathBuf {
+    if let Ok(canonical) = workspace.canonicalize() {
+        return canonical;
+    }
+    let absolute = if workspace.is_absolute() {
+        workspace.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(workspace)
+    };
+    normalize_path_components(&absolute)
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+fn paths_refer_to_same_config(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => normalize_workspace_path(left) == normalize_workspace_path(right),
+    }
+}
+
 /// 64-bit content hash of an [`McpConfig`]. Used by [`McpPool`] to decide
 /// whether a freshly-read config differs from the one currently driving the
 /// live connections. Hashing the JSON serialization avoids forcing every
@@ -2634,6 +2779,7 @@ fn mcp_template_json() -> Result<String> {
             command: Some("node".to_string()),
             args: vec!["./path/to/your-mcp-server.js".to_string()],
             env: HashMap::new(),
+            cwd: None,
             url: None,
             transport: None,
             connect_timeout: None,
@@ -2689,6 +2835,7 @@ pub fn add_server_config(
             command,
             args,
             env: HashMap::new(),
+            cwd: None,
             url,
             transport,
             connect_timeout: None,
@@ -2724,6 +2871,7 @@ pub fn set_server_enabled(path: &Path, name: &str, enabled: bool) -> Result<()> 
     save_config(path, &cfg)
 }
 
+#[cfg(test)]
 pub fn manager_snapshot_from_config(
     path: &Path,
     restart_required: bool,
@@ -2738,12 +2886,54 @@ pub fn manager_snapshot_from_config(
     ))
 }
 
+pub fn manager_snapshot_from_config_with_workspace(
+    path: &Path,
+    workspace: &Path,
+    restart_required: bool,
+) -> Result<McpManagerSnapshot> {
+    let cfg = load_config_with_workspace(path, workspace)?;
+    Ok(snapshot_from_config(
+        path,
+        path.exists(),
+        restart_required,
+        &cfg,
+        None,
+    ))
+}
+
+#[cfg(test)]
 pub async fn discover_manager_snapshot(
     path: &Path,
     network_policy: Option<NetworkPolicyDecider>,
     restart_required: bool,
 ) -> Result<McpManagerSnapshot> {
     let cfg = load_config(path)?;
+    let mut pool = McpPool::new(cfg.clone());
+    if let Some(policy) = network_policy {
+        pool = pool.with_network_policy(policy);
+    }
+    let errors = pool
+        .connect_all()
+        .await
+        .into_iter()
+        .map(|(name, err)| (name, format!("{err:#}")))
+        .collect::<HashMap<_, _>>();
+    Ok(snapshot_from_config(
+        path,
+        path.exists(),
+        restart_required,
+        &cfg,
+        Some((&pool, &errors)),
+    ))
+}
+
+pub async fn discover_manager_snapshot_with_workspace(
+    path: &Path,
+    workspace: &Path,
+    network_policy: Option<NetworkPolicyDecider>,
+    restart_required: bool,
+) -> Result<McpManagerSnapshot> {
+    let cfg = load_config_with_workspace(path, workspace)?;
     let mut pool = McpPool::new(cfg.clone());
     if let Some(policy) = network_policy {
         pool = pool.with_network_policy(policy);
@@ -2920,11 +3110,66 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex, OnceLock};
 
+    fn test_http_client() -> reqwest::Client {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::reqwest_client()
+    }
+
     async fn lock_mcp_loopback_tests() -> tokio::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await
+    }
+
+    struct WorkspaceTrustConfigGuard {
+        config_path: PathBuf,
+        _codewhale_config_path: crate::test_support::EnvVarGuard,
+        _deepseek_config_path: crate::test_support::EnvVarGuard,
+        _env_lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn workspace_trust_config_guard(workspace: &Path) -> WorkspaceTrustConfigGuard {
+        let env_lock = crate::test_support::lock_test_env();
+        let config_path = workspace
+            .parent()
+            .unwrap_or(workspace)
+            .join("user-config")
+            .join("config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let codewhale_config_path =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+        let deepseek_config_path = crate::test_support::EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+
+        WorkspaceTrustConfigGuard {
+            config_path,
+            _codewhale_config_path: codewhale_config_path,
+            _deepseek_config_path: deepseek_config_path,
+            _env_lock: env_lock,
+        }
+    }
+
+    fn write_workspace_trust_config(config_path: &Path, workspace: &Path) {
+        let workspace = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let key = workspace
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        fs::write(
+            config_path,
+            format!("[projects.\"{key}\"]\ntrust_level = \"trusted\"\n"),
+        )
+        .unwrap();
+    }
+
+    fn mark_workspace_trusted(workspace: &Path) -> WorkspaceTrustConfigGuard {
+        let guard = workspace_trust_config_guard(workspace);
+        write_workspace_trust_config(&guard.config_path, workspace);
+        guard
     }
 
     #[test]
@@ -2965,6 +3210,27 @@ mod tests {
     }
 
     #[test]
+    fn mcp_pool_parse_prefixed_name_preserves_registered_underscored_server() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "servers": {
+                    "my": {"command": "node"},
+                    "my_db": {"command": "node"}
+                }
+            }"#,
+        )
+        .unwrap();
+        let pool = McpPool::new(config);
+
+        let (server, tool) = pool
+            .parse_prefixed_name("mcp_my_db_execute_sql")
+            .expect("registered underscored server should parse");
+
+        assert_eq!(server, "my_db");
+        assert_eq!(tool, "execute_sql");
+    }
+
+    #[test]
     fn mcp_server_config_parses_custom_headers() {
         let json = r#"{
             "servers": {
@@ -2996,6 +3262,7 @@ mod tests {
             command: Some("node".into()),
             args: vec!["server.js".into()],
             env: HashMap::new(),
+            cwd: None,
             url: None,
             transport: None,
             connect_timeout: None,
@@ -3057,7 +3324,7 @@ mod tests {
 
     #[test]
     fn default_mcp_http_get_accepts_json_and_event_stream() {
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let request =
             with_default_mcp_http_headers(client.get("https://example.invalid/mcp"), false)
                 .build()
@@ -3074,7 +3341,7 @@ mod tests {
 
     #[test]
     fn default_mcp_http_post_accepts_json_and_event_stream() {
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let request =
             with_default_mcp_http_headers(client.post("https://example.invalid/mcp"), true)
                 .build()
@@ -3094,7 +3361,7 @@ mod tests {
 
     #[test]
     fn streamable_http_transport_stores_headers() {
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer xyz".to_string());
         let transport = StreamableHttpTransport::new(
@@ -3130,6 +3397,350 @@ mod tests {
         assert_eq!(snapshot.servers[0].name, "disabled");
         assert!(!snapshot.servers[0].enabled);
         assert_eq!(snapshot.servers[0].error.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn workspace_mcp_config_merges_with_project_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{
+              "servers": {
+                "global": {"command": "node", "args": ["global.js"]},
+                "shared": {"command": "node", "args": ["global-shared.js"]}
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{
+              "servers": {
+                "project": {"command": "php", "args": ["artisan", "boost:mcp"]},
+                "shared": {"command": "php", "args": ["artisan", "shared:mcp"]}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+
+        assert!(cfg.servers.contains_key("global"));
+        let project = cfg.servers.get("project").unwrap();
+        assert_eq!(project.command.as_deref(), Some("php"));
+        assert_eq!(project.cwd.as_deref(), Some(workspace.as_path()));
+        let shared = cfg.servers.get("shared").unwrap();
+        assert_eq!(shared.args, vec!["artisan", "shared:mcp"]);
+        assert_eq!(shared.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn workspace_manager_snapshot_counts_global_and_project_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{
+              "servers": {
+                "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+                "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp@latest"]}
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{
+              "servers": {
+                "laravel-boost": {"command": "php", "args": ["artisan", "boost:mcp"]}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let plain = manager_snapshot_from_config(&global_path, false).unwrap();
+        let merged =
+            manager_snapshot_from_config_with_workspace(&global_path, &workspace, false).unwrap();
+
+        assert_eq!(plain.servers.len(), 2);
+        assert_eq!(merged.servers.len(), 3);
+        assert!(
+            merged
+                .servers
+                .iter()
+                .any(|server| server.name == "laravel-boost"),
+            "workspace-aware snapshots must include trusted project MCP servers"
+        );
+    }
+
+    #[test]
+    fn workspace_mcp_config_ignores_project_file_until_workspace_trusted() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+
+        assert!(cfg.servers.contains_key("global"));
+        assert!(!cfg.servers.contains_key("project"));
+    }
+
+    #[test]
+    fn workspace_mcp_config_ignores_project_local_legacy_trust_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::create_dir_all(workspace.join(".deepseek")).unwrap();
+        fs::write(workspace.join(".deepseek").join("trusted"), "").unwrap();
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+
+        assert!(cfg.servers.contains_key("global"));
+        assert!(!cfg.servers.contains_key("project"));
+    }
+
+    #[test]
+    fn workspace_mcp_config_ignores_invalid_untrusted_project_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(project_dir.join("mcp.json"), "{ not json").unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+
+        assert!(cfg.servers.is_empty());
+    }
+
+    #[test]
+    fn workspace_mcp_config_normalizes_parent_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "node", "args": ["server.js"]}}}"#,
+        )
+        .unwrap();
+
+        let workspace_with_parent = workspace.join("..").join("workspace");
+        let cfg = load_config_with_workspace(&global_path, &workspace_with_parent).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+
+        assert!(cfg.servers.contains_key("project"));
+        let project = cfg.servers.get("project").unwrap();
+        assert_eq!(project.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn workspace_mcp_config_resolves_relative_cwd_from_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "node", "args": ["server.js"], "cwd": "tools/mcp"}}}"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_with_workspace(&global_path, &workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+
+        let project = cfg.servers.get("project").unwrap();
+        assert_eq!(
+            project.cwd.as_deref(),
+            Some(workspace.join("tools/mcp").as_path())
+        );
+    }
+
+    #[test]
+    fn workspace_mcp_config_rejects_project_cwd_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(&global_path, r#"{"servers": {}}"#).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "node", "args": ["server.js"], "cwd": "../outside"}}}"#,
+        )
+        .unwrap();
+
+        let err = load_config_with_workspace(&global_path, &workspace)
+            .expect_err("project MCP cwd escape must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("Project MCP server cwd must stay within workspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_mcp_pool_reload_picks_up_project_config_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&workspace).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+
+        let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
+        assert_eq!(pool.server_names(), vec!["global"]);
+
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        assert!(pool.reload_if_config_changed().await.unwrap());
+        let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
+        let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+        assert_eq!(names, expected);
+    }
+
+    #[tokio::test]
+    async fn workspace_mcp_pool_reload_picks_up_project_config_after_workspace_trust() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let trust_env = workspace_trust_config_guard(&workspace);
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
+        assert_eq!(pool.server_names(), vec!["global"]);
+
+        write_workspace_trust_config(&trust_env.config_path, &workspace);
+
+        assert!(pool.reload_if_config_changed().await.unwrap());
+        let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
+        let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+        assert_eq!(names, expected);
+    }
+
+    #[tokio::test]
+    async fn workspace_mcp_pool_reload_drops_project_config_after_workspace_trust_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("mcp.json"),
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
+        let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
+        let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+        assert_eq!(names, expected);
+
+        fs::remove_file(&trust.config_path).unwrap();
+
+        assert!(pool.reload_if_config_changed().await.unwrap());
+        assert_eq!(pool.server_names(), vec!["global"]);
+    }
+
+    #[tokio::test]
+    async fn workspace_mcp_pool_reload_drops_project_config_after_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global-mcp.json");
+        let workspace = dir.path().join("workspace");
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir).unwrap();
+        let _trust = mark_workspace_trusted(&workspace);
+        fs::write(
+            &global_path,
+            r#"{"servers": {"global": {"command": "node", "args": ["global.js"]}}}"#,
+        )
+        .unwrap();
+        let project_path = project_dir.join("mcp.json");
+        fs::write(
+            &project_path,
+            r#"{"servers": {"project": {"command": "php", "args": ["artisan", "boost:mcp"]}}}"#,
+        )
+        .unwrap();
+
+        let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
+        let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
+        let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+        assert_eq!(names, expected);
+
+        fs::remove_file(project_path).unwrap();
+
+        assert!(pool.reload_if_config_changed().await.unwrap());
+        assert_eq!(pool.server_names(), vec!["global"]);
     }
 
     #[test]
@@ -3232,6 +3843,7 @@ mod tests {
             command: Some("test".to_string()),
             args: vec![],
             env: HashMap::new(),
+            cwd: None,
             url: None,
             transport: None,
             connect_timeout: Some(20),
@@ -3343,6 +3955,7 @@ mod tests {
             command: Some("mock".to_string()),
             args: Vec::new(),
             env: HashMap::new(),
+            cwd: None,
             url: None,
             transport: None,
             connect_timeout: None,
@@ -3532,6 +4145,7 @@ mod tests {
                 command: Some("/bin/echo".into()),
                 args: vec!["hi".into()],
                 env: Default::default(),
+                cwd: None,
                 url: None,
                 transport: None,
                 connect_timeout: None,
@@ -3639,6 +4253,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_pool_call_tool_preserves_server_names_with_underscores() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"ok": true}
+            }))]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+        conn.name = "my_db".to_string();
+        conn.tools = vec![McpTool {
+            name: "execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let mut pool = McpPool::new(McpConfig {
+            timeouts: McpTimeouts::default(),
+            servers: HashMap::new(),
+        });
+        pool.connections.insert("my_db".to_string(), conn);
+
+        let result = pool
+            .call_tool(
+                "mcp_my_db_execute_sql",
+                serde_json::json!({"query": "select 1"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"ok": true}));
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent[0]["method"], "tools/call");
+        assert_eq!(sent[0]["params"]["name"], "execute_sql");
+        assert_eq!(
+            sent[0]["params"]["arguments"],
+            serde_json::json!({"query": "select 1"})
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_pool_call_tool_prefers_longest_matching_server_name() {
+        let sent_short = Arc::new(Mutex::new(Vec::new()));
+        let short_transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent_short),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"short": true}
+            }))]),
+        };
+        let mut short_conn = test_connection(Box::new(short_transport));
+        short_conn.name = "my".to_string();
+        short_conn.tools = vec![McpTool {
+            name: "db_execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let sent_long = Arc::new(Mutex::new(Vec::new()));
+        let long_transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent_long),
+            responses: VecDeque::from([json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"long": true}
+            }))]),
+        };
+        let mut long_conn = test_connection(Box::new(long_transport));
+        long_conn.name = "my_db".to_string();
+        long_conn.tools = vec![McpTool {
+            name: "execute_sql".to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }];
+
+        let mut pool = McpPool::new(McpConfig {
+            timeouts: McpTimeouts::default(),
+            servers: HashMap::new(),
+        });
+        pool.connections.insert("my".to_string(), short_conn);
+        pool.connections.insert("my_db".to_string(), long_conn);
+
+        let result = pool
+            .call_tool(
+                "mcp_my_db_execute_sql",
+                serde_json::json!({"query": "select 1"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"long": true}));
+        assert!(
+            sent_short.lock().unwrap().is_empty(),
+            "the shorter server name must not receive the tool call"
+        );
+        let sent_long = sent_long.lock().unwrap();
+        assert_eq!(sent_long[0]["method"], "tools/call");
+        assert_eq!(sent_long[0]["params"]["name"], "execute_sql");
+        assert_eq!(
+            sent_long[0]["params"]["arguments"],
+            serde_json::json!({"query": "select 1"})
+        );
+    }
+
+    #[tokio::test]
     async fn json_rpc_session_error_is_marked_stale() {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let transport = ScriptedValueTransport {
@@ -3690,6 +4412,14 @@ mod tests {
         assert!(
             is_mcp_stale_session_error(&err),
             "reset legacy SSE POST should force reconnect before retry"
+        );
+
+        let err = anyhow::anyhow!(
+            "MCP SSE POST send failed (transport=sse endpoint=http://127.0.0.1:123/messages): An existing connection was forcibly closed by the remote host."
+        );
+        assert!(
+            is_mcp_stale_session_error(&err),
+            "Windows reset wording should force reconnect before retry"
         );
     }
 
@@ -3904,7 +4634,7 @@ mod tests {
 
                     if method == "notifications/initialized" {
                         socket
-                            .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
+                            .write_all(b"HTTP/1.1 202 Accepted\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                             .await
                             .unwrap();
                         return;
@@ -3948,6 +4678,7 @@ mod tests {
             command: None,
             args: vec![],
             env: HashMap::new(),
+            cwd: None,
             url: Some(format!("http://{addr}/mcp")),
             transport: None,
             connect_timeout: Some(2),
@@ -4227,7 +4958,7 @@ mod tests {
                     } else if request.starts_with("POST /messages ") {
                         post_seen.store(true, AtomicOrdering::SeqCst);
                         socket
-                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                             .await
                             .unwrap();
                     }
@@ -4235,7 +4966,7 @@ mod tests {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/sse");
         let mut transport = SseTransport::connect(
             client,
@@ -4318,7 +5049,7 @@ mod tests {
                     } else if request.starts_with("POST /messages ") {
                         post_seen.store(true, AtomicOrdering::SeqCst);
                         socket
-                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                             .await
                             .unwrap();
                     }
@@ -4326,7 +5057,7 @@ mod tests {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/sse");
         let mut transport = SseTransport::connect(
             client,
@@ -4418,7 +5149,7 @@ mod tests {
                             post_header_seen.store(true, AtomicOrdering::SeqCst);
                         }
                         socket
-                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                             .await
                             .unwrap();
                     }
@@ -4426,7 +5157,7 @@ mod tests {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/sse");
         let mut headers = HashMap::new();
         headers.insert("X-Custom-Auth".to_string(), "my-test-token".to_string());
@@ -4508,7 +5239,7 @@ mod tests {
                     } else if request.starts_with("POST /messages ") {
                         socket
                             .write_all(
-                                b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 25\r\n\r\n{\"error\":\"missing query\"}",
+                                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 25\r\n\r\n{\"error\":\"missing query\"}",
                             )
                             .await
                             .unwrap();
@@ -4517,7 +5248,7 @@ mod tests {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/sse");
         let mut transport = SseTransport::connect(
             client,
@@ -4618,7 +5349,7 @@ mod tests {
                         let count = get_count.fetch_add(1, AtomicOrdering::SeqCst);
                         let session = if count == 0 { "sess-old" } else { "sess-new" };
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nMcp-Session-Id: {session}\r\nContent-Length: 0\r\n\r\n"
+                            "HTTP/1.1 200 OK\r\nConnection: close\r\nMcp-Session-Id: {session}\r\nContent-Length: 0\r\n\r\n"
                         );
                         write_response(&mut socket, response.as_bytes()).await;
                         return;
@@ -4638,7 +5369,7 @@ mod tests {
                         stale_seen.store(true, AtomicOrdering::SeqCst);
                         write_response(
                             &mut socket,
-                            b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
+                            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
                         )
                         .await;
                         return;
@@ -4667,7 +5398,7 @@ mod tests {
                         _ => {
                             write_response(
                                 &mut socket,
-                                b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n",
+                                b"HTTP/1.1 202 Accepted\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
                             )
                             .await;
                             return;
@@ -4696,6 +5427,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 env: HashMap::new(),
+                cwd: None,
                 url: Some(format!("http://{addr}/mcp")),
                 transport: None,
                 connect_timeout: Some(10),
@@ -4755,20 +5487,22 @@ mod tests {
             assert!(headers.starts_with("POST /messages "));
             socket
                 .write_all(
-                    b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
+                    b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"session expired\"}",
                 )
                 .await
                 .unwrap();
         });
 
         let (_sender, receiver) = mpsc::unbounded_channel();
+        let sse_task = tokio::spawn(async {});
         let mut transport = SseTransport {
-            client: reqwest::Client::new(),
+            client: test_http_client(),
             base_url: format!("http://{addr}/sse"),
             headers: HashMap::new(),
             endpoint_url: Some(format!("http://{addr}/messages")),
             receiver,
             pending_messages: VecDeque::new(),
+            sse_task,
         };
 
         let err = transport
@@ -4882,7 +5616,9 @@ mod tests {
                     }
 
                     socket
-                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                        )
                         .await
                         .unwrap();
 
@@ -4967,6 +5703,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 env: HashMap::new(),
+                cwd: None,
                 url: Some(format!("http://{addr}/sse")),
                 transport: Some("sse".to_string()),
                 connect_timeout: Some(10),
@@ -5001,7 +5738,7 @@ mod tests {
     #[test]
     fn session_id_starts_none() {
         let transport = StreamableHttpTransport::new(
-            reqwest::Client::new(),
+            test_http_client(),
             "https://example.invalid/mcp".to_string(),
             HashMap::new(),
         );
@@ -5045,12 +5782,12 @@ mod tests {
             );
 
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .unwrap();
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/mcp");
         let mut transport = StreamableHttpTransport::new(client, url, HashMap::new());
 
@@ -5112,12 +5849,12 @@ mod tests {
             }
 
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .unwrap();
         });
 
-        let client = reqwest::Client::new();
+        let client = test_http_client();
         let url = format!("http://{addr}/mcp");
         let mut headers = HashMap::new();
         headers.insert("X-Custom-Auth".to_string(), "my-test-token".to_string());

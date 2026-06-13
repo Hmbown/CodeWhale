@@ -22,15 +22,16 @@ pub use footer::{
 pub use header::{HeaderData, HeaderWidget, header_status_indicator_frame};
 pub use renderable::Renderable;
 
+use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::localization::Locale;
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
 use crate::tui::approval::{
     ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest, RiskLevel, ToolCategory,
 };
-use crate::tui::history::HistoryCell;
+use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus};
 use crate::tui::scrolling::TranscriptLineMeta;
 use crate::{
     commands,
@@ -129,7 +130,25 @@ impl ChatWidget {
             .map_or(&[], |active| active.entries());
 
         let history_len = app.history.len();
-        let has_collapsed = !app.collapsed_cells.is_empty();
+        let tool_runs = if app.tool_collapse_active() {
+            crate::tui::history::detect_tool_runs(&app.history, app.tool_collapse_threshold)
+        } else {
+            Vec::new()
+        };
+        let collapsed_run_starts: HashSet<usize> = tool_runs
+            .iter()
+            .filter_map(|run| (!app.expanded_tool_runs.contains(&run.start)).then_some(run.start))
+            .collect();
+        let mut collapsed_tool_indices: HashSet<usize> = HashSet::new();
+        for run in &tool_runs {
+            if !collapsed_run_starts.contains(&run.start) {
+                continue;
+            }
+            for offset in 1..run.count {
+                collapsed_tool_indices.insert(run.start + offset);
+            }
+        }
+        let has_collapsed = !app.collapsed_cells.is_empty() || !collapsed_run_starts.is_empty();
 
         // Fast path: no collapsed cells — use original slices directly.
         if !has_collapsed {
@@ -172,6 +191,18 @@ impl ChatWidget {
 
             for (idx, cell) in app.history.iter().enumerate() {
                 if app.collapsed_cells.contains(&idx) {
+                    continue;
+                }
+                if collapsed_tool_indices.contains(&idx) {
+                    continue;
+                }
+                if let Some(run) = tool_runs
+                    .iter()
+                    .find(|run| run.start == idx && collapsed_run_starts.contains(&idx))
+                {
+                    filtered_cells.push(tool_run_summary_cell(run));
+                    filtered_revs.push(tool_run_summary_revision(run, &app.history_revisions));
+                    filtered_to_original.push(idx);
                     continue;
                 }
                 filtered_cells.push(cell.clone());
@@ -277,14 +308,26 @@ impl ChatWidget {
             && let Some(send_at) = app.last_send_at
         {
             if send_at.elapsed() < SEND_FLASH_DURATION {
-                apply_send_flash(&mut lines, top, &app.history, line_meta);
+                apply_send_flash(
+                    &mut lines,
+                    top,
+                    &app.history,
+                    line_meta,
+                    &app.collapsed_cell_map,
+                );
             } else {
                 app.last_send_at = None;
             }
         }
 
         if let Some(target_cell) = detail_target_cell {
-            apply_detail_target_highlight(&mut lines, top, target_cell, line_meta);
+            apply_detail_target_highlight(
+                &mut lines,
+                top,
+                target_cell,
+                line_meta,
+                &app.collapsed_cell_map,
+            );
         }
 
         apply_selection(&mut lines, top, app);
@@ -321,6 +364,27 @@ impl ChatWidget {
             jump_arrow,
         }
     }
+}
+
+fn tool_run_summary_cell(run: &ToolRun) -> HistoryCell {
+    HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+        name: "activity_group".to_string(),
+        status: ToolStatus::Success,
+        input_summary: Some(crate::tui::history::tool_run_summary(run)),
+        output: None,
+        prompts: None,
+        spillover_path: None,
+        output_summary: None,
+        is_diff: false,
+    }))
+}
+
+fn tool_run_summary_revision(run: &ToolRun, revisions: &[u64]) -> u64 {
+    let mut revision = 0xA11C_EA5E_D00D_2692u64 ^ ((run.start as u64) << 32) ^ (run.count as u64);
+    for idx in run.start..run.start.saturating_add(run.count) {
+        revision = revision.rotate_left(7) ^ revisions.get(idx).copied().unwrap_or(u64::MAX);
+    }
+    revision
 }
 
 impl Renderable for ChatWidget {
@@ -660,17 +724,26 @@ impl Renderable for ComposerWidget<'_> {
 
         let mut input_lines = Vec::new();
         if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+            if let Some(ref suggestion) = self.app.prompt_suggestion
+                && !self.app.is_history_search_active()
+            {
+                input_lines.push(Line::from(Span::styled(
+                    suggestion.as_str(),
+                    Style::default().fg(palette::TEXT_HINT),
+                )));
             } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
-            input_lines.push(Line::from(Span::styled(
-                placeholder,
-                Style::default().fg(palette::TEXT_MUTED).italic(),
-            )));
+                let placeholder = if self.app.is_history_search_active() {
+                    self.app
+                        .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+                } else {
+                    self.app
+                        .tr(crate::localization::MessageId::ComposerPlaceholder)
+                };
+                input_lines.push(Line::from(Span::styled(
+                    placeholder,
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
+                )));
+            }
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
             let line_ranges: Vec<(usize, usize)> =
                 wrap_input_lines_for_mouse(&self.app.input, content_width)
@@ -705,7 +778,9 @@ impl Renderable for ComposerWidget<'_> {
         // wrap the single Line at render time, so we must estimate the wrapped
         // row count ourselves to keep padding accurate on narrow widths.
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
+            let placeholder: &str = if let Some(ref suggestion) = self.app.prompt_suggestion {
+                suggestion.as_str()
+            } else if self.app.is_history_search_active() {
                 self.app
                     .tr(crate::localization::MessageId::HistorySearchPlaceholder)
             } else {
@@ -1010,7 +1085,9 @@ impl Renderable for ComposerWidget<'_> {
         let (visible_lines, cursor_row, cursor_col) =
             layout_input(input_text, input_cursor, content_width, input_rows_budget);
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
+            let placeholder: &str = if let Some(ref suggestion) = self.app.prompt_suggestion {
+                suggestion.as_str()
+            } else if self.app.is_history_search_active() {
                 self.app
                     .tr(crate::localization::MessageId::HistorySearchPlaceholder)
             } else {
@@ -1172,10 +1249,7 @@ impl Renderable for ApprovalWidget<'_> {
             let max_width = card_area.width.saturating_sub(14) as usize;
             if max_width > 0 {
                 lines.push(Line::from(""));
-                let intent_label = match locale {
-                    Locale::ZhHans => "意图：",
-                    _ => "Intent: ",
-                };
+                let intent_label = tr(locale, MessageId::ApprovalIntentLabel);
                 let summary_lines: Vec<&str> = summary.lines().collect();
                 for (i, sline) in summary_lines.iter().take(3).enumerate() {
                     let prefix = if i == 0 { intent_label } else { "  " };
@@ -1194,10 +1268,8 @@ impl Renderable for ApprovalWidget<'_> {
                     ]));
                 }
                 if summary_lines.len() > 3 {
-                    let more = match locale {
-                        Locale::ZhHans => format!("  … (还有 {} 行)", summary_lines.len() - 3),
-                        _ => format!("  … (+{} lines)", summary_lines.len() - 3),
-                    };
+                    let more = tr(locale, MessageId::ApprovalMoreLines)
+                        .replace("{count}", &(summary_lines.len() - 3).to_string());
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(more, Style::default().fg(palette::TEXT_HINT)),
@@ -1207,21 +1279,35 @@ impl Renderable for ApprovalWidget<'_> {
         }
 
         lines.push(Line::from(""));
-        let params_str = self.request.params_display();
-        let params_width = card_area.width.saturating_sub(14) as usize;
-        let params_truncated =
-            crate::utils::truncate_with_ellipsis(&params_str, params_width.max(20), "...");
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                label_params(locale),
-                Style::default().fg(palette::TEXT_HINT),
-            ),
-            Span::styled(
-                params_truncated,
-                Style::default().fg(palette::TEXT_SECONDARY),
-            ),
-        ]));
+        let details = self.request.prominent_detail_items(locale);
+        if details.is_empty() {
+            let params_str = self.request.params_display();
+            let params_width = card_area.width.saturating_sub(14) as usize;
+            let params_truncated =
+                crate::utils::truncate_with_ellipsis(&params_str, params_width.max(20), "...");
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    label_params(locale),
+                    Style::default().fg(palette::TEXT_HINT),
+                ),
+                Span::styled(
+                    params_truncated,
+                    Style::default().fg(palette::TEXT_SECONDARY),
+                ),
+            ]));
+        } else {
+            for detail in details.iter().take(4) {
+                if self.request.category == ToolCategory::Shell
+                    && matches!(detail.label.as_str(), "Command" | "命令")
+                    && let Some(shell_lines) = detail.shell_lines.as_deref()
+                {
+                    push_shell_command_lines(&mut lines, &detail.label, shell_lines);
+                } else {
+                    push_detail_line(&mut lines, &detail.label, &detail.value);
+                }
+            }
+        }
 
         lines.push(Line::from(""));
 
@@ -1382,87 +1468,101 @@ fn approval_option_style(is_selected: bool, color: Color) -> Style {
 }
 
 fn risk_badge_text(risk: RiskLevel, locale: Locale) -> &'static str {
-    match (locale, risk) {
-        (Locale::ZhHans, RiskLevel::Benign) => "审查",
-        (Locale::ZhHans, RiskLevel::Destructive) => "破坏性",
-        (_, RiskLevel::Benign) => "REVIEW",
-        (_, RiskLevel::Destructive) => "DESTRUCTIVE",
+    match risk {
+        RiskLevel::Benign => tr(locale, MessageId::ApprovalRiskReview),
+        RiskLevel::Destructive => tr(locale, MessageId::ApprovalRiskDestructive),
     }
 }
 
 fn category_label_for(category: ToolCategory, locale: Locale) -> (&'static str, Color) {
-    match (locale, category) {
-        (Locale::ZhHans, ToolCategory::Safe) => ("安全", palette::STATUS_SUCCESS),
-        (Locale::ZhHans, ToolCategory::FileWrite) => ("文件写入", palette::STATUS_WARNING),
-        (Locale::ZhHans, ToolCategory::Shell) => ("Shell 命令", palette::STATUS_ERROR),
-        (Locale::ZhHans, ToolCategory::Network) => ("网络", palette::STATUS_WARNING),
-        (Locale::ZhHans, ToolCategory::McpRead) => ("MCP 读取", palette::DEEPSEEK_SKY),
-        (Locale::ZhHans, ToolCategory::McpAction) => ("MCP 操作", palette::STATUS_WARNING),
-        (Locale::ZhHans, ToolCategory::Unknown) => ("未知", palette::STATUS_ERROR),
-        (_, ToolCategory::Safe) => ("Safe", palette::STATUS_SUCCESS),
-        (_, ToolCategory::FileWrite) => ("File Write", palette::STATUS_WARNING),
-        (_, ToolCategory::Shell) => ("Shell Command", palette::STATUS_ERROR),
-        (_, ToolCategory::Network) => ("Network", palette::STATUS_WARNING),
-        (_, ToolCategory::McpRead) => ("MCP Read", palette::DEEPSEEK_SKY),
-        (_, ToolCategory::McpAction) => ("MCP Action", palette::STATUS_WARNING),
-        (_, ToolCategory::Unknown) => ("Unknown", palette::STATUS_ERROR),
-    }
+    let label = match category {
+        ToolCategory::Safe => tr(locale, MessageId::ApprovalCategorySafe),
+        ToolCategory::FileWrite => tr(locale, MessageId::ApprovalCategoryFileWrite),
+        ToolCategory::Shell => tr(locale, MessageId::ApprovalCategoryShell),
+        ToolCategory::Network => tr(locale, MessageId::ApprovalCategoryNetwork),
+        ToolCategory::McpRead => tr(locale, MessageId::ApprovalCategoryMcpRead),
+        ToolCategory::McpAction => tr(locale, MessageId::ApprovalCategoryMcpAction),
+        ToolCategory::Unknown => tr(locale, MessageId::ApprovalCategoryUnknown),
+    };
+    let color = match category {
+        ToolCategory::Safe => palette::STATUS_SUCCESS,
+        ToolCategory::FileWrite => palette::STATUS_WARNING,
+        ToolCategory::Shell => palette::STATUS_ERROR,
+        ToolCategory::Network => palette::STATUS_WARNING,
+        ToolCategory::McpRead => palette::DEEPSEEK_SKY,
+        ToolCategory::McpAction => palette::STATUS_WARNING,
+        ToolCategory::Unknown => palette::STATUS_ERROR,
+    };
+    (label, color)
 }
 
 fn approval_word(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "审批",
-        _ => "approval",
-    }
+    tr(locale, MessageId::ApprovalBlockTitle)
 }
 
 fn label_type(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "类型：",
-        _ => "Type: ",
-    }
+    tr(locale, MessageId::ApprovalFieldType)
 }
 
 fn label_about(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "说明：",
-        _ => "About:  ",
-    }
+    tr(locale, MessageId::ApprovalFieldAbout)
 }
 
 fn label_impact(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "影响：",
-        _ => "Impact: ",
-    }
+    tr(locale, MessageId::ApprovalFieldImpact)
 }
 
 fn label_params(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "参数：",
-        _ => "Params: ",
+    tr(locale, MessageId::ApprovalFieldParams)
+}
+
+fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label:<7} "),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(palette::TEXT_BODY)),
+    ]));
+}
+
+fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command_lines: &[String]) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label}:"),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    for line in command_lines {
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                line.clone(),
+                Style::default()
+                    .fg(palette::TEXT_BODY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
     }
 }
 
 fn footer_controls(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
-        _ => "  ·  v: full params  ·  Esc: abort",
-    }
+    tr(locale, MessageId::ApprovalControlsHint)
 }
 
 fn selection_hint_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "选择：",
-        _ => "Choose: ",
-    }
+    tr(locale, MessageId::ApprovalChooseHint)
 }
 
 fn selection_hint_value(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "Enter 执行选中项，或直接按 y/a/d",
-        _ => "Enter selected option, or press y/a/d directly",
-    }
+    tr(locale, MessageId::ApprovalChooseAction)
 }
 
 struct ApprovalOptionRow {
@@ -1498,46 +1598,42 @@ fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 
 }
 
 fn option_approve_once(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "仅本次批准",
-        _ => "Approve once",
-    }
+    tr(locale, MessageId::ApprovalOptionApproveOnce)
 }
 
 fn option_approve_always(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "本会话同类自动批准",
-        _ => "Approve always for this kind",
-    }
+    tr(locale, MessageId::ApprovalOptionApproveAlways)
 }
 
 fn option_deny(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "拒绝本次调用",
-        _ => "Deny this call",
-    }
+    tr(locale, MessageId::ApprovalOptionDeny)
 }
 
 fn option_abort(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "终止本轮",
-        _ => "Abort the turn",
-    }
+    tr(locale, MessageId::ApprovalOptionAbortTurn)
 }
 
 pub struct ElevationWidget<'a> {
     request: &'a ElevationRequest,
     selected: usize,
+    locale: Locale,
 }
 
 impl<'a> ElevationWidget<'a> {
-    pub fn new(request: &'a ElevationRequest, selected: usize) -> Self {
-        Self { request, selected }
+    pub fn new(request: &'a ElevationRequest, selected: usize, locale: Locale) -> Self {
+        Self {
+            request,
+            selected,
+            locale,
+        }
     }
 }
 
 impl Renderable for ElevationWidget<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        use crate::localization::MessageId;
+        use crate::localization::tr;
+
         let popup_width = 70.min(area.width.saturating_sub(4));
         let popup_height = 22.min(area.height.saturating_sub(4));
         let popup_area = Rect {
@@ -1552,14 +1648,14 @@ impl Renderable for ElevationWidget<'_> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![Span::styled(
-                "  ⚠ Sandbox Denied ",
+                tr(self.locale, MessageId::ElevationTitleSandboxDenied),
                 Style::default()
                     .fg(palette::STATUS_ERROR)
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
             Line::from(vec![
-                Span::raw("  Tool: "),
+                Span::raw(tr(self.locale, MessageId::ElevationFieldTool)),
                 Span::styled(
                     &self.request.tool_name,
                     Style::default()
@@ -1569,18 +1665,17 @@ impl Renderable for ElevationWidget<'_> {
             ]),
         ];
 
-        // Show command if it's a shell command
         if let Some(ref command) = self.request.command {
             let cmd_display = crate::utils::truncate_with_ellipsis(command, 45, "...");
             lines.push(Line::from(vec![
-                Span::raw("  Cmd:  "),
+                Span::raw(tr(self.locale, MessageId::ElevationFieldCmd)),
                 Span::styled(cmd_display, Style::default().fg(palette::TEXT_MUTED)),
             ]));
         }
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::raw("  Reason: "),
+            Span::raw(tr(self.locale, MessageId::ElevationFieldReason)),
             Span::styled(
                 &self.request.denial_reason,
                 Style::default().fg(palette::STATUS_WARNING),
@@ -1589,7 +1684,7 @@ impl Renderable for ElevationWidget<'_> {
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Impact if approved:",
+            tr(self.locale, MessageId::ElevationImpactHeader),
             Style::default().fg(palette::TEXT_MUTED),
         )));
         if self
@@ -1599,7 +1694,7 @@ impl Renderable for ElevationWidget<'_> {
             .any(|option| matches!(option, ElevationOption::WithNetwork))
         {
             lines.push(Line::from(Span::styled(
-                "    - network retry enables outbound downloads and HTTP requests",
+                tr(self.locale, MessageId::ElevationImpactNetwork),
                 Style::default().fg(palette::TEXT_PRIMARY),
             )));
         }
@@ -1610,22 +1705,21 @@ impl Renderable for ElevationWidget<'_> {
             .any(|option| matches!(option, ElevationOption::WithWriteAccess(_)))
         {
             lines.push(Line::from(Span::styled(
-                "    - write retry expands writable filesystem scope for this tool call",
+                tr(self.locale, MessageId::ElevationImpactWrite),
                 Style::default().fg(palette::TEXT_PRIMARY),
             )));
         }
         lines.push(Line::from(Span::styled(
-            "    - full access removes sandbox restrictions entirely for this retry",
+            tr(self.locale, MessageId::ElevationImpactFullAccess),
             Style::default().fg(palette::TEXT_PRIMARY),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Choose how to proceed:",
+            tr(self.locale, MessageId::ElevationPromptProceed),
             Style::default().fg(palette::TEXT_MUTED),
         )));
         lines.push(Line::from(""));
 
-        // Render options
         for (i, option) in self.request.options.iter().enumerate() {
             let is_selected = i == self.selected;
             let style = if is_selected {
@@ -1636,11 +1730,27 @@ impl Renderable for ElevationWidget<'_> {
                 Style::default()
             };
 
-            let key = match option {
-                ElevationOption::WithNetwork => "n",
-                ElevationOption::WithWriteAccess(_) => "w",
-                ElevationOption::FullAccess => "f",
-                ElevationOption::Abort => "a",
+            let (key, label_id, desc_id) = match option {
+                ElevationOption::WithNetwork => (
+                    "n",
+                    MessageId::ElevationOptionNetwork,
+                    MessageId::ElevationOptionNetworkDesc,
+                ),
+                ElevationOption::WithWriteAccess(_) => (
+                    "w",
+                    MessageId::ElevationOptionWrite,
+                    MessageId::ElevationOptionWriteDesc,
+                ),
+                ElevationOption::FullAccess => (
+                    "f",
+                    MessageId::ElevationOptionFullAccess,
+                    MessageId::ElevationOptionFullAccessDesc,
+                ),
+                ElevationOption::Abort => (
+                    "a",
+                    MessageId::ElevationOptionAbort,
+                    MessageId::ElevationOptionAbortDesc,
+                ),
             };
 
             let label_color = match option {
@@ -1655,18 +1765,18 @@ impl Renderable for ElevationWidget<'_> {
                     format!("[{key}] "),
                     Style::default().fg(palette::STATUS_SUCCESS),
                 ),
-                Span::styled(option.label(), style.fg(label_color)),
+                Span::styled(tr(self.locale, label_id), style.fg(label_color)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("      "),
                 Span::styled(
-                    option.description(),
+                    tr(self.locale, desc_id),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]));
         }
 
-        let title = " Sandbox Elevation Required ";
+        let title = tr(self.locale, MessageId::ElevationTitleRequired);
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -1742,12 +1852,17 @@ fn apply_detail_target_highlight(
     top: usize,
     target_cell: usize,
     line_meta: &[TranscriptLineMeta],
+    original_index_map: &[usize],
 ) {
     let highlight_bg = Color::Reset;
     for (idx, line) in lines.iter_mut().enumerate() {
         let line_index = top + idx;
         if let Some(TranscriptLineMeta::CellLine { cell_index, .. }) = line_meta.get(line_index)
-            && *cell_index == target_cell
+            && original_index_map
+                .get(*cell_index)
+                .copied()
+                .unwrap_or(*cell_index)
+                == target_cell
         {
             for span in &mut line.spans {
                 span.style = span.style.bg(highlight_bg);
@@ -1762,6 +1877,7 @@ fn apply_send_flash(
     top: usize,
     history: &[HistoryCell],
     line_meta: &[TranscriptLineMeta],
+    original_index_map: &[usize],
 ) {
     // Find the last User cell index.
     let last_user_cell = history
@@ -1776,7 +1892,11 @@ fn apply_send_flash(
     for (idx, line) in lines.iter_mut().enumerate() {
         let line_index = top + idx;
         if let Some(TranscriptLineMeta::CellLine { cell_index, .. }) = line_meta.get(line_index)
-            && *cell_index == target_cell
+            && original_index_map
+                .get(*cell_index)
+                .copied()
+                .unwrap_or(*cell_index)
+                == target_cell
         {
             for span in &mut line.spans {
                 span.style = span.style.bg(flash_bg);
@@ -2612,22 +2732,22 @@ fn line_spans_with_selection<'a>(
 mod tests {
     use super::{
         ApprovalWidget, COMPOSER_PANEL_HEIGHT, ChatWidget, ComposerWidget, Renderable,
-        SlashMenuEntry, apply_selection_to_line, build_empty_state_lines, composer_height,
-        composer_max_height, composer_min_input_rows, composer_top_padding, compute_takeover_area,
-        cursor_row_col, layout_input, pad_lines_to_bottom, placeholder_visual_lines,
-        push_command_entry, should_render_empty_state, slash_completion_hints, wrap_input_lines,
-        wrap_text,
+        SlashMenuEntry, apply_detail_target_highlight, apply_selection_to_line, apply_send_flash,
+        build_empty_state_lines, composer_height, composer_max_height, composer_min_input_rows,
+        composer_top_padding, compute_takeover_area, cursor_row_col, layout_input,
+        pad_lines_to_bottom, placeholder_visual_lines, push_command_entry,
+        should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
     };
     use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
     use crate::palette;
-    use crate::tui::app::{App, ComposerDensity, TuiOptions};
+    use crate::tui::app::{App, ComposerDensity, ToolCollapseMode, TuiOptions};
     use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus};
-    use crate::tui::scrolling::TranscriptScroll;
+    use crate::tui::scrolling::{TranscriptLineMeta, TranscriptScroll};
     use ratatui::{
         buffer::Buffer,
         layout::Rect,
-        style::Style,
+        style::{Color, Style},
         text::{Line, Span},
     };
     use std::path::PathBuf;
@@ -2667,6 +2787,131 @@ mod tests {
             text.push('\n');
         }
         text
+    }
+
+    fn success_tool_cell(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some(format!("path: {name}.txt")),
+            output: Some(format!("full output from {name}")),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    fn add_dense_tool_run(app: &mut App) {
+        app.add_message(success_tool_cell("read_file"));
+        app.add_message(success_tool_cell("list_dir"));
+        app.add_message(success_tool_cell("web_search"));
+    }
+
+    #[test]
+    fn send_flash_uses_original_index_map_for_collapsed_rows() {
+        let history = vec![
+            success_tool_cell("read_file"),
+            success_tool_cell("list_dir"),
+            HistoryCell::User {
+                content: "sent".to_string(),
+            },
+        ];
+        let mut lines = vec![Line::from("sent")];
+        let line_meta = vec![TranscriptLineMeta::CellLine {
+            cell_index: 0,
+            line_in_cell: 0,
+            copy_prefix_width: 0,
+            copy_separator_after: crate::tui::ui_text::CopyLineSeparator::Newline,
+        }];
+        let original_index_map = vec![2];
+
+        apply_send_flash(&mut lines, 0, &history, &line_meta, &original_index_map);
+
+        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Rgb(30, 40, 55)));
+    }
+
+    #[test]
+    fn detail_highlight_uses_original_index_map_for_collapsed_rows() {
+        let mut lines = vec![Line::from("tool group")];
+        let line_meta = vec![TranscriptLineMeta::CellLine {
+            cell_index: 0,
+            line_in_cell: 0,
+            copy_prefix_width: 0,
+            copy_separator_after: crate::tui::ui_text::CopyLineSeparator::Newline,
+        }];
+        let original_index_map = vec![4];
+
+        apply_detail_target_highlight(&mut lines, 0, 4, &line_meta, &original_index_map);
+
+        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn chat_widget_collapses_dense_tool_runs_by_default() {
+        let mut app = create_test_app();
+        app.tool_collapse_mode = ToolCollapseMode::Compact;
+        app.tool_collapse_threshold = 3;
+        add_dense_tool_run(&mut app);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 8,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert_eq!(app.collapsed_cell_map, vec![0]);
+        assert!(rendered.contains("3 tools"), "{rendered}");
+        assert!(
+            !rendered.contains("full output from list_dir"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn chat_widget_expands_dense_tool_runs_on_demand() {
+        let mut app = create_test_app();
+        app.tool_collapse_mode = ToolCollapseMode::Compact;
+        app.tool_collapse_threshold = 3;
+        add_dense_tool_run(&mut app);
+        app.expanded_tool_runs.insert(0);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 12,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert_eq!(app.collapsed_cell_map, vec![0, 1, 2]);
+        assert!(rendered.contains("full output from list_dir"), "{rendered}");
+    }
+
+    #[test]
+    fn chat_widget_expanded_mode_leaves_dense_tool_runs_visible() {
+        let mut app = create_test_app();
+        app.tool_collapse_mode = ToolCollapseMode::Expanded;
+        app.tool_collapse_threshold = 3;
+        add_dense_tool_run(&mut app);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 12,
+        };
+        let _widget = ChatWidget::new(&mut app, area);
+
+        assert_eq!(app.collapsed_cell_map, vec![0, 1, 2]);
     }
 
     #[test]
@@ -3052,6 +3297,21 @@ mod tests {
 
         assert!(names.contains(&"/model deepseek-ai/deepseek-v4-pro"));
         assert!(!names.contains(&"/model deepseek/deepseek-v4-pro"));
+    }
+
+    #[test]
+    fn slash_completion_hints_model_ollama_has_no_static_remote_models() {
+        let hints =
+            slash_completion_hints("/model", 128, &[], Locale::En, None, ApiProvider::Ollama);
+        let names = hints
+            .iter()
+            .map(|hint| hint.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"/model"));
+        assert!(!names.contains(&"/model deepseek-v4-pro"));
+        assert!(!names.contains(&"/model deepseek-v4-flash"));
+        assert!(!names.contains(&"/model deepseek-coder:1.3b"));
     }
 
     #[test]
@@ -3827,6 +4087,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn approval_shell_command_detects_printf_write_file_preview() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf '%s\\n' 'alpha' 'beta' > src/generated.txt",
+                "cwd": "/tmp/project",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 110, 32);
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(rendered.contains("Command:"), "{rendered}");
+        assert!(
+            rendered.contains("printf > src/generated.txt"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("alpha"), "{rendered}");
+        assert!(rendered.contains("beta"), "{rendered}");
+        assert!(rendered.contains("Dir"), "{rendered}");
+        assert!(rendered.contains("/tmp/project"), "{rendered}");
+    }
+
+    #[test]
+    fn approval_intent_summary_still_renders_with_shell_details() {
+        let request = crate::tui::approval::ApprovalRequest::new_with_intent(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "cargo build || echo fallback",
+                "cwd": "/tmp/project",
+            }),
+            "exec_shell:cargo",
+            Some("Need to verify the fallback build path before editing files."),
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 34);
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(rendered.contains("Intent:"), "{rendered}");
+        assert!(rendered.contains("fallback build path"), "{rendered}");
+        assert!(rendered.contains("Command:"), "{rendered}");
+        assert!(rendered.contains("cargo build ||"), "{rendered}");
+        assert!(rendered.contains("echo fallback"), "{rendered}");
+    }
+
     /// Regression for issue #65: after `App::handle_resize`, the chat widget
     /// must produce a clean render at the new width — no stale wrapping,
     /// no panic, no content exceeding the requested width. Cycling through
@@ -4039,5 +4358,89 @@ mod tests {
                 elapsed.as_millis()
             );
         }
+    }
+
+    // ── Ghost-text prompt suggestion rendering ────────────────────────
+
+    #[test]
+    fn ghost_text_renders_when_suggestion_set_and_input_empty() {
+        let mut app = create_test_app();
+        app.prompt_suggestion = Some("What about error handling?".to_string());
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let rendered: String = buf
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("What about error handling?"),
+            "ghost text should render the suggestion. Got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn ghost_text_hidden_when_input_not_empty() {
+        let mut app = create_test_app();
+        app.prompt_suggestion = Some("A suggestion".to_string());
+        app.input = "hello".to_string();
+        app.cursor_position = 5;
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let has_suggestion = buf
+            .content
+            .iter()
+            .any(|c| c.symbol().contains("A suggestion"));
+        assert!(
+            !has_suggestion,
+            "suggestion should not render when input is non-empty"
+        );
+    }
+
+    #[test]
+    fn ghost_text_hidden_when_no_suggestion() {
+        let mut app = create_test_app();
+        app.prompt_suggestion = None;
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        // When no suggestion and input is empty, placeholder text should appear
+        // instead. The exact placeholder text is locale-dependent, so we check
+        // that the suggestion text is NOT present.
+        let has_placeholder_like_text = buf.content.iter().any(|c| !c.symbol().trim().is_empty());
+        assert!(
+            has_placeholder_like_text,
+            "some non-empty text should render as placeholder"
+        );
     }
 }

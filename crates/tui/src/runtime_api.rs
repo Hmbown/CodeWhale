@@ -1,6 +1,6 @@
 //! Runtime HTTP/SSE API for local DeepSeek automation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
 use std::net::{SocketAddr, UdpSocket};
@@ -34,14 +34,18 @@ use crate::automation_manager::{
     CreateAutomationRequest, SharedAutomationManager, UpdateAutomationRequest, spawn_scheduler,
 };
 use crate::config::{Config, DEFAULT_TEXT_MODEL};
-use crate::mcp::{McpConfig, McpPool};
+use crate::mcp::McpPool;
+use crate::models::{ContentBlock, Message};
 use crate::runtime_threads::{
     CompactThreadRequest, CreateThreadRequest, ExternalApprovalDecision, RuntimeThreadManager,
-    RuntimeThreadManagerConfig, SharedRuntimeThreadManager, StartTurnRequest, SteerTurnRequest,
-    ThreadDetail, ThreadListFilter, ThreadRecord, TurnItemKind, TurnRecord, UpdateThreadRequest,
-    UsageGroupBy,
+    RuntimeThreadManagerConfig, RuntimeTurnStatus, SharedRuntimeThreadManager, StartTurnRequest,
+    SteerTurnRequest, ThreadDetail, ThreadListFilter, ThreadRecord, TurnItemKind,
+    TurnItemLifecycleStatus, TurnRecord, UpdateThreadRequest, UsageGroupBy,
 };
-use crate::session_manager::{SavedSession, SessionManager, SessionMetadata, default_sessions_dir};
+use crate::session_manager::{
+    SavedSession, SessionManager, SessionMetadata, create_saved_session_with_id_and_mode,
+    default_sessions_dir,
+};
 use crate::skill_state::SkillStateStore;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskRecord, TaskSummary,
@@ -177,6 +181,20 @@ struct SessionDetailResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateSessionRequest {
+    thread_id: String,
+    title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateSessionResponse {
+    session_id: String,
+    thread_id: String,
+    message_count: usize,
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ResumeSessionRequest {
     model: Option<String>,
     mode: Option<String>,
@@ -246,6 +264,10 @@ struct ThreadSummary {
     preview: String,
     model: String,
     mode: String,
+    workspace: PathBuf,
+    branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
     archived: bool,
     updated_at: chrono::DateTime<Utc>,
     latest_turn_id: Option<String>,
@@ -257,11 +279,20 @@ struct WorkspaceStatusResponse {
     workspace: PathBuf,
     git_repo: bool,
     branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
     staged: usize,
     unstaged: usize,
     untracked: usize,
     ahead: Option<u32>,
     behind: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceGitMetadata {
+    branch: Option<String>,
+    head: Option<String>,
+    dirty: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -514,7 +545,10 @@ pub async fn run_http_server(
 
 pub fn build_router(state: RuntimeApiState) -> Router {
     let api_routes = Router::new()
-        .route("/v1/sessions", get(list_sessions))
+        .route(
+            "/v1/sessions",
+            get(list_sessions).post(create_session_from_thread),
+        )
         .route("/v1/sessions/{id}", get(get_session).delete(delete_session))
         .route(
             "/v1/sessions/{id}/resume-thread",
@@ -565,6 +599,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
         .route("/v1/usage", get(get_usage))
+        .route("/v1/snapshots", get(list_snapshots))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_runtime_token,
@@ -845,6 +880,150 @@ async fn resume_session_thread(
     ))
 }
 
+async fn create_session_from_thread(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<(StatusCode, Json<CreateSessionResponse>), ApiError> {
+    let thread_id = req.thread_id.trim();
+    if thread_id.is_empty() {
+        return Err(ApiError::bad_request("thread_id is required"));
+    }
+
+    let detail = state
+        .runtime_threads
+        .get_thread_detail(thread_id)
+        .await
+        .map_err(map_thread_err)?;
+
+    if thread_detail_has_live_work(&detail) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: format!(
+                "Thread {thread_id} has a queued or active turn; wait for completion before saving as a session"
+            ),
+        });
+    }
+
+    let messages = messages_from_thread_detail(&detail);
+    if messages.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "Thread {thread_id} has no user or assistant messages to save"
+        )));
+    }
+
+    let manager = SessionManager::new(state.sessions_dir.clone())
+        .map_err(|e| ApiError::internal(format!("Failed to open sessions dir: {e}")))?;
+    let total_tokens = total_tokens_from_thread_detail(&detail);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let mut session = create_saved_session_with_id_and_mode(
+        session_id.clone(),
+        &messages,
+        &detail.thread.model,
+        &detail.thread.workspace,
+        total_tokens,
+        None,
+        Some(&detail.thread.mode),
+    );
+    session.system_prompt = detail.thread.system_prompt.clone();
+
+    if let Some(title) =
+        session_title_override(req.title.as_deref(), detail.thread.title.as_deref())
+    {
+        session.metadata.title = title;
+    }
+    let title = session.metadata.title.clone();
+    let message_count = session.metadata.message_count;
+
+    manager
+        .save_session(&session)
+        .map_err(|e| ApiError::internal(format!("Failed to save session: {e}")))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateSessionResponse {
+            session_id,
+            thread_id: detail.thread.id,
+            message_count,
+            title,
+        }),
+    ))
+}
+
+fn thread_detail_has_live_work(detail: &ThreadDetail) -> bool {
+    detail.turns.iter().any(|turn| {
+        matches!(
+            turn.status,
+            RuntimeTurnStatus::Queued | RuntimeTurnStatus::InProgress
+        )
+    }) || detail.items.iter().any(|item| {
+        matches!(
+            item.status,
+            TurnItemLifecycleStatus::Queued | TurnItemLifecycleStatus::InProgress
+        )
+    })
+}
+
+fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message> {
+    let items_by_id: HashMap<&str, _> = detail
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item))
+        .collect();
+    let mut messages = Vec::new();
+
+    for turn in &detail.turns {
+        for item_id in &turn.item_ids {
+            let Some(item) = items_by_id.get(item_id.as_str()) else {
+                continue;
+            };
+            let role = match item.kind {
+                TurnItemKind::UserMessage => "user",
+                TurnItemKind::AgentMessage => "assistant",
+                _ => continue,
+            };
+            let Some(text) = item.detail.as_deref().map(str::trim) else {
+                continue;
+            };
+            if text.is_empty() {
+                continue;
+            }
+            messages.push(Message {
+                role: role.to_string(),
+                content: vec![ContentBlock::Text {
+                    text: text.to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+    }
+
+    messages
+}
+
+fn total_tokens_from_thread_detail(detail: &ThreadDetail) -> u64 {
+    detail
+        .turns
+        .iter()
+        .filter_map(|turn| turn.usage.as_ref())
+        .map(|usage| u64::from(usage.input_tokens) + u64::from(usage.output_tokens))
+        .sum()
+}
+
+fn session_title_override(requested: Option<&str>, thread_title: Option<&str>) -> Option<String> {
+    requested
+        .and_then(nonempty_title)
+        .or_else(|| thread_title.and_then(nonempty_title))
+}
+
+fn nonempty_title(title: &str) -> Option<String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(truncate_text(trimmed, 50))
+    }
+}
+
 async fn delete_session(
     State(state): State<RuntimeApiState>,
     Path(id): Path<String>,
@@ -1073,12 +1252,17 @@ async fn list_threads_summary(
             }
         }
 
+        let workspace_git = collect_workspace_git_metadata(&thread.workspace);
         summaries.push(ThreadSummary {
             id: thread.id,
             title,
             preview,
             model: thread.model,
             mode: thread.mode,
+            branch: workspace_git.branch,
+            head: workspace_git.head,
+            dirty: workspace_git.dirty,
+            workspace: thread.workspace,
             archived: thread.archived,
             updated_at: thread.updated_at,
             latest_turn_id: thread.latest_turn_id,
@@ -1223,7 +1407,8 @@ async fn runtime_info(State(state): State<RuntimeApiState>) -> Json<RuntimeInfoR
 async fn list_mcp_servers(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<McpServersResponse>, ApiError> {
-    let config = load_mcp_config_or_default(&state.mcp_config_path)?;
+    let config = crate::mcp::load_config_with_workspace(&state.mcp_config_path, &state.workspace)
+        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
     let mut pool = McpPool::new(config.clone());
     let _errors = pool.connect_all().await;
     let connected: HashSet<String> = pool
@@ -1254,16 +1439,14 @@ async fn list_mcp_tools(
     State(state): State<RuntimeApiState>,
     Query(query): Query<McpToolsQuery>,
 ) -> Result<Json<McpToolsResponse>, ApiError> {
-    let mut pool = McpPool::from_config_path(&state.mcp_config_path)
-        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
+    let mut pool =
+        McpPool::from_config_path_with_workspace(&state.mcp_config_path, &state.workspace)
+            .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
     let _errors = pool.connect_all().await;
 
     let mut tools = Vec::new();
     for (prefixed_name, tool) in pool.all_tools() {
-        let Some(rest) = prefixed_name.strip_prefix("mcp_") else {
-            continue;
-        };
-        let Some((server, name)) = rest.split_once('_') else {
+        let Ok((server, name)) = pool.parse_prefixed_name(&prefixed_name) else {
             continue;
         };
 
@@ -1831,6 +2014,8 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
         workspace: workspace.to_path_buf(),
         git_repo: false,
         branch: None,
+        head: None,
+        dirty: false,
         staged: 0,
         unstaged: 0,
         untracked: 0,
@@ -1846,9 +2031,10 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
     }
 
     status.git_repo = true;
-    status.branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let metadata = collect_workspace_git_metadata(workspace);
+    status.branch = metadata.branch;
+    status.head = metadata.head;
+    status.dirty = metadata.dirty;
 
     if let Some(porcelain) = run_git(workspace, &["status", "--porcelain=v1"]) {
         for line in porcelain.lines() {
@@ -1882,12 +2068,52 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
     status
 }
 
+fn collect_workspace_git_metadata(workspace: &std::path::Path) -> WorkspaceGitMetadata {
+    let Some(repo_check) = run_git(workspace, &["rev-parse", "--is-inside-work-tree"]) else {
+        return WorkspaceGitMetadata::default();
+    };
+    if repo_check.trim() != "true" {
+        return WorkspaceGitMetadata::default();
+    }
+
+    WorkspaceGitMetadata {
+        branch: current_git_branch(workspace),
+        head: current_git_head(workspace),
+        dirty: run_git(workspace, &["status", "--porcelain=v1"])
+            .is_some_and(|porcelain| !porcelain.trim().is_empty()),
+    }
+}
+
 fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
     let output = crate::dependencies::Git::output(args, workspace).ok()?;
     if !output.status.success() {
         return None;
     }
     String::from_utf8(output.stdout).ok()
+}
+
+fn current_git_branch(workspace: &std::path::Path) -> Option<String> {
+    let repo_check = run_git(workspace, &["rev-parse", "--is-inside-work-tree"])?;
+    if repo_check.trim() != "true" {
+        return None;
+    }
+    let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return None;
+    }
+    if branch != "HEAD" {
+        return Some(branch.to_string());
+    }
+    let short_hash = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let short_hash = short_hash.trim();
+    (!short_hash.is_empty()).then(|| format!("detached@{short_hash}"))
+}
+
+fn current_git_head(workspace: &std::path::Path) -> Option<String> {
+    let head = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let head = head.trim();
+    (!head.is_empty()).then(|| head.to_string())
 }
 
 fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
@@ -1961,11 +2187,6 @@ fn format_skill_search_paths(directories: &[PathBuf]) -> String {
         .join(", ")
 }
 
-fn load_mcp_config_or_default(path: &std::path::Path) -> Result<McpConfig, ApiError> {
-    crate::mcp::load_config(path)
-        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e:#}")))
-}
-
 #[derive(Debug, Deserialize)]
 struct UsageQuery {
     /// ISO-8601 lower bound (inclusive). When omitted, no lower bound.
@@ -2017,6 +2238,59 @@ async fn get_usage(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!(aggregation)))
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotsQuery {
+    /// Maximum number of snapshots to return. Mirrors `/restore list [N]`.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotEntry {
+    id: String,
+    label: String,
+    timestamp: i64,
+}
+
+async fn list_snapshots(
+    State(state): State<RuntimeApiState>,
+    Query(query): Query<SnapshotsQuery>,
+) -> Result<Json<Vec<SnapshotEntry>>, ApiError> {
+    Ok(Json(snapshot_entries_for_workspace(
+        &state.workspace,
+        query,
+    )?))
+}
+
+fn snapshot_entries_for_workspace(
+    workspace: &FsPath,
+    query: SnapshotsQuery,
+) -> Result<Vec<SnapshotEntry>, ApiError> {
+    const DEFAULT_LIMIT: usize = 20;
+    const MAX_LIMIT: usize = 100;
+
+    let limit = match query.limit.unwrap_or(DEFAULT_LIMIT) {
+        1..=MAX_LIMIT => query.limit.unwrap_or(DEFAULT_LIMIT),
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "limit must be between 1 and {MAX_LIMIT}; got {other}",
+            )));
+        }
+    };
+    let repo = crate::snapshot::SnapshotRepo::open_or_init(workspace)
+        .map_err(|e| ApiError::internal(format!("Snapshot repo unavailable: {e}")))?;
+    let snapshots = repo
+        .list(limit)
+        .map_err(|e| ApiError::internal(format!("Failed to list snapshots: {e}")))?;
+    Ok(snapshots
+        .into_iter()
+        .map(|snapshot| SnapshotEntry {
+            id: snapshot.id.as_str().to_string(),
+            label: snapshot.label,
+            timestamp: snapshot.timestamp,
+        })
+        .collect())
 }
 
 const MOBILE_HTML: &str = include_str!("runtime_mobile.html");
@@ -2148,11 +2422,12 @@ mod tests {
     use crate::core::ops::Op;
     use crate::models::Usage;
     use crate::runtime_threads::RuntimeEventRecord;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use anyhow::{Context, bail};
     use futures_util::StreamExt;
     use std::fs;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, mpsc};
+    use tokio::sync::{Mutex, mpsc, oneshot};
     use tokio::time::sleep;
     use uuid::Uuid;
 
@@ -2211,6 +2486,56 @@ mod tests {
             context_references: Vec::new(),
             artifacts: Vec::new(),
         }
+    }
+
+    fn run_test_git(workspace: &std::path::Path, args: &[&str]) -> Result<()> {
+        let output = crate::dependencies::Git::output(args, workspace)
+            .with_context(|| format!("git {args:?} failed to spawn"))?;
+        if !output.status.success() {
+            bail!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_status_reports_head_and_dirty_counts() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo)?;
+        run_test_git(&repo, &["init", "-b", "main"])?;
+        run_test_git(&repo, &["config", "core.autocrlf", "false"])?;
+        fs::write(repo.join("tracked.txt"), "clean\n")?;
+        run_test_git(&repo, &["add", "tracked.txt"])?;
+        run_test_git(
+            &repo,
+            &[
+                "-c",
+                "user.name=CodeWhale Test",
+                "-c",
+                "user.email=codewhale@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )?;
+
+        let clean = collect_workspace_status(&repo);
+        assert!(clean.git_repo);
+        assert_eq!(clean.branch.as_deref(), Some("main"));
+        assert!(clean.head.as_deref().is_some_and(|head| !head.is_empty()));
+        assert!(!clean.dirty);
+
+        fs::write(repo.join("tracked.txt"), "dirty\n")?;
+        fs::write(repo.join("untracked.txt"), "new\n")?;
+
+        let dirty = collect_workspace_status(&repo);
+        assert!(dirty.dirty);
+        assert_eq!(dirty.unstaged, 1);
+        assert_eq!(dirty.untracked, 1);
+        Ok(())
     }
 
     #[test]
@@ -2357,6 +2682,7 @@ mod tests {
             tokio::task::JoinHandle<()>,
         )>,
     > {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         fs::create_dir_all(&sessions_dir)?;
         let manager = TaskManager::start_with_executor(
             TaskManagerConfig {
@@ -2522,12 +2848,40 @@ mod tests {
         }
     }
 
+    async fn wait_for_in_progress_item(
+        client: &reqwest::Client,
+        addr: SocketAddr,
+        thread_id: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let detail: serde_json::Value = client
+                .get(format!("http://{addr}/v1/threads/{thread_id}"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            if detail["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["status"] == "in_progress"))
+            {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                bail!("timed out waiting for in-progress item in thread {thread_id}");
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     #[tokio::test]
     async fn health_and_tasks_endpoints_work() -> Result<()> {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let health: serde_json::Value = client
             .get(format!("http://{addr}/health"))
@@ -2592,7 +2946,7 @@ mod tests {
         else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let health = client
             .get(format!("http://{addr}/health"))
@@ -2627,11 +2981,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_summary_includes_workspace_branch_metadata() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("runtime");
+        let sessions_dir = root.join("sessions");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo)?;
+        run_test_git(&repo, &["init", "-b", "feature/agent"])?;
+        run_test_git(&repo, &["config", "core.autocrlf", "false"])?;
+        fs::write(repo.join("README.md"), "branch visibility\n")?;
+        run_test_git(&repo, &["add", "README.md"])?;
+        run_test_git(
+            &repo,
+            &[
+                "-c",
+                "user.name=CodeWhale Test",
+                "-c",
+                "user.email=codewhale@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )?;
+
+        let non_git = tmp.path().join("non-git");
+        fs::create_dir_all(&non_git)?;
+
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root(root, sessions_dir).await?
+        else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let git_thread: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "title": "Git workspace",
+                "workspace": repo,
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let git_thread_id = git_thread["id"]
+            .as_str()
+            .context("missing git thread id")?
+            .to_string();
+        fs::write(
+            repo.join("dirty.txt"),
+            "worktree changed after thread spawn\n",
+        )?;
+
+        let plain_thread: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "title": "Plain workspace",
+                "workspace": non_git,
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let plain_thread_id = plain_thread["id"]
+            .as_str()
+            .context("missing plain thread id")?
+            .to_string();
+
+        let summary: serde_json::Value = client
+            .get(format!("http://{addr}/v1/threads/summary?limit=100"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let summaries = summary.as_array().context("summary should be an array")?;
+        let git_summary = summaries
+            .iter()
+            .find(|item| item["id"] == git_thread_id)
+            .context("missing git workspace summary")?;
+        assert_eq!(git_summary["branch"], "feature/agent");
+        assert!(
+            git_summary["head"]
+                .as_str()
+                .is_some_and(|head| !head.is_empty())
+        );
+        assert_eq!(git_summary["dirty"], true);
+        assert_eq!(git_summary["workspace"], repo.to_string_lossy().as_ref());
+
+        let plain_summary = summaries
+            .iter()
+            .find(|item| item["id"] == plain_thread_id)
+            .context("missing plain workspace summary")?;
+        assert_eq!(plain_summary["branch"], serde_json::Value::Null);
+        assert_eq!(plain_summary["head"], serde_json::Value::Null);
+        assert_eq!(plain_summary["dirty"], false);
+        assert_eq!(
+            plain_summary["workspace"],
+            non_git.to_string_lossy().as_ref()
+        );
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn workspace_and_automation_endpoints_work() -> Result<()> {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let workspace: serde_json::Value = client
             .get(format!("http://{addr}/v1/workspace/status"))
@@ -2755,7 +3216,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let resp = client
             .post(format!("http://{addr}/v1/stream"))
@@ -2772,7 +3233,7 @@ mod tests {
         let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let created: serde_json::Value = client
             .post(format!("http://{addr}/v1/threads"))
@@ -3044,7 +3505,7 @@ mod tests {
         let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let created: serde_json::Value = client
             .post(format!("http://{addr}/v1/threads"))
@@ -3170,7 +3631,7 @@ mod tests {
         let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let created: serde_json::Value = client
             .post(format!("http://{addr}/v1/threads"))
@@ -3393,7 +3854,7 @@ mod tests {
         let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         // Create a thread and install a mock engine so /v1/stream doesn't call the real API.
         let created: serde_json::Value = client
@@ -3510,7 +3971,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let resp = client
             .get(format!("http://{addr}/v1/sessions/nonexistent_id"))
@@ -3527,7 +3988,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let get_resp = client
             .get(format!("http://{addr}/v1/sessions/invalid%20id"))
@@ -3559,7 +4020,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let resp = client
             .post(format!(
@@ -3614,7 +4075,7 @@ mod tests {
         else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let resp = client
             .post(format!(
@@ -3647,11 +4108,283 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_create_from_completed_thread_saves_messages() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-thread-session-{}", Uuid::new_v4()));
+        let sessions_dir = root.join("sessions");
+        let Some((addr, runtime_threads, handle)) =
+            spawn_test_server_with_root(root.clone(), sessions_dir).await?
+        else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let created: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({
+                "model": "deepseek-v4-pro",
+                "mode": "plan",
+                "workspace": root.join("workspace")
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let thread_id = created["id"]
+            .as_str()
+            .context("missing thread id")?
+            .to_string();
+
+        let patched: serde_json::Value = client
+            .patch(format!("http://{addr}/v1/threads/{thread_id}"))
+            .json(&json!({ "title": "Thread title fallback" }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(patched["title"], "Thread title fallback");
+
+        runtime_threads
+            .seed_thread_from_messages(
+                &thread_id,
+                &[
+                    Message {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: "Please save this runtime thread".to_string(),
+                            cache_control: None,
+                        }],
+                    },
+                    Message {
+                        role: "assistant".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: "Saved replies should round-trip.".to_string(),
+                            cache_control: None,
+                        }],
+                    },
+                ],
+            )
+            .await?;
+
+        let resp = client
+            .post(format!("http://{addr}/v1/sessions"))
+            .json(&json!({ "thread_id": thread_id }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let saved: serde_json::Value = resp.json().await?;
+        assert_eq!(saved["thread_id"], thread_id);
+        assert_eq!(saved["message_count"], 2);
+        assert_eq!(saved["title"], "Thread title fallback");
+        let session_id = saved["session_id"]
+            .as_str()
+            .context("missing session id")?
+            .to_string();
+
+        let detail: serde_json::Value = client
+            .get(format!("http://{addr}/v1/sessions/{session_id}"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(detail["metadata"]["title"], "Thread title fallback");
+        assert_eq!(detail["metadata"]["model"], "deepseek-v4-pro");
+        assert_eq!(detail["metadata"]["mode"], "plan");
+        assert_eq!(detail["metadata"]["message_count"], 2);
+        assert_eq!(detail["messages"][0]["role"], "user");
+        assert_eq!(
+            detail["messages"][0]["content"][0]["text"],
+            "Please save this runtime thread"
+        );
+        assert_eq!(detail["messages"][1]["role"], "assistant");
+
+        let manual_title: serde_json::Value = client
+            .post(format!("http://{addr}/v1/sessions"))
+            .json(&json!({
+                "thread_id": thread_id,
+                "title": "Manual saved title"
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(manual_title["title"], "Manual saved title");
+        assert_ne!(manual_title["session_id"], session_id);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_create_from_thread_returns_404_for_missing_thread() -> Result<()> {
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let resp = client
+            .post(format!("http://{addr}/v1/sessions"))
+            .json(&json!({ "thread_id": "thr_missing" }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_create_from_thread_rejects_active_turn() -> Result<()> {
+        let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let created: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads"))
+            .json(&json!({}))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let thread_id = created["id"]
+            .as_str()
+            .context("missing thread id")?
+            .to_string();
+
+        let harness = crate::core::engine::mock_engine_handle();
+        runtime_threads
+            .install_test_engine(&thread_id, harness.handle.clone())
+            .await?;
+        let mut rx_op = harness.rx_op;
+        let tx_event = harness.tx_event;
+        let (active_tx, active_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            if !matches!(rx_op.recv().await, Some(Op::SendMessage { .. })) {
+                return;
+            }
+            let _ = tx_event
+                .send(EngineEvent::TurnStarted {
+                    turn_id: "mock_active_session_save".to_string(),
+                })
+                .await;
+            let _ = tx_event
+                .send(EngineEvent::MessageStarted { index: 0 })
+                .await;
+            let _ = active_tx.send(());
+            let _ = finish_rx.await;
+            let _ = tx_event
+                .send(EngineEvent::MessageDelta {
+                    index: 0,
+                    content: "now complete".to_string(),
+                })
+                .await;
+            let _ = tx_event
+                .send(EngineEvent::MessageComplete { index: 0 })
+                .await;
+            let _ = tx_event
+                .send(EngineEvent::TurnComplete {
+                    usage: Usage {
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        ..Usage::default()
+                    },
+                    status: TurnOutcomeStatus::Completed,
+                    error: None,
+                    tool_catalog: None,
+                    base_url: None,
+                })
+                .await;
+        });
+
+        let started: serde_json::Value = client
+            .post(format!("http://{addr}/v1/threads/{thread_id}/turns"))
+            .json(&json!({ "prompt": "save me while active" }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let turn_id = started["turn"]["id"]
+            .as_str()
+            .context("missing turn id")?
+            .to_string();
+        tokio::time::timeout(Duration::from_secs(2), active_rx)
+            .await
+            .context("timed out waiting for mock active turn")?
+            .context("mock active turn sender dropped")?;
+        wait_for_in_progress_item(&client, addr, &thread_id, Duration::from_secs(2)).await?;
+
+        let resp = client
+            .post(format!("http://{addr}/v1/sessions"))
+            .json(&json!({ "thread_id": thread_id }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = resp.json().await?;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("queued or active turn"))
+        );
+
+        let _ = finish_tx.send(());
+        let terminal = wait_for_terminal_turn_status(
+            &client,
+            addr,
+            &thread_id,
+            &turn_id,
+            Duration::from_secs(2),
+        )
+        .await?;
+        assert_eq!(terminal, "completed");
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn snapshots_endpoint_lists_workspace_snapshots() -> Result<()> {
+        let _lock = lock_test_env();
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        fs::create_dir_all(&home)?;
+        let _home = EnvVarGuard::set("HOME", &home);
+
+        let workspace = root.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let repo = crate::snapshot::SnapshotRepo::open_or_init(&workspace)?;
+        fs::write(workspace.join("a.txt"), "v1")?;
+        repo.snapshot("pre-turn:1")?;
+        fs::write(workspace.join("a.txt"), "v2")?;
+        repo.snapshot("post-turn:1")?;
+
+        let snapshots =
+            snapshot_entries_for_workspace(&workspace, SnapshotsQuery { limit: Some(1) })
+                .expect("snapshot listing should succeed");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].label, "post-turn:1");
+        assert!(snapshots[0].id.len() >= 8);
+        assert!(snapshots[0].timestamp > 0);
+
+        let bad_limit =
+            snapshot_entries_for_workspace(&workspace, SnapshotsQuery { limit: Some(101) })
+                .expect_err("limit above cap should fail");
+        assert_eq!(bad_limit.status, StatusCode::BAD_REQUEST);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn session_delete_returns_404_for_missing_id() -> Result<()> {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let resp = client
             .delete(format!("http://{addr}/v1/sessions/nonexistent-id"))
             .send()
@@ -3686,7 +4419,7 @@ mod tests {
             let _ = axum::serve(listener, router).await;
         });
 
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         // The user-supplied origin is allowed.
         let resp = client
@@ -3756,7 +4489,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let created: serde_json::Value = client
             .post(format!("http://{addr}/v1/threads"))
@@ -3842,7 +4575,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         // Two threads — keep one active, archive the other.
         let active: serde_json::Value = client
@@ -3953,7 +4686,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let body: serde_json::Value = client
             .get(format!("http://{addr}/v1/usage"))
@@ -4012,7 +4745,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let info: serde_json::Value = client
             .get(format!("http://{addr}/v1/runtime/info"))
             .send()
@@ -4043,7 +4776,7 @@ mod tests {
         else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let disabled = client.get(format!("http://{addr}/mobile")).send().await?;
         assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
         handle.abort();
@@ -4082,7 +4815,7 @@ mod tests {
         else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let unauthorized = client.get(format!("http://{addr}/mobile")).send().await?;
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
@@ -4117,7 +4850,7 @@ mod tests {
         else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
 
         let page = client
             .get(format!("http://{addr}/mobile"))
@@ -4142,7 +4875,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let resp = client
             .post(format!("http://{addr}/v1/approvals/no_such_id"))
             .json(&json!({ "decision": "allow" }))
@@ -4159,7 +4892,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let resp = client
             .post(format!("http://{addr}/v1/approvals/whatever"))
             .json(&json!({ "decision": "yolo" }))
@@ -4176,7 +4909,7 @@ mod tests {
         let Some((addr, runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let rx = runtime_threads.register_pending_approval_for_test("ext_id");
 
         let resp = client
@@ -4205,7 +4938,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let body: serde_json::Value = client
             .get(format!("http://{addr}/v1/skills"))
             .send()
@@ -4228,7 +4961,7 @@ mod tests {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
         };
-        let client = reqwest::Client::new();
+        let client = crate::tls::reqwest_client();
         let resp = client
             .post(format!("http://{addr}/v1/skills/no-such-skill"))
             .json(&json!({ "enabled": false }))

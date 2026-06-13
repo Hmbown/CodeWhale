@@ -24,11 +24,10 @@ export async function fetchRepoStats(token?: string): Promise<RepoStats> {
     fetch(`${GH}/repos/${REPO}/releases/latest`, { headers: headers(token), next: { revalidate: 3600 } }),
   ]);
 
-  const repo = (await repoRes.json()) as {
-    stargazers_count: number;
-    forks_count: number;
-    open_issues_count: number;
-  };
+  const repo = repoRes.ok ? await repoRes.json().catch(() => null) : null;
+  const stars = numberField(repo, "stargazers_count");
+  const forks = numberField(repo, "forks_count");
+  const repoOpenCount = numberField(repo, "open_issues_count");
 
   const contributors = await contributorCount(contribRes);
 
@@ -37,9 +36,9 @@ export async function fetchRepoStats(token?: string): Promise<RepoStats> {
     `${GH}/search/issues?q=${encodeURIComponent(`repo:${REPO} is:pr is:open`)}&per_page=1`,
     { headers: headers(token), next: { revalidate: 1800 } }
   );
-  const prJson = (await prRes.json()) as { total_count?: number };
-  const openPulls = prJson.total_count ?? 0;
-  const openIssues = Math.max(0, repo.open_issues_count - openPulls);
+  const prJson = prRes.ok ? ((await prRes.json().catch(() => null)) as { total_count?: number } | null) : null;
+  const openPulls = typeof prJson?.total_count === "number" ? prJson.total_count : 0;
+  const openIssues = Math.max(0, repoOpenCount - openPulls);
 
   let latestRelease: RepoStats["latestRelease"];
   if (releaseRes.ok) {
@@ -48,14 +47,20 @@ export async function fetchRepoStats(token?: string): Promise<RepoStats> {
   }
 
   return {
-    stars: repo.stargazers_count,
-    forks: repo.forks_count,
+    stars,
+    forks,
     openIssues,
     openPulls,
     contributors,
     latestRelease,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+function numberField(body: unknown, key: string): number {
+  if (!body || typeof body !== "object") return 0;
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 async function contributorCount(res: Response): Promise<number> {
@@ -115,8 +120,8 @@ export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]>
     ),
   ]);
 
-  const issues = (await issuesRes.json()) as RawIssue[];
-  const pulls = (await pullsRes.json()) as (RawIssue & { merged_at?: string | null })[];
+  const issues = await responseArray<RawIssue>(issuesRes);
+  const pulls = await responseArray<RawIssue & { merged_at?: string | null }>(pullsRes);
 
   const items: FeedItem[] = [];
 
@@ -161,6 +166,12 @@ export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]>
   return items
     .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))
     .slice(0, limit);
+}
+
+async function responseArray<T>(res: Response): Promise<T[]> {
+  if (!res.ok) return [];
+  const body = await res.json().catch(() => null);
+  return Array.isArray(body) ? (body as T[]) : [];
 }
 
 export function relativeTime(iso: string): string {

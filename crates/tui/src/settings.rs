@@ -5,7 +5,7 @@
 //! TUI-specific preferences (theme, keybinds, font_size) that survive project
 //! switches are stored separately in tui.toml. See [`TuiPrefs`].
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -203,6 +203,8 @@ pub struct Settings {
     pub auto_compact_threshold_percent: f64,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
+    /// Dense tool-run collapse mode: compact, expanded, or calm.
+    pub tool_collapse_mode: String,
     /// Streaming pacing mode. `true` pins the chunker to one-character-per-
     /// commit-tick (typewriter); `false` drains the upstream cadence (each
     /// commit flushes everything queued, which matches V4-pro's burst pattern
@@ -259,6 +261,9 @@ pub struct Settings {
     pub transcript_spacing: String,
     /// Default mode: "agent", "plan", "yolo"
     pub default_mode: String,
+    /// Enable the explicit Pro Plan routing profile. Default false so the
+    /// normal mode/menu surface stays unchanged unless the user opts in.
+    pub pro_plan_profile: bool,
     /// Sidebar width as percentage of terminal width
     pub sidebar_width_percent: u16,
     /// Sidebar focus mode: auto, work, tasks, agents, context, hidden
@@ -330,6 +335,7 @@ impl Default for Settings {
             auto_compact: false,
             auto_compact_threshold_percent: 80.0,
             calm_mode: false,
+            tool_collapse_mode: "compact".to_string(),
             low_motion: false,
             fancy_animations: true,
             bracketed_paste: true,
@@ -347,6 +353,7 @@ impl Default for Settings {
             composer_vim_mode: "normal".to_string(),
             transcript_spacing: "comfortable".to_string(),
             default_mode: "agent".to_string(),
+            pro_plan_profile: false,
             sidebar_width_percent: 28,
             sidebar_focus: "auto".to_string(),
             context_panel: false,
@@ -364,46 +371,44 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Get the settings file path
+    /// Get the canonical settings file path.
+    ///
+    /// New writes should target `~/.codewhale/settings.toml`. Legacy
+    /// DeepSeek-branded paths remain readable as fallbacks during load, but we
+    /// no longer surface them as the primary path in `/config`.
     pub fn path() -> Result<PathBuf> {
-        // Allow tests to override the settings directory via the same env var
-        // used for config (DEEPSEEK_CONFIG_PATH points at config.toml; the
-        // settings file lives as a sibling in the same directory).
-        if let Ok(config_path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
-            let config_path = config_path.trim();
-            if !config_path.is_empty() {
-                let p = expand_path(config_path);
-                if let Some(parent) = p.parent() {
-                    return Ok(parent.join(SETTINGS_FILE_NAME));
-                }
-            }
-        }
-
-        let primary = codewhale_config::codewhale_home()
-            .ok()
-            .map(|home| home.join(SETTINGS_FILE_NAME));
-        let legacy_home = codewhale_config::legacy_deepseek_home()
-            .ok()
-            .map(|home| home.join(SETTINGS_FILE_NAME));
-        let legacy_config_dir =
-            dirs::config_dir().map(|dir| dir.join("deepseek").join(SETTINGS_FILE_NAME));
-
-        resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
+        let (primary, _legacy_home, legacy_config_dir) = settings_path_candidates();
+        primary.or(legacy_config_dir).ok_or_else(|| {
+            anyhow::anyhow!("Failed to resolve settings path: no config directory found.")
+        })
     }
 
     /// Load settings from disk, or return defaults if not found
     pub fn load() -> Result<Self> {
-        let path = Self::path()?;
-        let mut settings = if !path.exists() {
+        let (primary, legacy_home, legacy_config_dir) = settings_path_candidates();
+        let write_path = primary
+            .as_ref()
+            .cloned()
+            .or_else(|| legacy_config_dir.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to resolve settings path: no config directory found.")
+            })?;
+        let read_path =
+            resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
+                .unwrap_or_else(|_| write_path.clone());
+
+        let mut settings = if !read_path.exists() {
             Self::default()
         } else {
-            let content = std::fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read settings from {}", path.display()))?;
-            let mut s: Settings = toml::from_str(&content)
-                .with_context(|| format!("Failed to parse settings from {}", path.display()))?;
+            let content = std::fs::read_to_string(&read_path)
+                .with_context(|| format!("Failed to read settings from {}", read_path.display()))?;
+            let mut s: Settings = toml::from_str(&content).with_context(|| {
+                format!("Failed to parse settings from {}", read_path.display())
+            })?;
             s.default_mode = normalize_mode(&s.default_mode).to_string();
             s.composer_density = normalize_composer_density(&s.composer_density).to_string();
             s.transcript_spacing = normalize_transcript_spacing(&s.transcript_spacing).to_string();
+            s.tool_collapse_mode = normalize_tool_collapse_mode(&s.tool_collapse_mode).to_string();
             s.sidebar_focus = normalize_sidebar_focus(&s.sidebar_focus).to_string();
             s.status_indicator = normalize_status_indicator(&s.status_indicator).to_string();
             s.synchronized_output =
@@ -420,6 +425,7 @@ impl Settings {
                 .and_then(|value| normalize_reasoning_effort_setting(value).ok().flatten());
             s
         };
+        migrate_settings_file_to_primary_if_needed(&write_path, &read_path);
         settings.apply_env_overrides();
         Ok(settings)
     }
@@ -427,7 +433,10 @@ impl Settings {
     /// Whether the user explicitly persisted an `auto_compact` preference.
     /// When absent, callers may choose a model-aware default.
     pub fn auto_compact_explicitly_configured() -> bool {
-        let Ok(path) = Self::path() else {
+        let (primary, legacy_home, legacy_config_dir) = settings_path_candidates();
+        let Ok(path) =
+            resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
+        else {
             return false;
         };
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -564,6 +573,15 @@ impl Settings {
             "calm_mode" | "calm" => {
                 self.calm_mode = parse_bool(value)?;
             }
+            "tool_collapse" | "tool_collapse_mode" | "collapse" => {
+                let normalized = normalize_tool_collapse_mode(value);
+                if !matches!(normalized, "compact" | "expanded" | "calm") {
+                    return Err(anyhow::anyhow!(
+                        "Failed to update setting: invalid tool collapse mode '{value}'. Expected: compact, expanded, or calm."
+                    ));
+                }
+                self.tool_collapse_mode = normalized.to_string();
+            }
             "low_motion" | "motion" => {
                 self.low_motion = parse_bool(value)?;
             }
@@ -678,6 +696,9 @@ impl Settings {
                 }
                 self.default_mode = normalized.to_string();
             }
+            "pro_plan_profile" | "pro_plan" | "proplan" => {
+                self.pro_plan_profile = parse_bool(value)?;
+            }
             "sidebar_width" | "sidebar" => {
                 let width: u16 = value
                     .parse()
@@ -773,6 +794,7 @@ impl Settings {
             self.auto_compact_threshold_percent
         ));
         lines.push(format!("  calm_mode:          {}", self.calm_mode));
+        lines.push(format!("  tool_collapse:      {}", self.tool_collapse_mode));
         lines.push(format!("  low_motion:         {}", self.low_motion));
         lines.push(format!("  fancy_animations:   {}", self.fancy_animations));
         lines.push(format!("  bracketed_paste:    {}", self.bracketed_paste));
@@ -808,6 +830,7 @@ impl Settings {
             self.prefer_external_pdftotext
         ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
+        lines.push(format!("  pro_plan_profile:  {}", self.pro_plan_profile));
         lines.push(format!(
             "  sidebar_width:      {}%",
             self.sidebar_width_percent
@@ -848,6 +871,10 @@ impl Settings {
                 "Auto-compact trigger threshold percent when auto_compact is on: 10-100 (default 80)",
             ),
             ("calm_mode", "Calmer UI defaults: on/off"),
+            (
+                "tool_collapse",
+                "Dense tool-run collapse mode: compact, expanded, calm",
+            ),
             (
                 "low_motion",
                 "Streaming pacing: on = typewriter (one char/tick), off = upstream cadence",
@@ -920,6 +947,10 @@ impl Settings {
                 "Route PDF reads through Poppler's pdftotext instead of the bundled pure-Rust extractor: on/off (default off)",
             ),
             ("default_mode", "Default mode: agent, plan, yolo"),
+            (
+                "pro_plan_profile",
+                "Enable the explicit Pro Plan routing profile: on/off (default off)",
+            ),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             (
                 "sidebar_focus",
@@ -1012,6 +1043,58 @@ fn resolve_settings_path_from_candidates(
     primary.or(legacy_config_dir).ok_or_else(|| {
         anyhow::anyhow!("Failed to resolve settings path: no config directory found.")
     })
+}
+
+fn settings_path_candidates() -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
+    // Allow tests to override the settings directory via the same env var
+    // used for config (DEEPSEEK_CONFIG_PATH points at config.toml; the
+    // settings file lives as a sibling in the same directory).
+    if let Ok(config_path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
+        let config_path = config_path.trim();
+        if !config_path.is_empty() {
+            let p = expand_path(config_path);
+            if let Some(parent) = p.parent() {
+                return (Some(parent.join(SETTINGS_FILE_NAME)), None, None);
+            }
+        }
+    }
+
+    let primary = codewhale_config::codewhale_home()
+        .ok()
+        .map(|home| home.join(SETTINGS_FILE_NAME));
+    let legacy_home = codewhale_config::legacy_deepseek_home()
+        .ok()
+        .map(|home| home.join(SETTINGS_FILE_NAME));
+    let legacy_config_dir =
+        dirs::config_dir().map(|dir| dir.join("deepseek").join(SETTINGS_FILE_NAME));
+
+    (primary, legacy_home, legacy_config_dir)
+}
+
+fn migrate_settings_file_to_primary_if_needed(primary: &Path, active_read_path: &Path) {
+    if primary == active_read_path || primary.exists() || !active_read_path.exists() {
+        return;
+    }
+
+    let Some(parent) = primary.parent() else {
+        return;
+    };
+
+    if let Err(err) = std::fs::create_dir_all(parent) {
+        tracing::warn!(
+            "failed to create settings migration directory {}: {err}",
+            parent.display()
+        );
+        return;
+    }
+
+    if let Err(err) = std::fs::copy(active_read_path, primary) {
+        tracing::warn!(
+            "failed to migrate settings from {} to {}: {err}",
+            active_read_path.display(),
+            primary.display()
+        );
+    }
 }
 
 fn normalize_default_model(value: &str) -> Option<String> {
@@ -1121,6 +1204,15 @@ fn normalize_transcript_spacing(value: &str) -> &str {
         "compact" | "tight" => "compact",
         "comfortable" | "default" | "normal" => "comfortable",
         "spacious" | "loose" => "spacious",
+        _ => value,
+    }
+}
+
+fn normalize_tool_collapse_mode(value: &str) -> &str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "compact" | "default" | "on" | "true" => "compact",
+        "expanded" | "expand" | "off" | "none" | "false" => "expanded",
+        "calm" | "calm_mode" | "calm-mode" | "calm_only" | "calm-only" => "calm",
         _ => value,
     }
 }
@@ -1487,6 +1579,28 @@ mod tests {
             .set("session_panel", "off")
             .expect("disable context panel via alias");
         assert!(!settings.context_panel);
+    }
+
+    #[test]
+    fn tool_collapse_mode_is_configurable() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.tool_collapse_mode, "compact");
+
+        settings
+            .set("tool_collapse", "expanded")
+            .expect("expanded mode");
+        assert_eq!(settings.tool_collapse_mode, "expanded");
+
+        settings.set("collapse", "calm-only").expect("calm alias");
+        assert_eq!(settings.tool_collapse_mode, "calm");
+
+        settings.set("collapse", "off").expect("off alias");
+        assert_eq!(settings.tool_collapse_mode, "expanded");
+
+        let err = settings
+            .set("tool_collapse", "mystery")
+            .expect_err("invalid collapse mode");
+        assert!(err.to_string().contains("invalid tool collapse mode"));
     }
 
     #[test]
@@ -2329,69 +2443,80 @@ mod tests {
     }
 
     #[test]
-    fn settings_path_reads_legacy_deepseek_home_when_present() {
+    fn settings_path_prefers_codewhale_home_even_when_legacy_exists() {
+        let _g = config_path_test_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy_dir = tmp.path().join(".deepseek");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        std::fs::write(legacy_dir.join("settings.toml"), "low_motion = true\n")
+            .expect("legacy settings");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+
+        let got = Settings::path().expect("settings path");
+
+        assert_eq!(got, tmp.path().join(".codewhale").join("settings.toml"));
+    }
+
+    #[test]
+    fn settings_load_migrates_legacy_deepseek_home_into_codewhale_home() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         let primary = tmp.path().join(".codewhale").join("settings.toml");
         let legacy_dir = tmp.path().join(".deepseek");
-        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
         let legacy_home = legacy_dir.join("settings.toml");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
         std::fs::write(&legacy_home, "low_motion = true\n").expect("legacy settings");
-        let legacy_config_dir = tmp
-            .path()
-            .join("platform-config")
-            .join("deepseek")
-            .join("settings.toml");
-        std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
-            .expect("legacy config dir");
-        std::fs::write(&legacy_config_dir, "low_motion = false\n")
-            .expect("platform legacy settings");
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
 
-        let got = resolve_settings_path_from_candidates(
-            Some(primary),
-            Some(legacy_home.clone()),
-            Some(legacy_config_dir),
-        )
-        .expect("settings path");
+        let loaded = Settings::load().expect("load settings");
 
-        assert_eq!(got, legacy_home);
+        assert!(loaded.low_motion, "legacy settings should still be read");
+        assert!(
+            primary.exists(),
+            "settings load should migrate to primary path"
+        );
+        let display = loaded.display(crate::localization::Locale::En);
+        assert!(
+            display.contains(&format!("Config file: {}", primary.display())),
+            "settings display should surface the canonical codewhale path:\n{display}"
+        );
     }
 
     #[test]
-    fn settings_path_keeps_platform_config_dir_as_last_legacy_fallback() {
+    fn settings_load_migrates_platform_legacy_fallback_into_codewhale_home() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         let primary = tmp.path().join(".codewhale").join("settings.toml");
-        let legacy_home = tmp.path().join(".deepseek").join("settings.toml");
-        let legacy_config_dir = tmp
-            .path()
-            .join("platform-config")
+        let _config_override = EnvVarRestore::remove("DEEPSEEK_CONFIG_PATH");
+        let _codewhale_home = EnvVarRestore::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
+        let _home = EnvVarRestore::set("HOME", tmp.path());
+        let _xdg = EnvVarRestore::set("XDG_CONFIG_HOME", tmp.path().join("platform-config"));
+        #[cfg(windows)]
+        let _appdata = EnvVarRestore::set("APPDATA", tmp.path().join("platform-config"));
+        let legacy_config_dir = dirs::config_dir()
+            .expect("config dir")
             .join("deepseek")
             .join("settings.toml");
         std::fs::create_dir_all(legacy_config_dir.parent().expect("parent"))
             .expect("legacy config dir");
         std::fs::write(&legacy_config_dir, "low_motion = true\n").expect("legacy settings");
 
-        let got = resolve_settings_path_from_candidates(
-            Some(primary),
-            Some(legacy_home),
-            Some(legacy_config_dir.clone()),
-        )
-        .expect("settings path");
+        let loaded = Settings::load().expect("load settings");
 
-        assert_eq!(got, legacy_config_dir);
-    }
-
-    #[test]
-    fn settings_path_uses_primary_when_platform_config_dir_is_unavailable() {
-        let _g = config_path_test_guard();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let primary = tmp.path().join(".codewhale").join("settings.toml");
-
-        let got = resolve_settings_path_from_candidates(Some(primary.clone()), None, None)
-            .expect("settings path");
-
-        assert_eq!(got, primary);
+        assert!(loaded.low_motion, "legacy settings should still be read");
+        assert!(
+            primary.exists(),
+            "legacy fallback should be copied into primary"
+        );
+        let display = loaded.display(crate::localization::Locale::En);
+        assert!(
+            display.contains(&format!("Config file: {}", primary.display())),
+            "settings display should surface the canonical codewhale path:\n{display}"
+        );
     }
 
     #[test]

@@ -3,5 +3,11 @@
 # produces different compiled binaries on Windows vs Linux/macOS.
 crates/tui/src/prompts/*.md text eol=lf
 
+# Rustfmt writes LF; keep Rust sources stable across Windows/Linux/macOS.
+*.rs text eol=lf
+
+# Keep repository attributes themselves stable on every platform.
+.gitattributes text eol=lf
+
 # Everything else auto-detects (default).
 * text=auto

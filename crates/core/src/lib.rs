@@ -748,7 +748,9 @@ impl Runtime {
         hooks: HookDispatcher,
     ) -> Self {
         let mut jobs = JobManager::default();
-        let _ = jobs.load_from_store(&state);
+        if let Err(e) = jobs.load_from_store(&state) {
+            tracing::warn!("Failed to load job store, starting with empty job list: {e}");
+        }
         Self {
             config,
             model_registry,
@@ -1095,11 +1097,12 @@ impl Runtime {
             ToolPayload::LocalShell { .. } => "exec_shell",
             _ => call.name.as_str(),
         };
+        let policy_path = permission_path_for_call(&call);
         let decision = self.exec_policy.check(ExecPolicyContext {
             command: &command,
             cwd: &policy_cwd,
             tool: Some(policy_tool),
-            path: None,
+            path: policy_path.as_deref(),
             ask_for_approval: approval_mode,
             sandbox_mode: None,
         })?;
@@ -1134,7 +1137,7 @@ impl Runtime {
                 .await;
             self.hooks
                 .emit(HookEvent::GenericEventFrame {
-                    frame: error_frame.clone(),
+                    frame: Box::new(error_frame.clone()),
                 })
                 .await;
             return Ok(json!({
@@ -1153,6 +1156,7 @@ impl Runtime {
             let reason = decision.reason().to_string();
             let maybe_approval_frame = approval_request_frame(
                 &decision.requirement,
+                decision.matched_rule.as_deref(),
                 call_id,
                 approval_id.clone(),
                 response_id.clone(),
@@ -1170,7 +1174,7 @@ impl Runtime {
             if let Some(frame) = maybe_approval_frame {
                 self.hooks
                     .emit(HookEvent::GenericEventFrame {
-                        frame: frame.clone(),
+                        frame: Box::new(frame.clone()),
                     })
                     .await;
                 events.push(event_frame_payload(&frame));
@@ -1194,7 +1198,7 @@ impl Runtime {
         };
         self.hooks
             .emit(HookEvent::GenericEventFrame {
-                frame: start_frame.clone(),
+                frame: Box::new(start_frame.clone()),
             })
             .await;
         self.hooks
@@ -1218,7 +1222,7 @@ impl Runtime {
                 };
                 self.hooks
                     .emit(HookEvent::GenericEventFrame {
-                        frame: result_frame.clone(),
+                        frame: Box::new(result_frame.clone()),
                     })
                     .await;
                 self.hooks
@@ -1250,7 +1254,7 @@ impl Runtime {
                 };
                 self.hooks
                     .emit(HookEvent::GenericEventFrame {
-                        frame: error_frame.clone(),
+                        frame: Box::new(error_frame.clone()),
                     })
                     .await;
                 self.hooks
@@ -1296,18 +1300,18 @@ impl Runtime {
             };
             self.hooks
                 .emit(HookEvent::GenericEventFrame {
-                    frame: EventFrame::McpStartupUpdate {
+                    frame: Box::new(EventFrame::McpStartupUpdate {
                         update: codewhale_protocol::McpStartupUpdateEvent {
                             server_name: update.server_name,
                             status,
                         },
-                    },
+                    }),
                 })
                 .await;
         }
         self.hooks
             .emit(HookEvent::GenericEventFrame {
-                frame: EventFrame::McpStartupComplete {
+                frame: Box::new(EventFrame::McpStartupComplete {
                     summary: codewhale_protocol::McpStartupCompleteEvent {
                         ready: summary.ready.clone(),
                         failed: summary
@@ -1320,7 +1324,7 @@ impl Runtime {
                             .collect(),
                         cancelled: summary.cancelled.clone(),
                     },
-                },
+                }),
             })
             .await;
         summary
@@ -1500,6 +1504,24 @@ fn preview_from_initial_history(initial_history: &InitialHistory) -> String {
     }
 }
 
+fn permission_path_for_call(call: &ToolCall) -> Option<String> {
+    match &call.payload {
+        ToolPayload::Function { arguments } => serde_json::from_str::<Value>(arguments)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        ToolPayload::Mcp { raw_arguments, .. } => raw_arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ToolPayload::Custom { .. } | ToolPayload::LocalShell { .. } => None,
+    }
+}
+
 fn truncate_preview(value: &str) -> String {
     value.chars().take(120).collect()
 }
@@ -1557,6 +1579,7 @@ fn to_persisted_source(source: &codewhale_protocol::SessionSource) -> SessionSou
 
 fn approval_request_frame(
     requirement: &ExecApprovalRequirement,
+    matched_rule: Option<&str>,
     call_id: String,
     approval_id: String,
     turn_id: String,
@@ -1599,6 +1622,7 @@ fn approval_request_frame(
             command,
             cwd,
             reason: reason.clone(),
+            matched_rule: matched_rule.map(|rule| rule.to_string().into_boxed_str()),
             network_approval_context: None,
             proposed_execpolicy_amendment: proposed_execpolicy_amendment
                 .as_ref()
@@ -1806,8 +1830,94 @@ fn job_state_status_to_runtime(status: JobStateStatus) -> JobStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codewhale_tools::ToolCallSource;
 
     // ── JobManager: lifecycle ──────────────────────────────────────────
+
+    #[test]
+    fn permission_path_for_call_extracts_function_path_argument() {
+        let call = ToolCall {
+            name: "read_file".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({ "path": "README.md" }).to_string(),
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(
+            permission_path_for_call(&call).as_deref(),
+            Some("README.md")
+        );
+    }
+
+    #[test]
+    fn permission_path_for_call_extracts_mcp_path_argument() {
+        let call = ToolCall {
+            name: "mcp_fs_read".to_string(),
+            payload: ToolPayload::Mcp {
+                server: "fs".to_string(),
+                tool: "read".to_string(),
+                raw_arguments: json!({ "path": "secrets/token.txt" }),
+                raw_tool_call_id: None,
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(
+            permission_path_for_call(&call).as_deref(),
+            Some("secrets/token.txt")
+        );
+    }
+
+    #[test]
+    fn permission_path_for_call_ignores_shell_payload() {
+        let call = ToolCall {
+            name: "exec_shell".to_string(),
+            payload: ToolPayload::LocalShell {
+                params: codewhale_protocol::LocalShellParams {
+                    command: "cargo test".to_string(),
+                    cwd: None,
+                    timeout_ms: None,
+                },
+            },
+            source: ToolCallSource::Direct,
+            raw_tool_call_id: None,
+        };
+
+        assert_eq!(permission_path_for_call(&call), None);
+    }
+
+    #[test]
+    fn approval_request_frame_includes_matched_rule() {
+        let requirement = ExecApprovalRequirement::NeedsApproval {
+            reason: "Typed ask rule 'tool=exec_shell command=cargo test' requires approval."
+                .to_string(),
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: Vec::new(),
+        };
+
+        let frame = approval_request_frame(
+            &requirement,
+            Some("tool=exec_shell command=cargo test"),
+            "call-1".to_string(),
+            "approval-1".to_string(),
+            "turn-1".to_string(),
+            "cargo test --workspace".to_string(),
+            "/repo".to_string(),
+        )
+        .expect("approval frame");
+
+        let EventFrame::ExecApprovalRequest { request } = frame else {
+            panic!("expected exec approval request frame");
+        };
+        assert_eq!(
+            request.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+        assert_eq!(request.reason, requirement.reason());
+    }
 
     #[test]
     fn enqueue_creates_queued_job_with_zero_progress() {

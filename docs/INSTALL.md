@@ -5,8 +5,8 @@ This page covers every supported install path and the most common
 common platforms.
 
 If you just want the short version, see the
-[main README](../README.md#quickstart) or
-[简体中文 README](../README.zh-CN.md#快速开始).
+[main README](../README.md#install) or
+[简体中文 README](../README.zh-CN.md#安装).
 
 ---
 
@@ -44,6 +44,8 @@ systems such as Alpine should use [Build from source](#7-build-from-source).
 > and `codewhale-tui-linux-arm64`, so a plain `npm i -g codewhale` works
 > on any glibc-based ARM64 Linux. If you're stuck on v0.8.7, jump to
 > [Build from source](#7-build-from-source) — `cargo install` works fine.
+> For HarmonyOS PC and OpenHarmony cross-build setup, see
+> [HarmonyOS and OpenHarmony](HarmonyOS.md).
 
 ---
 
@@ -81,7 +83,14 @@ a download sourced from an impersonating repository or mirror.
 
 ---
 
-## 3. Install via npm (recommended)
+## 3. Install via npm
+
+The `codewhale` npm wrapper is available for v0.8.56 and later.
+
+```bash
+npm install -g codewhale
+codewhale
+```
 
 ```bash
 npm install -g codewhale
@@ -103,7 +112,7 @@ Useful environment variables:
 | `DEEPSEEK_TUI_DISABLE_INSTALL=1`    | Skip the `postinstall` download entirely (CI smoke, vendored binaries)                 |
 | `DEEPSEEK_TUI_OPTIONAL_INSTALL=1`   | Don't fail `npm install` on download/extract errors — useful in CI matrices            |
 
-> **Slow npm download from mainland China?** If `npm install` itself is slow
+> **Slow npm download from mainland China?** Once npm publication resumes, if `npm install` itself is slow
 > (not just the postinstall binary download), use an npm registry mirror:
 > ```bash
 > npm config set registry https://registry.npmmirror.com
@@ -284,6 +293,38 @@ curl -L -o /tmp/codewhale-artifacts-sha256.txt \
 ```
 
 (Use `shasum -a 256 -c` instead of `sha256sum` on macOS.)
+
+### Roll back to a previous release
+
+If a new release is bad on your machine, install the last known-good version
+explicitly. Replace `X.Y.Z` with the version you want to restore.
+
+```bash
+# npm wrapper, only for versions that were published to npm
+npm install -g codewhale@X.Y.Z
+
+# Cargo install path; both crates are required
+cargo install codewhale-cli --version X.Y.Z --locked --force
+cargo install codewhale-tui --version X.Y.Z --locked --force
+```
+
+For manual installs, download both binaries or the platform archive from the
+exact release tag and verify the matching checksum manifest from that same tag:
+
+```bash
+# individual binaries
+curl -L -o codewhale-artifacts-sha256.txt \
+  https://github.com/Hmbown/CodeWhale/releases/download/vX.Y.Z/codewhale-artifacts-sha256.txt
+
+# platform archives
+curl -L -o codewhale-bundles-sha256.txt \
+  https://github.com/Hmbown/CodeWhale/releases/download/vX.Y.Z/codewhale-bundles-sha256.txt
+```
+
+Inside a CodeWhale workspace, `/restore list [N]` lists side-git file snapshots
+and `/restore <N>` restores files from the chosen snapshot. That workspace
+rollback does not change your installed binary version and does not rewrite
+conversation history.
 
 ### Windows Scoop
 
@@ -479,9 +520,7 @@ cargo build --release
 Both binaries appear in `target\release\codewhale.exe` and
 `target\release\codewhale-tui.exe`.
 
-> **Prefer `npm install -g` on Windows unless you need to modify source.**
-> The npm package pulls prebuilt binaries and avoids the C toolchain
-> dependency entirely — see [Section 3](#3-install-via-npm-recommended).
+> For v0.8.56, install via Cargo, GitHub Releases, CNB, npm, or build from source.
 
 ---
 
@@ -632,9 +671,9 @@ path-agnostic — moving `target-dir` does not help.
 
 1. **Add the project's `target/` directory to your AV exclusions list.**
 2. **Close the antivirus software temporarily** during `cargo build`.
-3. **Use `npm install -g codewhale` instead** — the npm package ships
-   prebuilt binaries and skips the Cargo build entirely
-   ([Section 3](#3-install-via-npm-recommended)).
+3. **Use the GitHub Release installer/archive instead** — the release assets
+   ship prebuilt binaries and skip the Cargo build entirely
+   ([Section 6](#6-manual-download-from-github-releases)).
 4. **Use `cargo install codewhale-cli --locked`** from crates.io — this
    changes the binary path, which some AV tools treat differently.
 

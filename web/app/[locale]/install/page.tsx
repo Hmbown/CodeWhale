@@ -9,8 +9,8 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   return {
     title: isZh ? "安装 · CodeWhale" : "Install · CodeWhale",
     description: isZh
-      ? "安装 CodeWhale 的 codewhale / codewhale-tui 二进制对。其他方式：npm、Homebrew、预编译二进制、Docker、国内镜像。"
-      : "Install the matched codewhale / codewhale-tui binary pair. Other ways: npm, Homebrew, prebuilt binary, Docker, source.",
+      ? "安装 CodeWhale 的 codewhale / codewhale-tui 二进制对。v0.8.56 推荐 Cargo、GitHub Releases、CNB、Homebrew、预编译二进制、Docker、国内镜像。"
+      : "Install the matched codewhale / codewhale-tui binary pair. For v0.8.56 use Cargo, GitHub Releases, CNB, Homebrew, prebuilt binary, Docker, or source.",
   };
 }
 
@@ -25,8 +25,10 @@ const UPDATE = `codewhale update`;
 const SET_KEY_BASH = `export DEEPSEEK_API_KEY=sk-...`;
 const SET_KEY_AUTH = `codewhale auth set --provider deepseek --api-key sk-...`;
 
-const NPM_INSTALL = `npm install -g codewhale`;
-
+const RELEASE_DOWNLOAD = `# Download your platform archive:
+https://github.com/Hmbown/CodeWhale/releases/tag/v0.8.56`;
+const CNB_INSTALL = `cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.56 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.56 codewhale-tui --locked --force`;
 const TUNA_CONFIG = `# ~/.cargo/config.toml
 [source.crates-io]
 replace-with = "tuna"
@@ -35,8 +37,6 @@ replace-with = "tuna"
 registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`;
 const TUNA_INSTALL = `cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked`;
-const NPMMIRROR = `npm config set registry https://registry.npmmirror.com
-npm install -g codewhale`;
 
 const BREW = `brew tap Hmbown/deepseek-tui
 brew install deepseek-tui`;
@@ -107,19 +107,15 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              编译并安装 <code className="inline">codewhale</code> 和 <code className="inline">codewhale-tui</code> 到 <code className="inline">~/.cargo/bin</code>。
-              需要 Rust 1.88+——如未安装可访问{" "}
-              <a href="https://rustup.rs" className="body-link">rustup.rs</a>。
-              下方「其他安装方式」列出了不用 Rust 工具链、国内镜像、Homebrew、预编译二进制等替代选项。
+              v0.8.56 推荐通过 Cargo 安装已发布的 crates。npm wrapper 暂缓发布，直到 release asset 发布路径加固完成。
+              下方「其他安装方式」列出 GitHub Releases、CNB、国内镜像、Homebrew、预编译二进制等替代选项。
             </>
           ) : (
             <>
-              Compiles and installs <code className="inline">codewhale</code> and{" "}
-              <code className="inline">codewhale-tui</code> to{" "}
-              <code className="inline">~/.cargo/bin</code>. Requires Rust 1.88+ — install via{" "}
-              <a href="https://rustup.rs" className="body-link">rustup.rs</a> if you don&apos;t have it.
-              See <a href="#other-ways" className="body-link">Other ways to install</a> below for
-              npm, Homebrew, prebuilt binaries, or mainland China mirrors.
+              For v0.8.56, install the published Cargo crates. The npm wrapper is deferred
+              while the release asset publication path is hardened. See{" "}
+              <a href="#other-ways" className="body-link">Other ways to install</a> below for
+              GitHub Releases, CNB, Homebrew, prebuilt binaries, or mainland China mirrors.
             </>
           )}
         </p>
@@ -172,9 +168,8 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
           ) : (
             <>
               Checks GitHub Releases for a newer version and replaces the binary in place. If you
-              installed via Homebrew or npm, prefer the package manager instead:{" "}
-              <code className="inline">brew upgrade deepseek-tui</code> or{" "}
-              <code className="inline">npm update -g codewhale</code>. Cargo users can re-run both{" "}
+              installed via Homebrew, prefer the package manager instead:{" "}
+              <code className="inline">brew upgrade deepseek-tui</code>. Cargo users can re-run both{" "}
               <code className="inline">cargo install</code> commands with <code className="inline">--force</code>.
             </>
           )}
@@ -269,27 +264,39 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
           </p>
 
           <div className="space-y-10">
-            {/* No Rust toolchain */}
+            {/* Cargo */}
             <div>
               <div className="eyebrow mb-2 text-indigo">
-                {isZh ? "没有 Rust 工具链" : "No Rust toolchain"}
+                {isZh ? "Rust 工具链" : "Rust toolchain"}
               </div>
-              <InstallCodeBlock cmd={NPM_INSTALL} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+              <InstallCodeBlock cmd={CARGO_INSTALL} copyLabel={copyLabel} copiedLabel={copiedLabel} />
               <p className="mt-3 text-sm text-ink-soft leading-relaxed max-w-2xl">
                 {isZh ? (
                   <>
-                    npm 包装器会从 GitHub Releases 下载对应平台的预编译二进制。需要 Node 18+。
-                    安装后会同时提供 <code className="inline">codewhale</code> 和{" "}
-                    <code className="inline">codewhale-tui</code> 两个命令。
+                    编译并安装 <code className="inline">codewhale</code> 和 <code className="inline">codewhale-tui</code> 到 <code className="inline">~/.cargo/bin</code>。
+                    需要 Rust 1.88+；如未安装可访问 <a href="https://rustup.rs" className="body-link">rustup.rs</a>。
                   </>
                 ) : (
                   <>
-                    The npm wrapper downloads the prebuilt binary from GitHub Releases for your
-                    platform. Requires Node 18+. Installs both <code className="inline">codewhale</code>{" "}
-                    and <code className="inline">codewhale-tui</code> on PATH.
+                    Compiles and installs <code className="inline">codewhale</code> and{" "}
+                    <code className="inline">codewhale-tui</code> to{" "}
+                    <code className="inline">~/.cargo/bin</code>. Requires Rust 1.88+; install via{" "}
+                    <a href="https://rustup.rs" className="body-link">rustup.rs</a> if you don&apos;t have it.
                   </>
                 )}
               </p>
+            </div>
+
+            {/* GitHub Release */}
+            <div className="rounded-lg border border-ink/12 bg-white/70 p-5">
+              <div className="font-display text-lg mb-3">{isZh ? "GitHub Releases" : "GitHub Releases"}</div>
+              <InstallCodeBlock cmd={RELEASE_DOWNLOAD} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            </div>
+
+            {/* CNB */}
+            <div className="rounded-lg border border-ink/12 bg-white/70 p-5">
+              <div className="font-display text-lg mb-3">{isZh ? "CNB 镜像" : "CNB mirror"}</div>
+              <InstallCodeBlock cmd={CNB_INSTALL} copyLabel={copyLabel} copiedLabel={copiedLabel} />
             </div>
 
             {/* Mainland China network */}
@@ -314,26 +321,18 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
                 <InstallCodeBlock cmd={TUNA_INSTALL} copyLabel={copyLabel} copiedLabel={copiedLabel} />
               </div>
 
-              <p className="text-sm text-ink-soft leading-relaxed max-w-2xl mt-6 mb-3">
-                {isZh ? "npm 经 npmmirror 镜像：" : "npm via npmmirror:"}
-              </p>
-              <InstallCodeBlock cmd={NPMMIRROR} copyLabel={copyLabel} copiedLabel={copiedLabel} />
-
               <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
                 {isZh ? (
                   <>
-                    npm 包装器仍会从{" "}
-                    <code className="inline">github.com/Hmbown/CodeWhale/releases</code>{" "}
-                    下载二进制，国内可能较慢。Cargo + Tuna 完全绕开 GitHub。
+                    v0.8.56 的 npm wrapper 暂缓发布。Cargo + Tuna 或 CNB 路径可以绕开 GitHub 下载瓶颈。
                     DeepSeek API（<code className="inline">api.deepseek.com</code>）在国内直连，无需代理。
                   </>
                 ) : (
                   <>
-                    The npm wrapper still downloads the binary from{" "}
-                    <code className="inline">github.com/Hmbown/CodeWhale/releases</code>, which can
-                    be slow over GFW. Cargo + Tuna routes around GitHub entirely. The DeepSeek API
-                    at <code className="inline">api.deepseek.com</code> is reachable from mainland
-                    China without a proxy.
+                    The npm wrapper is deferred for v0.8.56. Cargo + Tuna or the CNB path routes
+                    around GitHub download bottlenecks. The DeepSeek API at{" "}
+                    <code className="inline">api.deepseek.com</code> is reachable from mainland China
+                    without a proxy.
                   </>
                 )}
               </p>

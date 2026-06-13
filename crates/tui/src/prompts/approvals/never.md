@@ -1,4 +1,4 @@
-## Approval Policy: Never — Tier 2 (Statute)
+##### Approval Policy: Never — Tier 2 (Statute)
 
 All write operations are blocked. You can read, search, and investigate, but you cannot modify the workspace.
 

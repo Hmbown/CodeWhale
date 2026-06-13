@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+pub mod provider;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
@@ -7,6 +10,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 pub use codewhale_execpolicy::ToolAskRule;
+use codewhale_execpolicy::{ExecPolicyEngine, Ruleset};
 use codewhale_secrets::SecretSource;
 pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
@@ -22,6 +26,10 @@ const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
+const DEFAULT_OPENAI_CODEX_MODEL: &str = "gpt-5.5";
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
@@ -43,6 +51,7 @@ const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
 const OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL: &str = "qwen/qwen3.6-max-preview";
 const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
 const OPENROUTER_QWEN_3_6_PLUS_MODEL: &str = "qwen/qwen3.6-plus";
+const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
 const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
 const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
@@ -70,6 +79,9 @@ const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
+const XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
+const XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL: &str = DEFAULT_XIAOMI_MIMO_BASE_URL;
+const XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL: &str = "https://token-plan-ams.xiaomimimo.com/v1";
 const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
@@ -78,6 +90,9 @@ const DEFAULT_ARCEE_BASE_URL: &str = "https://api.arcee.ai/api/v1";
 const DEFAULT_HUGGINGFACE_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_HUGGINGFACE_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://router.huggingface.co/v1";
+const DEFAULT_TOGETHER_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+const DEFAULT_TOGETHER_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
+const DEFAULT_TOGETHER_BASE_URL: &str = "https://api.together.xyz/v1";
 const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
@@ -128,9 +143,119 @@ pub enum ProviderKind {
     Ollama,
     #[serde(alias = "hugging-face", alias = "hugging_face", alias = "hf")]
     Huggingface,
+    #[serde(alias = "together-ai", alias = "together_ai")]
+    Together,
+    #[serde(
+        alias = "openai-codex",
+        alias = "openai_codex",
+        alias = "codex",
+        alias = "chatgpt",
+        alias = "chatgpt-codex",
+        alias = "chatgpt_codex"
+    )]
+    OpenaiCodex,
+    #[serde(alias = "claude")]
+    Anthropic,
 }
 
 impl ProviderKind {
+    #[must_use]
+    pub fn is_tui_capable(self) -> bool {
+        matches!(
+            self,
+            Self::Deepseek
+                | Self::NvidiaNim
+                | Self::Openai
+                | Self::Atlascloud
+                | Self::WanjieArk
+                | Self::Volcengine
+                | Self::Openrouter
+                | Self::XiaomiMimo
+                | Self::Novita
+                | Self::Fireworks
+                | Self::Siliconflow
+                | Self::SiliconflowCN
+                | Self::Arcee
+                | Self::Moonshot
+                | Self::Sglang
+                | Self::Vllm
+                | Self::Ollama
+                | Self::Huggingface
+                | Self::Together
+                | Self::OpenaiCodex
+        )
+    }
+
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Deepseek => "DeepSeek",
+            Self::NvidiaNim => "NVIDIA NIM",
+            Self::Openai => "OpenAI-compatible",
+            Self::Atlascloud => "AtlasCloud",
+            Self::WanjieArk => "Wanjie Ark",
+            Self::Volcengine => "Volcengine Ark",
+            Self::Openrouter => "OpenRouter",
+            Self::XiaomiMimo => "Xiaomi MiMo",
+            Self::Novita => "Novita",
+            Self::Fireworks => "Fireworks",
+            Self::Siliconflow => "SiliconFlow",
+            Self::SiliconflowCN => "SiliconFlow (CN)",
+            Self::Arcee => "Arcee AI",
+            Self::Moonshot => "Moonshot/Kimi",
+            Self::Sglang => "SGLang",
+            Self::Vllm => "vLLM",
+            Self::Ollama => "Ollama",
+            Self::Huggingface => "Hugging Face",
+            Self::Together => "Together AI",
+            Self::OpenaiCodex => "OpenAI Codex",
+            Self::Anthropic => "Anthropic",
+        }
+    }
+
+    #[must_use]
+    pub fn tui_supported_providers_msg() -> String {
+        let mut names = Vec::new();
+        for p in Self::ALL {
+            if p.is_tui_capable() {
+                names.push(p.display_name());
+            }
+        }
+        match names.as_slice() {
+            [] => String::new(),
+            [only] => (*only).to_string(),
+            [first, second] => format!("{first} and {second}"),
+            _ => {
+                let last = names.pop().expect("non-empty");
+                format!("{}, and {}", names.join(", "), last)
+            }
+        }
+    }
+
+    pub const ALL: [Self; 21] = [
+        Self::Deepseek,
+        Self::NvidiaNim,
+        Self::Openai,
+        Self::Atlascloud,
+        Self::WanjieArk,
+        Self::Volcengine,
+        Self::Openrouter,
+        Self::XiaomiMimo,
+        Self::Novita,
+        Self::Fireworks,
+        Self::Siliconflow,
+        Self::SiliconflowCN,
+        Self::Arcee,
+        Self::Moonshot,
+        Self::Sglang,
+        Self::Vllm,
+        Self::Ollama,
+        Self::Huggingface,
+        Self::Together,
+        Self::OpenaiCodex,
+        Self::Anthropic,
+    ];
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -152,6 +277,9 @@ impl ProviderKind {
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
             Self::Huggingface => "huggingface",
+            Self::Together => "together",
+            Self::OpenaiCodex => "openai-codex",
+            Self::Anthropic => "anthropic",
         }
     }
 
@@ -181,6 +309,10 @@ impl ProviderKind {
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
             "huggingface" | "hugging-face" | "hugging_face" | "hf" => Some(Self::Huggingface),
+            "together" | "together-ai" | "together_ai" => Some(Self::Together),
+            "anthropic" | "claude" => Some(Self::Anthropic),
+            "openai-codex" | "openai_codex" | "openaicodex" | "codex" | "chatgpt"
+            | "chatgpt-codex" | "chatgpt_codex" | "chatgptcodex" => Some(Self::OpenaiCodex),
             _ => None,
         }
     }
@@ -189,6 +321,15 @@ impl ProviderKind {
     pub fn is_siliconflow(self) -> bool {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
     }
+
+    /// Return the built-in metadata entry for this provider.
+    ///
+    /// This is a metadata foundation only; runtime routing still resolves
+    /// through [`ConfigToml::resolve_runtime_options`].
+    #[must_use]
+    pub fn provider(self) -> &'static dyn provider::Provider {
+        provider::provider_for_kind(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -196,7 +337,9 @@ pub struct ProviderConfigToml {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub mode: Option<String>,
     pub auth_mode: Option<String>,
+    pub insecure_skip_tls_verify: Option<bool>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
     pub path_suffix: Option<String>,
@@ -226,6 +369,8 @@ pub struct ProvidersToml {
     pub fireworks: ProviderConfigToml,
     #[serde(default)]
     pub siliconflow: ProviderConfigToml,
+    #[serde(default, alias = "siliconflow-CN", alias = "siliconflow-cn")]
+    pub siliconflow_cn: ProviderConfigToml,
     #[serde(default)]
     pub arcee: ProviderConfigToml,
     #[serde(default)]
@@ -238,6 +383,19 @@ pub struct ProvidersToml {
     pub ollama: ProviderConfigToml,
     #[serde(default)]
     pub huggingface: ProviderConfigToml,
+    #[serde(default)]
+    pub together: ProviderConfigToml,
+    #[serde(
+        default,
+        alias = "openai-codex",
+        alias = "openai_codex",
+        alias = "codex",
+        alias = "chatgpt",
+        alias = "chatgpt-codex"
+    )]
+    pub openai_codex: ProviderConfigToml,
+    #[serde(default)]
+    pub anthropic: ProviderConfigToml,
 }
 
 /// Sibling `permissions.toml` schema.
@@ -257,6 +415,11 @@ impl PermissionsToml {
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
+
+    #[must_use]
+    pub fn ruleset(&self) -> Ruleset {
+        Ruleset::user(Vec::new(), Vec::new()).with_ask_rules(self.rules.clone())
+    }
 }
 
 impl ProvidersToml {
@@ -273,13 +436,17 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &self.xiaomi_mimo,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
-            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &self.siliconflow,
+            ProviderKind::Siliconflow => &self.siliconflow,
+            ProviderKind::SiliconflowCN => &self.siliconflow_cn,
             ProviderKind::Arcee => &self.arcee,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
             ProviderKind::Ollama => &self.ollama,
             ProviderKind::Huggingface => &self.huggingface,
+            ProviderKind::Together => &self.together,
+            ProviderKind::OpenaiCodex => &self.openai_codex,
+            ProviderKind::Anthropic => &self.anthropic,
         }
     }
 
@@ -295,14 +462,162 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &mut self.xiaomi_mimo,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
-            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => &mut self.siliconflow,
+            ProviderKind::Siliconflow => &mut self.siliconflow,
+            ProviderKind::SiliconflowCN => &mut self.siliconflow_cn,
             ProviderKind::Arcee => &mut self.arcee,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
             ProviderKind::Ollama => &mut self.ollama,
             ProviderKind::Huggingface => &mut self.huggingface,
+            ProviderKind::Together => &mut self.together,
+            ProviderKind::OpenaiCodex => &mut self.openai_codex,
+            ProviderKind::Anthropic => &mut self.anthropic,
         }
+    }
+}
+
+/// Kinds of built-in harness postures.
+///
+/// A posture names the runtime strategy CodeWhale should use for a
+/// provider/model route: how much context to preload, how aggressively to lean
+/// on sub-agents, and how to balance prompt-cache stability against quick
+/// exploration. Runtime selection is wired in later v0.9 slices; this config
+/// model intentionally keeps the policy data explicit first.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessPostureKind {
+    /// Full-featured default: rich constitution, broad tool catalog, and normal
+    /// sub-agent posture.
+    #[default]
+    Standard,
+    /// Cache-heavy: deeper prompt layering and prefix-cache-oriented context.
+    CacheHeavy,
+    /// Lean: smaller starting context, faster compaction, and stronger
+    /// exploration/delegation bias.
+    Lean,
+    /// User-defined posture assembled from explicit knobs below.
+    Custom,
+}
+
+/// How this posture should approach compaction and prompt-cache stability.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessCompactionStrategy {
+    #[default]
+    Default,
+    PrefixCache,
+    Aggressive,
+}
+
+/// Which tool catalog shape this posture prefers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessToolSurface {
+    #[default]
+    Full,
+    ReadOnly,
+    Auto,
+}
+
+/// Safety posture applied when the runtime consumes a harness profile.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessSafetyPosture {
+    #[default]
+    Standard,
+    Strict,
+    Permissive,
+}
+
+/// A concrete harness posture with policy knobs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessPosture {
+    /// Named posture kind.
+    #[serde(default)]
+    pub kind: HarnessPostureKind,
+    /// Maximum number of concurrent sub-agents (0 = runtime default).
+    #[serde(default)]
+    pub max_subagents: usize,
+    /// Prefer search-based/on-demand context over always-on documentation.
+    #[serde(default)]
+    pub prefer_codebase_search: bool,
+    /// Compaction and prompt-cache strategy.
+    #[serde(default)]
+    pub compaction_strategy: HarnessCompactionStrategy,
+    /// Preferred tool catalog shape.
+    #[serde(default)]
+    pub tool_surface: HarnessToolSurface,
+    /// Safety posture for runtime consumers.
+    #[serde(default)]
+    pub safety_posture: HarnessSafetyPosture,
+}
+
+impl Default for HarnessPosture {
+    fn default() -> Self {
+        Self {
+            kind: HarnessPostureKind::Standard,
+            max_subagents: 0,
+            prefer_codebase_search: false,
+            compaction_strategy: HarnessCompactionStrategy::default(),
+            tool_surface: HarnessToolSurface::default(),
+            safety_posture: HarnessSafetyPosture::default(),
+        }
+    }
+}
+
+impl HarnessPosture {
+    /// A cache-heavy posture tuned for DeepSeek V4 / MiMo-style models.
+    #[must_use]
+    pub fn cache_heavy() -> Self {
+        Self {
+            kind: HarnessPostureKind::CacheHeavy,
+            max_subagents: 10,
+            prefer_codebase_search: false,
+            compaction_strategy: HarnessCompactionStrategy::PrefixCache,
+            tool_surface: HarnessToolSurface::Full,
+            safety_posture: HarnessSafetyPosture::Standard,
+        }
+    }
+
+    /// A lean posture for smaller-context or weaker tool-use models.
+    #[must_use]
+    pub fn lean() -> Self {
+        Self {
+            kind: HarnessPostureKind::Lean,
+            max_subagents: 20,
+            prefer_codebase_search: true,
+            compaction_strategy: HarnessCompactionStrategy::Aggressive,
+            tool_surface: HarnessToolSurface::Full,
+            safety_posture: HarnessSafetyPosture::Standard,
+        }
+    }
+}
+
+/// A harness profile binds a posture to a provider route and model pattern.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessProfile {
+    /// Provider route this profile applies to, e.g. "deepseek" or
+    /// "xiaomi-mimo".
+    pub provider_route: String,
+    /// Regex or glob pattern for model names, e.g. "deepseek-v4.*".
+    pub model_pattern: String,
+    /// The posture to apply.
+    #[serde(default)]
+    pub posture: HarnessPosture,
+}
+
+impl HarnessProfile {
+    /// Return true when this profile applies to the provider/model route.
+    ///
+    /// This is a pure config helper: matching a profile must not mutate runtime
+    /// provider selection, prompts, auth, tools, context, or persisted config.
+    #[must_use]
+    pub fn matches_route(&self, provider_route: &str, model: &str) -> bool {
+        provider_routes_equal(&self.provider_route, provider_route)
+            && wildcard_pattern_matches(&self.model_pattern, model)
     }
 }
 
@@ -323,6 +638,7 @@ pub struct ConfigToml {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub output_mode: Option<String>,
+    pub verbosity: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: Option<bool>,
     pub approval_policy: Option<String>,
@@ -332,6 +648,11 @@ pub struct ConfigToml {
     pub tools: Option<ToolsToml>,
     #[serde(default)]
     pub providers: ProvidersToml,
+    /// Dormant provider fallback chain (#2574). This is parsed and preserved
+    /// for future provider-routing work; current runtime resolution still uses
+    /// the selected primary provider and does not auto-switch routes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_providers: Vec<ProviderKind>,
     /// Per-domain network policy (#135). When absent, network tools fall back
     /// to a permissive default that mirrors pre-v0.7.0 behavior.
     #[serde(default)]
@@ -349,12 +670,345 @@ pub struct ConfigToml {
     /// applies the defaults documented in [`LspConfigToml`].
     #[serde(default)]
     pub lsp: Option<LspConfigToml>,
+    /// Per-model harness profiles (#2693). Runtime wiring lands in follow-up
+    /// v0.9 slices; this is the durable config data model.
+    #[serde(default)]
+    pub harness_profiles: Vec<HarnessProfile>,
+    /// Optional 1-8 hotbar slot bindings (#2064). When absent, the TUI falls
+    /// back to the built-in default slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotbar: Option<Vec<HotbarBindingToml>>,
     /// App-server hook sink configuration. Kept separate from the TUI
     /// lifecycle `[hooks]` table so config rewrites preserve existing hooks.
     #[serde(default)]
     pub hook_sinks: Option<HookSinksToml>,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
+}
+
+impl ConfigToml {
+    /// Resolve the first configured harness profile for a provider/model route.
+    ///
+    /// This helper is deliberately dormant for v0.9: callers may display or
+    /// test the resolved profile, but runtime provider/model routing and prompt
+    /// shaping remain unchanged until a later, explicit integration slice.
+    #[must_use]
+    pub fn resolve_harness_profile(
+        &self,
+        provider_route: &str,
+        model: &str,
+    ) -> Option<&HarnessProfile> {
+        self.harness_profiles
+            .iter()
+            .chain(built_in_harness_profiles().iter())
+            .find(|profile| profile.matches_route(provider_route, model))
+    }
+
+    /// Resolve durable hotbar config into normalized 1-8 slot bindings.
+    ///
+    /// `known_action_ids` is supplied by the TUI action registry in later
+    /// slices. Unknown actions are preserved so the UI can render a disabled
+    /// `?` cell instead of silently deleting user config.
+    #[must_use]
+    pub fn resolve_hotbar_bindings(&self, known_action_ids: &[&str]) -> HotbarConfigResolution {
+        resolve_hotbar_bindings(self.hotbar.as_deref(), known_action_ids)
+    }
+}
+
+/// Built-in profile seeds for common provider/model families.
+///
+/// User-configured profiles are always checked first; these seeds only provide
+/// a stable resolver result when config has no narrower match.
+#[must_use]
+pub fn built_in_harness_profiles() -> &'static [HarnessProfile] {
+    static PROFILES: OnceLock<Vec<HarnessProfile>> = OnceLock::new();
+    PROFILES.get_or_init(|| {
+        vec![
+            HarnessProfile {
+                provider_route: "deepseek".to_string(),
+                model_pattern: "deepseek-v4*".to_string(),
+                posture: HarnessPosture::cache_heavy(),
+            },
+            HarnessProfile {
+                provider_route: "xiaomi-mimo".to_string(),
+                model_pattern: "mimo-v2.5*".to_string(),
+                posture: HarnessPosture::cache_heavy(),
+            },
+            HarnessProfile {
+                provider_route: "arcee".to_string(),
+                model_pattern: "trinity-large-thinking".to_string(),
+                posture: HarnessPosture::cache_heavy(),
+            },
+            HarnessProfile {
+                provider_route: "huggingface".to_string(),
+                model_pattern: "*".to_string(),
+                posture: HarnessPosture::lean(),
+            },
+            HarnessProfile {
+                provider_route: "sglang".to_string(),
+                model_pattern: "*".to_string(),
+                posture: HarnessPosture::lean(),
+            },
+            HarnessProfile {
+                provider_route: "vllm".to_string(),
+                model_pattern: "*".to_string(),
+                posture: HarnessPosture::lean(),
+            },
+            HarnessProfile {
+                provider_route: "ollama".to_string(),
+                model_pattern: "*".to_string(),
+                posture: HarnessPosture::lean(),
+            },
+        ]
+    })
+}
+
+fn provider_routes_equal(expected: &str, actual: &str) -> bool {
+    match (ProviderKind::parse(expected), ProviderKind::parse(actual)) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => expected.trim().eq_ignore_ascii_case(actual.trim()),
+    }
+}
+
+fn wildcard_pattern_matches(pattern: &str, value: &str) -> bool {
+    wildcard_chars_match(
+        &pattern.chars().collect::<Vec<_>>(),
+        &value.chars().collect::<Vec<_>>(),
+    )
+}
+
+fn wildcard_chars_match(pattern: &[char], value: &[char]) -> bool {
+    let (mut pattern_idx, mut value_idx) = (0, 0);
+    let mut star_idx: Option<usize> = None;
+    let mut star_value_idx = 0;
+
+    while value_idx < value.len() {
+        if pattern_idx < pattern.len()
+            && (pattern[pattern_idx] == '?' || pattern[pattern_idx] == value[value_idx])
+        {
+            pattern_idx += 1;
+            value_idx += 1;
+        } else if pattern_idx < pattern.len() && pattern[pattern_idx] == '*' {
+            star_idx = Some(pattern_idx);
+            pattern_idx += 1;
+            star_value_idx = value_idx;
+        } else if let Some(star) = star_idx {
+            pattern_idx = star + 1;
+            star_value_idx += 1;
+            value_idx = star_value_idx;
+        } else {
+            return false;
+        }
+    }
+
+    pattern[pattern_idx..].iter().all(|ch| *ch == '*')
+}
+
+/// Ordered primary-plus-fallback provider list for future provider routing.
+///
+/// The helper is intentionally dormant: constructing or parsing a chain does
+/// not change [`ConfigToml::resolve_runtime_options`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChain {
+    providers: Vec<ProviderKind>,
+    position: usize,
+}
+
+pub const HOTBAR_SLOT_COUNT: u8 = 8;
+
+pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
+    "voice.toggle",
+    "session.compact",
+    "mode.plan",
+    "mode.agent",
+    "mode.yolo",
+    "palette.open",
+    "sidebar.toggle",
+    "trust.toggle",
+];
+
+/// On-disk schema for one `[[hotbar]]` table.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HotbarBindingToml {
+    pub slot: u8,
+    pub action: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Validated hotbar binding used by future render/dispatch layers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotbarBinding {
+    pub slot: u8,
+    pub action: String,
+    pub label: Option<String>,
+}
+
+/// Non-fatal hotbar config issue. Invalid slots are skipped; duplicate slots
+/// use the last binding; unknown actions are kept for UI feedback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotbarConfigWarning {
+    SlotOutOfRange {
+        slot: u8,
+        action: String,
+    },
+    DuplicateSlot {
+        slot: u8,
+        previous_action: String,
+        replacement_action: String,
+    },
+    UnknownAction {
+        slot: u8,
+        action: String,
+    },
+}
+
+impl fmt::Display for HotbarConfigWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SlotOutOfRange { slot, action } => write!(
+                f,
+                "hotbar slot {slot} for action '{action}' is outside 1-{HOTBAR_SLOT_COUNT}; skipped"
+            ),
+            Self::DuplicateSlot {
+                slot,
+                previous_action,
+                replacement_action,
+            } => write!(
+                f,
+                "hotbar slot {slot} was bound to '{previous_action}' more than once; using '{replacement_action}'"
+            ),
+            Self::UnknownAction { slot, action } => write!(
+                f,
+                "hotbar slot {slot} references unknown action '{action}'; keeping binding"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotbarConfigResolution {
+    pub bindings: Vec<HotbarBinding>,
+    pub warnings: Vec<HotbarConfigWarning>,
+}
+
+#[must_use]
+pub fn default_hotbar_bindings() -> Vec<HotbarBinding> {
+    DEFAULT_HOTBAR_ACTIONS
+        .iter()
+        .enumerate()
+        .map(|(idx, action)| HotbarBinding {
+            slot: u8::try_from(idx + 1).expect("default hotbar slot fits in u8"),
+            action: (*action).to_string(),
+            label: None,
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn resolve_hotbar_bindings(
+    configured: Option<&[HotbarBindingToml]>,
+    known_action_ids: &[&str],
+) -> HotbarConfigResolution {
+    let known = known_action_ids.iter().copied().collect::<BTreeSet<&str>>();
+    let mut warnings = Vec::new();
+
+    let source = match configured {
+        Some(bindings) => bindings
+            .iter()
+            .map(|binding| HotbarBinding {
+                slot: binding.slot,
+                action: binding.action.clone(),
+                label: binding.label.clone(),
+            })
+            .collect::<Vec<_>>(),
+        None => default_hotbar_bindings(),
+    };
+
+    let mut by_slot: BTreeMap<u8, HotbarBinding> = BTreeMap::new();
+    for binding in source {
+        if !(1..=HOTBAR_SLOT_COUNT).contains(&binding.slot) {
+            warnings.push(HotbarConfigWarning::SlotOutOfRange {
+                slot: binding.slot,
+                action: binding.action,
+            });
+            continue;
+        }
+        if !known.is_empty() && !known.contains(binding.action.as_str()) {
+            warnings.push(HotbarConfigWarning::UnknownAction {
+                slot: binding.slot,
+                action: binding.action.clone(),
+            });
+        }
+        if let Some(previous) = by_slot.insert(binding.slot, binding.clone()) {
+            warnings.push(HotbarConfigWarning::DuplicateSlot {
+                slot: binding.slot,
+                previous_action: previous.action,
+                replacement_action: binding.action,
+            });
+        }
+    }
+
+    HotbarConfigResolution {
+        bindings: by_slot.into_values().collect(),
+        warnings,
+    }
+}
+
+impl ProviderChain {
+    #[must_use]
+    pub fn new(active: ProviderKind, fallbacks: &[ProviderKind]) -> Self {
+        let mut providers = vec![active];
+        for fallback in fallbacks {
+            if *fallback != active && !providers.contains(fallback) {
+                providers.push(*fallback);
+            }
+        }
+        Self {
+            providers,
+            position: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn providers(&self) -> &[ProviderKind] {
+        &self.providers
+    }
+
+    #[must_use]
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    #[must_use]
+    pub fn current(&self) -> ProviderKind {
+        self.providers[self.position]
+    }
+
+    #[must_use]
+    pub fn has_next(&self) -> bool {
+        self.position + 1 < self.providers.len()
+    }
+
+    pub fn advance(&mut self) -> Option<ProviderKind> {
+        if !self.has_next() {
+            return None;
+        }
+        self.position += 1;
+        Some(self.current())
+    }
+
+    #[must_use]
+    pub fn is_fallback_active(&self) -> bool {
+        self.position > 0
+    }
+
+    /// Count the current provider plus untried chain entries.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.providers.len() - self.position
+    }
 }
 
 /// On-disk schema for the `[hook_sinks]` table.
@@ -497,6 +1151,9 @@ impl ConfigToml {
         if project.output_mode.is_some() {
             self.output_mode = project.output_mode;
         }
+        if project.verbosity.is_some() {
+            self.verbosity = project.verbosity;
+        }
         if project.log_level.is_some() {
             self.log_level = project.log_level;
         }
@@ -567,6 +1224,7 @@ impl ConfigToml {
             "model" => self.model.clone(),
             "auth.mode" => self.auth_mode.clone(),
             "output_mode" => self.output_mode.clone(),
+            "verbosity" => self.verbosity.clone(),
             "log_level" => self.log_level.clone(),
             "telemetry" => self.telemetry.map(|v| v.to_string()),
             "approval_policy" => self.approval_policy.clone(),
@@ -622,6 +1280,7 @@ impl ConfigToml {
             "providers.xiaomi_mimo.api_key" => self.providers.xiaomi_mimo.api_key.clone(),
             "providers.xiaomi_mimo.base_url" => self.providers.xiaomi_mimo.base_url.clone(),
             "providers.xiaomi_mimo.model" => self.providers.xiaomi_mimo.model.clone(),
+            "providers.xiaomi_mimo.mode" => self.providers.xiaomi_mimo.mode.clone(),
             "providers.xiaomi_mimo.http_headers" => {
                 serialize_http_headers(&self.providers.xiaomi_mimo.http_headers)
             }
@@ -680,6 +1339,12 @@ impl ConfigToml {
             "providers.huggingface.http_headers" => {
                 serialize_http_headers(&self.providers.huggingface.http_headers)
             }
+            "providers.together.api_key" => self.providers.together.api_key.clone(),
+            "providers.together.base_url" => self.providers.together.base_url.clone(),
+            "providers.together.model" => self.providers.together.model.clone(),
+            "providers.together.http_headers" => {
+                serialize_http_headers(&self.providers.together.http_headers)
+            }
             _ => self.extras.get(key).map(toml::Value::to_string),
         }
     }
@@ -708,6 +1373,7 @@ impl ConfigToml {
             "model" => self.model = Some(value.to_string()),
             "auth.mode" => self.auth_mode = Some(value.to_string()),
             "output_mode" => self.output_mode = Some(value.to_string()),
+            "verbosity" => self.verbosity = Some(value.to_string()),
             "log_level" => self.log_level = Some(value.to_string()),
             "telemetry" => {
                 self.telemetry = Some(parse_bool(value)?);
@@ -813,6 +1479,9 @@ impl ConfigToml {
             }
             "providers.xiaomi_mimo.model" => {
                 self.providers.xiaomi_mimo.model = Some(value.to_string());
+            }
+            "providers.xiaomi_mimo.mode" => {
+                self.providers.xiaomi_mimo.mode = Some(value.to_string());
             }
             "providers.xiaomi_mimo.http_headers" => {
                 self.providers.xiaomi_mimo.http_headers = parse_http_headers(value)?;
@@ -928,6 +1597,18 @@ impl ConfigToml {
             "providers.huggingface.http_headers" => {
                 self.providers.huggingface.http_headers = parse_http_headers(value)?;
             }
+            "providers.together.api_key" => {
+                self.providers.together.api_key = Some(value.to_string());
+            }
+            "providers.together.base_url" => {
+                self.providers.together.base_url = Some(value.to_string());
+            }
+            "providers.together.model" => {
+                self.providers.together.model = Some(value.to_string());
+            }
+            "providers.together.http_headers" => {
+                self.providers.together.http_headers = parse_http_headers(value)?;
+            }
             _ => {
                 self.extras
                     .insert(key.to_string(), toml::Value::String(value.to_string()));
@@ -946,6 +1627,7 @@ impl ConfigToml {
             "model" => self.model = None,
             "auth.mode" => self.auth_mode = None,
             "output_mode" => self.output_mode = None,
+            "verbosity" => self.verbosity = None,
             "log_level" => self.log_level = None,
             "telemetry" => self.telemetry = None,
             "approval_policy" => self.approval_policy = None,
@@ -1002,6 +1684,7 @@ impl ConfigToml {
             "providers.xiaomi_mimo.api_key" => self.providers.xiaomi_mimo.api_key = None,
             "providers.xiaomi_mimo.base_url" => self.providers.xiaomi_mimo.base_url = None,
             "providers.xiaomi_mimo.model" => self.providers.xiaomi_mimo.model = None,
+            "providers.xiaomi_mimo.mode" => self.providers.xiaomi_mimo.mode = None,
             "providers.xiaomi_mimo.http_headers" => {
                 self.providers.xiaomi_mimo.http_headers.clear();
             }
@@ -1046,6 +1729,10 @@ impl ConfigToml {
             "providers.huggingface.base_url" => self.providers.huggingface.base_url = None,
             "providers.huggingface.model" => self.providers.huggingface.model = None,
             "providers.huggingface.http_headers" => self.providers.huggingface.http_headers.clear(),
+            "providers.together.api_key" => self.providers.together.api_key = None,
+            "providers.together.base_url" => self.providers.together.base_url = None,
+            "providers.together.model" => self.providers.together.model = None,
+            "providers.together.http_headers" => self.providers.together.http_headers.clear(),
             _ => {
                 self.extras.remove(key);
             }
@@ -1078,6 +1765,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.output_mode.as_ref() {
             out.insert("output_mode".to_string(), v.clone());
+        }
+        if let Some(v) = self.verbosity.as_ref() {
+            out.insert("verbosity".to_string(), v.clone());
         }
         if let Some(v) = self.log_level.as_ref() {
             out.insert("log_level".to_string(), v.clone());
@@ -1196,6 +1886,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.xiaomi_mimo.model.as_ref() {
             out.insert("providers.xiaomi_mimo.model".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.xiaomi_mimo.mode.as_ref() {
+            out.insert("providers.xiaomi_mimo.mode".to_string(), v.clone());
         }
         if let Some(v) = serialize_http_headers(&self.providers.xiaomi_mimo.http_headers) {
             out.insert("providers.xiaomi_mimo.http_headers".to_string(), v);
@@ -1348,9 +2041,32 @@ impl ConfigToml {
         secrets: &Secrets,
     ) -> ResolvedRuntimeOptions {
         let env = EnvRuntimeOverrides::load();
-        let provider = cli.provider.or(env.provider).unwrap_or(self.provider);
+        let (provider, provider_source) = if let Some(p) = cli.provider {
+            (p, ProviderSource::Cli)
+        } else if let Some(p) = env.provider {
+            let var_name = if std::env::var("CODEWHALE_PROVIDER").is_ok() {
+                "CODEWHALE_PROVIDER"
+            } else {
+                "DEEPSEEK_PROVIDER"
+            };
+            (p, ProviderSource::Env(var_name))
+        } else {
+            (self.provider, ProviderSource::Config)
+        };
 
-        let provider_cfg = self.providers.for_provider(provider);
+        let mut provider_cfg = self.providers.for_provider(provider).clone();
+        if provider == ProviderKind::SiliconflowCN {
+            let fb = &self.providers.siliconflow;
+            if provider_cfg.api_key.is_none() {
+                provider_cfg.api_key = fb.api_key.clone();
+            }
+            if provider_cfg.base_url.is_none() {
+                provider_cfg.base_url = fb.base_url.clone();
+            }
+            if provider_cfg.model.is_none() {
+                provider_cfg.model = fb.model.clone();
+            }
+        }
         let root_deepseek_api_key = (provider == ProviderKind::Deepseek)
             .then(|| self.api_key.clone())
             .flatten();
@@ -1367,15 +2083,38 @@ impl ConfigToml {
             .or_else(|| provider_cfg.auth_mode.clone())
             .or_else(|| self.auth_mode.clone());
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
-        let explicit_api_key_for_endpoint = cli.api_key.as_deref().or(from_file.as_deref());
         let configured_base_url = cli
             .base_url
             .clone()
             .or_else(|| env.base_url_for(provider))
             .or_else(|| provider_cfg.base_url.clone())
             .or(root_deepseek_base_url);
+        let xiaomi_mimo_mode = if provider == ProviderKind::XiaomiMimo {
+            env.xiaomi_mimo_mode
+                .clone()
+                .or_else(|| provider_cfg.mode.clone())
+        } else {
+            None
+        };
+        let xiaomi_mimo_env_api_key = if provider == ProviderKind::XiaomiMimo {
+            xiaomi_mimo_env_api_key_for_runtime(
+                xiaomi_mimo_mode.as_deref(),
+                configured_base_url.as_deref(),
+            )
+        } else {
+            None
+        };
+        let explicit_api_key_for_endpoint = cli
+            .api_key
+            .as_deref()
+            .or(from_file.as_deref())
+            .or(xiaomi_mimo_env_api_key.as_deref());
         let base_url = if provider == ProviderKind::XiaomiMimo {
-            resolve_xiaomi_mimo_base_url(configured_base_url, explicit_api_key_for_endpoint)
+            resolve_xiaomi_mimo_base_url(
+                configured_base_url,
+                explicit_api_key_for_endpoint,
+                xiaomi_mimo_mode.as_deref(),
+            )
         } else {
             configured_base_url.unwrap_or_else(|| match provider {
                 ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
@@ -1402,6 +2141,9 @@ impl ConfigToml {
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
                 ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
+                ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
+                ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
+                ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
             })
         };
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
@@ -1417,6 +2159,8 @@ impl ConfigToml {
             (None, None)
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
+        } else if let Some(value) = xiaomi_mimo_env_api_key.filter(|v| !v.trim().is_empty()) {
+            (Some(value), Some(RuntimeApiKeySource::Env))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
             match codewhale_secrets::env_for(provider.as_str()) {
                 Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
@@ -1500,20 +2244,28 @@ impl ConfigToml {
             .or_else(|| env.sandbox_mode.clone())
             .or_else(|| self.sandbox_mode.clone());
         let yolo = cli.yolo.or(env.yolo);
+        let verbosity = cli
+            .verbosity
+            .clone()
+            .or_else(|| env.verbosity.clone())
+            .or_else(|| self.verbosity.clone());
 
         ResolvedRuntimeOptions {
             provider,
+            provider_source,
             model,
             api_key,
             api_key_source,
             base_url,
             auth_mode,
+            insecure_skip_tls_verify: provider_cfg.insecure_skip_tls_verify.unwrap_or(false),
             output_mode,
             log_level,
             telemetry,
             approval_policy,
             sandbox_mode,
             yolo,
+            verbosity,
             http_headers,
         }
     }
@@ -1522,9 +2274,6 @@ impl ConfigToml {
 fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
     if source.model.is_some() {
         target.model = source.model.clone();
-    }
-    if source.path_suffix.is_some() {
-        target.path_suffix = source.path_suffix.clone();
     }
 }
 
@@ -1587,7 +2336,13 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
         if path.exists()
             && let Ok(raw) = fs::read_to_string(&path)
         {
-            return toml::from_str(&raw).ok();
+            match toml::from_str(&raw) {
+                Ok(config) => return Some(config),
+                Err(e) => {
+                    tracing::warn!("Failed to parse project config {}: {e}", path.display());
+                    return None;
+                }
+            }
         }
     }
     None
@@ -1688,6 +2443,14 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
             | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
         ) => DEFAULT_HUGGINGFACE_FLASH_MODEL.to_string(),
+        (ProviderKind::Together, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_TOGETHER_MODEL.to_string()
+        }
+        (
+            ProviderKind::Together,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
+            | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
+        ) => DEFAULT_TOGETHER_FLASH_MODEL.to_string(),
         _ => model.to_string(),
     }
 }
@@ -1779,6 +2542,9 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_QWEN_3_6_PLUS_MODEL | "qwen3.6-plus" | "qwen-3.6-plus" => {
             Some(OPENROUTER_QWEN_3_6_PLUS_MODEL)
         }
+        OPENROUTER_QWEN_3_7_MAX_MODEL | "qwen3.7-max" | "qwen-3.7-max" => {
+            Some(OPENROUTER_QWEN_3_7_MAX_MODEL)
+        }
         OPENROUTER_TENCENT_HY3_PREVIEW_MODEL | "hy3-preview" | "tencent-hy3-preview" => {
             Some(OPENROUTER_TENCENT_HY3_PREVIEW_MODEL)
         }
@@ -1815,6 +2581,9 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
+        ProviderKind::Together => DEFAULT_TOGETHER_MODEL,
+        ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
+        ProviderKind::Anthropic => DEFAULT_ANTHROPIC_MODEL,
     }
 }
 
@@ -1838,6 +2607,9 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
+        ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL,
+        ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+        ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
     }
 }
 
@@ -1848,15 +2620,124 @@ fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
         || normalized.starts_with("https://api.kimi.com/coding/")
 }
 
-fn resolve_xiaomi_mimo_base_url(configured: Option<String>, api_key: Option<&str>) -> String {
+fn xiaomi_mimo_base_url_for_mode(mode: &str) -> Option<&'static str> {
+    let normalized = mode.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    if normalized.is_empty() || xiaomi_mimo_mode_uses_standard_endpoint(&normalized) {
+        return None;
+    }
+    Some(match normalized.as_str() {
+        "token-plan" | "tokenplan" | "subscription" | "subscribed" | "plan" => {
+            DEFAULT_XIAOMI_MIMO_BASE_URL
+        }
+        "token-plan-cn"
+        | "token-plan-china"
+        | "token-plan-mainland"
+        | "token-plan-mainland-china"
+        | "cn"
+        | "china" => XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL,
+        "token-plan-sgp"
+        | "token-plan-sg"
+        | "token-plan-singapore"
+        | "sgp"
+        | "sg"
+        | "singapore" => XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL,
+        "token-plan-ams"
+        | "token-plan-eu"
+        | "token-plan-europe"
+        | "token-plan-amsterdam"
+        | "ams"
+        | "eu"
+        | "europe"
+        | "amsterdam" => XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL,
+        _ => DEFAULT_XIAOMI_MIMO_BASE_URL,
+    })
+}
+
+fn xiaomi_mimo_mode_uses_standard_endpoint(normalized_mode: &str) -> bool {
+    matches!(
+        normalized_mode,
+        "standard" | "default" | "payg" | "paygo" | "pay-as-you-go" | "pay-as-go"
+    )
+}
+
+fn xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
+    let normalized = base_url.trim_end_matches('/').to_ascii_lowercase();
+    normalized == XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL
+        || normalized == XIAOMI_MIMO_TOKEN_PLAN_SGP_BASE_URL
+        || normalized == XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL
+}
+
+fn xiaomi_mimo_env_var(candidates: &[&str]) -> Option<String> {
+    candidates.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn xiaomi_mimo_env_api_key_for_runtime(
+    mode: Option<&str>,
+    base_url: Option<&str>,
+) -> Option<String> {
+    const TOKEN_PLAN_ENV_VARS: &[&str] =
+        &["XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "MIMO_TOKEN_PLAN_API_KEY"];
+    const STANDARD_ENV_VARS: &[&str] = &["XIAOMI_MIMO_API_KEY", "XIAOMI_API_KEY", "MIMO_API_KEY"];
+
+    let normalized_mode =
+        mode.map(|value| value.trim().to_ascii_lowercase().replace(['_', ' '], "-"));
+    let standard_selected = normalized_mode
+        .as_deref()
+        .is_some_and(xiaomi_mimo_mode_uses_standard_endpoint)
+        || base_url.is_some_and(xiaomi_mimo_base_url_is_pay_as_you_go);
+    if standard_selected {
+        return xiaomi_mimo_env_var(STANDARD_ENV_VARS);
+    }
+
+    let token_plan_selected = normalized_mode
+        .as_deref()
+        .and_then(xiaomi_mimo_base_url_for_mode)
+        .is_some()
+        || base_url.is_some_and(xiaomi_mimo_base_url_uses_token_plan);
+    if token_plan_selected {
+        return xiaomi_mimo_env_var(TOKEN_PLAN_ENV_VARS);
+    }
+
+    xiaomi_mimo_env_var(TOKEN_PLAN_ENV_VARS).or_else(|| xiaomi_mimo_env_var(STANDARD_ENV_VARS))
+}
+
+fn resolve_xiaomi_mimo_base_url(
+    configured: Option<String>,
+    api_key: Option<&str>,
+    mode: Option<&str>,
+) -> String {
+    let normalized_mode =
+        mode.map(|value| value.trim().to_ascii_lowercase().replace(['_', ' '], "-"));
+    let uses_standard_mode = normalized_mode
+        .as_deref()
+        .is_some_and(xiaomi_mimo_mode_uses_standard_endpoint);
+    let mode_base_url = normalized_mode
+        .as_deref()
+        .and_then(xiaomi_mimo_base_url_for_mode);
     let uses_token_plan = xiaomi_mimo_api_key_uses_token_plan(api_key);
     match configured {
+        Some(base_url) if uses_standard_mode => base_url,
         Some(base_url) if uses_token_plan && xiaomi_mimo_base_url_is_pay_as_you_go(&base_url) => {
-            DEFAULT_XIAOMI_MIMO_BASE_URL.to_string()
+            mode_base_url
+                .unwrap_or(DEFAULT_XIAOMI_MIMO_BASE_URL)
+                .to_string()
         }
         Some(base_url) => base_url,
-        None if uses_token_plan || api_key.is_none() => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
-        None => XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string(),
+        None => {
+            if let Some(base_url) = mode_base_url {
+                base_url.to_string()
+            } else if uses_standard_mode {
+                XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string()
+            } else if uses_token_plan || api_key.is_none() {
+                DEFAULT_XIAOMI_MIMO_BASE_URL.to_string()
+            } else {
+                XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL.to_string()
+            }
+        }
     }
 }
 
@@ -1873,6 +2754,12 @@ fn xiaomi_mimo_base_url_is_pay_as_you_go(base_url: &str) -> bool {
 
 fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
     if provider.is_siliconflow() && siliconflow_base_url_is_official(base_url) {
+        return false;
+    }
+    if provider == ProviderKind::XiaomiMimo
+        && (xiaomi_mimo_base_url_uses_token_plan(base_url)
+            || xiaomi_mimo_base_url_is_pay_as_you_go(base_url))
+    {
         return false;
     }
     let actual = base_url.trim_end_matches('/');
@@ -1984,6 +2871,7 @@ pub struct CliRuntimeOverrides {
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    pub verbosity: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2006,20 +2894,30 @@ impl RuntimeApiKeySource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSource {
+    Cli,
+    Env(&'static str),
+    Config,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedRuntimeOptions {
     pub provider: ProviderKind,
+    pub provider_source: ProviderSource,
     pub model: String,
     pub api_key: Option<String>,
     pub api_key_source: Option<RuntimeApiKeySource>,
     pub base_url: String,
     pub auth_mode: Option<String>,
+    pub insecure_skip_tls_verify: bool,
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: bool,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    pub verbosity: Option<String>,
     pub http_headers: BTreeMap<String, String>,
 }
 
@@ -2097,6 +2995,15 @@ impl ConfigStore {
     #[must_use]
     pub fn permissions_path(&self) -> PathBuf {
         permissions_path_for_config_path(&self.path)
+    }
+
+    #[must_use]
+    pub fn exec_policy_engine(&self) -> ExecPolicyEngine {
+        if self.permissions.is_empty() {
+            ExecPolicyEngine::new(Vec::new(), Vec::new())
+        } else {
+            ExecPolicyEngine::with_rulesets(vec![self.permissions.ruleset()])
+        }
     }
 }
 
@@ -2430,6 +3337,7 @@ struct EnvRuntimeOverrides {
     openrouter_model: Option<String>,
     moonshot_model: Option<String>,
     xiaomi_mimo_model: Option<String>,
+    xiaomi_mimo_mode: Option<String>,
     novita_model: Option<String>,
     fireworks_model: Option<String>,
     arcee_model: Option<String>,
@@ -2440,6 +3348,7 @@ struct EnvRuntimeOverrides {
     approval_policy: Option<String>,
     sandbox_mode: Option<String>,
     yolo: Option<bool>,
+    verbosity: Option<String>,
     http_headers: Option<BTreeMap<String, String>>,
     deepseek_base_url: Option<String>,
     nvidia_base_url: Option<String>,
@@ -2460,6 +3369,12 @@ struct EnvRuntimeOverrides {
     ollama_base_url: Option<String>,
     huggingface_base_url: Option<String>,
     huggingface_model: Option<String>,
+    together_base_url: Option<String>,
+    together_model: Option<String>,
+    openai_codex_base_url: Option<String>,
+    openai_codex_model: Option<String>,
+    anthropic_base_url: Option<String>,
+    anthropic_model: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -2495,6 +3410,10 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("MIMO_MODEL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            xiaomi_mimo_mode: std::env::var("XIAOMI_MIMO_MODE")
+                .or_else(|_| std::env::var("MIMO_MODE"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             novita_model: std::env::var("NOVITA_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -2504,20 +3423,41 @@ impl EnvRuntimeOverrides {
             arcee_model: std::env::var("ARCEE_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            verbosity: std::env::var("CODEWHALE_VERBOSITY")
+                .or_else(|_| std::env::var("DEEPSEEK_VERBOSITY"))
+                .ok(),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
             auth_mode: std::env::var("DEEPSEEK_AUTH_MODE").ok(),
             log_level: std::env::var("DEEPSEEK_LOG_LEVEL").ok(),
             telemetry: std::env::var("DEEPSEEK_TELEMETRY")
                 .ok()
-                .and_then(|v| parse_bool(&v).ok()),
+                .and_then(|v| match parse_bool(&v) {
+                    Ok(b) => Some(b),
+                    Err(_) => {
+                        tracing::warn!("Invalid DEEPSEEK_TELEMETRY value '{v}', expected true/false");
+                        None
+                    }
+                }),
             approval_policy: std::env::var("DEEPSEEK_APPROVAL_POLICY").ok(),
             sandbox_mode: std::env::var("DEEPSEEK_SANDBOX_MODE").ok(),
             yolo: std::env::var("DEEPSEEK_YOLO")
                 .ok()
-                .and_then(|v| parse_bool(&v).ok()),
+                .and_then(|v| match parse_bool(&v) {
+                    Ok(b) => Some(b),
+                    Err(_) => {
+                        tracing::warn!("Invalid DEEPSEEK_YOLO value '{v}', expected true/false");
+                        None
+                    }
+                }),
             http_headers: std::env::var("DEEPSEEK_HTTP_HEADERS")
                 .ok()
-                .and_then(|value| parse_http_headers(&value).ok())
+                .and_then(|value| match parse_http_headers(&value) {
+                    Ok(h) => Some(h),
+                    Err(_) => {
+                        tracing::warn!("Invalid DEEPSEEK_HTTP_HEADERS value, expected format: header1=val1,header2=val2");
+                        None
+                    }
+                })
                 .filter(|headers| !headers.is_empty()),
             deepseek_base_url: std::env::var("CODEWHALE_BASE_URL")
                 .or_else(|_| std::env::var("DEEPSEEK_BASE_URL"))
@@ -2587,6 +3527,26 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("HF_MODEL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            together_base_url: std::env::var("TOGETHER_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            together_model: std::env::var("TOGETHER_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            openai_codex_base_url: std::env::var("OPENAI_CODEX_BASE_URL")
+                .or_else(|_| std::env::var("CODEX_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            openai_codex_model: std::env::var("OPENAI_CODEX_MODEL")
+                .or_else(|_| std::env::var("CODEX_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            anthropic_base_url: std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            anthropic_model: std::env::var("ANTHROPIC_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 
@@ -2613,6 +3573,9 @@ impl EnvRuntimeOverrides {
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
             ProviderKind::Huggingface => self.huggingface_base_url.clone(),
+            ProviderKind::Together => self.together_base_url.clone(),
+            ProviderKind::OpenaiCodex => self.openai_codex_base_url.clone(),
+            ProviderKind::Anthropic => self.anthropic_base_url.clone(),
         }
     }
 
@@ -2630,6 +3593,9 @@ impl EnvRuntimeOverrides {
             ProviderKind::Novita => self.novita_model.clone(),
             ProviderKind::Fireworks => self.fireworks_model.clone(),
             ProviderKind::Huggingface => self.huggingface_model.clone(),
+            ProviderKind::Together => self.together_model.clone(),
+            ProviderKind::OpenaiCodex => self.openai_codex_model.clone(),
+            ProviderKind::Anthropic => self.anthropic_model.clone(),
             _ => None,
         }?;
 
@@ -2708,6 +3674,132 @@ mod tests {
         .expect_err("permissions.toml should be ask-only in this slice");
 
         assert!(err.message().contains("unknown field"));
+    }
+
+    #[test]
+    fn hotbar_defaults_when_config_is_absent() {
+        let config = ConfigToml::default();
+
+        let resolved = config.resolve_hotbar_bindings(&DEFAULT_HOTBAR_ACTIONS);
+
+        assert_eq!(resolved.warnings, Vec::new());
+        assert_eq!(resolved.bindings, default_hotbar_bindings());
+        assert_eq!(
+            resolved
+                .bindings
+                .iter()
+                .map(|binding| (binding.slot, binding.action.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "voice.toggle"),
+                (2, "session.compact"),
+                (3, "mode.plan"),
+                (4, "mode.agent"),
+                (5, "mode.yolo"),
+                (6, "palette.open"),
+                (7, "sidebar.toggle"),
+                (8, "trust.toggle"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hotbar_tables_parse_and_round_trip() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[[hotbar]]
+slot = 1
+label = "Plan"
+action = "mode.plan"
+
+[[hotbar]]
+slot = 2
+action = "session.compact"
+"#,
+        )
+        .expect("parse hotbar tables");
+
+        let resolved = config.resolve_hotbar_bindings(&["mode.plan", "session.compact"]);
+
+        assert_eq!(
+            resolved.bindings,
+            vec![
+                HotbarBinding {
+                    slot: 1,
+                    action: "mode.plan".to_string(),
+                    label: Some("Plan".to_string()),
+                },
+                HotbarBinding {
+                    slot: 2,
+                    action: "session.compact".to_string(),
+                    label: None,
+                },
+            ]
+        );
+        assert_eq!(resolved.warnings, Vec::new());
+
+        let serialized = toml::to_string_pretty(&config).expect("serialize config");
+        let round_tripped: ConfigToml =
+            toml::from_str(&serialized).expect("deserialize serialized config");
+        assert_eq!(round_tripped.hotbar, config.hotbar);
+    }
+
+    #[test]
+    fn hotbar_validation_warns_without_dropping_unknown_actions() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[[hotbar]]
+slot = 0
+action = "mode.plan"
+
+[[hotbar]]
+slot = 2
+action = "mode.plan"
+
+[[hotbar]]
+slot = 2
+action = "custom.action"
+
+[[hotbar]]
+slot = 9
+action = "mode.agent"
+"#,
+        )
+        .expect("parse hotbar tables");
+
+        let resolved = config.resolve_hotbar_bindings(&["mode.plan", "mode.agent"]);
+
+        assert_eq!(
+            resolved.bindings,
+            vec![HotbarBinding {
+                slot: 2,
+                action: "custom.action".to_string(),
+                label: None,
+            }]
+        );
+        assert_eq!(
+            resolved.warnings,
+            vec![
+                HotbarConfigWarning::SlotOutOfRange {
+                    slot: 0,
+                    action: "mode.plan".to_string(),
+                },
+                HotbarConfigWarning::UnknownAction {
+                    slot: 2,
+                    action: "custom.action".to_string(),
+                },
+                HotbarConfigWarning::DuplicateSlot {
+                    slot: 2,
+                    previous_action: "mode.plan".to_string(),
+                    replacement_action: "custom.action".to_string(),
+                },
+                HotbarConfigWarning::SlotOutOfRange {
+                    slot: 9,
+                    action: "mode.agent".to_string(),
+                },
+            ]
+        );
+        assert!(resolved.warnings[1].to_string().contains("keeping binding"));
     }
 
     #[test]
@@ -2792,6 +3884,54 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn config_store_exec_policy_engine_uses_sibling_permissions() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-engine-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "model = \"deepseek-v4-flash\"\n").expect("write config");
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo test"
+            "#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path)).expect("load config store");
+        let decision = store
+            .exec_policy_engine()
+            .check(codewhale_execpolicy::ExecPolicyContext {
+                command: "cargo test --workspace",
+                cwd: "/workspace",
+                tool: Some("exec_shell"),
+                path: None,
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy check");
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     struct EnvGuard {
         deepseek_api_key: Option<OsString>,
         deepseek_base_url: Option<OsString>,
@@ -2808,6 +3948,8 @@ mod tests {
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
         openrouter_model: Option<OsString>,
+        xiaomi_mimo_token_plan_api_key: Option<OsString>,
+        mimo_token_plan_api_key: Option<OsString>,
         xiaomi_mimo_api_key: Option<OsString>,
         xiaomi_api_key: Option<OsString>,
         mimo_api_key: Option<OsString>,
@@ -2815,6 +3957,8 @@ mod tests {
         mimo_base_url: Option<OsString>,
         xiaomi_mimo_model: Option<OsString>,
         mimo_model: Option<OsString>,
+        xiaomi_mimo_mode: Option<OsString>,
+        mimo_mode: Option<OsString>,
         wanjie_ark_api_key: Option<OsString>,
         volcengine_api_key: Option<OsString>,
         volcengine_ark_api_key: Option<OsString>,
@@ -2881,6 +4025,8 @@ mod tests {
                 openrouter_api_key: env::var_os("OPENROUTER_API_KEY"),
                 openrouter_base_url: env::var_os("OPENROUTER_BASE_URL"),
                 openrouter_model: env::var_os("OPENROUTER_MODEL"),
+                xiaomi_mimo_token_plan_api_key: env::var_os("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"),
+                mimo_token_plan_api_key: env::var_os("MIMO_TOKEN_PLAN_API_KEY"),
                 xiaomi_mimo_api_key: env::var_os("XIAOMI_MIMO_API_KEY"),
                 xiaomi_api_key: env::var_os("XIAOMI_API_KEY"),
                 mimo_api_key: env::var_os("MIMO_API_KEY"),
@@ -2888,6 +4034,8 @@ mod tests {
                 mimo_base_url: env::var_os("MIMO_BASE_URL"),
                 xiaomi_mimo_model: env::var_os("XIAOMI_MIMO_MODEL"),
                 mimo_model: env::var_os("MIMO_MODEL"),
+                xiaomi_mimo_mode: env::var_os("XIAOMI_MIMO_MODE"),
+                mimo_mode: env::var_os("MIMO_MODE"),
                 wanjie_ark_api_key: env::var_os("WANJIE_ARK_API_KEY"),
                 volcengine_api_key: env::var_os("VOLCENGINE_API_KEY"),
                 volcengine_ark_api_key: env::var_os("VOLCENGINE_ARK_API_KEY"),
@@ -2949,6 +4097,8 @@ mod tests {
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
                 env::remove_var("OPENROUTER_MODEL");
+                env::remove_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY");
+                env::remove_var("MIMO_TOKEN_PLAN_API_KEY");
                 env::remove_var("XIAOMI_MIMO_API_KEY");
                 env::remove_var("XIAOMI_API_KEY");
                 env::remove_var("MIMO_API_KEY");
@@ -2956,6 +4106,8 @@ mod tests {
                 env::remove_var("MIMO_BASE_URL");
                 env::remove_var("XIAOMI_MIMO_MODEL");
                 env::remove_var("MIMO_MODEL");
+                env::remove_var("XIAOMI_MIMO_MODE");
+                env::remove_var("MIMO_MODE");
                 env::remove_var("WANJIE_ARK_API_KEY");
                 env::remove_var("VOLCENGINE_API_KEY");
                 env::remove_var("VOLCENGINE_ARK_API_KEY");
@@ -3034,6 +4186,14 @@ mod tests {
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
                 Self::restore_var("OPENROUTER_MODEL", self.openrouter_model.take());
+                Self::restore_var(
+                    "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
+                    self.xiaomi_mimo_token_plan_api_key.take(),
+                );
+                Self::restore_var(
+                    "MIMO_TOKEN_PLAN_API_KEY",
+                    self.mimo_token_plan_api_key.take(),
+                );
                 Self::restore_var("XIAOMI_MIMO_API_KEY", self.xiaomi_mimo_api_key.take());
                 Self::restore_var("XIAOMI_API_KEY", self.xiaomi_api_key.take());
                 Self::restore_var("MIMO_API_KEY", self.mimo_api_key.take());
@@ -3041,6 +4201,8 @@ mod tests {
                 Self::restore_var("MIMO_BASE_URL", self.mimo_base_url.take());
                 Self::restore_var("XIAOMI_MIMO_MODEL", self.xiaomi_mimo_model.take());
                 Self::restore_var("MIMO_MODEL", self.mimo_model.take());
+                Self::restore_var("XIAOMI_MIMO_MODE", self.xiaomi_mimo_mode.take());
+                Self::restore_var("MIMO_MODE", self.mimo_mode.take());
                 Self::restore_var("WANJIE_ARK_API_KEY", self.wanjie_ark_api_key.take());
                 Self::restore_var("VOLCENGINE_API_KEY", self.volcengine_api_key.take());
                 Self::restore_var("VOLCENGINE_ARK_API_KEY", self.volcengine_ark_api_key.take());
@@ -3217,6 +4379,28 @@ mod tests {
             resolved.http_headers.get("X-Shared").map(String::as_str),
             Some("provider")
         );
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_resolves_only_for_active_provider() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Openai,
+            ..ConfigToml::default()
+        };
+        config.providers.deepseek.insecure_skip_tls_verify = Some(true);
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Openai);
+        assert!(!resolved.insecure_skip_tls_verify);
+
+        config.providers.openai.insecure_skip_tls_verify = Some(true);
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Openai);
+        assert!(resolved.insecure_skip_tls_verify);
     }
 
     #[test]
@@ -3631,6 +4815,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             ..ConfigToml::default()
         };
         base.providers.openrouter.api_key = Some("user-openrouter-key".to_string());
+        base.providers.openrouter.path_suffix = Some("/chat/completions".to_string());
 
         let mut project = ConfigToml {
             provider: ProviderKind::Openrouter,
@@ -3643,6 +4828,8 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         };
         project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
         project.providers.openrouter.base_url = Some("https://evil.example/openrouter".to_string());
+        project.providers.openrouter.insecure_skip_tls_verify = Some(true);
+        project.providers.openrouter.path_suffix = Some("/attacker/chat".to_string());
         project.providers.openrouter.model = Some("deepseek/deepseek-v4-pro".to_string());
         project.providers.volcengine.model = Some("DeepSeek-V4-Pro".to_string());
         project.providers.moonshot.model = Some("kimi-k2.6".to_string());
@@ -3659,6 +4846,11 @@ unix_socket_path = "/tmp/cw-hooks.sock"
             Some("user-openrouter-key")
         );
         assert_eq!(base.providers.openrouter.base_url, None);
+        assert_eq!(base.providers.openrouter.insecure_skip_tls_verify, None);
+        assert_eq!(
+            base.providers.openrouter.path_suffix.as_deref(),
+            Some("/chat/completions")
+        );
         assert_eq!(base.default_text_model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(
             base.providers.openrouter.model.as_deref(),
@@ -4014,6 +5206,100 @@ unix_socket_path = "/tmp/cw-hooks.sock"
     }
 
     #[test]
+    fn provider_metadata_registry_covers_every_provider_kind_once() {
+        let providers = provider::all_providers();
+        assert_eq!(providers.len(), ProviderKind::ALL.len());
+
+        for (kind, provider) in ProviderKind::ALL.iter().zip(providers.iter()) {
+            assert_eq!(provider.kind(), *kind);
+            assert_eq!(provider.id(), kind.as_str());
+            assert_eq!(kind.provider().id(), kind.as_str());
+        }
+
+        let mut ids = std::collections::BTreeSet::new();
+        for provider in providers {
+            assert!(ids.insert(provider.id()), "duplicate provider id");
+        }
+    }
+
+    #[test]
+    fn provider_metadata_lookup_does_not_fall_back_to_deepseek() {
+        assert!(provider::lookup_provider("not-a-provider").is_none());
+        assert!(provider::resolve_provider("not-a-provider").is_none());
+        assert!(provider::lookup_provider("deepseek-cn").is_none());
+        assert_eq!(
+            provider::resolve_provider("deepseek-cn")
+                .expect("legacy alias resolves")
+                .kind(),
+            ProviderKind::Deepseek
+        );
+    }
+
+    #[test]
+    fn provider_metadata_preserves_alias_and_config_key_semantics() {
+        assert_eq!(
+            provider::resolve_provider("open_router")
+                .expect("openrouter alias")
+                .kind(),
+            ProviderKind::Openrouter
+        );
+        assert_eq!(
+            provider::resolve_provider("xiaomi")
+                .expect("xiaomi alias")
+                .kind(),
+            ProviderKind::XiaomiMimo
+        );
+        assert_eq!(
+            provider::resolve_provider("kimi")
+                .expect("kimi alias")
+                .kind(),
+            ProviderKind::Moonshot
+        );
+        assert_eq!(
+            provider::resolve_provider("hf")
+                .expect("huggingface alias")
+                .kind(),
+            ProviderKind::Huggingface
+        );
+
+        let siliconflow_cn =
+            provider::resolve_provider("siliconflow-cn").expect("siliconflow-cn alias resolves");
+        assert_eq!(siliconflow_cn.kind(), ProviderKind::SiliconflowCN);
+        assert_eq!(siliconflow_cn.id(), "siliconflow-CN");
+        assert_eq!(siliconflow_cn.provider_config_key(), "siliconflow_cn");
+
+        let config = ProvidersToml::default();
+        let shared_table = config.for_provider(ProviderKind::SiliconflowCN);
+        assert!(!std::ptr::eq(
+            shared_table,
+            config.for_provider(ProviderKind::Siliconflow)
+        ));
+    }
+
+    #[test]
+    fn provider_metadata_defaults_match_runtime_helpers() {
+        for kind in ProviderKind::ALL {
+            let provider = kind.provider();
+            assert_eq!(provider.default_model(), default_model_for_provider(kind));
+            assert_eq!(
+                provider.default_base_url(),
+                default_base_url_for_provider(kind)
+            );
+            assert!(!provider.display_name().trim().is_empty());
+            assert!(!provider.env_vars().is_empty());
+            // OpenAI Codex (ChatGPT) speaks the Responses API and Anthropic
+            // speaks the native Messages API; every other built-in provider
+            // is OpenAI-compatible Chat Completions.
+            let expected_wire = match kind {
+                ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
+                ProviderKind::Anthropic => provider::WireFormat::AnthropicMessages,
+                _ => provider::WireFormat::ChatCompletions,
+            };
+            assert_eq!(provider.wire(), expected_wire);
+        }
+    }
+
+    #[test]
     fn openrouter_provider_defaults_to_canonical_endpoint_and_model() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4094,6 +5380,46 @@ model = "mimo-v2.5-pro"
         assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
         assert_eq!(resolved.base_url, DEFAULT_XIAOMI_MIMO_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_XIAOMI_MIMO_MODEL);
+    }
+
+    #[test]
+    fn xiaomi_mimo_token_plan_mode_accepts_region_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config: ConfigToml = toml::from_str(
+            r#"
+provider = "mimo"
+
+[providers.mimo]
+mode = "token-plan-ams"
+"#,
+        )
+        .expect("xiaomi token-plan region config");
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.base_url, XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL);
+    }
+
+    #[test]
+    fn xiaomi_mimo_unknown_mode_stays_on_token_plan_endpoint() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config: ConfigToml = toml::from_str(
+            r#"
+provider = "mimo"
+
+[providers.mimo]
+mode = "token-plan-usa"
+"#,
+        )
+        .expect("xiaomi token-plan unknown mode config");
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.base_url, DEFAULT_XIAOMI_MIMO_BASE_URL);
     }
 
     #[test]
@@ -4564,6 +5890,48 @@ model = "mimo-v2.5-pro"
     }
 
     #[test]
+    fn xiaomi_mimo_env_token_plan_mode_uses_token_plan_key_and_endpoint() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "xiaomi-mimo");
+            env::set_var("XIAOMI_MIMO_MODE", "token-plan-cn");
+            env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "tp-env-key");
+            env::set_var("XIAOMI_MIMO_API_KEY", "sk-env-key");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.api_key.as_deref(), Some("tp-env-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Env));
+        assert_eq!(resolved.base_url, XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL);
+    }
+
+    #[test]
+    fn xiaomi_mimo_env_pay_as_you_go_mode_prefers_standard_key() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "xiaomi-mimo");
+            env::set_var("XIAOMI_MIMO_MODE", "pay-as-you-go");
+            env::set_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY", "tp-env-key");
+            env::set_var("XIAOMI_MIMO_API_KEY", "sk-env-key");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.api_key.as_deref(), Some("sk-env-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Env));
+        assert_eq!(resolved.base_url, XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL);
+    }
+
+    #[test]
     fn novita_env_overrides_key_and_model_when_config_missing() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4775,6 +6143,41 @@ model = "mimo-v2.5-pro"
 
         assert_eq!(resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.model, DEFAULT_OPENROUTER_FLASH_MODEL);
+    }
+
+    #[test]
+    fn qwen3_6_plus_resolves_to_canonical_on_openrouter() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides {
+            model: Some("qwen3.6-plus".to_string()),
+            ..CliRuntimeOverrides::default()
+        });
+
+        assert_eq!(resolved.provider, ProviderKind::Openrouter);
+        assert_eq!(resolved.model, OPENROUTER_QWEN_3_6_PLUS_MODEL);
+    }
+
+    #[test]
+    fn qwen3_6_plus_alias_qwen_dash_resolves() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides {
+            model: Some("qwen-3.6-plus".to_string()),
+            ..CliRuntimeOverrides::default()
+        });
+
+        assert_eq!(resolved.model, OPENROUTER_QWEN_3_6_PLUS_MODEL);
     }
 
     #[test]
@@ -5086,5 +6489,423 @@ model = "mimo-v2.5-pro"
         let resolved = ConfigToml::default().resolve_runtime_options_with_secrets(&cli, &secrets);
         assert_eq!(resolved.api_key.as_deref(), Some("cli-key"));
         assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Cli));
+    }
+
+    #[test]
+    fn provider_chain_initial_current_is_active() {
+        let chain = ProviderChain::new(
+            ProviderKind::NvidiaNim,
+            &[ProviderKind::Deepseek, ProviderKind::Openrouter],
+        );
+
+        assert_eq!(chain.current(), ProviderKind::NvidiaNim);
+        assert_eq!(chain.position(), 0);
+        assert_eq!(
+            chain.providers(),
+            &[
+                ProviderKind::NvidiaNim,
+                ProviderKind::Deepseek,
+                ProviderKind::Openrouter,
+            ]
+        );
+        assert!(!chain.is_fallback_active());
+    }
+
+    #[test]
+    fn provider_chain_advance_switches_to_fallback() {
+        let mut chain = ProviderChain::new(
+            ProviderKind::NvidiaNim,
+            &[ProviderKind::Deepseek, ProviderKind::Openrouter],
+        );
+
+        assert!(chain.has_next());
+        assert_eq!(chain.advance(), Some(ProviderKind::Deepseek));
+        assert_eq!(chain.current(), ProviderKind::Deepseek);
+        assert!(chain.is_fallback_active());
+    }
+
+    #[test]
+    fn provider_chain_exhausts_returns_none() {
+        let mut chain = ProviderChain::new(ProviderKind::Deepseek, &[ProviderKind::Openrouter]);
+
+        assert_eq!(chain.advance(), Some(ProviderKind::Openrouter));
+        assert!(!chain.has_next());
+        assert_eq!(chain.advance(), None);
+    }
+
+    #[test]
+    fn provider_chain_skips_duplicates() {
+        let chain = ProviderChain::new(
+            ProviderKind::Deepseek,
+            &[
+                ProviderKind::Deepseek,
+                ProviderKind::NvidiaNim,
+                ProviderKind::Deepseek,
+            ],
+        );
+
+        assert_eq!(
+            chain.providers(),
+            &[ProviderKind::Deepseek, ProviderKind::NvidiaNim]
+        );
+    }
+
+    #[test]
+    fn provider_chain_remaining_counts_current_and_untried_entries() {
+        let mut chain = ProviderChain::new(
+            ProviderKind::Deepseek,
+            &[ProviderKind::NvidiaNim, ProviderKind::Openrouter],
+        );
+
+        assert_eq!(chain.remaining(), 3);
+        assert_eq!(chain.advance(), Some(ProviderKind::NvidiaNim));
+        assert_eq!(chain.remaining(), 2);
+    }
+
+    #[test]
+    fn config_toml_parses_fallback_providers() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+provider = "nvidia-nim"
+fallback_providers = ["deepseek", "openrouter"]
+"#,
+        )
+        .expect("fallback providers config");
+
+        assert_eq!(config.provider, ProviderKind::NvidiaNim);
+        assert_eq!(
+            config.fallback_providers,
+            [ProviderKind::Deepseek, ProviderKind::Openrouter]
+        );
+    }
+
+    #[test]
+    fn empty_fallback_providers_do_not_serialize() {
+        let serialized = toml::to_string_pretty(&ConfigToml::default()).expect("config serializes");
+
+        assert!(!serialized.contains("fallback_providers"));
+    }
+
+    #[test]
+    fn fallback_providers_do_not_change_runtime_resolution() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::NvidiaNim,
+            fallback_providers: vec![ProviderKind::Deepseek],
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::NvidiaNim);
+    }
+
+    #[test]
+    fn harness_posture_default_is_standard() {
+        let posture = HarnessPosture::default();
+
+        assert_eq!(
+            posture,
+            HarnessPosture {
+                kind: HarnessPostureKind::Standard,
+                max_subagents: 0,
+                prefer_codebase_search: false,
+                compaction_strategy: HarnessCompactionStrategy::Default,
+                tool_surface: HarnessToolSurface::Full,
+                safety_posture: HarnessSafetyPosture::Standard,
+            }
+        );
+    }
+
+    #[test]
+    fn harness_posture_factories_are_typed() {
+        assert_eq!(
+            HarnessPosture::cache_heavy(),
+            HarnessPosture {
+                kind: HarnessPostureKind::CacheHeavy,
+                max_subagents: 10,
+                prefer_codebase_search: false,
+                compaction_strategy: HarnessCompactionStrategy::PrefixCache,
+                tool_surface: HarnessToolSurface::Full,
+                safety_posture: HarnessSafetyPosture::Standard,
+            }
+        );
+        assert_eq!(
+            HarnessPosture::lean(),
+            HarnessPosture {
+                kind: HarnessPostureKind::Lean,
+                max_subagents: 20,
+                prefer_codebase_search: true,
+                compaction_strategy: HarnessCompactionStrategy::Aggressive,
+                tool_surface: HarnessToolSurface::Full,
+                safety_posture: HarnessSafetyPosture::Standard,
+            }
+        );
+    }
+
+    #[test]
+    fn harness_profile_serde_round_trips_as_a_whole_struct() {
+        let profile = HarnessProfile {
+            provider_route: "deepseek".to_string(),
+            model_pattern: "deepseek-v4.*".to_string(),
+            posture: HarnessPosture::cache_heavy(),
+        };
+
+        let json = serde_json::to_string(&profile).expect("serialize profile");
+        let round_tripped: HarnessProfile =
+            serde_json::from_str(&json).expect("deserialize profile");
+
+        assert_eq!(round_tripped, profile);
+    }
+
+    #[test]
+    fn config_toml_accepts_harness_profiles() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+provider = "deepseek"
+model = "deepseek-v4-pro"
+
+[[harness_profiles]]
+provider_route = "deepseek"
+model_pattern = "deepseek-v4.*"
+
+[harness_profiles.posture]
+kind = "cache-heavy"
+max_subagents = 10
+compaction_strategy = "prefix-cache"
+tool_surface = "read-only"
+safety_posture = "strict"
+"#,
+        )
+        .expect("parse harness profiles");
+
+        assert_eq!(
+            config.harness_profiles,
+            vec![HarnessProfile {
+                provider_route: "deepseek".to_string(),
+                model_pattern: "deepseek-v4.*".to_string(),
+                posture: HarnessPosture {
+                    kind: HarnessPostureKind::CacheHeavy,
+                    max_subagents: 10,
+                    prefer_codebase_search: false,
+                    compaction_strategy: HarnessCompactionStrategy::PrefixCache,
+                    tool_surface: HarnessToolSurface::ReadOnly,
+                    safety_posture: HarnessSafetyPosture::Strict,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn harness_profile_matches_provider_alias_and_model_wildcard() {
+        let profile = HarnessProfile {
+            provider_route: "xiaomi-mimo".to_string(),
+            model_pattern: "mimo-v2.?-pro".to_string(),
+            posture: HarnessPosture::cache_heavy(),
+        };
+
+        assert!(profile.matches_route("mimo", "mimo-v2.5-pro"));
+        assert!(!profile.matches_route("mimo", "mimo-v2.50-pro"));
+        assert!(!profile.matches_route("deepseek", "mimo-v2.5-pro"));
+    }
+
+    #[test]
+    fn resolve_harness_profile_returns_first_matching_profile() {
+        let config = ConfigToml {
+            harness_profiles: vec![
+                HarnessProfile {
+                    provider_route: "deepseek".to_string(),
+                    model_pattern: "deepseek-v4-flash".to_string(),
+                    posture: HarnessPosture::lean(),
+                },
+                HarnessProfile {
+                    provider_route: "deepseek".to_string(),
+                    model_pattern: "deepseek-v4-*".to_string(),
+                    posture: HarnessPosture::cache_heavy(),
+                },
+            ],
+            ..ConfigToml::default()
+        };
+
+        let flash = config
+            .resolve_harness_profile("deepseek-cn", "deepseek-v4-flash")
+            .expect("exact profile should match first");
+        assert_eq!(flash.posture.kind, HarnessPostureKind::Lean);
+
+        let pro = config
+            .resolve_harness_profile("deepseek", "deepseek-v4-pro")
+            .expect("wildcard profile should match pro model");
+        assert_eq!(pro.posture.kind, HarnessPostureKind::CacheHeavy);
+    }
+
+    #[test]
+    fn resolve_harness_profile_uses_built_in_seed_when_config_has_no_match() {
+        let config = ConfigToml::default();
+
+        let xiaomi = config
+            .resolve_harness_profile("xiaomi", "mimo-v2.5-pro")
+            .expect("direct Xiaomi MiMo seed should resolve");
+        assert_eq!(xiaomi.provider_route, "xiaomi-mimo");
+        assert_eq!(xiaomi.posture.kind, HarnessPostureKind::CacheHeavy);
+
+        let arcee = config
+            .resolve_harness_profile("arcee", "trinity-large-thinking")
+            .expect("direct Arcee seed should resolve");
+        assert_eq!(arcee.posture.kind, HarnessPostureKind::CacheHeavy);
+
+        let local = config
+            .resolve_harness_profile("vllm", "Qwen/Qwen3.6-Coder")
+            .expect("local seed should resolve");
+        assert_eq!(local.posture.kind, HarnessPostureKind::Lean);
+        assert!(local.posture.prefer_codebase_search);
+    }
+
+    #[test]
+    fn configured_harness_profile_overrides_built_in_seed() {
+        let config = ConfigToml {
+            harness_profiles: vec![HarnessProfile {
+                provider_route: "xiaomi-mimo".to_string(),
+                model_pattern: "mimo-v2.5-pro".to_string(),
+                posture: HarnessPosture {
+                    kind: HarnessPostureKind::Custom,
+                    max_subagents: 3,
+                    prefer_codebase_search: true,
+                    compaction_strategy: HarnessCompactionStrategy::Default,
+                    tool_surface: HarnessToolSurface::Auto,
+                    safety_posture: HarnessSafetyPosture::Strict,
+                },
+            }],
+            ..ConfigToml::default()
+        };
+
+        let profile = config
+            .resolve_harness_profile("xiaomi-mimo", "mimo-v2.5-pro")
+            .expect("configured profile should match first");
+
+        assert_eq!(profile.posture.kind, HarnessPostureKind::Custom);
+        assert_eq!(profile.posture.max_subagents, 3);
+        assert_eq!(profile.posture.tool_surface, HarnessToolSurface::Auto);
+        assert_eq!(profile.posture.safety_posture, HarnessSafetyPosture::Strict);
+    }
+
+    #[test]
+    fn resolve_harness_profile_returns_none_when_route_or_model_misses() {
+        let config = ConfigToml {
+            harness_profiles: vec![HarnessProfile {
+                provider_route: "huggingface".to_string(),
+                model_pattern: "deepseek-ai/*".to_string(),
+                posture: HarnessPosture::lean(),
+            }],
+            ..ConfigToml::default()
+        };
+
+        assert!(
+            config
+                .resolve_harness_profile("openrouter", "deepseek-ai/DeepSeek-V4-Pro")
+                .is_none()
+        );
+        assert!(
+            config
+                .resolve_harness_profile("deepseek", "Qwen/Qwen3.6-Coder")
+                .is_none()
+        );
+        assert!(
+            config
+                .resolve_harness_profile("openai", "mimo-v2.5-pro")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolving_harness_profile_does_not_change_runtime_options() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            model: Some("deepseek-v4-pro".to_string()),
+            harness_profiles: vec![HarnessProfile {
+                provider_route: "deepseek".to_string(),
+                model_pattern: "deepseek-v4-*".to_string(),
+                posture: HarnessPosture::lean(),
+            }],
+            ..ConfigToml::default()
+        };
+
+        let profile = config
+            .resolve_harness_profile("deepseek", "deepseek-v4-pro")
+            .expect("profile should resolve for display/future runtime");
+        assert_eq!(profile.posture.kind, HarnessPostureKind::Lean);
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.provider, ProviderKind::Deepseek);
+        assert_eq!(resolved.model, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn harness_posture_kind_rejects_unknown_values() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[[harness_profiles]]
+provider_route = "deepseek"
+model_pattern = "deepseek-v4.*"
+
+[harness_profiles.posture]
+kind = "cahce-heavy"
+"#,
+        )
+        .expect_err("misspelled kind should not deserialize as custom");
+
+        assert!(err.to_string().contains("cahce-heavy"));
+    }
+
+    #[test]
+    fn harness_posture_rejects_unknown_policy_keys() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[[harness_profiles]]
+provider_route = "deepseek"
+model_pattern = "deepseek-v4.*"
+
+[harness_profiles.posture]
+kind = "custom"
+unknown_policy = "surprise"
+"#,
+        )
+        .expect_err("unknown posture keys should not be ignored");
+
+        assert!(err.to_string().contains("unknown_policy"));
+    }
+
+    #[test]
+    fn test_verbosity_resolution() {
+        let _lock = env_lock();
+        // Test TOML parsing
+        let toml_str = r#"
+            verbosity = "concise"
+        "#;
+        let config: ConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.verbosity, Some("concise".to_string()));
+
+        // Test Env overrides
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        unsafe {
+            std::env::set_var("CODEWHALE_VERBOSITY", "normal");
+        }
+        let env_overrides = EnvRuntimeOverrides::load();
+        assert_eq!(env_overrides.verbosity, Some("normal".to_string()));
+        unsafe {
+            std::env::remove_var("CODEWHALE_VERBOSITY");
+        }
+
+        // Test fallback to DEEPSEEK_VERBOSITY
+        unsafe {
+            std::env::set_var("DEEPSEEK_VERBOSITY", "concise");
+        }
+        let env_overrides = EnvRuntimeOverrides::load();
+        assert_eq!(env_overrides.verbosity, Some("concise".to_string()));
+        unsafe {
+            std::env::remove_var("DEEPSEEK_VERBOSITY");
+        }
     }
 }

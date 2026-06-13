@@ -75,6 +75,7 @@ pub struct SettingsSection {
     pub status_indicator: StatusIndicatorValue,
     pub synchronized_output: SynchronizedOutputValue,
     pub default_mode: DefaultModeValue,
+    pub pro_plan_profile: bool,
     #[schemars(range(min = 10, max = 50))]
     pub sidebar_width: u16,
     pub sidebar_focus: SidebarFocusValue,
@@ -346,6 +347,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             status_indicator: settings.status_indicator.as_str().into(),
             synchronized_output: settings.synchronized_output.as_str().into(),
             default_mode: settings.default_mode.as_str().into(),
+            pro_plan_profile: settings.pro_plan_profile,
             sidebar_width: settings.sidebar_width_percent,
             sidebar_focus: settings.sidebar_focus.as_str().into(),
             context_panel: settings.context_panel,
@@ -405,7 +407,7 @@ pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSes
         let poll_tx = tx.clone();
         let poll_url = format!("{url}/api/session");
         let poll_task = tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            let client = crate::tls::reqwest_client();
             let mut last: Option<ConfigUiDocument> = Some(app_snapshot);
             loop {
                 tokio::time::sleep(Duration::from_millis(750)).await;
@@ -543,6 +545,7 @@ pub fn apply_document(
             doc.settings.synchronized_output.as_setting(),
         ),
         ("default_mode", doc.settings.default_mode.as_setting()),
+        ("pro_plan_profile", bool_str(doc.settings.pro_plan_profile)),
         ("sidebar_width", &doc.settings.sidebar_width.to_string()),
         ("sidebar_focus", doc.settings.sidebar_focus.as_setting()),
         ("context_panel", bool_str(doc.settings.context_panel)),
@@ -596,7 +599,7 @@ pub fn apply_document(
         app.status_items = new_status_items.clone();
         app.needs_redraw = true;
         if persist {
-            let path = commands::persist_status_items(&new_status_items)?;
+            let path = crate::config_persistence::persist_status_items(&new_status_items)?;
             notes.push(format!("status_items saved to {}", path.display()));
         } else {
             notes.push("status_items updated for this session".to_string());
@@ -685,7 +688,7 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key(
+        crate::config_persistence::persist_root_string_key(
             app.config_path.as_deref(),
             "reasoning_effort",
             effort.as_setting(),

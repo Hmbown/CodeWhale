@@ -15,12 +15,13 @@ members = [
     "crates/tools",
     "crates/tui",
     "crates/tui-core",
+    "crates/whaleflow",
 ]
 default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.53"
+version = "0.8.58"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older
@@ -38,7 +39,8 @@ chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.54", features = ["derive"] }
 clap_complete = "4.5"
 dirs = "6.0.0"
-reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "socks"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
+rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

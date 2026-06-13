@@ -23,7 +23,7 @@ const faqEn: FaqItem[] = [
     q: "What is CodeWhale?",
     a: (
       <>
-        CodeWhale is a terminal-native coding agent for open-source and open-weight models. It runs from the <code className="inline">codewhale</code> command, streams reasoning blocks, edits local workspaces with approval gates, and can auto-route each turn to the right model and thinking level. DeepSeek V4 is the first-class model path; OpenRouter is ready. Hugging Face, self-hosted, and other open-model surfaces are on the roadmap.
+        CodeWhale is a terminal-native coding agent for open-source and open-weight models. It runs from the <code className="inline">codewhale</code> command, streams reasoning blocks, edits local workspaces with approval gates, and can auto-route each turn to the right model and thinking level. DeepSeek V4 is the first-class model path; OpenRouter, Hugging Face, self-hosted runtimes, and other OpenAI-compatible routes are additive.
       </>
     ),
     sources: ["README.md", "docs/ARCHITECTURE.md"],
@@ -113,8 +113,8 @@ codewhale doctor         # full connectivity check`}
         <p className="mb-2">CodeWhale ships with these built-in providers:</p>
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft mb-3">
           <li><strong>DeepSeek</strong> — first-class, native API. Reasoning streaming, cache metrics, thinking effort control.</li>
-          <li><strong>OpenRouter</strong> — unified API for DeepSeek models and more.</li>
-          <li><strong>OpenAI</strong>, <strong>NVIDIA NIM</strong>, <strong>Volcengine Ark</strong>, <strong>Xiaomi MiMo</strong>, <strong>SiliconFlow</strong>, <strong>Novita</strong>, <strong>Fireworks</strong>, <strong>sglang</strong>, <strong>vLLM</strong>, <strong>Ollama</strong></li>
+          <li><strong>OpenRouter</strong> — unified API for DeepSeek models and other open-model routes.</li>
+          <li><strong>OpenAI-compatible</strong>, <strong>NVIDIA NIM</strong>, <strong>AtlasCloud</strong>, <strong>Wanjie Ark</strong>, <strong>Volcengine Ark</strong>, <strong>Xiaomi MiMo</strong>, <strong>Novita</strong>, <strong>Fireworks</strong>, <strong>SiliconFlow</strong>, <strong>SiliconFlow CN</strong>, <strong>Arcee AI</strong>, <strong>Moonshot/Kimi</strong>, <strong>Hugging Face</strong>, <strong>SGLang</strong>, <strong>vLLM</strong>, <strong>Ollama</strong></li>
         </ul>
         <p>
           Set the corresponding env var (e.g. <code className="inline">OPENROUTER_API_KEY</code>) and your provider in <code className="inline">~/.codewhale/config.toml</code>.
@@ -157,7 +157,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
         Yes. Use the <code className="inline">vllm</code>, <code className="inline">sglang</code>, or <code className="inline">ollama</code> providers with your local endpoint.
         For OpenAI-compatible endpoints (llama.cpp server, text-generation-webui, Aphrodite, etc.), you can use the <code className="inline">openai</code> provider with a custom <code className="inline">base_url</code>.
         CodeWhale also respects <code className="inline">DEEPSEEK_ALLOW_INSECURE_HTTP=true</code> for local HTTP endpoints.
-        Full Hugging Face TGI/vLLM integration is on the roadmap.
+        Hugging Face Inference Providers are also available through the <code className="inline">huggingface</code> provider. Broader Hub discovery, model cards, datasets, and Jobs belong to Model Lab.
       </>
     ),
     sources: ["#574", "#1303", "docs/CONFIGURATION.md"],
@@ -282,12 +282,12 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
     sources: ["#907", "#1545"],
   },
   {
-    q: "What is Model Lab? When will Hugging Face integration be available?",
+    q: "What is Model Lab? What Hugging Face pieces are available?",
     a: (
       <>
-        Model Lab is the planned open-model infrastructure layer: Hugging Face Hub API for model discovery, model cards, datasets, safetensors adapters, inference providers, and Jobs.
-        It is NOT fully implemented. Track progress in <a href="https://github.com/Hmbown/CodeWhale/issues/1977" className="body-link">#1977</a>.
-        Currently, you can use Hugging Face models through the OpenRouter provider or self-hosted endpoints.
+        The <code className="inline">huggingface</code> provider is the shipped OpenAI-compatible route for Hugging Face Inference Providers.
+        Model Lab is the planned open-model infrastructure layer for Hub discovery, model cards, datasets, safetensors adapters, and Jobs.
+        Track broader progress in <a href="https://github.com/Hmbown/CodeWhale/issues/1977" className="body-link">#1977</a>.
       </>
     ),
     sources: ["#1977", "docs/MODEL_LAB.md"],
@@ -337,7 +337,7 @@ const faqZh: FaqItem[] = [
     q: "CodeWhale 是什么？",
     a: (
       <>
-        CodeWhale 是一个面向开源模型的终端原生编程智能体。通过 <code className="inline">codewhale</code> 命令启动，流式输出推理块，在有审批门槛的情况下编辑本地工作区，并可为每个回合自动选择最合适的模型和推理深度。DeepSeek V4 是一级模型路径；OpenRouter 已就绪。Hugging Face、自托管等开放模型接口已在路线图中。
+        CodeWhale 是一个面向开源模型的终端原生编程智能体。通过 <code className="inline">codewhale</code> 命令启动，流式输出推理块，在有审批门槛的情况下编辑本地工作区，并可为每个回合自动选择最合适的模型和推理深度。DeepSeek V4 是一级模型路径；OpenRouter、Hugging Face、自托管运行时和其他 OpenAI 兼容路由都是增量选择。
       </>
     ),
     sources: ["README.md", "docs/ARCHITECTURE.md"],
@@ -426,8 +426,8 @@ codewhale doctor         # 完整连接检查`}
         <p className="mb-2">CodeWhale 内建以下提供商：</p>
         <ul className="list-disc pl-5 space-y-1 text-sm text-ink-soft mb-3">
           <li><strong>DeepSeek</strong> — 一级支持，原生 API。推理流、缓存指标、思考力度控制。</li>
-          <li><strong>OpenRouter</strong> — 统一 API，可访问 DeepSeek 等模型。</li>
-          <li><strong>OpenAI</strong>、<strong>NVIDIA NIM</strong>、<strong>Volcengine Ark</strong>、<strong>Xiaomi MiMo</strong>、<strong>SiliconFlow</strong>、<strong>Novita</strong>、<strong>Fireworks</strong>、<strong>sglang</strong>、<strong>vLLM</strong>、<strong>Ollama</strong></li>
+          <li><strong>OpenRouter</strong> — 统一 API，可访问 DeepSeek 和其他开放模型路由。</li>
+          <li><strong>OpenAI 兼容</strong>、<strong>NVIDIA NIM</strong>、<strong>AtlasCloud</strong>、<strong>Wanjie Ark</strong>、<strong>Volcengine Ark</strong>、<strong>Xiaomi MiMo</strong>、<strong>Novita</strong>、<strong>Fireworks</strong>、<strong>SiliconFlow</strong>、<strong>SiliconFlow CN</strong>、<strong>Arcee AI</strong>、<strong>Moonshot/Kimi</strong>、<strong>Hugging Face</strong>、<strong>SGLang</strong>、<strong>vLLM</strong>、<strong>Ollama</strong></li>
         </ul>
         <p>
           设置对应的环境变量（如 <code className="inline">OPENROUTER_API_KEY</code>）并在 <code className="inline">~/.codewhale/config.toml</code> 中配置你的提供商。
@@ -470,7 +470,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
         可以。使用 <code className="inline">vllm</code>、<code className="inline">sglang</code> 或 <code className="inline">ollama</code> 提供商连接本地端点。
         对于 OpenAI 兼容端点（llama.cpp server、text-generation-webui 等），可以使用 <code className="inline">openai</code> 提供商并设置自定义 <code className="inline">base_url</code>。
         CodeWhale 也支持 <code className="inline">DEEPSEEK_ALLOW_INSECURE_HTTP=true</code> 用于本地 HTTP 端点。
-        完整的 Hugging Face TGI/vLLM 集成正在路线图中。
+        Hugging Face Inference Providers 也可以通过 <code className="inline">huggingface</code> provider 使用。更完整的 Hub 发现、模型卡片、数据集和 Jobs 属于 Model Lab。
       </>
     ),
     sources: ["#574", "#1303", "docs/CONFIGURATION.md"],
@@ -595,12 +595,12 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
     sources: ["#907", "#1545"],
   },
   {
-    q: "Model Lab 是什么？Hugging Face 集成什么时候可用？",
+    q: "Model Lab 是什么？Hugging Face 哪些部分可用？",
     a: (
       <>
-        Model Lab 是规划中的开放模型基础设施层：Hugging Face Hub API 用于模型发现、模型卡片、数据集、safetensors 适配器、推理提供商和 Jobs。
-        它尚未完全实现。关注 <a href="https://github.com/Hmbown/CodeWhale/issues/1977" className="body-link">#1977</a> 的进展。
-        目前，你可以通过 OpenRouter 提供商或自托管端点使用 Hugging Face 模型。
+        <code className="inline">huggingface</code> provider 是已经接入的 OpenAI 兼容 Hugging Face Inference Providers 路由。
+        Model Lab 是规划中的开放模型基础设施层：Hub 发现、模型卡片、数据集、safetensors 适配器和 Jobs。
+        更完整的进展见 <a href="https://github.com/Hmbown/CodeWhale/issues/1977" className="body-link">#1977</a>。
       </>
     ),
     sources: ["#1977", "docs/MODEL_LAB.md"],

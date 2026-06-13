@@ -104,6 +104,7 @@ impl ProviderPickerView {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
             ApiProvider::Openai => "OPENAI_API_KEY",
+            ApiProvider::Anthropic => "ANTHROPIC_API_KEY",
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
             ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
             ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
@@ -118,6 +119,8 @@ impl ProviderPickerView {
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
             ApiProvider::Huggingface => "HUGGINGFACE_API_KEY / HF_TOKEN",
+            ApiProvider::Together => "TOGETHER_API_KEY",
+            ApiProvider::OpenaiCodex => "OPENAI_CODEX_ACCESS_TOKEN / CODEX_ACCESS_TOKEN",
         }
     }
 
@@ -508,7 +511,10 @@ mod tests {
                 "SGLang",
                 "vLLM",
                 "Ollama",
-                "Hugging Face"
+                "Hugging Face",
+                "Together AI",
+                "OpenAI Codex (ChatGPT)",
+                "Anthropic"
             ]
         );
     }
@@ -543,7 +549,7 @@ mod tests {
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
         picker.handle_key(key(KeyCode::Up));
-        assert_eq!(picker.selected_provider(), ApiProvider::Huggingface);
+        assert_eq!(picker.selected_provider(), ApiProvider::Anthropic);
 
         picker.handle_key(key(KeyCode::Down));
         assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);

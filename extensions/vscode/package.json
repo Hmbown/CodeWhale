@@ -1,0 +1,126 @@
+{
+  "name": "codewhale-vscode",
+  "displayName": "CodeWhale",
+  "description": "Official CodeWhale VS Code integration scaffold for local runtime attach and terminal launch.",
+  "version": "0.8.53",
+  "publisher": "codewhale",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hmbown/CodeWhale.git",
+    "directory": "extensions/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codewhale.openTerminal",
+    "onCommand:codewhale.startRuntime",
+    "onCommand:codewhale.checkRuntime",
+    "onCommand:codewhale.refreshAgentView",
+    "onCommand:codewhale.refreshSnapshots",
+    "onCommand:codewhale.openRuntimeDocs",
+    "onView:codewhale.runtimeStatus"
+  ],
+  "main": "./out/extension.js",
+  "files": [
+    "out",
+    "media",
+    "README.md",
+    "LICENSE"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codewhale.openTerminal",
+        "title": "CodeWhale: Open Terminal"
+      },
+      {
+        "command": "codewhale.startRuntime",
+        "title": "CodeWhale: Start Local Runtime"
+      },
+      {
+        "command": "codewhale.checkRuntime",
+        "title": "CodeWhale: Check Runtime"
+      },
+      {
+        "command": "codewhale.refreshAgentView",
+        "title": "CodeWhale: Refresh Agent View"
+      },
+      {
+        "command": "codewhale.refreshSnapshots",
+        "title": "CodeWhale: Refresh Restore Points"
+      },
+      {
+        "command": "codewhale.openRuntimeDocs",
+        "title": "CodeWhale: Open Runtime API Docs"
+      }
+    ],
+    "configuration": {
+      "title": "CodeWhale",
+      "properties": {
+        "codewhale.commandPath": {
+          "type": "string",
+          "default": "codewhale",
+          "description": "Command or absolute path used to launch CodeWhale."
+        },
+        "codewhale.runtimeHost": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Local host used for CodeWhale runtime attach checks."
+        },
+        "codewhale.runtimePort": {
+          "type": "number",
+          "default": 7878,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Local port used for CodeWhale runtime attach checks."
+        },
+        "codewhale.runtimeToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional bearer token for authenticated runtime endpoints."
+        },
+        "codewhale.agentViewRefreshIntervalSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Seconds between read-only Agent View refreshes. Set to 0 to disable automatic refresh."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codewhale",
+          "title": "CodeWhale",
+          "icon": "media/codewhale.svg"
+        }
+      ]
+    },
+    "views": {
+      "codewhale": [
+        {
+          "type": "webview",
+          "id": "codewhale.runtimeStatus",
+          "name": "Agent View"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "check": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.27",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.7.0",
+    "typescript": "^5.9.3"
+  }
+}

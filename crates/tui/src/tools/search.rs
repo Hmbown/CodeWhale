@@ -100,8 +100,9 @@ impl ToolSpec for GrepFilesTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let pattern_str = required_str(&input, "pattern")?;
         let path_str = optional_str(&input, "path").unwrap_or(".");
-        let context_lines =
-            usize::try_from(optional_u64(&input, "context_lines", 2)).unwrap_or(usize::MAX);
+        let context_lines = usize::try_from(optional_u64(&input, "context_lines", 2))
+            .unwrap_or(usize::MAX)
+            .min(1000);
         let case_insensitive = optional_bool(&input, "case_insensitive", false);
         let max_results = usize::try_from(optional_u64(&input, "max_results", MAX_RESULTS as u64))
             .unwrap_or(MAX_RESULTS);

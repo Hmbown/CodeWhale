@@ -140,6 +140,16 @@ pub struct ApprovalRequest {
     pub intent_summary: Option<String>,
 }
 
+/// Key approval details rendered prominently in the approval card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalDetail {
+    pub label: String,
+    pub value: String,
+    /// Preformatted shell lines for commands that benefit from safe wrapping
+    /// or a compact write-file preview. `value` remains the original command.
+    pub shell_lines: Option<Vec<String>>,
+}
+
 impl ApprovalRequest {
     #[cfg(test)]
     pub fn new(
@@ -207,6 +217,18 @@ impl ApprovalRequest {
             _ => self.impacts.clone(),
         }
     }
+
+    /// Extract the most important params for the approval card.
+    #[must_use]
+    pub fn prominent_detail_items(&self, locale: Locale) -> Vec<ApprovalDetail> {
+        build_prominent_details(self.category, &self.params)
+            .into_iter()
+            .map(|mut detail| {
+                detail.label = localize_detail_label(&detail.label, locale).to_string();
+                detail
+            })
+            .collect()
+    }
 }
 
 /// Get the category for a tool by name
@@ -215,7 +237,16 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         ToolCategory::FileWrite
     } else if matches!(name, "web_run" | "web_search" | "fetch_url") {
         ToolCategory::Network
-    } else if name == "exec_shell" {
+    } else if matches!(
+        name,
+        "exec_shell"
+            | "task_shell_start"
+            | "task_shell_wait"
+            | "exec_shell_wait"
+            | "exec_shell_interact"
+            | "exec_wait"
+            | "exec_interact"
+    ) {
         ToolCategory::Shell
     } else if name.starts_with("list_mcp_")
         || name.starts_with("read_mcp_")
@@ -313,13 +344,12 @@ fn param_preview(params: &Value, keys: &[&str], max_len: usize) -> Option<String
     None
 }
 
-fn mcp_server_hint(tool_name: &str) -> Option<String> {
+fn mcp_target_hint(tool_name: &str) -> Option<String> {
     let remainder = tool_name.strip_prefix("mcp_")?;
-    let (server, _) = remainder.split_once('_')?;
-    if server.is_empty() {
+    if remainder.is_empty() {
         None
     } else {
-        Some(server.to_string())
+        Some(remainder.to_string())
     }
 }
 
@@ -362,16 +392,16 @@ fn build_impact_summary(tool_name: &str, category: ToolCategory, params: &Value)
         ToolCategory::McpRead => {
             let mut impacts =
                 vec!["Reads from an MCP server without an obvious local write.".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("Server: {server}"));
+            if let Some(target) = mcp_target_hint(tool_name) {
+                impacts.push(format!("MCP target: {target}"));
             }
             impacts
         }
         ToolCategory::McpAction => {
             let mut impacts =
                 vec!["Calls an MCP server action that may have side effects.".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("Server: {server}"));
+            if let Some(target) = mcp_target_hint(tool_name) {
+                impacts.push(format!("MCP target: {target}"));
             }
             impacts
         }
@@ -444,15 +474,15 @@ fn build_impact_summary_zh_hans(
         }
         ToolCategory::McpRead => {
             let mut impacts = vec!["从 MCP 服务器读取信息，不应产生本地写入。".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("服务器：{server}"));
+            if let Some(target) = mcp_target_hint(tool_name) {
+                impacts.push(format!("MCP 目标：{target}"));
             }
             impacts
         }
         ToolCategory::McpAction => {
             let mut impacts = vec!["调用可能产生副作用的 MCP 服务器操作。".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("服务器：{server}"));
+            if let Some(target) = mcp_target_hint(tool_name) {
+                impacts.push(format!("MCP 目标：{target}"));
             }
             impacts
         }
@@ -468,6 +498,287 @@ fn build_impact_summary_zh_hans(
             impacts
         }
     }
+}
+
+fn build_prominent_details(category: ToolCategory, params: &Value) -> Vec<ApprovalDetail> {
+    let mut details = Vec::new();
+    match category {
+        ToolCategory::Shell => {
+            if let Some(command) = param_text(params, &["command", "cmd"]) {
+                details.push(ApprovalDetail {
+                    label: "Command".to_string(),
+                    shell_lines: Some(format_shell_command_for_approval(&command)),
+                    value: command,
+                });
+            }
+            if let Some(workdir) = param_preview(params, &["workdir", "cwd"], 96) {
+                details.push(ApprovalDetail {
+                    label: "Dir".to_string(),
+                    value: workdir,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::FileWrite => {
+            if let Some(path) = param_preview(params, &["path", "target", "destination"], 200) {
+                details.push(ApprovalDetail {
+                    label: "File".to_string(),
+                    value: path,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::Safe => {
+            if let Some(path) = param_preview(params, &["path", "ref_id", "uri"], 200) {
+                details.push(ApprovalDetail {
+                    label: "Path".to_string(),
+                    value: path,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::Network => {
+            if let Some(target) =
+                param_preview(params, &["url", "q", "query", "location", "repo"], 200)
+            {
+                details.push(ApprovalDetail {
+                    label: "Target".to_string(),
+                    value: target,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::McpRead | ToolCategory::McpAction | ToolCategory::Unknown => {
+            if let Some(input) = param_preview(
+                params,
+                &["command", "cmd", "path", "url", "q", "query", "ref_id"],
+                200,
+            ) {
+                details.push(ApprovalDetail {
+                    label: "Input".to_string(),
+                    value: input,
+                    shell_lines: None,
+                });
+            }
+        }
+    }
+    details
+}
+
+fn param_text(params: &Value, keys: &[&str]) -> Option<String> {
+    let Value::Object(map) = params else {
+        return None;
+    };
+
+    for key in keys {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        match value {
+            Value::String(text) => return Some(text.clone()),
+            Value::Number(number) => return Some(number.to_string()),
+            Value::Bool(flag) => return Some(flag.to_string()),
+            other => return Some(other.to_string()),
+        }
+    }
+
+    None
+}
+
+fn localize_detail_label(label: &str, locale: Locale) -> &str {
+    match locale {
+        Locale::ZhHans => match label {
+            "Command" => "命令",
+            "Dir" => "目录",
+            "File" => "文件",
+            "Path" => "路径",
+            "Target" => "目标",
+            "Input" => "输入",
+            _ => label,
+        },
+        _ => label,
+    }
+}
+
+pub(crate) fn format_shell_command_for_approval(command: &str) -> Vec<String> {
+    if let Some(preview) = parse_printf_write_file_command(command) {
+        return format_printf_write_file_preview(preview);
+    }
+
+    let mut out = Vec::new();
+    for raw_line in command.lines() {
+        split_shell_display_line(raw_line, &mut out);
+    }
+    if out.is_empty() && !command.trim().is_empty() {
+        out.push(command.trim().to_string());
+    }
+    out
+}
+
+fn split_shell_display_line(line: &str, out: &mut Vec<String>) {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+
+        if matches!(ch, '"' | '\'') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            }
+            current.push(ch);
+            continue;
+        }
+
+        if quote.is_none() {
+            match ch {
+                '&' if chars.peek() == Some(&'&') => {
+                    chars.next();
+                    push_shell_clause(out, &mut current, Some("&&"));
+                    continue;
+                }
+                '|' if chars.peek() == Some(&'|') => {
+                    chars.next();
+                    push_shell_clause(out, &mut current, Some("||"));
+                    continue;
+                }
+                '|' => {
+                    push_shell_clause(out, &mut current, Some("|"));
+                    continue;
+                }
+                ';' => {
+                    push_shell_clause(out, &mut current, Some(";"));
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        current.push(ch);
+    }
+
+    push_shell_clause(out, &mut current, None);
+}
+
+fn push_shell_clause(out: &mut Vec<String>, current: &mut String, operator: Option<&str>) {
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        if let Some(operator) = operator {
+            out.push(operator.to_string());
+        }
+    } else if let Some(operator) = operator {
+        out.push(format!("{trimmed} {operator}"));
+    } else {
+        out.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrintfWriteFilePreview {
+    target: String,
+    lines: Vec<String>,
+}
+
+fn parse_printf_write_file_command(command: &str) -> Option<PrintfWriteFilePreview> {
+    let (before_redirect, after_redirect) = split_unquoted_redirect(command)?;
+    let before_redirect = before_redirect.trim();
+    if !before_redirect.starts_with("printf") {
+        return None;
+    }
+
+    let tokens = shlex::split(before_redirect)?;
+    if tokens.first()?.as_str() != "printf" {
+        return None;
+    }
+    let target_parts = shlex::split(after_redirect.trim())?;
+    if target_parts.len() != 1 {
+        return None;
+    }
+    let target = target_parts
+        .into_iter()
+        .next()?
+        .trim_matches(|ch| ch == '"' || ch == '\'')
+        .to_string();
+    if target.is_empty() {
+        return None;
+    }
+
+    let args = &tokens[1..];
+    if args.is_empty() {
+        return None;
+    }
+    let values = if args.len() >= 2 && args[0].contains('%') {
+        &args[1..]
+    } else {
+        args
+    };
+    let mut lines = Vec::new();
+    for value in values {
+        let normalized = value.replace("\\n", "\n");
+        for line in normalized.lines() {
+            lines.push(line.to_string());
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    Some(PrintfWriteFilePreview { target, lines })
+}
+
+fn format_printf_write_file_preview(preview: PrintfWriteFilePreview) -> Vec<String> {
+    const MAX_PREVIEW_LINES: usize = 12;
+    let mut out = vec![format!("printf > {}", preview.target)];
+    let total = preview.lines.len();
+    for line in preview.lines.into_iter().take(MAX_PREVIEW_LINES) {
+        out.push(format!("  {line}"));
+    }
+    if total > MAX_PREVIEW_LINES {
+        out.push(format!("  ... (+{} more lines)", total - MAX_PREVIEW_LINES));
+    }
+    out
+}
+
+fn split_unquoted_redirect(command: &str) -> Option<(&str, &str)> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in command.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if matches!(ch, '"' | '\'') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            }
+            continue;
+        }
+        if quote.is_none() && ch == '>' {
+            return Some((&command[..idx], &command[idx + ch.len_utf8()..]));
+        }
+    }
+    None
 }
 
 /// Indices into the option list shared by both variants.
@@ -715,6 +1026,7 @@ pub enum ElevationOption {
 
 impl ElevationOption {
     /// Get the display label for this option.
+    #[cfg(test)]
     pub fn label(&self) -> &'static str {
         match self {
             ElevationOption::WithNetwork => "Allow outbound network",
@@ -725,6 +1037,7 @@ impl ElevationOption {
     }
 
     /// Get a short description.
+    #[cfg(test)]
     pub fn description(&self) -> &'static str {
         match self {
             ElevationOption::WithNetwork => {
@@ -821,13 +1134,15 @@ impl ElevationRequest {
 pub struct ElevationView {
     request: ElevationRequest,
     selected: usize,
+    locale: Locale,
 }
 
 impl ElevationView {
-    pub fn new(request: ElevationRequest) -> Self {
+    pub fn new(request: ElevationRequest, locale: Locale) -> Self {
         Self {
             request,
             selected: 0,
+            locale,
         }
     }
 
@@ -902,7 +1217,7 @@ impl ModalView for ElevationView {
     }
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
-        let elevation_widget = ElevationWidget::new(&self.request, self.selected);
+        let elevation_widget = ElevationWidget::new(&self.request, self.selected, self.locale);
         elevation_widget.render(area, buf);
     }
 }
@@ -970,6 +1285,15 @@ mod tests {
     #[test]
     fn test_get_tool_category_shell_tools() {
         assert_eq!(get_tool_category("exec_shell"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("task_shell_start"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("task_shell_wait"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("exec_shell_wait"), ToolCategory::Shell);
+        assert_eq!(
+            get_tool_category("exec_shell_interact"),
+            ToolCategory::Shell
+        );
+        assert_eq!(get_tool_category("exec_wait"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("exec_interact"), ToolCategory::Shell);
         assert_eq!(
             get_tool_category("mcp_linear_save_issue"),
             ToolCategory::McpAction
@@ -1124,6 +1448,93 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("cargo test"))
         );
+    }
+
+    #[test]
+    fn mcp_impact_summary_preserves_full_target_for_underscored_names() {
+        let request = ApprovalRequest::new(
+            "test-id",
+            "mcp_my_db_execute_sql",
+            "Call an MCP tool",
+            &json!({}),
+            "tool:mcp_my_db_execute_sql",
+        );
+
+        assert!(
+            request
+                .impacts
+                .iter()
+                .any(|line| line == "MCP target: my_db_execute_sql")
+        );
+        assert!(!request.impacts.iter().any(|line| line == "Server: my"));
+
+        let zh_impacts = request.impacts_for_locale(Locale::ZhHans);
+        assert!(
+            zh_impacts
+                .iter()
+                .any(|line| line == "MCP 目标：my_db_execute_sql")
+        );
+        assert!(!zh_impacts.iter().any(|line| line == "服务器：my"));
+    }
+
+    #[test]
+    fn test_prominent_details_shell_does_not_truncate_long_command() {
+        let command = format!("printf '{}\\n' > /tmp/x && cat /tmp/x", "x".repeat(300));
+        let request = ApprovalRequest::new(
+            "test-id",
+            "exec_shell",
+            "Run a shell command",
+            &json!({"command": command, "cwd": "/tmp/project"}),
+            "test_key",
+        );
+
+        let details = request.prominent_detail_items(Locale::En);
+
+        assert_eq!(details[0].label, "Command");
+        assert_eq!(details[0].value, command);
+        assert!(
+            details[0]
+                .shell_lines
+                .as_ref()
+                .is_some_and(|lines| lines.iter().any(|line| line.contains("cat /tmp/x"))),
+            "shell preview should preserve the dangerous tail of long commands"
+        );
+        assert_eq!(details[1].label, "Dir");
+        assert_eq!(details[1].value, "/tmp/project");
+    }
+
+    #[test]
+    fn test_prominent_details_file_write() {
+        let request = ApprovalRequest::new(
+            "test-id",
+            "write_file",
+            "Write a file to disk",
+            &json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            "test_key",
+        );
+
+        let details = request.prominent_detail_items(Locale::En);
+
+        assert_eq!(details[0].label, "File");
+        assert_eq!(details[0].value, "src/main.rs");
+        assert!(details[0].shell_lines.is_none());
+    }
+
+    #[test]
+    fn test_shell_formatter_preserves_logical_or_operator() {
+        let lines = format_shell_command_for_approval("cargo build || echo fallback");
+
+        assert_eq!(lines, vec!["cargo build ||", "echo fallback"]);
+    }
+
+    #[test]
+    fn test_shell_formatter_detects_printf_write_file_preview() {
+        let lines =
+            format_shell_command_for_approval("printf '%s\\n' 'hello' 'world' > src/main.rs");
+
+        assert_eq!(lines[0], "printf > src/main.rs");
+        assert!(lines.iter().any(|line| line.contains("hello")));
+        assert!(lines.iter().any(|line| line.contains("world")));
     }
 
     // ========================================================================
@@ -1584,7 +1995,7 @@ mod tests {
     fn test_elevation_view_initial_state() {
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "network blocked", true, false);
-        let view = ElevationView::new(request);
+        let view = ElevationView::new(request, Locale::En);
         assert_eq!(view.selected, 0);
     }
 
@@ -1592,7 +2003,7 @@ mod tests {
     fn test_elevation_view_keybindings() {
         let request =
             ElevationRequest::for_shell("test-id", "cargo test", "write blocked", false, true);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         let action = view.handle_key(create_key_event(KeyCode::Char('n')));
         assert!(matches!(
@@ -1605,7 +2016,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "write blocked", false, true);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('w')));
         assert!(matches!(
             action,
@@ -1617,7 +2028,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('f')));
         assert!(matches!(
             action,
@@ -1629,7 +2040,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Esc));
         assert!(matches!(
             action,
@@ -1641,7 +2052,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('a')));
         assert!(matches!(
             action,
@@ -1655,7 +2066,7 @@ mod tests {
     #[test]
     fn test_elevation_view_navigation() {
         let request = ElevationRequest::for_shell("test-id", "cargo build", "blocked", true, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         assert_eq!(view.selected, 0);
 
@@ -1675,7 +2086,7 @@ mod tests {
     #[test]
     fn test_elevation_view_enter_uses_selected_option() {
         let request = ElevationRequest::for_shell("test-id", "cargo build", "blocked", true, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         view.handle_key(create_key_event(KeyCode::Down));
         assert_eq!(view.selected, 1);
@@ -1688,6 +2099,136 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    fn render_elevation_lines(view: &ElevationView, w: u16, h: u16) -> Vec<String> {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        view.render(Rect::new(0, 0, w, h), &mut buf);
+        (0..h)
+            .map(|row| {
+                (0..w)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn compact_elevation_text(lines: &[String]) -> String {
+        lines.join("\n").replace(' ', "")
+    }
+
+    fn elevation_shell_request() -> ElevationRequest {
+        ElevationRequest::for_shell("test-id", "cargo build", "network blocked", true, false)
+    }
+
+    #[test]
+    fn test_elevation_render_en_has_expected_strings() {
+        let view = ElevationView::new(elevation_shell_request(), Locale::En);
+        let lines = render_elevation_lines(&view, 70, 22);
+        let joined = compact_elevation_text(&lines);
+        assert!(
+            joined.contains("SandboxDenied"),
+            "missing en title:\n{joined}"
+        );
+        assert!(joined.contains("Tool:"), "missing en tool label:\n{joined}");
+        assert!(joined.contains("Cmd:"), "missing en cmd label:\n{joined}");
+        assert!(
+            joined.contains("Reason:"),
+            "missing en reason label:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn test_elevation_render_zh_hans_localizes_copy() {
+        let view = ElevationView::new(elevation_shell_request(), Locale::ZhHans);
+        let lines = render_elevation_lines(&view, 70, 22);
+        let joined = compact_elevation_text(&lines);
+        assert!(joined.contains("沙箱拒绝"), "missing zh title:\n{joined}");
+        assert!(
+            joined.contains("工具："),
+            "missing zh tool label:\n{joined}"
+        );
+        assert!(joined.contains("命令："), "missing zh cmd label:\n{joined}");
+        assert!(
+            joined.contains("原因："),
+            "missing zh reason label:\n{joined}"
+        );
+        assert!(
+            joined.contains("批准后的影响"),
+            "missing zh impact header:\n{joined}"
+        );
+        let en_artifacts = [
+            "SandboxDenied",
+            "Tool:",
+            "Cmd:",
+            "Reason:",
+            "Impactifapproved",
+            "Choosehowtoproceed",
+            "Allowoutboundnetwork",
+            "Allowextrawriteaccess",
+            "Fullaccess",
+            "Abort",
+        ];
+        for artifact in &en_artifacts {
+            assert!(
+                !joined.contains(artifact),
+                "English leak '{artifact}' in zh rendering:\n{joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_elevation_render_ja_has_translated_copy() {
+        let view = ElevationView::new(elevation_shell_request(), Locale::Ja);
+        let lines = render_elevation_lines(&view, 70, 22);
+        let joined = compact_elevation_text(&lines);
+        assert!(
+            joined.contains("サンドボックス拒否"),
+            "missing ja title:\n{joined}"
+        );
+        assert!(
+            joined.contains("ツール："),
+            "missing ja tool label:\n{joined}"
+        );
+        assert!(
+            joined.contains("コマンド："),
+            "missing ja cmd label:\n{joined}"
+        );
+        assert!(
+            joined.contains("理由："),
+            "missing ja reason label:\n{joined}"
+        );
+        for eng in &["SandboxDenied", "Tool:", "Cmd:", "Reason:"] as &[&str] {
+            assert!(
+                !joined.contains(eng),
+                "English leak '{eng}' in ja:\n{joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_elevation_render_zh_hant_has_translated_copy() {
+        let view = ElevationView::new(elevation_shell_request(), Locale::ZhHant);
+        let lines = render_elevation_lines(&view, 70, 22);
+        let joined = compact_elevation_text(&lines);
+        assert!(
+            joined.contains("沙箱拒絕"),
+            "missing zh-Hant title:\n{joined}"
+        );
+        assert!(
+            joined.contains("工具："),
+            "missing zh-Hant tool label:\n{joined}"
+        );
+        assert!(
+            joined.contains("命令："),
+            "missing zh-Hant cmd label:\n{joined}"
+        );
+        assert!(
+            joined.contains("原因："),
+            "missing zh-Hant reason label:\n{joined}"
+        );
     }
 
     // ========================================================================

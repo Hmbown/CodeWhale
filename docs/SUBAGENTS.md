@@ -18,6 +18,19 @@ The `type` field on `agent_open` selects a system-prompt posture for the child
 (`agent_type` is accepted as a compatibility alias). Each role is a distinct
 stance toward the work — not just a different label.
 
+## Maintainer posture
+
+Sub-agents help CodeWhale move faster, but the parent agent still owns the
+maintainer decision. Use children to gather evidence, review patches, and run
+verification while keeping the community posture in
+[`AGENT_ETHOS.md`](AGENT_ETHOS.md): issues are open intake, PR gates are
+review-load controls, and harvested work needs clear contributor credit.
+
+When a child reviews community work, the parent should still inspect the PR
+diff, linked issues, tests, and CI before merging, harvesting, closing, or
+deferring it. A sub-agent's result is a working set, not a substitute for
+stewardship.
+
 | Role          | Stance                                 | Writes? | Shell posture | Typical use                                  |
 |---------------|----------------------------------------|---------|---------------|----------------------------------------------|
 | `general`     | flexible; do whatever the parent says  | yes     | yes           | the default; multi-step tasks                |
@@ -110,6 +123,50 @@ The cap counts only **running** agents — completed / failed /
 cancelled records persist for inspection but don't occupy a slot.
 Agents that lost their `task_handle` (e.g. across a process
 restart) also don't count against the cap.
+
+## Per-role models (#3018)
+
+Children can run on a different model than the parent. Two config surfaces
+feed the same override map (`[subagents.models]` keys win on conflict, keys
+are case-insensitive):
+
+```toml
+[subagents]
+default_model  = "deepseek-v4-flash"   # fallback for every role
+worker_model   = "deepseek-v4-pro"     # worker / general
+explorer_model = "deepseek-v4-flash"   # explorer / explore
+awaiter_model  = "deepseek-v4-flash"   # awaiter / plan
+review_model   = "deepseek-v4-pro"     # review
+custom_model   = "deepseek-v4-pro"     # custom
+
+[subagents.models]
+# Free-form role → model map; any role alias accepted by agent_open works.
+implementation = "deepseek-v4-pro"
+```
+
+Model ids may be **any model the active provider accepts** — validation is
+provider-aware and happens at spawn time, not load time. On the official
+DeepSeek API only DeepSeek ids are accepted; every other provider passes the
+id through to the provider API, which is the authority. A non-DeepSeek
+example:
+
+```toml
+provider = "moonshot"
+model = "kimi-k2.6"
+
+[subagents]
+worker_model = "kimi-k2.5"
+```
+
+Spawn-time `model` arguments on `agent_open` are validated the same way; an
+invalid id on the official DeepSeek API fails the spawn with the accepted-id
+list instead of an opaque provider 400.
+
+With `/model auto`, sub-agent routing is provider-aware too: providers with a
+known big/cheap pair (DeepSeek, and the hosted DeepSeek routes on NVIDIA NIM,
+OpenRouter, Novita, SiliconFlow, SGLang, vLLM) route between that pair;
+providers without a known cheap tier (e.g. Ollama, Moonshot) skip the
+network router and keep children on the session model.
 
 ## Per-step API timeout (#1806, #1808)
 

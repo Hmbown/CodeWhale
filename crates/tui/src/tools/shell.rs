@@ -34,6 +34,7 @@ use windows::Win32::System::JobObjects::{
 #[cfg(windows)]
 use windows::core::PCWSTR;
 
+#[cfg(not(target_env = "ohos"))]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use super::shell_output::{summarize_output, truncate_with_meta};
@@ -130,6 +131,7 @@ pub struct ShellDeltaResult {
 
 enum ShellChild {
     Process(Child),
+    #[cfg(not(target_env = "ohos"))]
     Pty(Box<dyn portable_pty::Child + Send>),
 }
 
@@ -165,7 +167,7 @@ fn kill_child_process_group(child: &mut Child) -> std::io::Result<()> {
 /// path (`kill_child_process_group` from the cancellation token) still
 /// handles normal shutdown; abnormal exit can leak children — tracked as a
 /// follow-up watchdog item per the original issue's acceptance criteria.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 fn install_parent_death_signal(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
     // SAFETY: `pre_exec` runs in the child between fork and exec. The closure
@@ -227,7 +229,7 @@ fn push_shell_args(cmd: &mut Command, _program: &str, args: &[String]) {
     cmd.args(args);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
 fn install_parent_death_signal(_cmd: &mut Command) {
     // No kernel-level equivalent on macOS / Windows. The cooperative
     // cancellation + process_group SIGKILL path covers normal shutdown;
@@ -269,7 +271,7 @@ impl WindowsJob {
             )
             .map_err(windows_io_error)?;
 
-            let process_handle = HANDLE(child.as_raw_handle() as *mut core::ffi::c_void);
+            let process_handle = HANDLE(child.as_raw_handle());
             AssignProcessToJobObject(job.handle, process_handle).map_err(windows_io_error)?;
         }
 
@@ -363,6 +365,7 @@ impl ShellExitStatus {
         }
     }
 
+    #[cfg(not(target_env = "ohos"))]
     fn from_pty(status: portable_pty::ExitStatus) -> Self {
         let code = i32::try_from(status.exit_code()).unwrap_or(i32::MAX);
         Self {
@@ -378,6 +381,7 @@ impl ShellChild {
             ShellChild::Process(child) => child
                 .try_wait()
                 .map(|status| status.map(ShellExitStatus::from_std)),
+            #[cfg(not(target_env = "ohos"))]
             ShellChild::Pty(child) => child
                 .try_wait()
                 .map(|status| status.map(ShellExitStatus::from_pty)),
@@ -387,16 +391,19 @@ impl ShellChild {
     fn wait(&mut self) -> std::io::Result<ShellExitStatus> {
         match self {
             ShellChild::Process(child) => child.wait().map(ShellExitStatus::from_std),
+            #[cfg(not(target_env = "ohos"))]
             ShellChild::Pty(child) => child.wait().map(ShellExitStatus::from_pty),
         }
     }
 
+    #[cfg(not(windows))]
     fn kill(&mut self) -> std::io::Result<()> {
         match self {
             #[cfg(unix)]
             ShellChild::Process(child) => kill_child_process_group(child),
             #[cfg(not(unix))]
             ShellChild::Process(child) => child.kill(),
+            #[cfg(not(target_env = "ohos"))]
             ShellChild::Pty(child) => child.kill(),
         }
     }
@@ -404,6 +411,7 @@ impl ShellChild {
 
 enum StdinWriter {
     Pipe(ChildStdin),
+    #[cfg(not(target_env = "ohos"))]
     Pty(Box<dyn Write + Send>),
 }
 
@@ -411,6 +419,7 @@ impl StdinWriter {
     fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
         match self {
             StdinWriter::Pipe(stdin) => stdin.write_all(data),
+            #[cfg(not(target_env = "ohos"))]
             StdinWriter::Pty(writer) => writer.write_all(data),
         }
     }
@@ -418,6 +427,7 @@ impl StdinWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             StdinWriter::Pipe(stdin) => stdin.flush(),
+            #[cfg(not(target_env = "ohos"))]
             StdinWriter::Pty(writer) => writer.flush(),
         }
     }
@@ -523,8 +533,14 @@ impl BackgroundShell {
         // Without this kill, handle.join() blocks indefinitely, freezing the UI
         // event loop that calls list_jobs() → poll() → collect_output().
         #[cfg(unix)]
-        if let Some(ShellChild::Process(ref mut proc)) = self.child {
-            let _ = kill_child_process_group(proc);
+        if let Some(child) = self.child.as_mut() {
+            match child {
+                ShellChild::Process(proc) => {
+                    let _ = kill_child_process_group(proc);
+                }
+                #[cfg(not(target_env = "ohos"))]
+                ShellChild::Pty(_) => {}
+            }
         }
         #[cfg(windows)]
         terminate_and_close_windows_job(self.windows_job.take());
@@ -619,21 +635,25 @@ impl BackgroundShell {
     /// Kill the process
     fn kill(&mut self) -> Result<()> {
         if let Some(ref mut child) = self.child {
-            if let ShellChild::Process(proc) = child {
-                #[cfg(windows)]
-                {
-                    terminate_windows_job(self.windows_job.as_ref(), proc)
-                        .context("Failed to kill process tree")?;
-                    let _ = proc.wait();
+            match child {
+                ShellChild::Process(proc) => {
+                    #[cfg(windows)]
+                    {
+                        terminate_windows_job(self.windows_job.as_ref(), proc)
+                            .context("Failed to kill process tree")?;
+                        let _ = proc.wait();
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        proc.kill().context("Failed to kill process")?;
+                        let _ = proc.wait();
+                    }
                 }
-                #[cfg(not(windows))]
-                {
-                    proc.kill().context("Failed to kill process")?;
-                    let _ = proc.wait();
+                #[cfg(not(target_env = "ohos"))]
+                ShellChild::Pty(child) => {
+                    child.kill().context("Failed to kill process")?;
+                    let _ = child.wait();
                 }
-            } else {
-                child.kill().context("Failed to kill process")?;
-                let _ = child.wait();
             }
         }
         self.status = ShellStatus::Killed;
@@ -717,10 +737,14 @@ impl Drop for BackgroundShell {
             && let Some(ref mut child) = self.child
         {
             #[cfg(windows)]
-            if let ShellChild::Process(proc) = child {
-                let _ = terminate_windows_job(self.windows_job.as_ref(), proc);
-            } else {
-                let _ = child.kill();
+            match child {
+                ShellChild::Process(proc) => {
+                    let _ = terminate_windows_job(self.windows_job.as_ref(), proc);
+                }
+                #[cfg(not(target_env = "ohos"))]
+                ShellChild::Pty(child) => {
+                    let _ = child.kill();
+                }
             }
             #[cfg(not(windows))]
             let _ = child.kill();
@@ -1276,6 +1300,13 @@ impl ShellManager {
         let program = exec_env.program();
         let args = exec_env.args();
 
+        #[cfg(target_env = "ohos")]
+        if tty {
+            return Err(anyhow!(
+                "TTY shell mode is not supported on HarmonyOS/OpenHarmony yet."
+            ));
+        }
+
         let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
         let stderr_buffer = if tty {
             None
@@ -1287,45 +1318,51 @@ impl ShellManager {
         let mut windows_job = None;
 
         let (child, stdin, stdout_thread, stderr_thread) = if tty {
-            let pty_system = native_pty_system();
-            let pair = pty_system
-                .openpty(PtySize {
-                    rows: 24,
-                    cols: 80,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .context("Failed to open PTY")?;
+            #[cfg(target_env = "ohos")]
+            unreachable!("OHOS TTY mode returns before PTY setup");
 
-            let mut cmd = CommandBuilder::new(program);
-            for arg in args {
-                cmd.arg(arg);
+            #[cfg(not(target_env = "ohos"))]
+            {
+                let pty_system = native_pty_system();
+                let pair = pty_system
+                    .openpty(PtySize {
+                        rows: 24,
+                        cols: 80,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .context("Failed to open PTY")?;
+
+                let mut cmd = CommandBuilder::new(program);
+                for arg in args {
+                    cmd.arg(arg);
+                }
+                cmd.cwd(working_dir);
+                child_env::apply_to_pty_command(&mut cmd, child_env::string_map_env(&exec_env.env));
+
+                let child = pair
+                    .slave
+                    .spawn_command(cmd)
+                    .with_context(|| format!("Failed to spawn PTY command: {original_command}"))?;
+                drop(pair.slave);
+
+                let reader = pair
+                    .master
+                    .try_clone_reader()
+                    .context("Failed to clone PTY reader")?;
+                let stdout_thread = Some(spawn_reader_thread(reader, Arc::clone(&stdout_buffer)));
+                let writer = pair
+                    .master
+                    .take_writer()
+                    .context("Failed to take PTY writer")?;
+
+                (
+                    ShellChild::Pty(child),
+                    Some(StdinWriter::Pty(writer)),
+                    stdout_thread,
+                    None,
+                )
             }
-            cmd.cwd(working_dir);
-            child_env::apply_to_pty_command(&mut cmd, child_env::string_map_env(&exec_env.env));
-
-            let child = pair
-                .slave
-                .spawn_command(cmd)
-                .with_context(|| format!("Failed to spawn PTY command: {original_command}"))?;
-            drop(pair.slave);
-
-            let reader = pair
-                .master
-                .try_clone_reader()
-                .context("Failed to clone PTY reader")?;
-            let stdout_thread = Some(spawn_reader_thread(reader, Arc::clone(&stdout_buffer)));
-            let writer = pair
-                .master
-                .take_writer()
-                .context("Failed to take PTY writer")?;
-
-            (
-                ShellChild::Pty(child),
-                Some(StdinWriter::Pty(writer)),
-                stdout_thread,
-                None,
-            )
         } else {
             let mut cmd = Command::new(program);
             push_shell_args(&mut cmd, program, args);
@@ -1968,7 +2005,7 @@ impl ToolSpec for ExecShellTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace directory. Foreground mode is for bounded commands; use background=true or task_shell_start for long-running work, then poll/wait."
+        "Execute a shell command in the workspace directory. Foreground mode is for bounded commands; use background=true or task_shell_start for work expected to take >5 seconds, then poll/wait."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -1985,7 +2022,7 @@ impl ToolSpec for ExecShellTool {
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run in background and return task_id (default: false). Prefer true for commands that may run for minutes; poll with exec_shell_wait or task_shell_wait."
+                    "description": "Run in background and return task_id (default: false). Prefer task_shell_start or background=true for commands expected to take >5 seconds, including builds, test suites, servers, CI polling, sleep, or other long-running work; poll with exec_shell_wait or task_shell_wait."
                 },
                 "interactive": {
                     "type": "boolean",
@@ -2755,6 +2792,11 @@ impl ToolSpec for ShellWaitTool {
         self.name
     }
 
+    fn model_visible(&self) -> bool {
+        // `exec_wait` is a legacy alias; only `exec_shell_wait` is model-visible.
+        self.name == "exec_shell_wait"
+    }
+
     fn description(&self) -> &'static str {
         "Wait for a background shell task and return incremental output. Turn cancellation stops waiting but leaves the background task running."
     }
@@ -2834,6 +2876,11 @@ impl ToolSpec for ShellWaitTool {
 impl ToolSpec for ShellInteractTool {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn model_visible(&self) -> bool {
+        // `exec_interact` is a legacy alias; only `exec_shell_interact` is model-visible.
+        self.name == "exec_shell_interact"
     }
 
     fn description(&self) -> &'static str {

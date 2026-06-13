@@ -14,7 +14,8 @@ use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
 use codewhale_config::{
-    CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
+    CliRuntimeOverrides, ConfigStore, ProviderKind, ProviderSource, ResolvedRuntimeOptions,
+    RuntimeApiKeySource,
 };
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use codewhale_mcp::{McpServerDefinition, run_stdio_server};
@@ -40,6 +41,8 @@ enum ProviderArg {
     Vllm,
     Ollama,
     Huggingface,
+    Together,
+    OpenaiCodex,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -62,6 +65,8 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
             ProviderArg::Huggingface => ProviderKind::Huggingface,
+            ProviderArg::Together => ProviderKind::Together,
+            ProviderArg::OpenaiCodex => ProviderKind::OpenaiCodex,
         }
     }
 }
@@ -88,6 +93,12 @@ struct Cli {
     model: Option<String>,
     #[arg(long = "output-mode")]
     output_mode: Option<String>,
+    #[arg(
+        long = "verbosity",
+        value_name = "LEVEL",
+        help = "Controls transcript and output verbosity (normal, concise)"
+    )]
+    verbosity: Option<String>,
     #[arg(long = "log-level")]
     log_level: Option<String>,
     #[arg(long)]
@@ -471,7 +482,13 @@ struct AppServerArgs {
 
 const MCP_SERVER_DEFINITIONS_KEY: &str = "mcp.server_definitions";
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pub fn run_cli() -> std::process::ExitCode {
+    install_rustls_crypto_provider();
+
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
@@ -507,6 +524,7 @@ fn run() -> Result<()> {
         approval_policy: cli.approval_policy.clone(),
         sandbox_mode: cli.sandbox_mode.clone(),
         yolo: Some(cli.yolo),
+        verbosity: cli.verbosity.clone(),
     };
     let command = cli.command.take();
 
@@ -759,11 +777,14 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
         ProviderKind::Huggingface => "huggingface",
+        ProviderKind::Together => "together",
+        ProviderKind::OpenaiCodex => "openai-codex",
+        ProviderKind::Anthropic => "anthropic",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 18] = [
+const PROVIDER_LIST: [ProviderKind; 20] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -782,6 +803,8 @@ const PROVIDER_LIST: [ProviderKind; 18] = [
     ProviderKind::Vllm,
     ProviderKind::Ollama,
     ProviderKind::Huggingface,
+    ProviderKind::Together,
+    ProviderKind::OpenaiCodex,
 ];
 
 #[cfg(test)]
@@ -853,6 +876,9 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
             "WANJIE_API_KEY",
             "WANJIE_MAAS_API_KEY",
         ],
+        ProviderKind::Together => &["TOGETHER_API_KEY"],
+        ProviderKind::OpenaiCodex => &["OPENAI_CODEX_ACCESS_TOKEN", "CODEX_ACCESS_TOKEN"],
+        ProviderKind::Anthropic => &["ANTHROPIC_API_KEY"],
     }
 }
 
@@ -863,6 +889,28 @@ fn provider_env_value(provider: ProviderKind) -> Option<(&'static str, String)> 
             .filter(|value| !value.trim().is_empty())
             .map(|value| (*var, value))
     })
+}
+
+fn openai_codex_auth_file_path() -> PathBuf {
+    if let Ok(path) = std::env::var("OPENAI_CODEX_AUTH_FILE") {
+        let path = PathBuf::from(path);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+
+    let codex_home = std::env::var("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".codex")
+        });
+    codex_home.join("auth.json")
+}
+
+fn provider_oauth_file_path(provider: ProviderKind) -> Option<PathBuf> {
+    (provider == ProviderKind::OpenaiCodex).then(openai_codex_auth_file_path)
 }
 
 fn provider_config_api_key(store: &ConfigStore, provider: ProviderKind) -> Option<&str> {
@@ -924,17 +972,31 @@ fn auth_status_all_providers(store: &ConfigStore, secrets: &Secrets) -> Vec<Stri
         let config_key = provider_config_api_key(store, provider);
         let keyring_key = provider_keyring_api_key(secrets, provider);
         let env_key = provider_env_value(provider);
+        let oauth_file_present = provider_oauth_file_path(provider).is_some_and(|p| p.exists());
 
         let config_status = config_key.map(|_| "set").unwrap_or("-");
         let keyring_status = keyring_key.as_ref().map(|_| "set").unwrap_or("-");
         let env_status = env_key.as_ref().map(|_| "set").unwrap_or("-");
 
-        let source = if config_key.is_some() {
+        let source = if provider == ProviderKind::OpenaiCodex {
+            // Keep the summary consistent with `auth status`: Codex auth is
+            // OAuth-file (or env token) based — config/keyring keys are not
+            // consulted for it.
+            if env_key.is_some() {
+                "env"
+            } else if oauth_file_present {
+                "oauth file"
+            } else {
+                "unset"
+            }
+        } else if config_key.is_some() {
             "config"
         } else if keyring_key.is_some() {
             "keyring"
         } else if env_key.is_some() {
             "env"
+        } else if oauth_file_present {
+            "oauth file"
         } else {
             "unset"
         };
@@ -970,8 +1032,18 @@ fn auth_status_lines_for_provider(
     let config_key = provider_config_api_key(store, provider);
     let keyring_key = provider_keyring_api_key(secrets, provider);
     let env_key = provider_env_value(provider);
+    let oauth_file = provider_oauth_file_path(provider);
+    let oauth_file_present = oauth_file.as_ref().is_some_and(|path| path.exists());
 
-    let active_source = if config_key.is_some() {
+    let active_source = if provider == ProviderKind::OpenaiCodex {
+        if env_key.is_some() {
+            "env"
+        } else if oauth_file_present {
+            "Codex OAuth file"
+        } else {
+            "missing"
+        }
+    } else if config_key.is_some() {
         "config"
     } else if keyring_key.is_some() {
         "secret store"
@@ -980,10 +1052,14 @@ fn auth_status_lines_for_provider(
     } else {
         "missing"
     };
-    let active_last4 = config_key
-        .map(last4_label)
-        .or_else(|| keyring_key.as_deref().map(last4_label))
-        .or_else(|| env_key.as_ref().map(|(_, value)| last4_label(value)));
+    let active_last4 = if provider == ProviderKind::OpenaiCodex {
+        env_key.as_ref().map(|(_, value)| last4_label(value))
+    } else {
+        config_key
+            .map(last4_label)
+            .or_else(|| keyring_key.as_deref().map(last4_label))
+            .or_else(|| env_key.as_ref().map(|(_, value)| last4_label(value)))
+    };
     let active_label = active_last4
         .map(|last4| format!("{active_source} (last4: {last4})"))
         .unwrap_or_else(|| active_source.to_string());
@@ -1004,16 +1080,24 @@ fn auth_status_lines_for_provider(
     let base_url = provider_cfg.base_url.as_deref().unwrap_or("(default)");
     let model = provider_cfg.model.as_deref().unwrap_or("(default)");
 
-    vec![
+    let lookup_order = if provider == ProviderKind::OpenaiCodex {
+        "lookup order: env -> Codex OAuth file".to_string()
+    } else {
+        "lookup order: config -> secret store -> env".to_string()
+    };
+    let auth_mode = if provider == ProviderKind::OpenaiCodex {
+        "codex_oauth"
+    } else {
+        store.config.auth_mode.as_deref().unwrap_or("api_key")
+    };
+
+    let mut lines = vec![
         format!("provider: {}{}", provider.as_str(), active_marker),
         format!("route: {}", base_url),
         format!("model: {}", model),
-        format!(
-            "auth mode: {}",
-            store.config.auth_mode.as_deref().unwrap_or("api_key")
-        ),
+        format!("auth mode: {auth_mode}"),
         format!("active source: {active_label}"),
-        "lookup order: config -> secret store -> env".to_string(),
+        lookup_order,
         format!(
             "config file: {} ({})",
             store.path().display(),
@@ -1025,7 +1109,12 @@ fn auth_status_lines_for_provider(
             source_status(keyring_key.as_deref(), "missing")
         ),
         format!("env var: {env_var_label} ({env_status})"),
-    ]
+    ];
+    if let Some(path) = oauth_file {
+        let status = if path.exists() { "present" } else { "missing" };
+        lines.push(format!("Codex OAuth file: {} ({status})", path.display()));
+    }
+    lines
 }
 
 fn source_status(value: Option<&str>, missing_label: &str) -> String {
@@ -1567,6 +1656,14 @@ fn build_tui_command(
     passthrough: Vec<String>,
 ) -> Result<Command> {
     let tui = locate_sibling_tui_binary()?;
+    let mut verbosity = resolved_runtime.verbosity.clone();
+    if verbosity.is_none()
+        && passthrough
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "exec" | "swebench" | "eval"))
+    {
+        verbosity = Some("concise".to_string());
+    }
 
     let mut cmd = Command::new(&tui);
     if let Some(config) = cli.config.as_ref() {
@@ -1592,32 +1689,40 @@ fn build_tui_command(
     }
     cmd.args(passthrough);
 
-    if !matches!(
-        resolved_runtime.provider,
-        ProviderKind::Deepseek
-            | ProviderKind::NvidiaNim
-            | ProviderKind::Openai
-            | ProviderKind::Atlascloud
-            | ProviderKind::WanjieArk
-            | ProviderKind::Openrouter
-            | ProviderKind::XiaomiMimo
-            | ProviderKind::Novita
-            | ProviderKind::Fireworks
-            | ProviderKind::Siliconflow
-            | ProviderKind::Arcee
-            | ProviderKind::Moonshot
-            | ProviderKind::Sglang
-            | ProviderKind::Vllm
-            | ProviderKind::Ollama
-    ) {
-        bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Arcee AI, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
-            resolved_runtime.provider.as_str()
-        );
+    let mut resolved_runtime = resolved_runtime.clone();
+    let mut fallback_provider = None;
+    if !resolved_runtime.provider.is_tui_capable() {
+        match resolved_runtime.provider_source {
+            ProviderSource::Cli => {
+                bail!(
+                    "The interactive TUI supports {} providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+                    ProviderKind::tui_supported_providers_msg(),
+                    resolved_runtime.provider.as_str()
+                );
+            }
+            ProviderSource::Env(var_name) => {
+                bail!(
+                    "The interactive TUI supports {} providers. Unset `{}` (currently `{}`) or use `codewhale model ...` for provider registry inspection.",
+                    ProviderKind::tui_supported_providers_msg(),
+                    var_name,
+                    resolved_runtime.provider.as_str()
+                );
+            }
+            ProviderSource::Config => {
+                eprintln!(
+                    "warning: Unsupported provider '{}' configured in config.toml. Falling back to default 'deepseek'.",
+                    resolved_runtime.provider.as_str()
+                );
+                resolved_runtime.provider = ProviderKind::Deepseek;
+                fallback_provider = Some(resolved_runtime.provider);
+            }
+        }
     }
 
     if let Some(provider) = cli.provider {
         let provider: ProviderKind = provider.into();
+        cmd.env("DEEPSEEK_PROVIDER", provider.as_str());
+    } else if let Some(provider) = fallback_provider {
         cmd.env("DEEPSEEK_PROVIDER", provider.as_str());
     }
     if matches!(
@@ -1645,6 +1750,9 @@ fn build_tui_command(
     }
     if let Some(output_mode) = cli.output_mode.as_ref() {
         cmd.env("DEEPSEEK_OUTPUT_MODE", output_mode);
+    }
+    if let Some(v) = verbosity.as_ref() {
+        cmd.env("DEEPSEEK_VERBOSITY", v);
     }
     if let Some(log_level) = cli.log_level.as_ref() {
         cmd.env("DEEPSEEK_LOG_LEVEL", log_level);
@@ -2392,6 +2500,16 @@ mod tests {
             }))
         ));
 
+        let cli = parse_ok(&["deepseek", "auth", "status", "--provider", "openai-codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(AuthArgs {
+                command: AuthCommand::Status {
+                    provider: Some(ProviderArg::OpenaiCodex)
+                }
+            }))
+        ));
+
         let cli = parse_ok(&["deepseek", "auth", "list"]);
         assert!(matches!(
             cli.command,
@@ -2709,6 +2827,41 @@ mod tests {
     }
 
     #[test]
+    fn auth_status_openai_codex_reports_codex_oauth_file() {
+        use codewhale_secrets::InMemoryKeyringStore;
+        use std::sync::Arc;
+
+        let _lock = env_lock();
+        let _access_token = ScopedEnvVar::set("OPENAI_CODEX_ACCESS_TOKEN", "");
+        let _codex_token = ScopedEnvVar::set("CODEX_ACCESS_TOKEN", "");
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let auth_path = dir.path().join("auth.json");
+        std::fs::write(&auth_path, r#"{"tokens":{"access_token":"secret-token"}}"#)
+            .expect("write auth file");
+        let auth_path_str = auth_path.to_string_lossy().into_owned();
+        let _auth_file = ScopedEnvVar::set("OPENAI_CODEX_AUTH_FILE", &auth_path_str);
+
+        let mut store = ConfigStore::load(Some(config_path)).expect("store should load");
+        store.config.provider = ProviderKind::OpenaiCodex;
+        let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
+
+        let output =
+            auth_status_lines_for_provider(&store, &secrets, ProviderKind::OpenaiCodex).join("\n");
+
+        assert!(output.contains("provider: openai-codex"));
+        assert!(output.contains("auth mode: codex_oauth"));
+        assert!(output.contains("active source: Codex OAuth file"));
+        assert!(output.contains("lookup order: env -> Codex OAuth file"));
+        assert!(output.contains(&format!(
+            "Codex OAuth file: {} (present)",
+            auth_path.display()
+        )));
+        assert!(!output.contains("secret-token"));
+    }
+
+    #[test]
     fn auth_status_scoped_provider_shows_detailed_info() {
         use codewhale_secrets::InMemoryKeyringStore;
         use std::sync::Arc;
@@ -2960,17 +3113,20 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
+            provider_source: ProviderSource::Cli,
             model: "glm-5".to_string(),
             api_key: Some("resolved-openai-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
             base_url: "https://openai-compatible.example/v4".to_string(),
             auth_mode: Some("api_key".to_string()),
+            insecure_skip_tls_verify: false,
             output_mode: None,
             log_level: None,
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
 
@@ -3004,6 +3160,86 @@ mod tests {
     }
 
     #[test]
+    fn build_tui_command_allows_openai_codex_from_resolved_runtime() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["codewhale", "doctor"]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::OpenaiCodex,
+            provider_source: ProviderSource::Config,
+            model: "gpt-5.5".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            auth_mode: Some("oauth".to_string()),
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, vec!["doctor".to_string()])
+            .expect("openai-codex should be accepted by the facade");
+        assert_eq!(command_env(&cmd, "DEEPSEEK_PROVIDER"), None);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["doctor"]);
+    }
+
+    #[test]
+    fn build_tui_command_forwards_explicit_openai_codex_provider() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["codewhale", "--provider", "openai-codex", "doctor"]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::OpenaiCodex,
+            provider_source: ProviderSource::Cli,
+            model: "gpt-5.5".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            auth_mode: Some("oauth".to_string()),
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, vec!["doctor".to_string()])
+            .expect("openai-codex should be accepted by the facade");
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
+            Some("openai-codex")
+        );
+    }
+
+    #[test]
     fn build_tui_command_does_not_export_default_runtime_overrides_for_profiles() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -3019,17 +3255,20 @@ mod tests {
         resolved_headers.insert("X-From-Base".to_string(), "base".to_string());
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Deepseek,
+            provider_source: ProviderSource::Config,
             model: "deepseek-v4-pro".to_string(),
             api_key: Some("config-file-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::ConfigFile),
             base_url: "https://api.deepseek.com/beta".to_string(),
             auth_mode: Some("api_key".to_string()),
+            insecure_skip_tls_verify: false,
             output_mode: None,
             log_level: None,
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: resolved_headers,
         };
 
@@ -3074,17 +3313,20 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Moonshot,
+            provider_source: ProviderSource::Cli,
             model: "kimi-k2.6".to_string(),
             api_key: Some("resolved-kimi-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
             base_url: "https://api.moonshot.ai/v1".to_string(),
             auth_mode: Some("api_key".to_string()),
+            insecure_skip_tls_verify: false,
             output_mode: None,
             log_level: None,
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
 
@@ -3117,6 +3359,72 @@ mod tests {
     }
 
     #[test]
+    fn build_tui_command_allows_volcengine_and_forwards_ark_keys() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&[
+            "codewhale",
+            "--provider",
+            "volcengine",
+            "--model",
+            "DeepSeek-V4-Pro",
+            "--workspace",
+            "/tmp/codewhale-workspace",
+        ]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::Volcengine,
+            provider_source: ProviderSource::Cli,
+            model: "DeepSeek-V4-Pro".to_string(),
+            api_key: Some("resolved-ark-key".to_string()),
+            api_key_source: Some(RuntimeApiKeySource::Keyring),
+            base_url: "https://ark.cn-beijing.volces.com/api/coding/v3".to_string(),
+            auth_mode: Some("api_key".to_string()),
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
+            Some("volcengine")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_MODEL").as_deref(),
+            Some("DeepSeek-V4-Pro")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_API_KEY").as_deref(),
+            Some("resolved-ark-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "VOLCENGINE_API_KEY").as_deref(),
+            Some("resolved-ark-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "VOLCENGINE_ARK_API_KEY").as_deref(),
+            Some("resolved-ark-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "ARK_API_KEY").as_deref(),
+            Some("resolved-ark-key")
+        );
+    }
+
+    #[test]
     fn build_tui_command_exports_explicit_provider_model_and_base_url() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -3140,17 +3448,20 @@ mod tests {
         ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
+            provider_source: ProviderSource::Cli,
             model: "glm-5".to_string(),
             api_key: None,
             api_key_source: None,
             base_url: "https://openai-compatible.example/v4".to_string(),
             auth_mode: None,
+            insecure_skip_tls_verify: false,
             output_mode: None,
             log_level: None,
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
+            verbosity: None,
             http_headers: std::collections::BTreeMap::new(),
         };
 
@@ -3235,17 +3546,20 @@ mod tests {
             ]);
             let resolved = ResolvedRuntimeOptions {
                 provider,
+                provider_source: ProviderSource::Cli,
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
                 api_key_source: Some(RuntimeApiKeySource::Keyring),
                 base_url: "http://localhost:8000/v1".to_string(),
                 auth_mode: Some("api_key".to_string()),
+                insecure_skip_tls_verify: false,
                 output_mode: None,
                 log_level: None,
                 telemetry: false,
                 approval_policy: None,
                 sandbox_mode: None,
                 yolo: None,
+                verbosity: None,
                 http_headers: std::collections::BTreeMap::new(),
             };
 
@@ -3522,5 +3836,117 @@ mod tests {
 
         let resolved = locate_sibling_tui_binary().expect("override must resolve");
         assert_eq!(resolved, custom);
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_cli() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::Anthropic,
+            provider_source: ProviderSource::Cli,
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Remove --provider anthropic"), "msg: {}", msg);
+        assert!(msg.contains("The interactive TUI supports"), "msg: {}", msg);
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_env() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::Anthropic,
+            provider_source: ProviderSource::Env("CODEWHALE_PROVIDER"),
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let err = build_tui_command(&cli, &options, vec![]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unset `CODEWHALE_PROVIDER` (currently `anthropic`)"),
+            "msg: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_build_tui_command_unsupported_provider_config_fallback() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek"]);
+        let options = ResolvedRuntimeOptions {
+            provider: ProviderKind::Anthropic,
+            provider_source: ProviderSource::Config,
+            model: "model".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "url".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+        let cmd = build_tui_command(&cli, &options, vec![]).expect("should graceful fallback");
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
+            Some("deepseek")
+        );
     }
 }

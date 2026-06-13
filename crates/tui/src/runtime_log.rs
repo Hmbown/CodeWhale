@@ -154,12 +154,26 @@ pub fn init() -> Result<TuiLogGuard> {
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
+    let log_path_clone = log_path.clone();
     let subscriber = tracing_subscriber::registry().with(env_filter).with(
         fmt::layer()
-            .with_writer(move || {
-                subscriber_file
-                    .try_clone()
-                    .expect("clone log file handle for tracing writer")
+            .with_writer(move || -> Box<dyn std::io::Write + Send> {
+                // Clone the file handle for each write. If clone fails (fd exhaustion),
+                // fall back to reopening the same path, or ultimately stderr.
+                match subscriber_file.try_clone() {
+                    Ok(f) => Box::new(f),
+                    Err(e) => {
+                        tracing::warn!("Failed to clone log file handle: {e}, reopening");
+                        match std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&log_path_clone)
+                        {
+                            Ok(f) => Box::new(f),
+                            Err(_) => Box::new(std::io::stderr()),
+                        }
+                    }
+                }
             })
             .with_ansi(false)
             .with_target(true)
@@ -176,7 +190,10 @@ pub fn init() -> Result<TuiLogGuard> {
     #[cfg(windows)]
     let (saved_stderr_handle, redirected_stderr_handle) = match redirect_stderr_to(&file) {
         Ok((saved, dup)) => (Some(saved), Some(dup)),
-        Err(_) => (None, None),
+        Err(e) => {
+            tracing::warn!("Failed to redirect stderr to log file: {e}");
+            (None, None)
+        }
     };
 
     Ok(TuiLogGuard {

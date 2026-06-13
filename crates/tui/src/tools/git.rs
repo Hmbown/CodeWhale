@@ -333,6 +333,7 @@ mod tests {
         };
 
         run(&["init", "-q"]);
+        run(&["config", "core.autocrlf", "false"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test User"]);
     }

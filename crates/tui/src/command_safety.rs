@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Command safety analysis for shell execution
 //!
 //! This module provides pre-execution analysis of shell commands to detect
@@ -374,43 +372,38 @@ pub enum SafetyLevel {
 #[derive(Debug, Clone)]
 pub struct SafetyAnalysis {
     pub level: SafetyLevel,
-    pub command: String,
     pub reasons: Vec<String>,
     pub suggestions: Vec<String>,
 }
 
 impl SafetyAnalysis {
-    pub fn safe(command: &str) -> Self {
+    pub fn safe(_command: &str) -> Self {
         Self {
             level: SafetyLevel::Safe,
-            command: command.to_string(),
             reasons: vec!["Command is read-only".to_string()],
             suggestions: vec![],
         }
     }
 
-    pub fn workspace_safe(command: &str, reason: &str) -> Self {
+    pub fn workspace_safe(_command: &str, reason: &str) -> Self {
         Self {
             level: SafetyLevel::WorkspaceSafe,
-            command: command.to_string(),
             reasons: vec![reason.to_string()],
             suggestions: vec![],
         }
     }
 
-    pub fn requires_approval(command: &str, reasons: Vec<String>) -> Self {
+    pub fn requires_approval(_command: &str, reasons: Vec<String>) -> Self {
         Self {
             level: SafetyLevel::RequiresApproval,
-            command: command.to_string(),
             reasons,
             suggestions: vec![],
         }
     }
 
-    pub fn dangerous(command: &str, reasons: Vec<String>, suggestions: Vec<String>) -> Self {
+    pub fn dangerous(_command: &str, reasons: Vec<String>, suggestions: Vec<String>) -> Self {
         Self {
             level: SafetyLevel::Dangerous,
-            command: command.to_string(),
             reasons,
             suggestions,
         }
@@ -1012,72 +1005,6 @@ fn is_workspace_safe_command(command: &str) -> bool {
     false
 }
 
-/// Check if a path escapes the workspace
-pub fn path_escapes_workspace(path: &str, workspace: &str) -> bool {
-    let path_lower = normalize_safety_path(path);
-    let workspace_lower = normalize_safety_path(workspace);
-
-    // Check for obvious escape patterns
-    if path_lower.starts_with("~/") || path_lower.starts_with("$home") {
-        return true;
-    }
-
-    if is_absolute_safety_path(&path_lower) {
-        let path_components = lexical_components(&path_lower);
-        let workspace_components = lexical_components(&workspace_lower);
-        return !components_start_with(&path_components, &workspace_components);
-    }
-
-    // Walk the path components. Track depth relative to the workspace root:
-    // non-`..` components increment depth, `..` components decrement it.
-    // If depth ever goes negative, the path escapes the workspace boundary.
-    // This correctly distinguishes genuine traversal like `../outside` from
-    // names that happen to contain consecutive dots like `foo..bar`.
-    let mut depth: i32 = 0;
-    for component in path_lower.split('/') {
-        match component {
-            "" | "." => {}
-            ".." => depth -= 1,
-            _ => depth += 1,
-        }
-        if depth < 0 {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn normalize_safety_path(path: &str) -> String {
-    path.trim().replace('\\', "/").to_lowercase()
-}
-
-fn is_absolute_safety_path(path: &str) -> bool {
-    path.starts_with('/')
-        || path
-            .as_bytes()
-            .get(1..3)
-            .is_some_and(|bytes| bytes[0] == b':' && bytes[1] == b'/')
-}
-
-fn lexical_components(path: &str) -> Vec<&str> {
-    let mut components = Vec::new();
-    for component in path.split('/') {
-        match component {
-            "" | "." => {}
-            ".." => {
-                components.pop();
-            }
-            _ => components.push(component),
-        }
-    }
-    components
-}
-
-fn components_start_with(path: &[&str], prefix: &[&str]) -> bool {
-    path.len() >= prefix.len() && path.iter().zip(prefix.iter()).all(|(a, b)| a == b)
-}
-
 /// Parse a command and extract the primary command name
 pub fn extract_primary_command(command: &str) -> Option<&str> {
     let trimmed = command.trim();
@@ -1090,56 +1017,6 @@ pub fn extract_primary_command(command: &str) -> Option<&str> {
             .find(|s| !s.contains('=') && *s != "env")
     } else {
         trimmed.split_whitespace().next()
-    }
-}
-
-/// Categorize commands into groups
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandCategory {
-    FileSystem,
-    Network,
-    Process,
-    Package,
-    Git,
-    Build,
-    System,
-    Shell,
-    Other,
-}
-
-/// Get the category of a command
-pub fn categorize_command(command: &str) -> CommandCategory {
-    let primary = match extract_primary_command(command) {
-        Some(cmd) => cmd.to_lowercase(),
-        None => return CommandCategory::Other,
-    };
-
-    match primary.as_str() {
-        "ls" | "dir" | "cat" | "head" | "tail" | "less" | "more" | "cp" | "mv" | "rm" | "mkdir"
-        | "rmdir" | "touch" | "chmod" | "chown" | "ln" | "find" | "fd" | "locate" | "stat"
-        | "file" => CommandCategory::FileSystem,
-
-        "curl" | "wget" | "fetch" | "nc" | "netcat" | "ssh" | "scp" | "sftp" | "rsync" | "ftp"
-        | "ping" | "traceroute" | "nslookup" | "dig" | "host" | "nmap" => CommandCategory::Network,
-
-        "ps" | "top" | "htop" | "kill" | "killall" | "pkill" | "pgrep" | "nice" | "renice"
-        | "nohup" | "timeout" => CommandCategory::Process,
-
-        "npm" | "yarn" | "pnpm" | "pip" | "pip3" | "brew" | "apt" | "apt-get" | "yum" | "dnf"
-        | "pacman" => CommandCategory::Package,
-
-        "git" | "gh" | "hub" => CommandCategory::Git,
-
-        "make" | "cmake" | "ninja" | "meson" | "cargo" | "go" | "gcc" | "g++" | "clang"
-        | "rustc" | "javac" | "tsc" => CommandCategory::Build,
-
-        "sudo" | "su" | "systemctl" | "service" | "shutdown" | "reboot" | "mount" | "umount"
-        | "fdisk" | "parted" => CommandCategory::System,
-
-        "bash" | "sh" | "zsh" | "fish" | "csh" | "tcsh" | "dash" | "source" | "." | "exec"
-        | "eval" => CommandCategory::Shell,
-
-        _ => CommandCategory::Other,
     }
 }
 
@@ -1227,7 +1104,7 @@ mod tests {
             SafetyLevel::Dangerous
         );
         assert_ne!(
-            analyze_command("cargo run --bin deepseek -- eval").level,
+            analyze_command("cargo run --bin codewhale -- eval").level,
             SafetyLevel::Dangerous
         );
     }
@@ -1251,7 +1128,7 @@ mod tests {
         // contain the substring "eval" but are not eval invocations.
         // Guard against the naive `command.contains("eval")` regression
         // — these should stay safe / workspace-safe, never Dangerous.
-        let evaluate_safe = analyze_command("cargo run --bin deepseek -- eval").level;
+        let evaluate_safe = analyze_command("cargo run --bin codewhale -- eval").level;
         assert_ne!(
             evaluate_safe,
             SafetyLevel::Dangerous,
@@ -1322,62 +1199,6 @@ mod tests {
     }
 
     #[test]
-    fn test_path_escapes_workspace() {
-        assert!(path_escapes_workspace("/etc/passwd", "/home/user/project"));
-        assert!(path_escapes_workspace("~/secret", "/home/user/project"));
-        assert!(!path_escapes_workspace(
-            "./src/main.rs",
-            "/home/user/project"
-        ));
-    }
-
-    #[test]
-    fn test_path_escapes_workspace_doesnt_flag_double_dot_in_names() {
-        // Names like `foo..bar` should NOT be flagged as path traversal
-        assert!(!path_escapes_workspace(
-            "some..file.txt",
-            "/home/user/project"
-        ));
-        assert!(!path_escapes_workspace(
-            "./dir..name/file.txt",
-            "/home/user/project"
-        ));
-    }
-
-    #[test]
-    fn test_path_escapes_workspace_detects_genuine_traversal() {
-        assert!(path_escapes_workspace("../outside", "/home/user/project"));
-        assert!(path_escapes_workspace(
-            "..\\outside",
-            "C:\\Users\\me\\project"
-        ));
-        assert!(path_escapes_workspace(
-            "./subdir/../../etc/passwd",
-            "/home/user/project"
-        ));
-        assert!(path_escapes_workspace(
-            "/home/user/project/../secret",
-            "/home/user/project"
-        ));
-        assert!(path_escapes_workspace(
-            "C:\\Users\\me\\project\\..\\secret",
-            "C:\\Users\\me\\project"
-        ));
-    }
-
-    #[test]
-    fn test_path_escapes_workspace_allows_absolute_workspace_children() {
-        assert!(!path_escapes_workspace(
-            "/home/user/project/src/main.rs",
-            "/home/user/project"
-        ));
-        assert!(!path_escapes_workspace(
-            "C:\\Users\\me\\project\\src\\main.rs",
-            "C:\\Users\\me\\project"
-        ));
-    }
-
-    #[test]
     fn test_extract_primary_command() {
         assert_eq!(extract_primary_command("ls -la"), Some("ls"));
         assert_eq!(
@@ -1385,21 +1206,6 @@ mod tests {
             Some("cargo")
         );
         assert_eq!(extract_primary_command("  git status  "), Some("git"));
-    }
-
-    #[test]
-    fn test_categorize_command() {
-        assert_eq!(categorize_command("ls -la"), CommandCategory::FileSystem);
-        assert_eq!(
-            categorize_command("curl https://example.com"),
-            CommandCategory::Network
-        );
-        assert_eq!(categorize_command("git status"), CommandCategory::Git);
-        assert_eq!(categorize_command("npm install"), CommandCategory::Package);
-        assert_eq!(
-            categorize_command("sudo apt update"),
-            CommandCategory::System
-        );
     }
 
     // ── classify_command tests ────────────────────────────────────────────────

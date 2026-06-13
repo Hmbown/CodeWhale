@@ -92,7 +92,7 @@ pub trait KeyringStore: Send + Sync {
 /// Wraps the platform credential store:
 /// - **macOS**: Keychain (via `security` framework)
 /// - **Windows**: Credential Manager
-/// - **Linux**: Secret Service (GNOME Keyring / kwallet via dbus)
+/// - **Linux**: Secret Service (GNOME Keyring / kwallet via dbus), excluding OHOS
 ///
 /// This backend is opt-in -- set the [`SECRET_BACKEND_ENV`] environment
 /// variable to `system` or `keyring` to activate it. On platforms without
@@ -124,7 +124,15 @@ impl DefaultKeyringStore {
     /// Probe the OS keyring without writing anything. Returns `Ok(())` if
     /// a backend is reachable, otherwise an error describing why not.
     pub fn probe(&self) -> Result<(), SecretsError> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        ))]
         {
             // `Entry::new` is enough to validate the native macOS/Windows
             // backend path. Avoid a dummy read there because it can trigger
@@ -149,7 +157,15 @@ impl DefaultKeyringStore {
                 Err(other) => Err(SecretsError::Keyring(other.to_string())),
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        )))]
         {
             let _ = &self.service;
             Err(SecretsError::Keyring(unsupported_keyring_message()))
@@ -159,7 +175,15 @@ impl DefaultKeyringStore {
 
 impl KeyringStore for DefaultKeyringStore {
     fn get(&self, key: &str) -> Result<Option<String>, SecretsError> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
                 .map_err(|err| SecretsError::Keyring(err.to_string()))?;
@@ -169,7 +193,15 @@ impl KeyringStore for DefaultKeyringStore {
                 Err(err) => Err(SecretsError::Keyring(err.to_string())),
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        )))]
         {
             let _ = key;
             Err(SecretsError::Keyring(unsupported_keyring_message()))
@@ -177,7 +209,15 @@ impl KeyringStore for DefaultKeyringStore {
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), SecretsError> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
                 .map_err(|err| SecretsError::Keyring(err.to_string()))?;
@@ -185,7 +225,15 @@ impl KeyringStore for DefaultKeyringStore {
                 .set_password(value)
                 .map_err(|err| SecretsError::Keyring(err.to_string()))
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        )))]
         {
             let _ = (key, value);
             Err(SecretsError::Keyring(unsupported_keyring_message()))
@@ -193,7 +241,15 @@ impl KeyringStore for DefaultKeyringStore {
     }
 
     fn delete(&self, key: &str) -> Result<(), SecretsError> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        ))]
         {
             let entry = keyring::Entry::new(&self.service, key)
                 .map_err(|err| SecretsError::Keyring(err.to_string()))?;
@@ -202,7 +258,15 @@ impl KeyringStore for DefaultKeyringStore {
                 Err(err) => Err(SecretsError::Keyring(err.to_string())),
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            all(
+                target_os = "linux",
+                not(target_env = "ohos"),
+                not(target_env = "musl")
+            )
+        )))]
         {
             let _ = key;
             Err(SecretsError::Keyring(unsupported_keyring_message()))
@@ -214,7 +278,15 @@ impl KeyringStore for DefaultKeyringStore {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        target_os = "linux",
+        not(target_env = "ohos"),
+        not(target_env = "musl")
+    )
+)))]
 fn unsupported_keyring_message() -> String {
     "system keyring backend is unsupported on this platform".to_string()
 }
@@ -718,6 +790,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
         "openai" => &["OPENAI_API_KEY"],
+        "anthropic" | "claude" => &["ANTHROPIC_API_KEY"],
         "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
         "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark"
         | "volcengineark" => &[

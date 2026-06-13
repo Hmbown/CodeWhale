@@ -8,6 +8,7 @@ const COMPOSER_ARROW_SCROLL_LINES: usize = 3;
 pub(crate) enum EscapeAction {
     CloseSlashMenu,
     CancelRequest,
+    PauseCommand,
     DiscardQueuedDraft,
     ClearInput,
     Noop,
@@ -16,10 +17,17 @@ pub(crate) enum EscapeAction {
 pub(crate) fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeAction {
     if slash_menu_open {
         EscapeAction::CloseSlashMenu
+    } else if app.queued_draft.is_some() {
+        EscapeAction::DiscardQueuedDraft
+    } else if app.paused || app.paused_quarry.is_some() {
+        EscapeAction::CancelRequest
+    } else if app.pausable
+        && !app.paused
+        && (app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")))
+    {
+        EscapeAction::PauseCommand
     } else if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
         EscapeAction::CancelRequest
-    } else if app.queued_draft.is_some() && app.input.is_empty() {
-        EscapeAction::DiscardQueuedDraft
     } else if !app.input.is_empty() {
         EscapeAction::ClearInput
     } else {
@@ -111,6 +119,26 @@ fn byte_index_at_char(text: &str, char_index: usize) -> usize {
 
 pub(crate) fn is_word_cursor_modifier(modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT)
+}
+
+/// On macOS, map `SUPER` (Cmd ⌘) to `CONTROL` when `CONTROL` is not already
+/// set, so that terminal emulators that don't pass Ctrl faithfully still work.
+/// On all other platforms this is a no-op.
+#[cfg(target_os = "macos")]
+pub(crate) fn normalize_macos_modifiers(modifiers: KeyModifiers) -> KeyModifiers {
+    // Strip SUPER and add CONTROL so that exact modifier equality checks
+    // (e.g. `modifiers == KeyModifiers::CONTROL` in Ctrl+S stashing) work
+    // correctly after normalization.
+    if modifiers.contains(KeyModifiers::SUPER) {
+        (modifiers - KeyModifiers::SUPER) | KeyModifiers::CONTROL
+    } else {
+        modifiers
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn normalize_macos_modifiers(modifiers: KeyModifiers) -> KeyModifiers {
+    modifiers
 }
 
 pub(crate) fn handle_composer_alt_word_motion_key(app: &mut App, key: KeyEvent) -> bool {

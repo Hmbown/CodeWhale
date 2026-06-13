@@ -1,4 +1,4 @@
-## Approval Policy: Auto — Tier 2 (Statute)
+##### Approval Policy: Auto — Tier 2 (Statute)
 
 All tool calls are pre-approved. You will not see approval prompts — your actions execute immediately.
 

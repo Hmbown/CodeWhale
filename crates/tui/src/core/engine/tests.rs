@@ -3,6 +3,7 @@ use super::*;
 use super::context::TURN_MAX_OUTPUT_TOKENS;
 use crate::models::SystemBlock;
 use crate::test_support::lock_test_env;
+use crate::tools::plan::{PlanItemArg, PlanSnapshot, StepStatus};
 use crate::tools::spec::ToolCapability;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -82,6 +83,84 @@ fn build_engine_with_capacity(capacity: CapacityControllerConfig) -> Engine {
     };
     let (engine, _handle) = Engine::new(engine_config, &Config::default());
     engine
+}
+
+fn catalog_tool(name: &str) -> Tool {
+    Tool {
+        tool_type: None,
+        name: name.to_string(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+        allowed_callers: None,
+        defer_loading: None,
+        input_examples: None,
+        strict: None,
+        cache_control: None,
+    }
+}
+
+#[test]
+fn tool_catalog_filter_applies_allow_and_deny_gates() {
+    // #3027 AC1: the advertised catalog must not contain tools the execution
+    // gates would deny; deny wins over allow.
+    let mut catalog = vec![
+        catalog_tool("read_file"),
+        catalog_tool("exec_shell"),
+        catalog_tool("grep_files"),
+    ];
+    filter_tool_catalog_for_gates(
+        &mut catalog,
+        Some(&["read_file".to_string(), "exec_shell".to_string()][..]),
+        Some(&["exec_shell".to_string()][..]),
+    );
+    let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["read_file"]);
+}
+
+#[test]
+fn tool_catalog_filter_is_inert_without_gates() {
+    let mut catalog = vec![catalog_tool("read_file"), catalog_tool("exec_shell")];
+    filter_tool_catalog_for_gates(&mut catalog, None, None);
+    assert_eq!(catalog.len(), 2);
+}
+
+#[test]
+fn structured_state_block_includes_rich_plan_artifact() {
+    let state = StructuredState {
+        mode_label: "Plan".to_string(),
+        workspace: PathBuf::from("/workspace/codewhale"),
+        cwd: None,
+        working_set_summary: None,
+        todo_snapshot: None,
+        plan_snapshot: Some(PlanSnapshot {
+            objective: Some("Make Plan mode reviewable".to_string()),
+            context_summary: Some("Grounded in issue #2691".to_string()),
+            sources_used: vec!["gh issue view 2691".to_string()],
+            critical_files: vec!["crates/tui/src/tools/plan.rs".to_string()],
+            constraints: vec!["Preserve legacy payloads".to_string()],
+            recommended_approach: Some("Enrich update_plan".to_string()),
+            verification_plan: Some("Run focused tests".to_string()),
+            risks_and_unknowns: Some("Replay may drift".to_string()),
+            handoff_packet: Some("Next agent should inspect replay".to_string()),
+            items: vec![PlanItemArg {
+                step: "Render rich artifact".to_string(),
+                status: StepStatus::InProgress,
+            }],
+            ..PlanSnapshot::default()
+        }),
+        subagent_snapshots: Vec::new(),
+    };
+
+    let block = state.to_system_block().expect("fork state block");
+
+    assert!(block.contains("Objective: Make Plan mode reviewable"));
+    assert!(block.contains("Context: Grounded in issue #2691"));
+    assert!(block.contains("Source: gh issue view 2691"));
+    assert!(block.contains("Critical file: crates/tui/src/tools/plan.rs"));
+    assert!(block.contains("Constraint: Preserve legacy payloads"));
+    assert!(block.contains("Verification plan: Run focused tests"));
+    assert!(block.contains("Handoff packet: Next agent should inspect replay"));
+    assert!(block.contains("- [~] Render rich artifact"));
 }
 
 #[test]
@@ -263,7 +342,7 @@ fn refresh_system_prompt_uses_runtime_goal_state() {
         goal.create("Close the runtime goal loop".to_string(), None);
     }
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     let prompt = match engine.session.system_prompt {
         Some(SystemPrompt::Text(text)) => text,
         Some(SystemPrompt::Blocks(blocks)) => blocks
@@ -487,6 +566,33 @@ fn tool_error_messages_include_actionable_hints() {
     let timeout = ToolError::Timeout { seconds: 5 };
     let formatted = format_tool_error(&timeout, "exec_shell");
     assert!(formatted.contains("timed out"));
+
+    // #3020: Plan-mode denials already explain the fix — pass through
+    // verbatim, with no conflicting "Adjust approval mode" suffix.
+    let plan_denied = ToolError::permission_denied(
+        "'exec_shell' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code.",
+    );
+    let formatted = format_tool_error(&plan_denied, "exec_shell");
+    assert_eq!(
+        formatted,
+        "'exec_shell' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code."
+    );
+
+    // Bare denials still get the actionable suffix.
+    let bare_denied = ToolError::permission_denied("nope");
+    let formatted = format_tool_error(&bare_denied, "exec_shell");
+    assert!(
+        formatted.contains("Adjust approval mode or request permission"),
+        "{formatted}"
+    );
+
+    // "model" must not satisfy the "mode" pass-through check.
+    let model_denied = ToolError::permission_denied("requested model is not allowed");
+    let formatted = format_tool_error(&model_denied, "agent_open");
+    assert!(
+        formatted.contains("Adjust approval mode or request permission"),
+        "{formatted}"
+    );
 }
 
 #[test]
@@ -506,116 +612,36 @@ fn tool_exec_outcome_tracks_duration() {
 #[test]
 fn core_native_tools_stay_loaded_in_yolo_mode() {
     let always_load = HashSet::new();
-    assert!(!should_default_defer_tool(
-        "exec_shell",
-        AppMode::Yolo,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("exec_shell", &always_load));
     // git_blame remains deferred (read-only git history beyond log/show/diff).
-    assert!(should_default_defer_tool(
-        "git_blame",
-        AppMode::Yolo,
-        &always_load
-    ));
+    assert!(should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
 fn non_yolo_mode_retains_default_defer_policy() {
     let always_load = HashSet::new();
-    assert!(!should_default_defer_tool(
-        "exec_shell",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "edit_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "apply_patch",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "fetch_url",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_diff",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("exec_shell", &always_load));
+    assert!(!should_default_defer_tool("edit_file", &always_load));
+    assert!(!should_default_defer_tool("apply_patch", &always_load));
+    assert!(!should_default_defer_tool("fetch_url", &always_load));
+    assert!(!should_default_defer_tool("git_diff", &always_load));
     // #2654: read-only git history joins the active set.
-    assert!(!should_default_defer_tool(
-        "git_log",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_show",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "git_status",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "run_tests",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "agent_open",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("git_log", &always_load));
+    assert!(!should_default_defer_tool("git_show", &always_load));
+    assert!(!should_default_defer_tool("git_status", &always_load));
+    assert!(!should_default_defer_tool("run_tests", &always_load));
+    assert!(!should_default_defer_tool("agent_open", &always_load));
     // #2605: the fetch/close side of the sub-agent surface must also stay
     // active so a first `agent_eval`/`agent_close` executes instead of
     // hydrating its schema and forcing a double-invoke.
-    assert!(!should_default_defer_tool(
-        "agent_eval",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "agent_close",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "read_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "web_search",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "write_file",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "task_shell_start",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(!should_default_defer_tool(
-        "task_shell_wait",
-        AppMode::Agent,
-        &always_load
-    ));
-    assert!(should_default_defer_tool(
-        "git_blame",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("agent_eval", &always_load));
+    assert!(!should_default_defer_tool("agent_close", &always_load));
+    assert!(!should_default_defer_tool("read_file", &always_load));
+    assert!(!should_default_defer_tool("web_search", &always_load));
+    assert!(!should_default_defer_tool("write_file", &always_load));
+    assert!(!should_default_defer_tool("task_shell_start", &always_load));
+    assert!(!should_default_defer_tool("task_shell_wait", &always_load));
+    assert!(should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
@@ -816,11 +842,7 @@ fn agent_catalog_keeps_edit_file_loaded_when_fuzz_is_omitted() {
 #[test]
 fn tools_always_load_overrides_default_native_deferral() {
     let always_load = HashSet::from(["git_blame".to_string()]);
-    assert!(!should_default_defer_tool(
-        "git_blame",
-        AppMode::Agent,
-        &always_load
-    ));
+    assert!(!should_default_defer_tool("git_blame", &always_load));
 }
 
 #[test]
@@ -1732,6 +1754,7 @@ async fn session_update_preserves_reasoning_tool_only_turn() {
         role: "assistant".to_string(),
         content: vec![
             ContentBlock::Thinking {
+                signature: None,
                 thinking: "Need a tool before answering.".to_string(),
             },
             ContentBlock::ToolUse {
@@ -1829,15 +1852,20 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
         .await
         .expect("send change mode");
 
-    let prompt = {
+    let (_prompt, messages) = {
         let mut rx = handle.rx_event.write().await;
         loop {
             let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
                 .await
                 .expect("session update after mode switch")
                 .expect("event");
-            if let Event::SessionUpdated { system_prompt, .. } = event {
-                break match system_prompt.expect("system prompt") {
+            if let Event::SessionUpdated {
+                system_prompt,
+                messages,
+                ..
+            } = event
+            {
+                let prompt = match system_prompt.expect("system prompt") {
                     SystemPrompt::Text(text) => text,
                     SystemPrompt::Blocks(blocks) => blocks
                         .into_iter()
@@ -1845,17 +1873,103 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
                         .collect::<Vec<_>>()
                         .join("\n"),
                 };
+                break (prompt, messages);
             }
         }
     };
     run.abort();
 
-    assert!(prompt.contains("Mode: YOLO"));
-    assert!(prompt.contains("Approval Policy: Auto"));
+    assert!(
+        messages.iter().all(|message| message.role != "system"),
+        "mode switch must not persist appended system messages: {messages:?}"
+    );
+    assert!(
+        messages.iter().all(|message| {
+            message.content.iter().all(|block| {
+                !matches!(
+                    block,
+                    ContentBlock::Text { text, .. }
+                        if text.contains("<runtime_prompt")
+                )
+            })
+        }),
+        "runtime prompt tags should be request-time metadata, not session history"
+    );
+}
+
+#[test]
+fn turn_approval_mode_prefers_auto_approve_flag() {
+    use crate::tui::approval::ApprovalMode;
+
+    assert_eq!(
+        agent_approval_mode_for_turn(true, ApprovalMode::Suggest),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(
+            AppMode::Agent,
+            agent_approval_mode_for_turn(true, ApprovalMode::Never),
+        ),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(AppMode::Yolo, ApprovalMode::Suggest),
+        ApprovalMode::Auto
+    );
+    assert_eq!(
+        approval_mode_for(AppMode::Plan, ApprovalMode::Auto),
+        ApprovalMode::Never
+    );
+}
+
+#[test]
+fn runtime_prompt_is_projected_without_persisting_to_session_messages() {
+    use crate::tui::approval::ApprovalMode;
+
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    engine.current_mode = AppMode::Plan;
+    engine.session.approval_mode = ApprovalMode::Suggest;
+    engine.session.messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "summary after compaction".to_string(),
+            cache_control: None,
+        }],
+    }]
+    .into();
+    let stored = engine.session.messages.clone();
+
+    let request_messages = engine.messages_with_turn_metadata();
+
+    assert_eq!(&*engine.session.messages, &*stored);
+    assert_eq!(request_messages.len(), stored.len() + 1);
+    assert!(
+        request_messages
+            .iter()
+            .all(|message| message.role != "system"),
+        "runtime prompts must not create appended system messages"
+    );
+    let runtime = request_messages.last().expect("runtime prompt message");
+    assert_eq!(runtime.role, "user");
+    let ContentBlock::Text { text, .. } = runtime.content.first().expect("runtime prompt text")
+    else {
+        panic!("expected text runtime prompt");
+    };
+    assert!(text.contains("<runtime_prompt"));
+    assert!(text.contains("mode=\"plan\""));
+    assert!(
+        text.contains("approval=\"never\""),
+        "Plan mode should project its fixed never-approval policy: {text}"
+    );
 }
 
 #[tokio::test]
-async fn change_mode_op_injects_runtime_event_into_session_messages() {
+async fn change_mode_op_updates_current_mode_and_emits_status() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         workspace: tmp.path().to_path_buf(),
@@ -1865,7 +1979,6 @@ async fn change_mode_op_injects_runtime_event_into_session_messages() {
     let (engine, handle) = Engine::new(config, &Config::default());
 
     let run = tokio::spawn(engine.run());
-    // Switch from default Agent → YOLO
     handle
         .send(Op::ChangeMode {
             mode: AppMode::Yolo,
@@ -1873,40 +1986,41 @@ async fn change_mode_op_injects_runtime_event_into_session_messages() {
         .await
         .expect("send change mode");
 
-    // Collect session-updated events until we see the injected message
-    let messages = {
-        let mut rx = handle.rx_event.write().await;
-        loop {
-            let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("session update after mode switch")
-                .expect("event");
-            if let Event::SessionUpdated { messages, .. } = event {
-                // The last message should be our runtime event
-                if let Some(last) = messages.last()
-                    && let ContentBlock::Text { text, .. } =
-                        last.content.first().expect("text block")
-                    && text.contains("kind=\"mode_change\"")
-                {
-                    break messages;
-                }
-            }
-        }
+    // Expect a SessionUpdated event confirming the mode change (the
+    // per-turn <runtime_prompt> tag carries the mode in every request,
+    // so no separate persistence of a mode_change runtime event is needed).
+    let mut rx = handle.rx_event.write().await;
+    let session_updated = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("session update after mode switch")
+        .expect("event");
+    let Event::SessionUpdated { messages, .. } = session_updated else {
+        panic!("should emit SessionUpdated after mode change, got: {session_updated:?}");
     };
-    run.abort();
+    assert!(
+        messages.iter().all(|message| {
+            message.content.iter().all(|block| {
+                !matches!(
+                    block,
+                    ContentBlock::Text { text, .. }
+                        if text.contains("<runtime_prompt")
+                )
+            })
+        }),
+        "runtime prompt tags must not be persisted into session messages after mode change"
+    );
 
-    let last = messages.last().expect("at least one message");
-    let ContentBlock::Text { text, .. } = last.content.first().expect("text block") else {
-        panic!("expected text block");
-    };
+    // Also expect a status event
+    let status = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("status after mode switch")
+        .expect("event");
     assert!(
-        text.contains("Agent mode") && text.contains("YOLO mode"),
-        "should contain both previous and new mode: {text}"
+        matches!(status, Event::Status { .. }),
+        "should emit Status after mode change, got: {status:?}"
     );
-    assert!(
-        text.contains("Re-evaluate"),
-        "should tell agent to re-evaluate: {text}"
-    );
+
+    run.abort();
 }
 
 #[test]
@@ -2250,7 +2364,7 @@ fn refresh_system_prompt_leaves_working_set_out_of_system_prompt() {
         .working_set
         .observe_user_message("please inspect src/lib.rs", tmp.path());
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     let prompt = match &engine.session.system_prompt {
         Some(SystemPrompt::Text(text)) => text.clone(),
@@ -2284,11 +2398,11 @@ fn working_set_reaches_model_as_turn_metadata() {
     engine.session.add_message(user_msg);
 
     let messages = engine.messages_with_turn_metadata();
-    let first_block = messages
-        .last()
-        .and_then(|message| message.content.first())
+    let last_block = messages
+        .first()
+        .and_then(|message| message.content.last())
         .expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(text.starts_with("<turn_meta>\n"));
@@ -2309,11 +2423,11 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     engine.session.add_message(user_msg);
 
     let messages = engine.messages_with_turn_metadata();
-    let first_block = messages
-        .last()
-        .and_then(|message| message.content.first())
+    let last_block = messages
+        .first()
+        .and_then(|message| message.content.last())
         .expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2340,8 +2454,8 @@ fn turn_metadata_includes_auto_model_route() {
         Some("max"),
         true,
     );
-    let first_block = user_msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2368,8 +2482,11 @@ fn turn_metadata_includes_current_mode() {
         None,
         false,
     );
-    let first_block = user_msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    // turn_meta was relocated to the tail of the user message in #2517
+    // to keep the leading bytes (user input) stable across date / model
+    // route / working-set changes.
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
 
@@ -2388,10 +2505,11 @@ fn turn_metadata_mode_updates_with_change_mode_op() {
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
 
-    // In agent mode by default
+    // In agent mode by default. The turn_meta block now sits at the
+    // *tail* of the user message (see #2517) so we read `content.last()`.
     let msg = engine.user_text_message_with_turn_metadata("hello".to_string());
-    let first_block = msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(
@@ -2402,8 +2520,8 @@ fn turn_metadata_mode_updates_with_change_mode_op() {
     // Switch to YOLO — user_text_message_with_turn_metadata should reflect the new mode
     engine.current_mode = AppMode::Yolo;
     let msg = engine.user_text_message_with_turn_metadata("hello again".to_string());
-    let first_block = msg.content.first().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = first_block else {
+    let last_block = msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
         panic!("expected text metadata block");
     };
     assert!(
@@ -2413,29 +2531,54 @@ fn turn_metadata_mode_updates_with_change_mode_op() {
 }
 
 #[test]
-fn mode_change_runtime_message_format() {
-    let msg = Engine::mode_change_runtime_message(AppMode::Agent, AppMode::Yolo);
-
-    assert_eq!(msg.role, "user");
-    let ContentBlock::Text { text, .. } = msg.content.first().expect("text block") else {
-        panic!("expected text block");
+fn current_mode_field_assignment_takes_effect_synchronously() {
+    // Basic unit-level invariant: the current_mode field mutates as expected
+    // and the per-turn <runtime_prompt> tag reflects the current mode.
+    // Op::ChangeMode dispatch through the run loop is exercised by the
+    // integration test change_mode_op_updates_current_mode_and_emits_status.
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
     };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    assert_eq!(engine.current_mode, AppMode::Agent);
 
+    // Verify runtime tag in Agent mode
+    let agent_messages = engine.messages_with_turn_metadata();
+    let agent_tag = agent_messages.last().expect("runtime tag message");
+    let ContentBlock::Text {
+        text: agent_text, ..
+    } = agent_tag.content.first().expect("text block")
+    else {
+        panic!("expected text runtime tag in Agent mode");
+    };
     assert!(
-        text.contains("codewhale:runtime_event"),
-        "should be a runtime event message"
+        agent_text.contains("mode=\"agent\""),
+        "Agent mode should produce runtime tag with mode=\"agent\", got: {agent_text}"
+    );
+
+    // Switch to YOLO
+    engine.current_mode = AppMode::Yolo;
+    assert_eq!(engine.current_mode, AppMode::Yolo);
+
+    // Verify runtime tag reflects the YOLO mode with auto approval
+    let yolo_messages = engine.messages_with_turn_metadata();
+    let yolo_tag = yolo_messages.last().expect("runtime tag message");
+    let ContentBlock::Text {
+        text: yolo_text, ..
+    } = yolo_tag.content.first().expect("text block")
+    else {
+        panic!("expected text runtime tag in YOLO mode");
+    };
+    assert!(
+        yolo_text.contains("mode=\"yolo\""),
+        "YOLO mode should produce runtime tag with mode=\"yolo\", got: {yolo_text}"
     );
     assert!(
-        text.contains("kind=\"mode_change\""),
-        "should have mode_change kind"
-    );
-    assert!(
-        text.contains("Agent mode") && text.contains("YOLO mode"),
-        "should mention both previous and new mode: {text}"
-    );
-    assert!(
-        text.contains("Re-evaluate"),
-        "should tell agent to re-evaluate blocked operations: {text}"
+        yolo_text.contains("approval=\"auto\""),
+        "YOLO mode should project auto approval in runtime tag, got: {yolo_text}"
     );
 }
 
@@ -2451,10 +2594,10 @@ fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
     let user_msg =
         engine.user_text_message_with_turn_metadata("explain the cache metrics".to_string());
 
-    let last_text = user_msg
+    // User text is now at position 0, turn_meta at position 1.
+    let first_text = user_msg
         .content
         .iter()
-        .rev()
         .find_map(|block| {
             if let ContentBlock::Text { text, .. } = block {
                 Some(text.as_str())
@@ -2463,7 +2606,7 @@ fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
             }
         })
         .expect("user text block");
-    assert_eq!(last_text, "explain the cache metrics");
+    assert_eq!(first_text, "explain the cache metrics");
 }
 
 #[test]
@@ -2485,7 +2628,16 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     let first_user = engine.user_text_message_with_turn_metadata("inspect src/lib.rs".to_string());
     engine.session.add_message(first_user.clone());
     let first_request = engine.messages_with_turn_metadata();
-    assert_eq!(first_request, engine.session.messages);
+    assert_eq!(
+        &first_request[..engine.session.messages.len()],
+        &engine.session.messages[..]
+    );
+    assert_eq!(first_request.len(), engine.session.messages.len() + 1);
+    assert_eq!(first_request.first(), Some(&first_user));
+    assert_eq!(
+        first_request.last().map(|message| message.role.as_str()),
+        Some("user")
+    );
 
     engine.session.add_message(Message {
         role: "assistant".to_string(),
@@ -2502,14 +2654,24 @@ fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     engine.session.add_message(second_user);
 
     let second_request = engine.messages_with_turn_metadata();
-    assert_eq!(second_request, engine.session.messages);
+    assert_eq!(
+        &second_request[..engine.session.messages.len()],
+        &engine.session.messages[..]
+    );
+    assert_eq!(second_request.len(), engine.session.messages.len() + 1);
     assert_eq!(second_request.first(), Some(&first_user));
+    let runtime = second_request.last().expect("runtime prompt");
+    let ContentBlock::Text { text, .. } = runtime.content.first().expect("runtime prompt text")
+    else {
+        panic!("expected runtime prompt text");
+    };
+    assert!(text.contains("<runtime_prompt"));
 }
 
 /// v0.8.11 regression: tool-result messages serialize to role="tool" on
 /// the wire but are stored as role="user" internally. `<turn_meta>` must
-/// be stored only on actual user-text messages, not retroactively added
-/// to tool-result messages at request time.
+/// be stored only on actual user-text messages. Request-time runtime metadata
+/// is appended separately and must not mutate tool-result messages.
 #[test]
 fn turn_metadata_skips_tool_result_messages() {
     let tmp = tempdir().expect("tempdir");
@@ -2552,9 +2714,11 @@ fn turn_metadata_skips_tool_result_messages() {
 
     let messages = engine.messages_with_turn_metadata();
 
-    // The trailing message is the tool result and MUST be untouched —
+    // The stored trailing message is the tool result and MUST be untouched —
     // no Text block sneaking in front of the ToolResult block.
-    let trailing = messages.last().expect("trailing message");
+    let trailing = messages
+        .get(messages.len().saturating_sub(2))
+        .expect("stored trailing message");
     assert_eq!(trailing.role, "user");
     assert_eq!(trailing.content.len(), 1);
     assert!(matches!(
@@ -2562,20 +2726,72 @@ fn turn_metadata_skips_tool_result_messages() {
         Some(ContentBlock::ToolResult { .. })
     ));
 
-    // The earlier real user message already carries the turn_meta prefix.
+    // The earlier real user message carries user text first, turn_meta last.
     let real_user = messages.first().expect("first user message");
     assert_eq!(real_user.role, "user");
     let ContentBlock::Text { text, .. } = real_user.content.first().expect("user text content")
     else {
         panic!("expected Text block on real user message");
     };
-    assert!(text.starts_with("<turn_meta>\n"));
-    assert!(text.contains("src/lib.rs"));
+    assert_eq!(text, "inspect src/lib.rs");
+    // turn_meta is at the tail of the content array.
+    let last_block = real_user.content.last().expect("turn_meta block");
+    let ContentBlock::Text { text: meta, .. } = last_block else {
+        panic!("expected Text block for turn_meta at tail");
+    };
+    assert!(meta.starts_with("<turn_meta>\n"));
+    assert!(meta.contains("src/lib.rs"));
+    assert!(
+        matches!(
+            messages.last().and_then(|message| message.content.first()),
+            Some(ContentBlock::Text { text, .. }) if text.contains("<runtime_prompt")
+        ),
+        "request projection should append transient runtime metadata"
+    );
+}
+
+/// User text must appear before turn_meta in the content array so that
+/// the leading bytes of each user message stay stable across date changes.
+/// DeepSeek's KV prefix cache matches byte sequences from the start of
+/// each message; placing the volatile date-bearing turn_meta at position
+/// 0 would invalidate the entire user message prefix at every date
+/// boundary. Moving it to the tail preserves the user-input prefix.
+#[test]
+fn user_message_turn_meta_is_appended_not_prepended() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let msg = engine.user_text_message_with_turn_metadata("hello world".to_string());
+    assert_eq!(msg.role, "user");
+    assert_eq!(msg.content.len(), 2);
+
+    // First content block: user text.
+    let ContentBlock::Text { text, .. } = &msg.content[0] else {
+        panic!("expected Text block at position 0");
+    };
+    assert_eq!(text, "hello world");
+
+    // Second content block: turn_meta.
+    let ContentBlock::Text { text: meta, .. } = &msg.content[1] else {
+        panic!("expected Text block for turn_meta at position 1");
+    };
+    assert!(
+        meta.starts_with("<turn_meta>\n"),
+        "turn_meta must be at the tail"
+    );
+    assert!(
+        meta.contains("Current local date:"),
+        "turn_meta must contain the date"
+    );
 }
 
 /// When the turn is mid-execution and the trailing user message is a
-/// tool result, no turn_meta is injected at request time. The working_set
-/// surfaces again on the next stored user-text message.
+/// tool result, no turn_meta is injected into that tool-result message. The
+/// working_set surfaces again on the next stored user-text message.
 #[test]
 fn turn_metadata_skips_when_only_tool_results_trail() {
     let tmp = tempdir().expect("tempdir");
@@ -2608,14 +2824,21 @@ fn turn_metadata_skips_when_only_tool_results_trail() {
 
     let messages = engine.messages_with_turn_metadata();
 
-    // Returned unchanged: the single tool-result message, no Text
-    // prefix, content length == 1.
-    let only = messages.last().expect("trailing message");
+    // Stored tool-result message is unchanged: no Text prefix, content length == 1.
+    let only = messages.first().expect("stored tool result message");
     assert_eq!(only.content.len(), 1);
     assert!(matches!(
         only.content.first(),
         Some(ContentBlock::ToolResult { .. })
     ));
+    assert_eq!(messages.len(), 2);
+    assert!(
+        matches!(
+            messages.last().and_then(|message| message.content.first()),
+            Some(ContentBlock::Text { text, .. }) if text.contains("<runtime_prompt")
+        ),
+        "request projection should still append transient runtime metadata"
+    );
 }
 
 #[test]
@@ -2627,10 +2850,10 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
 
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     let first_hash = engine.session.last_system_prompt_hash;
     let first_prompt = engine.session.system_prompt.clone();
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.last_system_prompt_hash, first_hash);
     assert_eq!(engine.session.system_prompt, first_prompt);
@@ -2677,7 +2900,7 @@ fn text_system_prompt_override_via_runtime_sync_survives_refresh() {
     let expected = Some(prompt.clone());
 
     sync_runtime_system_prompt_override(&mut engine, prompt);
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.system_prompt, expected);
 }
@@ -2698,7 +2921,7 @@ fn blocks_system_prompt_override_via_runtime_sync_survives_mode_change_refresh()
     let expected = Some(prompt.clone());
 
     sync_runtime_system_prompt_override(&mut engine, prompt);
-    engine.refresh_system_prompt(AppMode::Plan);
+    engine.refresh_system_prompt();
 
     assert_eq!(engine.session.system_prompt, expected);
 }
@@ -2718,7 +2941,7 @@ fn compaction_summary_stays_in_stable_system_prompt() {
         .session
         .working_set
         .observe_user_message("continue in src/main.rs", tmp.path());
-    engine.refresh_system_prompt(AppMode::Agent);
+    engine.refresh_system_prompt();
     engine.merge_compaction_summary(Some(SystemPrompt::Blocks(vec![SystemBlock {
         block_type: "text".to_string(),
         text: format!("{COMPACTION_SUMMARY_MARKER}\nsummary"),
@@ -2780,6 +3003,33 @@ async fn pre_request_refresh_skips_compaction_below_normal_threshold() {
     assert!(!applied);
     assert_eq!(after, before);
     assert_eq!(engine.session.messages.len(), before_len);
+}
+
+#[test]
+fn capacity_observation_uses_bare_kimi_context_window() {
+    // #3023: capacity math reads models::context_window_for_model directly,
+    // so bare Moonshot ids must resolve their real window, not the 128K
+    // legacy fallback.
+    let mut engine = build_engine_with_capacity(CapacityControllerConfig::default());
+    engine.session.model = "kimi-k2.6".to_string();
+    engine.session.messages.push(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(40_000),
+            cache_control: None,
+        }],
+    });
+
+    let estimated = engine.estimated_input_tokens() as f64;
+    let turn = TurnContext::new(1);
+    let observation = engine.capacity_observation(&turn);
+
+    let expected = estimated / 262_144.0;
+    assert!(
+        (observation.context_used_ratio - expected).abs() < 1e-9,
+        "context_used_ratio must use kimi-k2.6's 262,144-token window (got {})",
+        observation.context_used_ratio
+    );
 }
 
 #[tokio::test]
@@ -2871,7 +3121,6 @@ async fn post_tool_replay_invoked_when_high_non_severe_risk() {
     let restarted = engine
         .run_capacity_post_tool_checkpoint(
             &turn,
-            AppMode::Agent,
             Some(&registry),
             Arc::new(RwLock::new(())),
             None,
@@ -2932,7 +3181,7 @@ async fn error_escalation_triggers_replan_when_severe_or_repeated_failures() {
     let before_len = engine.session.messages.len();
     let turn = TurnContext::new(10);
     let restarted = engine
-        .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
+        .run_capacity_error_escalation_checkpoint(&turn, 2, 2, &[])
         .await;
 
     assert!(restarted);
@@ -2990,7 +3239,7 @@ async fn capacity_disabled_by_default_keeps_messages_intact() {
     let before_len = engine.session.messages.len();
     let turn = TurnContext::new(10);
     let restarted = engine
-        .run_capacity_error_escalation_checkpoint(&turn, AppMode::Agent, 2, 2, &[])
+        .run_capacity_error_escalation_checkpoint(&turn, 2, 2, &[])
         .await;
 
     // Capacity is disabled → no replan, no message clear.
@@ -3318,6 +3567,10 @@ fn missing_shell_tool_error_message_names_allow_shell_gate() {
     ] {
         let message = missing_tool_error_message(tool_name, &catalog);
         assert!(message.contains("not available in the current tool catalog"));
+        assert!(
+            message.contains("allow_shell = false"),
+            "{tool_name}: {message}"
+        );
         assert!(message.contains("allow_shell"), "{tool_name}: {message}");
         assert!(
             message.contains("/config allow_shell true"),
@@ -3346,6 +3599,7 @@ fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
 
     assert!(message.contains("Did you mean:"));
     assert!(message.contains("exec"));
+    assert!(message.contains("allow_shell = false"));
     assert!(message.contains("allow_shell"));
     assert!(message.contains("/config allow_shell true"));
     assert!(message.contains("--save"));
@@ -3616,6 +3870,71 @@ fn stream_retry_respects_cancellation() {
     );
 }
 
+// === #2990 sleep-resume policy ================================================
+
+#[test]
+fn sleep_gap_requires_wallclock_to_outrun_monotonic_clock() {
+    use std::time::Duration;
+    // No divergence: ordinary network failure, clocks agree.
+    assert!(
+        !super::sleep_gap_detected(Duration::from_secs(30), Duration::from_secs(30)),
+        "equal elapsed times must not register as a sleep gap"
+    );
+    // Divergence below the threshold: NTP slew / scheduling jitter.
+    assert!(
+        !super::sleep_gap_detected(Duration::from_secs(5), Duration::from_secs(14)),
+        "9s of divergence is below the 10s threshold"
+    );
+    // Divergence above the threshold: the host was suspended.
+    assert!(
+        super::sleep_gap_detected(Duration::from_secs(5), Duration::from_secs(16)),
+        "11s of divergence must register as a sleep gap"
+    );
+    // Wall clock went backwards (NTP step): saturating_sub → zero gap.
+    assert!(
+        !super::sleep_gap_detected(Duration::from_secs(60), Duration::from_secs(5)),
+        "wall clock behind monotonic must never register as a sleep gap"
+    );
+}
+
+#[test]
+fn sleep_resume_retries_even_after_content_streamed() {
+    // The whole point of #2990: unlike the #103 transparent retry, a
+    // detected sleep gap retries regardless of streamed content — the
+    // partial output predates the sleep and the user was not watching.
+    assert!(
+        super::should_resume_after_sleep(true, 0, false),
+        "detected sleep with full budget must resume"
+    );
+    assert!(
+        super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES - 1, false),
+        "detected sleep one short of the budget must still resume"
+    );
+}
+
+#[test]
+fn sleep_resume_requires_a_detected_gap() {
+    // Without a sleep gap this layer stays out of the way entirely, so the
+    // deliberate no-retry-after-content policy for ordinary flakes (#103)
+    // is preserved.
+    assert!(
+        !super::should_resume_after_sleep(false, 0, false),
+        "no sleep gap → never resume via this layer"
+    );
+}
+
+#[test]
+fn sleep_resume_respects_budget_and_cancellation() {
+    assert!(
+        !super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES, false),
+        "budget exhausted → surface the failure instead of looping"
+    );
+    assert!(
+        !super::should_resume_after_sleep(true, 0, true),
+        "cancelled turn must not be resumed behind the user's back"
+    );
+}
+
 #[test]
 fn stream_retry_threshold_relaxed_to_five() {
     // Case 1+4 from issue #103: the consecutive-error threshold for marking
@@ -3821,9 +4140,10 @@ async fn post_edit_hook_injects_diagnostics_message_before_next_request() {
 
     let last = engine.session.messages.last().expect("message appended");
     assert_eq!(last.role, "user");
-    let meta = match &last.content[0] {
-        crate::models::ContentBlock::Text { text, .. } => text.clone(),
-        other => panic!("expected text block, got {other:?}"),
+    // turn_meta is now at the tail of the content array (PR #2517).
+    let meta = match last.content.last() {
+        Some(crate::models::ContentBlock::Text { text, .. }) => text.clone(),
+        other => panic!("expected text block at tail, got {other:?}"),
     };
     assert!(meta.starts_with("<turn_meta>\n"));
     let diagnostic_text = last

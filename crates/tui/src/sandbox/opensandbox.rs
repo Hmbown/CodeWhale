@@ -54,7 +54,7 @@ impl OpenSandboxBackend {
     /// `Authorization: Bearer <key>` when set. `timeout_secs` controls the
     /// HTTP request timeout.
     pub fn new(base_url: String, api_key: Option<String>, timeout_secs: u64) -> Result<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::tls::reqwest_client_builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .context("failed to construct HTTP client for OpenSandbox backend")?;

@@ -2,13 +2,23 @@
 
 use std::fs;
 
+use tempfile::tempdir;
+
 #[path = "../src/eval.rs"]
 mod eval;
 #[path = "../src/shell_dispatcher.rs"]
 mod shell_dispatcher;
 
-use eval::{EvalHarness, EvalHarnessConfig, ScenarioStepKind};
-use tempfile::tempdir;
+use eval::{EvalHarness, EvalHarnessConfig, FixtureRecord, ScenarioStepKind};
+
+const HAPPY_PATH_TOOL_LOOP: [ScenarioStepKind; 6] = [
+    ScenarioStepKind::List,
+    ScenarioStepKind::Read,
+    ScenarioStepKind::Search,
+    ScenarioStepKind::Edit,
+    ScenarioStepKind::ApplyPatch,
+    ScenarioStepKind::ExecShell,
+];
 
 #[test]
 fn runs_offline_tool_loop_successfully() {
@@ -26,14 +36,7 @@ fn runs_offline_tool_loop_successfully() {
     assert!(!run.scenario_name.is_empty());
     assert!(run.workspace_summary.file_count >= 3);
 
-    for kind in [
-        ScenarioStepKind::List,
-        ScenarioStepKind::Read,
-        ScenarioStepKind::Search,
-        ScenarioStepKind::Edit,
-        ScenarioStepKind::ApplyPatch,
-        ScenarioStepKind::ExecShell,
-    ] {
+    for kind in HAPPY_PATH_TOOL_LOOP {
         let stats = run
             .metrics
             .per_tool
@@ -51,6 +54,78 @@ fn runs_offline_tool_loop_successfully() {
 
     let report = run.to_report();
     assert_eq!(report.metrics.success, run.metrics.success);
+}
+
+#[test]
+fn acceptance_happy_path_records_simulated_llm_tool_plan() {
+    let record_dir = tempdir().expect("tempdir");
+    let scenario_name = "issue-2791-happy-path-tool-loop";
+    let config = EvalHarnessConfig {
+        scenario_name: scenario_name.to_string(),
+        record_dir: Some(record_dir.path().to_path_buf()),
+        ..EvalHarnessConfig::default()
+    };
+    let harness = EvalHarness::new(config);
+
+    let run = harness.run().expect("happy-path acceptance run");
+
+    assert!(run.metrics.success, "expected success metrics: {run:#?}");
+    assert_eq!(run.metrics.tool_errors, 0);
+    assert_eq!(run.metrics.steps, HAPPY_PATH_TOOL_LOOP.len());
+
+    let actual_tool_names: Vec<&str> = run.steps.iter().map(|step| step.tool_name).collect();
+    let expected_tool_names: Vec<&str> = HAPPY_PATH_TOOL_LOOP
+        .iter()
+        .map(|kind| kind.tool_name())
+        .collect();
+    assert_eq!(actual_tool_names, expected_tool_names);
+
+    let scenario_file = record_dir.path().join(format!("{scenario_name}.jsonl"));
+    let records = read_fixture_records(&scenario_file);
+    assert_eq!(records.len(), HAPPY_PATH_TOOL_LOOP.len());
+
+    for (record, kind) in records.iter().zip(HAPPY_PATH_TOOL_LOOP) {
+        assert_eq!(
+            record.request.get("step").and_then(|value| value.as_str()),
+            Some(kind.tool_name())
+        );
+
+        let expected_kind = format!("{kind:?}");
+        assert_eq!(
+            record.request.get("kind").and_then(|value| value.as_str()),
+            Some(expected_kind.as_str())
+        );
+
+        let event = record
+            .response_events
+            .first()
+            .expect("simulated LLM fixture should include a response event");
+        assert_eq!(
+            event.get("type").and_then(|value| value.as_str()),
+            Some("ok")
+        );
+        assert!(
+            event
+                .get("output")
+                .and_then(|value| value.as_str())
+                .is_some_and(|output| !output.is_empty()),
+            "fixture event should include non-empty tool output"
+        );
+    }
+
+    let notes_path = run.workspace_root().join("notes.txt");
+    let notes = fs::read_to_string(&notes_path).expect("notes.txt should exist");
+    assert!(notes.contains("edited = true"));
+    assert!(notes.contains("todo: offline metrics (patched)"));
+}
+
+fn read_fixture_records(path: &std::path::Path) -> Vec<FixtureRecord> {
+    fs::read_to_string(path)
+        .expect("read fixture records")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("fixture line should parse"))
+        .collect()
 }
 
 #[test]

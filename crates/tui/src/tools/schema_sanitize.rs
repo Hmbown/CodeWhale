@@ -41,28 +41,21 @@ pub fn sanitize(schema: &mut Value) {
 
 /// Prepare a complete active tool set for DeepSeek strict function-calling.
 ///
-/// Returns `false` and leaves the tools in non-strict mode when any root schema
-/// uses conditional alternatives (`anyOf`, `oneOf`, or `allOf`). DeepSeek's
-/// strict object rules make every property required, so forcing strict mode on
-/// root-alternative tools such as `apply_patch` or `finance` would either 400 or
-/// change their semantics. In that case callers should keep the normal
-/// best-effort schema and may still use `tool_choice = "required"`.
+/// Each tool is evaluated independently: compatible schemas are sanitized and
+/// marked strict, while incompatible schemas remain unchanged and non-strict.
+/// Returns `true` only when every tool in the set can use strict mode.
 pub fn prepare_tools_for_strict_mode(tools: &mut [Tool]) -> bool {
-    if tools
-        .iter()
-        .any(|tool| !strict_schema_supported(&tool.input_schema))
-    {
-        for tool in tools {
-            tool.strict = None;
-        }
-        return false;
-    }
-
+    let mut all_strict = true;
     for tool in tools {
-        sanitize_for_strict(&mut tool.input_schema);
-        tool.strict = Some(true);
+        if strict_schema_supported(&tool.input_schema) {
+            sanitize_for_strict(&mut tool.input_schema);
+            tool.strict = Some(true);
+        } else {
+            tool.strict = None;
+            all_strict = false;
+        }
     }
-    true
+    all_strict
 }
 
 /// Sanitize a schema for DeepSeek strict function-calling.
@@ -73,6 +66,43 @@ pub fn prepare_tools_for_strict_mode(tools: &mut [Tool]) -> bool {
 pub fn sanitize_for_strict(schema: &mut Value) {
     sanitize(schema);
     enforce_strict_subset(schema);
+}
+
+/// Sanitize a schema for OpenAI Responses function tools.
+///
+/// The Responses API requires the top-level `parameters` schema to be an object
+/// and rejects top-level `oneOf` / `anyOf` / `allOf` / `enum` / `not`. Keep the
+/// schema permissive rather than changing tool semantics: merge any root
+/// alternative properties we can see, then remove the root-only composition
+/// keywords while preserving nested schemas.
+///
+/// Returns a short description note when root composition constraints with
+/// meaningful `required` groups are dropped.
+pub fn sanitize_for_responses(schema: &mut Value) -> Option<String> {
+    let constraint_note = schema
+        .as_object()
+        .and_then(root_composition_constraint_note);
+
+    sanitize(schema);
+
+    if !schema.is_object() {
+        *schema = Value::Object(Map::new());
+    }
+
+    let Some(obj) = schema.as_object_mut() else {
+        return constraint_note;
+    };
+
+    merge_root_composition_properties(obj);
+    obj.insert("type".into(), Value::String("object".to_string()));
+    obj.remove("oneOf");
+    obj.remove("anyOf");
+    obj.remove("allOf");
+    obj.remove("enum");
+    obj.remove("not");
+    ensure_properties_object(obj);
+    prune_dangling_required(schema);
+    constraint_note
 }
 
 fn strict_schema_supported(schema: &Value) -> bool {
@@ -201,13 +231,23 @@ fn enforce_strict_subset(schema: &mut Value) {
     if let Some(obj) = schema.as_object_mut() {
         strip_unsupported_strict_keywords(obj);
         if is_object_schema(obj) {
-            let mut property_names: Vec<Value> = ensure_properties_object(obj)
-                .keys()
-                .cloned()
-                .map(Value::String)
-                .collect();
-            property_names.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
-            obj.insert("required".into(), Value::Array(property_names));
+            let originally_required = required_names(obj);
+            let properties = ensure_properties_object(obj);
+            let mut property_names: Vec<String> = properties.keys().cloned().collect();
+            property_names.sort();
+            for property_name in &property_names {
+                if !originally_required
+                    .iter()
+                    .any(|required| required == property_name)
+                    && let Some(property_schema) = properties.get_mut(property_name)
+                {
+                    mark_nullable(property_schema);
+                }
+            }
+            obj.insert(
+                "required".into(),
+                Value::Array(property_names.into_iter().map(Value::String).collect()),
+            );
             obj.insert("additionalProperties".into(), Value::Bool(false));
         }
 
@@ -250,10 +290,108 @@ fn ensure_properties_object(obj: &mut Map<String, Value>) -> &mut Map<String, Va
         .expect("properties was just ensured as object")
 }
 
+fn required_names(obj: &Map<String, Value>) -> Vec<String> {
+    obj.get("required")
+        .and_then(Value::as_array)
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mark_nullable(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut() {
+        obj.insert("nullable".into(), Value::Bool(true));
+    }
+}
+
+fn merge_root_composition_properties(obj: &mut Map<String, Value>) {
+    let mut merged = Map::new();
+    for key in ["oneOf", "anyOf", "allOf"] {
+        let Some(items) = obj.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(properties) = item.get("properties").and_then(Value::as_object) else {
+                continue;
+            };
+            for (name, schema) in properties {
+                merged.entry(name.clone()).or_insert_with(|| schema.clone());
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        return;
+    }
+
+    let properties = ensure_properties_object(obj);
+    for (name, schema) in merged {
+        properties.entry(name).or_insert(schema);
+    }
+}
+
+fn root_composition_constraint_note(obj: &Map<String, Value>) -> Option<String> {
+    for (key, prefix) in [
+        ("oneOf", "Exactly one"),
+        ("anyOf", "At least one"),
+        ("allOf", "All"),
+    ] {
+        let Some(items) = obj.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        let mut groups: Vec<String> = items.iter().filter_map(required_group_label).collect();
+        groups.sort();
+        groups.dedup();
+        if groups.len() >= 2 {
+            return Some(format!(
+                "{prefix} of these parameter groups must be provided: {}.",
+                groups.join(" | ")
+            ));
+        }
+    }
+    None
+}
+
+fn required_group_label(item: &Value) -> Option<String> {
+    let mut names: Vec<String> = item
+        .get("required")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|name| format!("`{name}`"))
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        names.sort();
+        names.dedup();
+        Some(names.join(" + "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn test_tool(name: &str, input_schema: Value) -> Tool {
+        Tool {
+            tool_type: None,
+            name: name.to_string(),
+            description: name.to_string(),
+            input_schema,
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }
+    }
 
     #[test]
     fn collapses_nullable_anyof() {
@@ -454,6 +592,53 @@ mod tests {
 
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["count", "name"]));
+        assert_eq!(schema["properties"]["count"]["nullable"], true);
+        assert!(schema["properties"]["name"].get("nullable").is_none());
+    }
+
+    #[test]
+    fn strict_sanitize_preserves_optional_properties_as_nullable() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "start_line": {"type": "integer"},
+                "max_lines": {"type": "integer"},
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "encoding": {"type": "string"},
+                        "trim": {"type": "boolean"}
+                    },
+                    "required": ["encoding"]
+                }
+            },
+            "required": ["path", "options"]
+        });
+
+        sanitize_for_strict(&mut schema);
+
+        assert_eq!(
+            schema["required"],
+            json!(["max_lines", "options", "path", "start_line"])
+        );
+        assert!(schema["properties"]["path"].get("nullable").is_none());
+        assert!(schema["properties"]["options"].get("nullable").is_none());
+        assert_eq!(schema["properties"]["start_line"]["nullable"], true);
+        assert_eq!(schema["properties"]["max_lines"]["nullable"], true);
+        assert_eq!(
+            schema["properties"]["options"]["required"],
+            json!(["encoding", "trim"])
+        );
+        assert!(
+            schema["properties"]["options"]["properties"]["encoding"]
+                .get("nullable")
+                .is_none()
+        );
+        assert_eq!(
+            schema["properties"]["options"]["properties"]["trim"]["nullable"],
+            true
+        );
     }
 
     #[test]
@@ -522,32 +707,60 @@ mod tests {
     }
 
     #[test]
-    fn strict_mode_rejects_root_composition_for_whole_tool_set() {
-        let mut tools = vec![Tool {
-            tool_type: None,
-            name: "either".to_string(),
-            description: "Either input shape".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "a": {"type": "string"},
-                    "b": {"type": "string"}
-                },
-                "anyOf": [
-                    {"required": ["a"]},
-                    {"required": ["b"]}
-                ]
-            }),
-            allowed_callers: None,
-            defer_loading: None,
-            input_examples: None,
-            strict: Some(true),
-            cache_control: None,
-        }];
+    fn strict_mode_applies_per_tool_in_mixed_catalog() {
+        let mut tools = vec![
+            test_tool(
+                "lookup",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": []
+                }),
+            ),
+            test_tool(
+                "either",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "string"},
+                        "b": {"type": "string"}
+                    },
+                    "anyOf": [
+                        {"required": ["a"]},
+                        {"required": ["b"]}
+                    ]
+                }),
+            ),
+            test_tool(
+                "nested",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "oneOf": [
+                                {"type": "string"},
+                                {"type": "integer"}
+                            ]
+                        }
+                    }
+                }),
+            ),
+        ];
 
         assert!(!prepare_tools_for_strict_mode(&mut tools));
-        assert_eq!(tools[0].strict, None);
-        assert!(tools[0].input_schema.get("anyOf").is_some());
+        assert_eq!(tools[0].strict, Some(true));
+        assert_eq!(tools[0].input_schema["required"], json!(["query"]));
+        assert_eq!(tools[0].input_schema["additionalProperties"], false);
+        assert_eq!(tools[1].strict, None);
+        assert!(tools[1].input_schema.get("anyOf").is_some());
+        assert_eq!(tools[2].strict, None);
+        assert!(
+            tools[2].input_schema["properties"]["value"]
+                .get("oneOf")
+                .is_some()
+        );
     }
 
     #[test]
@@ -602,6 +815,142 @@ mod tests {
         assert_eq!(tools[0].strict, Some(true));
         assert_eq!(tools[0].input_schema["required"], json!(["query"]));
         assert_eq!(tools[0].input_schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn responses_sanitize_removes_root_composition_from_apply_patch_shape() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "patch": {"type": "string"},
+                "changes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"}
+                        },
+                        "required": ["path", "content"]
+                    }
+                }
+            },
+            "oneOf": [
+                {"required": ["patch"]},
+                {"required": ["changes"]}
+            ]
+        });
+
+        let note = sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("oneOf").is_none());
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema.get("allOf").is_none());
+        assert!(schema.get("enum").is_none());
+        assert!(schema.get("not").is_none());
+        assert!(schema["properties"].get("patch").is_some());
+        assert!(schema["properties"].get("changes").is_some());
+        assert_eq!(
+            note.as_deref(),
+            Some("Exactly one of these parameter groups must be provided: `changes` | `patch`.")
+        );
+    }
+
+    #[test]
+    fn responses_sanitize_merges_root_alternative_properties() {
+        let mut schema = json!({
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"}
+                    },
+                    "required": ["url"]
+                }
+            ]
+        });
+
+        let note = sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema["properties"].get("path").is_some());
+        assert!(schema["properties"].get("url").is_some());
+        assert!(schema.get("required").is_none());
+        assert_eq!(
+            note.as_deref(),
+            Some("At least one of these parameter groups must be provided: `path` | `url`.")
+        );
+    }
+
+    #[test]
+    fn responses_sanitize_preserves_nested_alternatives() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "integer"}
+                    ]
+                }
+            }
+        });
+
+        let note = sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema["properties"]["value"].get("anyOf").is_some());
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn responses_sanitize_plain_object_has_no_constraint_note() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            }
+        });
+
+        let note = sanitize_for_responses(&mut schema);
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn responses_constraint_note_is_sorted_and_deduped() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+                "c": {"type": "string"}
+            },
+            "oneOf": [
+                {"required": ["b", "a", "a"]},
+                {"required": ["c"]},
+                {"required": ["a", "b"]}
+            ]
+        });
+
+        let note = sanitize_for_responses(&mut schema);
+
+        assert_eq!(
+            note.as_deref(),
+            Some("Exactly one of these parameter groups must be provided: `a` + `b` | `c`.")
+        );
     }
 }
 

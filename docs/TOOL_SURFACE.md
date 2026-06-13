@@ -110,8 +110,23 @@ to the model, such as `mcp_<server>_<tool>`.
 | `task_cancel` | Cancel a queued or running durable task. Approval-required. |
 | `checklist_write` | Granular progress under the active thread/task. Checklist state is subordinate to the durable task. |
 | `checklist_add` / `checklist_update` / `checklist_list` | Single-item checklist operations. |
-| `todo_write` / `todo_add` / `todo_update` / `todo_list` | Compatibility aliases for the checklist tools. Existing sessions keep working, but new prompts should use `checklist_*`. |
 | `note` | One-off important fact for later. |
+
+The legacy `todo_write`, `todo_add`, `todo_update`, and `todo_list` names are
+hidden compatibility aliases for saved transcript replay. They remain callable
+by exact name, but they are not part of the model-visible catalog; compatibility
+results include `_deprecation.use_instead = checklist_*` and
+`_deprecation.removed_in = 0.9.0`.
+
+`update_plan` accepts both the legacy shape (`explanation` plus `plan` steps)
+and a richer PlanArtifact shape for Plan mode review. The richer fields are
+optional and should be filled only when grounded in evidence: `title`,
+`objective`, `context_summary`, `sources_used`, `critical_files`,
+`constraints`, `recommended_approach`, `verification_plan`,
+`risks_and_unknowns`, and `handoff_packet`. The transcript card, Plan-mode
+confirmation prompt, `/relay`, and fork-state handoff all render the same
+artifact so a plan can be reviewed, accepted, revised, replayed, or delegated
+without losing its source context.
 
 ### Verification gates and artifacts
 
@@ -228,6 +243,12 @@ Aliases: `/batonpass`, `/接力`.
 Use it before a long break, compaction, or moving work to a fresh session. The
 relay should preserve the goal, current Work checklist item, changed files,
 decisions, verification state, and one concrete next action.
+Treat it as the deliberate counterpart to automatic compaction: both exist to
+preserve continuity for the next session or sub-agent, but `/relay` lets the
+current agent inspect live evidence and choose the durable handoff facts
+explicitly. When `update_plan` has a rich PlanArtifact, `/relay` includes that
+strategy metadata so manual relay, fork-state, and compacted continuity do not
+drift into separate stories.
 
 ### Parallel fan-out: cost-class caps
 
@@ -256,6 +277,20 @@ prompting and tool catalogs. Do not use these names in new active guidance:
 
 The old one-shot `rlm` model-facing tool is also replaced by persistent
 `rlm_open` / `rlm_eval` / `rlm_configure` / `rlm_close` sessions.
+
+v0.9.0 adds the following hidden-compat aliases (#2682, #2683):
+
+| Hidden alias | Canonical replacement | Status |
+|---|---|---|
+| `todo_write` | `checklist_write` | Hidden, returns `_deprecation` metadata |
+| `todo_add` | `checklist_add` | Hidden, returns `_deprecation` metadata |
+| `todo_update` | `checklist_update` | Hidden, returns `_deprecation` metadata |
+| `todo_list` | `checklist_list` | Hidden, returns `_deprecation` metadata |
+| `exec_wait` | `exec_shell_wait` | Hidden, callable for replay |
+| `exec_interact` | `exec_shell_interact` | Hidden, callable for replay |
+
+All hidden aliases remain registered and callable so saved transcripts can
+replay without teaching new sessions the deprecated spelling.
 
 Historical compatibility results may include a `_deprecation` block shaped
 like this:

@@ -381,7 +381,7 @@ impl McpServer {
         let messages = if internal_name == "deepseek" {
             vec![user_message]
         } else {
-            let thread = self.threads.lock().unwrap();
+            let thread = self.threads.lock().unwrap_or_else(|e| e.into_inner());
             let mut existing = thread.get(&thread_id).cloned().ok_or_else(|| RpcError {
                 code: -32602,
                 message: format!("Thread not found: {thread_id}"),
@@ -431,7 +431,7 @@ impl McpServer {
 
         // Store the assistant response in the thread
         {
-            let mut thread = self.threads.lock().unwrap();
+            let mut thread = self.threads.lock().unwrap_or_else(|e| e.into_inner());
             let convo = thread.entry(thread_id.clone()).or_default();
             // If deepseek, we already have just the user message; if deepseek-reply,
             // the user message was appended to the cloned messages above but we need

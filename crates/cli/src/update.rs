@@ -17,9 +17,16 @@ use codewhale_release::{
 };
 use reqwest::Proxy;
 use std::io::Write;
+use std::time::Duration;
 
 /// Run the self-update workflow.
 pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+        let _ = (beta, check_only, proxy_arg);
+        bail!("self-update is not supported on HarmonyOS/OpenHarmony yet");
+    }
+
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
@@ -353,12 +360,15 @@ pub(crate) fn validate_and_build_proxy(proxy_str: &str) -> Result<Proxy> {
 }
 
 fn update_http_client(proxy: Option<&Proxy>) -> Result<reqwest::blocking::Client> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let mut builder = reqwest::blocking::Client::builder();
     if let Some(proxy) = proxy {
         builder = builder.proxy(proxy.clone());
     }
     builder
         .user_agent(UPDATE_USER_AGENT)
+        .timeout(Duration::from_secs(5 * 60))
         .build()
         .context("failed to build update HTTP client")
 }

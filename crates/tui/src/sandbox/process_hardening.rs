@@ -45,18 +45,18 @@
 /// hardening is defense-in-depth — the sandbox still protects child processes
 /// even if these prctls fail (e.g., in a container where some are restricted).
 pub fn apply_process_hardening() {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         apply_linux_hardening();
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
     {
         tracing::debug!("Process hardening skipped: not on Linux");
     }
 }
 
 /// Linux-specific hardening implementation.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 fn apply_linux_hardening() {
     // ── PR_SET_DUMPABLE = 0 ────────────────────────────────────────────────
     //

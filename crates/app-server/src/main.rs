@@ -27,6 +27,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider();
+
     let cli = Cli::parse();
     let listen: SocketAddr = format!("{}:{}", cli.host, cli.port)
         .parse()
@@ -39,6 +41,10 @@ async fn main() -> Result<()> {
         cors_origins: cli.cors_origin,
     })
     .await
+}
+
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 fn app_server_token_from_env() -> Option<String> {

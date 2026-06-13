@@ -313,21 +313,26 @@ impl ExecPolicyEngine {
 
         self.rulesets
             .iter()
-            .flat_map(|ruleset| ruleset.ask_rules.iter())
-            .filter(|rule| rule.tool == tool)
-            .filter(|rule| match rule.command.as_deref() {
+            .flat_map(|ruleset| {
+                ruleset
+                    .ask_rules
+                    .iter()
+                    .map(move |rule| (ruleset.layer, rule))
+            })
+            .filter(|(_, rule)| rule.tool == tool)
+            .filter(|(_, rule)| match rule.command.as_deref() {
                 Some(command) => self.arity_dict.allow_rule_matches(command, ctx.command),
                 None => true,
             })
-            .filter(|rule| match (rule.path.as_deref(), ctx.path) {
+            .filter(|(_, rule)| match (rule.path.as_deref(), ctx.path) {
                 (Some(pattern), Some(path)) => {
                     normalize_path_value(pattern) == normalize_path_value(path)
                 }
                 (Some(_), None) => false,
                 (None, _) => true,
             })
-            .max_by_key(|rule| ask_rule_specificity(rule))
-            .cloned()
+            .max_by_key(|(layer, rule)| (*layer, ask_rule_specificity(rule)))
+            .map(|(_, rule)| rule.clone())
     }
 
     /// Records an approval key for the current session so subsequent checks skip approval.
@@ -347,11 +352,15 @@ impl ExecPolicyEngine {
     pub fn check(&self, ctx: ExecPolicyContext<'_>) -> Result<ExecPolicyDecision> {
         let normalized = normalize_command(ctx.command);
         let (trusted_prefixes, denied_prefixes) = self.resolve_prefixes();
-        // Deny rules use simple prefix matching (no arity semantics needed).
-        if let Some(rule) = denied_prefixes
-            .iter()
-            .find(|rule| normalized.starts_with(&normalize_command(rule)))
-        {
+        // Deny rules use word-boundary prefix matching: the command must either
+        // equal the rule or start with the rule followed by a space, so "rm"
+        // blocks "rm -rf /" but NOT "rmdir" or "rmview".
+        if let Some(rule) = denied_prefixes.iter().find(|rule| {
+            let norm_rule = normalize_command(rule);
+            normalized == norm_rule
+                || (normalized.starts_with(&norm_rule)
+                    && normalized.as_bytes().get(norm_rule.len()) == Some(&b' '))
+        }) {
             return Ok(ExecPolicyDecision {
                 allow: false,
                 requires_approval: false,
@@ -373,63 +382,88 @@ impl ExecPolicyEngine {
 
         let ask_rule = self.matching_ask_rule(&ctx);
 
-        let requirement = match &ctx.ask_for_approval {
-            AskForApproval::Never => {
-                if let Some(rule) = &ask_rule {
-                    ExecApprovalRequirement::Forbidden {
-                        reason: format!(
-                            "Typed ask rule '{}' requires approval, but approval policy is never.",
-                            rule.label()
-                        ),
-                    }
-                } else {
-                    ExecApprovalRequirement::Skip {
-                        bypass_sandbox: false,
-                        proposed_execpolicy_amendment: None,
+        let mut matched_ask_rule = None;
+        // Resolve a matching typed ask-rule first. Ask-rules take precedence over
+        // mode-based handling for everything except `Never` (which forbids,
+        // because no prompt can be shown) and `Reject { rules: true }` (which
+        // explicitly rejects rule-exceptions). This ordering is checked against
+        // the experimental `if let` match-guard the original PR used; it is
+        // reproduced here with plain control flow for edition-2024 stable.
+        let ask_rule_requirement = match &ctx.ask_for_approval {
+            AskForApproval::Never | AskForApproval::Reject { rules: true, .. } => None,
+            _ => ask_rule.as_ref().map(|rule| {
+                matched_ask_rule = Some(rule.label());
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: format!("Typed ask rule '{}' requires approval.", rule.label()),
+                    proposed_execpolicy_amendment: None,
+                    // A typed ask-rule approval (exec/fn/MCP) must not touch
+                    // network policy. The original PR allow-listed `ctx.cwd` as a
+                    // network host here, which is incorrect and security-relevant:
+                    // approving e.g. an exec rule should never create a network
+                    // allow-entry. Emit no network amendments for ask-rule prompts.
+                    proposed_network_policy_amendments: Vec::new(),
+                }
+            }),
+        };
+
+        let requirement = if let Some(req) = ask_rule_requirement {
+            req
+        } else {
+            match &ctx.ask_for_approval {
+                AskForApproval::Never => {
+                    if let Some(rule) = &ask_rule {
+                        matched_ask_rule = Some(rule.label());
+                        ExecApprovalRequirement::Forbidden {
+                            reason: format!(
+                                "Typed ask rule '{}' requires approval, but approval policy is never.",
+                                rule.label()
+                            ),
+                        }
+                    } else {
+                        ExecApprovalRequirement::Skip {
+                            bypass_sandbox: false,
+                            proposed_execpolicy_amendment: None,
+                        }
                     }
                 }
+                AskForApproval::Reject { rules, .. } if *rules => {
+                    ExecApprovalRequirement::Forbidden {
+                        reason: "Policy is configured to reject rule-exceptions.".to_string(),
+                    }
+                }
+                AskForApproval::UnlessTrusted if is_trusted => ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                },
+                AskForApproval::OnFailure => ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                },
+                _ => ExecApprovalRequirement::NeedsApproval {
+                    reason: if is_trusted {
+                        "Approval requested by policy mode.".to_string()
+                    } else {
+                        "Unmatched command prefix requires approval.".to_string()
+                    },
+                    proposed_execpolicy_amendment: if is_trusted {
+                        None
+                    } else {
+                        Some(ExecPolicyAmendment {
+                            prefixes: vec![first_token(ctx.command)],
+                        })
+                    },
+                    proposed_network_policy_amendments: vec![NetworkPolicyAmendment {
+                        host: ctx.cwd.to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    }],
+                },
             }
-            AskForApproval::UnlessTrusted if is_trusted => ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
-            },
-            AskForApproval::OnFailure => ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
-            },
-            AskForApproval::Reject { rules, .. } if *rules => ExecApprovalRequirement::Forbidden {
-                reason: "Policy is configured to reject rule-exceptions.".to_string(),
-            },
-            _ => ExecApprovalRequirement::NeedsApproval {
-                reason: if is_trusted {
-                    "Approval requested by policy mode.".to_string()
-                } else {
-                    "Unmatched command prefix requires approval.".to_string()
-                },
-                proposed_execpolicy_amendment: if is_trusted {
-                    None
-                } else {
-                    Some(ExecPolicyAmendment {
-                        prefixes: vec![first_token(ctx.command)],
-                    })
-                },
-                proposed_network_policy_amendments: vec![NetworkPolicyAmendment {
-                    host: ctx.cwd.to_string(),
-                    action: NetworkPolicyRuleAction::Allow,
-                }],
-            },
         };
 
         let (allow, requires_approval) = match requirement {
             ExecApprovalRequirement::Skip { .. } => (true, false),
             ExecApprovalRequirement::NeedsApproval { .. } => (true, true),
             ExecApprovalRequirement::Forbidden { .. } => (false, false),
-        };
-
-        let matched_ask_rule = if matches!(&ctx.ask_for_approval, AskForApproval::Never) {
-            ask_rule.map(|rule| rule.label())
-        } else {
-            None
         };
 
         Ok(ExecPolicyDecision {
@@ -442,7 +476,13 @@ impl ExecPolicyEngine {
 }
 
 fn normalize_command(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    // Normalize: lowercase, collapse internal whitespace to single spaces.
+    // This prevents bypass via "git  status" (double space) vs "git status".
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn first_token(command: &str) -> String {
@@ -629,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_ask_rule_is_ignored_outside_never_mode_for_now() {
+    fn typed_ask_rule_requires_approval_under_unless_trusted() {
         let engine = ExecPolicyEngine::with_rulesets(vec![
             Ruleset::user(vec![], vec![])
                 .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
@@ -641,18 +681,49 @@ mod tests {
 
         assert!(decision.allow);
         assert!(decision.requires_approval);
-        assert_eq!(decision.matched_rule, None);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
         match decision.requirement {
             ExecApprovalRequirement::NeedsApproval {
-                proposed_execpolicy_amendment: Some(amendment),
+                proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
                 ..
-            } => assert_eq!(amendment.prefixes, vec!["cargo"]),
-            other => panic!("expected unchanged approval behavior, got {other:?}"),
+            } => {
+                assert_eq!(proposed_execpolicy_amendment, None);
+                // A typed ask-rule approval must not allow-list the cwd (or
+                // anything else) as a network host. See the NeedsApproval arm.
+                assert!(
+                    proposed_network_policy_amendments.is_empty(),
+                    "ask-rule approval must not propose network amendments, got {proposed_network_policy_amendments:?}"
+                );
+            }
+            other => panic!("expected typed ask approval, got {other:?}"),
         }
     }
 
     #[test]
-    fn typed_ask_rule_does_not_change_allow_deny_precedence() {
+    fn typed_ask_rule_requires_approval_under_on_failure() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::user(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx("cargo test --workspace", AskForApproval::OnFailure))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(
+            decision.reason(),
+            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval."
+        );
+    }
+
+    #[test]
+    fn typed_ask_rule_overrides_trusted_but_not_deny() {
         let engine = ExecPolicyEngine::with_rulesets(vec![
             Ruleset::user(
                 vec!["cargo test".to_string()],
@@ -665,8 +736,11 @@ mod tests {
             .check(ctx("cargo test --workspace", AskForApproval::UnlessTrusted))
             .unwrap();
         assert!(trusted.allow);
-        assert!(!trusted.requires_approval);
-        assert_eq!(trusted.matched_rule.as_deref(), Some("cargo test"));
+        assert!(trusted.requires_approval);
+        assert_eq!(
+            trusted.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
 
         let denied = engine
             .check(ctx("cargo test --danger", AskForApproval::Never))
@@ -677,6 +751,56 @@ mod tests {
         assert_eq!(
             denied.reason(),
             "Command blocked by denied prefix rule 'cargo test --danger'"
+        );
+    }
+
+    #[test]
+    fn typed_ask_rule_prefers_higher_layer_before_specificity() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::agent(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test --workspace")]),
+            Ruleset::user(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx(
+                "cargo test --workspace --all-features",
+                AskForApproval::UnlessTrusted,
+            ))
+            .unwrap();
+
+        assert!(decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+    }
+
+    #[test]
+    fn reject_rules_mode_still_forbids_matching_ask_rule() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::user(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx(
+                "cargo test --workspace",
+                AskForApproval::Reject {
+                    sandbox_approval: false,
+                    rules: true,
+                    mcp_elicitations: false,
+                },
+            ))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.matched_rule, None);
+        assert_eq!(
+            decision.reason(),
+            "Policy is configured to reject rule-exceptions."
         );
     }
 

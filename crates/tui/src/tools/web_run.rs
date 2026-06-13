@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+
+use parking_lot::{RwLock, RwLockWriteGuard};
 
 const MAX_RESULTS: usize = 10;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
@@ -26,7 +28,13 @@ const MAX_PAGES_PER_SESSION: usize = 256;
 const WEB_RUN_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
-static WEB_RUN_STATE: OnceLock<Mutex<WebRunState>> = OnceLock::new();
+static WEB_RUN_STATE: OnceLock<WebRunCache> = OnceLock::new();
+
+#[derive(Default)]
+struct WebRunCache {
+    sessions: RwLock<HashMap<String, WebRunSessionState>>,
+    pages: RwLock<HashMap<String, StoredWebPage>>,
+}
 
 #[derive(Default)]
 struct WebRunState {
@@ -53,7 +61,7 @@ impl Default for WebRunSessionState {
 #[derive(Debug, Clone)]
 struct StoredWebPage {
     namespace: String,
-    page: WebPage,
+    page: Arc<WebPage>,
 }
 
 impl WebRunState {
@@ -148,21 +156,12 @@ impl WebRunState {
             ref_id.to_string(),
             StoredWebPage {
                 namespace: namespace.to_string(),
-                page,
+                page: Arc::new(page),
             },
         );
         for evicted_ref in evicted_refs {
             self.pages.remove(&evicted_ref);
         }
-    }
-
-    fn get_page(&mut self, ref_id: &str) -> Option<WebPage> {
-        self.cleanup();
-        let stored = self.pages.get(ref_id)?.clone();
-        if let Some(session) = self.sessions.get_mut(&stored.namespace) {
-            session.last_access = Instant::now();
-        }
-        Some(stored.page)
     }
 }
 
@@ -576,7 +575,7 @@ impl ToolSpec for WebRunTool {
                 let page = resolve_or_fetch_page(&ref_id, DEFAULT_OPEN_TIMEOUT_MS, context).await?;
                 view_counter += 1;
                 let view_ref = format!("{scope}turn{turn}view{view_counter}");
-                store_page(&context.state_namespace, &view_ref, page.clone());
+                store_page(&context.state_namespace, &view_ref, (*page).clone());
 
                 let view = render_view(&view_ref, &page, lineno, response_length);
                 views.push(view);
@@ -607,7 +606,7 @@ impl ToolSpec for WebRunTool {
                     resolve_or_fetch_page(&target, DEFAULT_OPEN_TIMEOUT_MS, context).await?;
                 click_counter += 1;
                 let click_ref = format!("{scope}turn{turn}click{click_counter}");
-                store_page(&context.state_namespace, &click_ref, fetched.clone());
+                store_page(&context.state_namespace, &click_ref, (*fetched).clone());
                 let view = render_view(&click_ref, &fetched, 1, response_length);
                 views.push(view);
             }
@@ -653,12 +652,60 @@ impl ToolSpec for WebRunTool {
 }
 
 fn with_state<T>(f: impl FnOnce(&mut WebRunState) -> T) -> T {
-    let lock = WEB_RUN_STATE.get_or_init(|| Mutex::new(WebRunState::default()));
-    let mut state = lock
-        .lock()
-        .expect("web run state mutex should not be poisoned");
-    state.cleanup();
-    f(&mut state)
+    let cache = WEB_RUN_STATE.get_or_init(WebRunCache::default);
+    let sessions = cache.sessions.write();
+    let pages = cache.pages.write();
+    let mut guard = WebRunStateWriteBack::new(sessions, pages);
+    guard.state_mut().cleanup();
+    let result = f(guard.state_mut());
+    guard.write_back();
+    result
+}
+
+struct WebRunStateWriteBack<'a> {
+    sessions: RwLockWriteGuard<'a, HashMap<String, WebRunSessionState>>,
+    pages: RwLockWriteGuard<'a, HashMap<String, StoredWebPage>>,
+    state: Option<WebRunState>,
+}
+
+impl<'a> WebRunStateWriteBack<'a> {
+    fn new(
+        mut sessions: RwLockWriteGuard<'a, HashMap<String, WebRunSessionState>>,
+        mut pages: RwLockWriteGuard<'a, HashMap<String, StoredWebPage>>,
+    ) -> Self {
+        let state = WebRunState {
+            sessions: std::mem::take(&mut *sessions),
+            pages: std::mem::take(&mut *pages),
+        };
+        Self {
+            sessions,
+            pages,
+            state: Some(state),
+        }
+    }
+
+    fn state_mut(&mut self) -> &mut WebRunState {
+        self.state
+            .as_mut()
+            .expect("web run state should be present until write-back")
+    }
+
+    fn write_back(mut self) {
+        self.restore();
+    }
+
+    fn restore(&mut self) {
+        if let Some(state) = self.state.take() {
+            *self.sessions = state.sessions;
+            *self.pages = state.pages;
+        }
+    }
+}
+
+impl Drop for WebRunStateWriteBack<'_> {
+    fn drop(&mut self) {
+        self.restore();
+    }
 }
 
 fn scoped_ref_prefix(namespace: &str) -> String {
@@ -673,8 +720,19 @@ fn store_page(namespace: &str, ref_id: &str, page: WebPage) {
     });
 }
 
-fn get_page(ref_id: &str) -> Option<WebPage> {
-    with_state(|state| state.get_page(ref_id))
+fn get_page(ref_id: &str) -> Option<Arc<WebPage>> {
+    let cache = WEB_RUN_STATE.get_or_init(WebRunCache::default);
+    let stored = {
+        let pages = cache.pages.read();
+        pages.get(ref_id).cloned()
+    }?;
+    {
+        let mut sessions = cache.sessions.write();
+        if let Some(session) = sessions.get_mut(&stored.namespace) {
+            session.last_access = Instant::now();
+        }
+    }
+    Some(stored.page)
 }
 
 #[cfg(test)]
@@ -693,13 +751,13 @@ async fn resolve_or_fetch_page(
     ref_id: &str,
     timeout_ms: u64,
     context: &ToolContext,
-) -> Result<WebPage, ToolError> {
+) -> Result<Arc<WebPage>, ToolError> {
     if let Some(page) = get_page(ref_id) {
         return Ok(page);
     }
     if looks_like_url(ref_id) {
         check_network_policy(ref_id, context)?;
-        return fetch_page(ref_id, timeout_ms).await;
+        return fetch_page(ref_id, timeout_ms).await.map(Arc::new);
     }
     Err(ToolError::invalid_input(format!(
         "Unknown ref_id '{ref_id}'"
@@ -716,7 +774,7 @@ async fn run_search(
     timeout_ms: u64,
     domains: &[String],
 ) -> Result<(Vec<SearchEntry>, String, Option<String>), ToolError> {
-    let client = reqwest::Client::builder()
+    let client = crate::tls::reqwest_client_builder()
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()
@@ -912,7 +970,7 @@ async fn run_image_search(
     timeout_ms: u64,
     domains: &[String],
 ) -> Result<(Vec<ImageResultEntry>, Option<String>), ToolError> {
-    let client = reqwest::Client::builder()
+    let client = crate::tls::reqwest_client_builder()
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()
@@ -1065,7 +1123,7 @@ fn check_network_policy(url: &str, context: &ToolContext) -> Result<(), ToolErro
 }
 
 async fn fetch_page(url: &str, timeout_ms: u64) -> Result<WebPage, ToolError> {
-    let client = reqwest::Client::builder()
+    let client = crate::tls::reqwest_client_builder()
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()
@@ -1637,6 +1695,15 @@ fn url_encode(input: &str) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    static WEB_RUN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_web_run_test_state() -> MutexGuard<'static, ()> {
+        WEB_RUN_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn sample_page(url: &str) -> WebPage {
         WebPage {
@@ -1729,6 +1796,7 @@ mod tests {
 
     #[test]
     fn scoped_ref_prefix_is_session_specific() {
+        let _lock = lock_web_run_test_state();
         reset_web_run_state();
         let alpha = scoped_ref_prefix("session-alpha");
         let beta = scoped_ref_prefix("session-beta");
@@ -1741,6 +1809,7 @@ mod tests {
 
     #[test]
     fn stored_pages_do_not_cross_scoped_sessions() {
+        let _lock = lock_web_run_test_state();
         reset_web_run_state();
         let shared_suffix = "turn1search1";
         let ref_alpha = format!("{}{}", scoped_ref_prefix("session-alpha"), shared_suffix);
@@ -1757,7 +1826,22 @@ mod tests {
     }
 
     #[test]
+    fn cached_page_reads_share_page_arc() {
+        let _lock = lock_web_run_test_state();
+        reset_web_run_state();
+        let namespace = "session-alpha";
+        let ref_id = format!("{}turn0search1", scoped_ref_prefix(namespace));
+        store_page(namespace, &ref_id, sample_page("https://example.com/alpha"));
+
+        let first = get_page(&ref_id).expect("first page read");
+        let second = get_page(&ref_id).expect("second page read");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
     fn turn_counters_are_scoped_per_session() {
+        let _lock = lock_web_run_test_state();
         reset_web_run_state();
 
         assert_eq!(next_turn_for_namespace("session-alpha"), 0);
@@ -1766,7 +1850,32 @@ mod tests {
     }
 
     #[test]
+    fn with_state_restores_cache_after_panic() {
+        let _lock = lock_web_run_test_state();
+        reset_web_run_state();
+        let namespace = "session-alpha";
+        let ref_id = format!("{}turn0search1", scoped_ref_prefix(namespace));
+        store_page(namespace, &ref_id, sample_page("https://example.com/alpha"));
+
+        let panic_result = std::panic::catch_unwind(|| {
+            with_state(|state| {
+                let session = state
+                    .sessions
+                    .get_mut(namespace)
+                    .expect("session should exist");
+                session.next_turn = 42;
+                panic!("exercise web_run write-back guard");
+            });
+        });
+
+        assert!(panic_result.is_err());
+        assert!(get_page(&ref_id).is_some());
+        assert_eq!(next_turn_for_namespace(namespace), 42);
+    }
+
+    #[test]
     fn stale_session_pages_are_evicted() {
+        let _lock = lock_web_run_test_state();
         reset_web_run_state();
         let namespace = "session-alpha";
         let ref_id = format!("{}turn0search1", scoped_ref_prefix(namespace));

@@ -1,0 +1,6 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CodeWhale">
+  <rect width="128" height="128" rx="20" fill="#0f172a"/>
+  <path d="M26 72c0-21 17-38 38-38h21c10 0 19 6 23 15 2 4 6 7 10 8-5 4-11 6-18 6h-2c-1 23-20 41-43 41H34c-7 0-12-5-12-12V80c0-4 3-8 8-8h-4z" fill="#38bdf8"/>
+  <circle cx="82" cy="56" r="5" fill="#0f172a"/>
+  <path d="M42 85h36M45 96h25" stroke="#0f172a" stroke-width="6" stroke-linecap="round"/>
+</svg>

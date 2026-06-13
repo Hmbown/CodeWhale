@@ -17,7 +17,6 @@ pub use system::{install_system_skills, is_bundled_skill_name};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 
 use crate::logging;
@@ -27,7 +26,6 @@ const MAX_AVAILABLE_SKILLS_CHARS: usize = 12_000;
 
 // === Defaults ===
 
-#[allow(dead_code)]
 #[must_use]
 pub fn default_skills_dir() -> PathBuf {
     dirs::home_dir().map_or_else(
@@ -40,17 +38,6 @@ pub fn default_skills_dir() -> PathBuf {
 #[must_use]
 pub fn agents_global_skills_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|p| p.join(".agents").join("skills"))
-}
-
-/// Global Claude-compatible skills directory (`~/.claude/skills`). The
-/// SKILL.md frontmatter convention is shared across the broader Claude
-/// ecosystem, so picking up the global path lets users inherit skills
-/// they already installed for other Claude-compatible tools without
-/// re-authoring them in DeepSeek's native layout (#902).
-#[allow(dead_code)]
-#[must_use]
-pub fn claude_global_skills_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|p| p.join(".claude").join("skills"))
 }
 
 // === Types ===
@@ -445,40 +432,6 @@ impl SkillRegistry {
     }
 }
 
-/// Render a compact model-visible skills block.
-///
-/// The full `SKILL.md` body is intentionally not included here. This mirrors
-/// Resolve the active skills directory given a workspace, mirroring the
-/// hierarchy `App::new` walks: `<workspace>/.agents/skills` →
-/// `<workspace>/skills` → [`agents_global_skills_dir`] (`~/.agents/skills`,
-/// when present) → [`default_skills_dir`] (`~/.codewhale/skills`).
-/// Returns the first directory that exists, or the global default
-/// (which itself falls back to `/tmp/codewhale/skills` if the user
-/// has no home directory).
-///
-/// Kept for callers that want a single canonical directory (e.g.
-/// "where do I install a new skill?"). For session-time discovery
-/// that should pick up cross-tool skill folders too, use
-/// [`skills_directories`] / [`discover_in_workspace`] (#432).
-#[must_use]
-#[allow(dead_code)] // Intentionally kept for the "single canonical install dir" surface; live callers use discover_in_workspace.
-pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
-    let agents = workspace.join(".agents").join("skills");
-    if agents.exists() {
-        return agents;
-    }
-    let local = workspace.join("skills");
-    if local.exists() {
-        return local;
-    }
-    if let Some(global_agents) = agents_global_skills_dir()
-        && global_agents.exists()
-    {
-        return global_agents;
-    }
-    default_skills_dir()
-}
-
 /// Resolve every candidate skills directory for a workspace, in
 /// precedence order — most specific first. Used for session-time
 /// skill discovery so the model sees skills that originated in
@@ -494,7 +447,7 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
 /// 5. `<workspace>/.cursor/skills` — Cursor interop.
 /// 6. `<workspace>/.codewhale/skills` — CodeWhale workspace skills.
 /// 7. [`agents_global_skills_dir`] — agentskills.io global.
-/// 8. [`claude_global_skills_dir`] — Claude-ecosystem global (#902).
+/// 8. `~/.claude/skills` — Claude-ecosystem global (#902).
 /// 9. `~/.codewhale/skills` — CodeWhale global, primary install target.
 /// 10. `~/.deepseek/skills` — legacy DeepSeek global fallback.
 ///
@@ -567,20 +520,41 @@ pub fn discover_in_workspace(workspace: &Path) -> SkillRegistry {
 }
 
 /// Discover skills from the workspace search set plus the configured install
-/// directory. Workspace/global directories keep their normal precedence; a
-/// custom configured directory is appended when it is outside that set.
+/// directory. Workspace-local directories keep their normal precedence; a
+/// custom configured directory is inserted before global defaults when it is
+/// outside that set so explicit configuration cannot be buried by large global
+/// libraries.
 #[must_use]
 pub fn discover_for_workspace_and_dir(workspace: &Path, skills_dir: &Path) -> SkillRegistry {
-    let dirs = skills_directories(workspace);
-    discover_for_workspace_dirs_and_dir(dirs, skills_dir)
+    let mut dirs = skills_directories(workspace);
+    insert_configured_skills_dir(&mut dirs, workspace, skills_dir);
+    discover_from_directories(dirs)
 }
 
-fn discover_for_workspace_dirs_and_dir(mut dirs: Vec<PathBuf>, skills_dir: &Path) -> SkillRegistry {
-    if skills_dir.is_dir() && !dirs.iter().any(|p| p == skills_dir) {
-        dirs.push(skills_dir.to_path_buf());
+fn insert_configured_skills_dir(dirs: &mut Vec<PathBuf>, workspace: &Path, skills_dir: &Path) {
+    if !skills_dir.is_dir() || dirs.iter().any(|p| paths_refer_to_same_dir(p, skills_dir)) {
+        return;
     }
 
-    discover_from_directories(dirs)
+    let workspace_root = fs::canonicalize(workspace).ok();
+    let insert_at = workspace_root
+        .as_ref()
+        .and_then(|root| {
+            dirs.iter()
+                .position(|dir| fs::canonicalize(dir).map_or(true, |dir| !dir.starts_with(root)))
+        })
+        .unwrap_or(dirs.len());
+    dirs.insert(insert_at, skills_dir.to_path_buf());
+}
+
+fn paths_refer_to_same_dir(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 pub(crate) fn discover_from_directories(dirs: impl IntoIterator<Item = PathBuf>) -> SkillRegistry {
@@ -600,13 +574,14 @@ pub(crate) fn discover_from_directories(dirs: impl IntoIterator<Item = PathBuf>)
 }
 
 #[cfg(test)]
-fn discover_for_workspace_and_dir_with_home(
+pub(crate) fn discover_for_workspace_and_dir_with_home(
     workspace: &Path,
     skills_dir: &Path,
     home_dir: Option<&Path>,
 ) -> SkillRegistry {
-    let dirs = skills_directories_with_home(workspace, home_dir);
-    discover_for_workspace_dirs_and_dir(dirs, skills_dir)
+    let mut dirs = skills_directories_with_home(workspace, home_dir);
+    insert_configured_skills_dir(&mut dirs, workspace, skills_dir);
+    discover_from_directories(dirs)
 }
 
 /// Render the system-prompt skills block from every workspace
@@ -626,9 +601,21 @@ pub fn render_available_skills_context_for_workspace(workspace: &Path) -> Option
 /// Single-directory variant — use
 /// [`render_available_skills_context_for_workspace`] when scanning
 /// a workspace for cross-tool skill folders (#432).
+#[cfg(test)]
 #[must_use]
-pub fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
+fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
     let registry = SkillRegistry::discover(skills_dir);
+    render_skills_block(&registry)
+}
+
+/// Union variant: merge skills discovered in the `workspace` (cross-tool skill
+/// folders) and an explicitly-configured `skills_dir`.
+#[must_use]
+pub fn render_available_skills_context_for_workspace_and_dir(
+    workspace: &Path,
+    skills_dir: &Path,
+) -> Option<String> {
+    let registry = discover_for_workspace_and_dir(workspace, skills_dir);
     render_skills_block(&registry)
 }
 
@@ -710,44 +697,6 @@ fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     truncated.push('…');
     truncated
-}
-
-// === CLI Helpers ===
-
-#[allow(dead_code)] // CLI utility for future use
-pub fn list(skills_dir: &Path) -> Result<()> {
-    if !skills_dir.exists() {
-        println!("No skills directory found at {}", skills_dir.display());
-        return Ok(());
-    }
-
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(skills_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            entries.push(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-
-    if entries.is_empty() {
-        println!("No skills found in {}", skills_dir.display());
-        return Ok(());
-    }
-
-    entries.sort();
-    for entry in entries {
-        println!("{entry}");
-    }
-    Ok(())
-}
-
-#[allow(dead_code)] // CLI utility for future use
-pub fn show(skills_dir: &Path, name: &str) -> Result<()> {
-    let path = skills_dir.join(name).join("SKILL.md");
-    let contents =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    println!("{contents}");
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1009,15 +958,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_global_skills_dir_returns_home_relative_path() {
-        // Smoke test for the #902 helper. We don't assert the exact path
-        // because dirs::home_dir() is host-dependent; we just pin the
-        // suffix shape so a future refactor can't silently rename it.
-        let path = super::claude_global_skills_dir().expect("home dir resolves on test host");
-        assert!(path.ends_with(".claude/skills") || path.ends_with(r".claude\skills"));
-    }
-
-    #[test]
     fn existing_skill_dirs_orders_globals_agents_then_claude_then_deepseek() {
         // Pins the precedence among the three global skill roots (#902).
         // Workspace candidates are tested separately above; here we only
@@ -1195,6 +1135,69 @@ mod tests {
         let rendered =
             super::render_available_skills_context_for_workspace(workspace).expect("non-empty");
         assert!(rendered.contains("from-claude"));
+    }
+
+    #[test]
+    fn discover_for_workspace_and_dir_merges_workspace_and_configured_sources() {
+        let tmpdir = TempDir::new().unwrap();
+        let workspace = tmpdir.path().join("workspace");
+        let home = tmpdir.path().join("home");
+        let configured_dir = tmpdir.path().join("configured-skills");
+        std::fs::create_dir_all(&workspace).unwrap();
+        write_skill(
+            &workspace.join(".claude").join("skills"),
+            "workspace-skill",
+            "workspace visible skill",
+            "body",
+        );
+        write_skill(
+            &configured_dir,
+            "configured-skill",
+            "configured visible skill",
+            "body",
+        );
+
+        let registry = super::discover_for_workspace_and_dir_with_home(
+            &workspace,
+            &configured_dir,
+            Some(&home),
+        );
+        let names: Vec<&str> = registry.list().iter().map(|s| s.name.as_str()).collect();
+
+        assert!(names.contains(&"workspace-skill"));
+        assert!(names.contains(&"configured-skill"));
+    }
+
+    #[test]
+    fn explicit_configured_skills_dir_precedes_global_defaults() {
+        let tmpdir = TempDir::new().unwrap();
+        let workspace = tmpdir.path().join("workspace");
+        let home = tmpdir.path().join("home");
+        let configured_dir = tmpdir.path().join("configured-skills");
+        std::fs::create_dir_all(&workspace).unwrap();
+        write_skill(
+            &home.join(".agents").join("skills"),
+            "shared-skill",
+            "global skill",
+            "global body",
+        );
+        write_skill(
+            &configured_dir,
+            "shared-skill",
+            "configured skill",
+            "configured body",
+        );
+
+        let registry = super::discover_for_workspace_and_dir_with_home(
+            &workspace,
+            &configured_dir,
+            Some(&home),
+        );
+        let skill = registry
+            .get("shared-skill")
+            .expect("shared skill discovered");
+
+        assert_eq!(skill.description, "configured skill");
     }
 
     /// Regression for the GitHub issue where users organize skills under

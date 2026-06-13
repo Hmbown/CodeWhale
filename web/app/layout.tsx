@@ -35,11 +35,11 @@ const cjk = Noto_Serif_SC({
 export const metadata: Metadata = {
   title: "CodeWhale · DeepSeek V4 Agent Harness",
   description:
-    "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery — rules, tools, and feedback loops that help the model keep working.",
+    "Local-first agent harness for DeepSeek V4 and open models: operating identity, conflict law, local tools, evidence, and recovery.",
   metadataBase: new URL("https://codewhale.net"),
   openGraph: {
     title: "CodeWhale",
-    description: "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery.",
+    description: "Local-first agent harness with operating identity, conflict law, local tools, evidence, and recovery.",
     url: "https://codewhale.net",
     siteName: "CodeWhale",
     type: "website",

@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::deepseek_theme::active_theme;
 use crate::models::{ContentBlock, Message};
 use crate::palette;
+use crate::tools::plan::{PlanSnapshot, StepStatus};
 use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
@@ -637,7 +638,7 @@ pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
                     _ => {}
                 }
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 if let Some(HistoryCell::Thinking { content, .. }) = cells.last_mut() {
                     if !content.is_empty() {
                         content.push('\n');
@@ -650,6 +651,12 @@ pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
                         duration_secs: None,
                     });
                 }
+            }
+            ContentBlock::ToolUse { name, input, .. } if name == "update_plan" => {
+                cells.push(HistoryCell::Tool(ToolCell::PlanUpdate(PlanUpdateCell {
+                    snapshot: PlanSnapshot::from_tool_input(input),
+                    status: ToolStatus::Success,
+                })));
             }
             _ => {}
         }
@@ -676,6 +683,68 @@ pub enum ToolCell {
 }
 
 impl ToolCell {
+    /// Status for cells that have a concrete lifecycle state.
+    pub fn status(&self) -> Option<ToolStatus> {
+        match self {
+            ToolCell::Exec(cell) => Some(cell.status),
+            ToolCell::Exploring(cell) => {
+                let has_running = cell
+                    .entries
+                    .iter()
+                    .any(|entry| entry.status == ToolStatus::Running);
+                let has_failed = cell
+                    .entries
+                    .iter()
+                    .any(|entry| entry.status == ToolStatus::Failed);
+                Some(if has_running {
+                    ToolStatus::Running
+                } else if has_failed {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Success
+                })
+            }
+            ToolCell::PlanUpdate(cell) => Some(cell.status),
+            ToolCell::PatchSummary(cell) => Some(cell.status),
+            ToolCell::Review(cell) => Some(cell.status),
+            ToolCell::Mcp(cell) => Some(cell.status),
+            ToolCell::WebSearch(cell) => Some(cell.status),
+            ToolCell::Generic(cell) => Some(cell.status),
+            ToolCell::DiffPreview(_) | ToolCell::ViewImage(_) => Some(ToolStatus::Success),
+        }
+    }
+
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.status() == Some(ToolStatus::Success)
+    }
+
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.status() == Some(ToolStatus::Running)
+    }
+
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        self.status() == Some(ToolStatus::Failed)
+    }
+
+    /// Whether this cell should stay visible even inside a dense tool run.
+    #[must_use]
+    pub fn is_collapsible_guard(&self) -> bool {
+        self.is_running()
+            || self.is_failed()
+            || matches!(
+                self,
+                ToolCell::Exec(_)
+                    | ToolCell::PatchSummary(_)
+                    | ToolCell::Review(_)
+                    | ToolCell::DiffPreview(_)
+                    | ToolCell::PlanUpdate(_)
+            )
+            || matches!(self, ToolCell::Generic(cell) if generic_tool_name_is_collapse_guard(&cell.name) || cell.is_diff)
+    }
+
     /// Render the tool cell into lines.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines_with_motion(width, false)
@@ -708,11 +777,110 @@ impl ToolCell {
     }
 }
 
+// ── Tool-run grouping for transcript collapse (#2692) ──────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRun {
+    /// Original index of the first tool cell in `App::history`.
+    pub start: usize,
+    /// Number of collapsed cells in the run.
+    pub count: usize,
+    /// Dominant tool names, deduplicated and capped for summary rendering.
+    pub tool_families: Vec<String>,
+}
+
+/// Detect contiguous runs of successful, low-risk tool cells.
+///
+/// Failed, running, shell, patch, review, diff, and plan-update cells split
+/// runs so important state never disappears into a summary row.
+pub fn detect_tool_runs(history: &[HistoryCell], min_size: usize) -> Vec<ToolRun> {
+    if min_size == 0 {
+        return Vec::new();
+    }
+
+    let mut runs = Vec::new();
+    let mut index = 0;
+    while index < history.len() {
+        if !is_collapsible_tool_cell(&history[index]) {
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        let mut names: Vec<String> = Vec::new();
+        while index < history.len() && is_collapsible_tool_cell(&history[index]) {
+            if let HistoryCell::Tool(tool) = &history[index] {
+                let name = tool_display_name(tool);
+                if !names.iter().any(|existing| existing == name) {
+                    names.push(name.to_string());
+                }
+            }
+            index += 1;
+        }
+
+        let count = index - start;
+        if count >= min_size {
+            names.truncate(3);
+            runs.push(ToolRun {
+                start,
+                count,
+                tool_families: names,
+            });
+        }
+    }
+
+    runs
+}
+
+fn is_collapsible_tool_cell(cell: &HistoryCell) -> bool {
+    matches!(cell, HistoryCell::Tool(tool) if tool.is_success() && !tool.is_collapsible_guard())
+}
+
+fn generic_tool_name_is_collapse_guard(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized.contains("patch")
+        || normalized.contains("write")
+        || normalized.contains("edit")
+        || normalized.contains("delete")
+        || normalized.contains("remove")
+        || normalized.contains("commit")
+        || normalized.contains("push")
+        || normalized.contains("shell")
+        || normalized.contains("exec")
+        || normalized.contains("review")
+}
+
+fn tool_display_name(tool: &ToolCell) -> &str {
+    match tool {
+        ToolCell::Generic(cell) => cell.name.as_str(),
+        ToolCell::Mcp(cell) => cell.tool.as_str(),
+        ToolCell::WebSearch(_) => "web_search",
+        ToolCell::ViewImage(_) => "view_image",
+        ToolCell::Exploring(_) => "explore",
+        ToolCell::Exec(_) => "shell",
+        ToolCell::PlanUpdate(_) => "update_plan",
+        ToolCell::PatchSummary(_) => "apply_patch",
+        ToolCell::Review(_) => "review",
+        ToolCell::DiffPreview(_) => "diff",
+    }
+}
+
+#[must_use]
+pub fn tool_run_summary(run: &ToolRun) -> String {
+    let tools = if run.tool_families.is_empty() {
+        "tools".to_string()
+    } else {
+        run.tool_families.join(", ")
+    };
+    format!("{} tools ({tools}) · all ok", run.count)
+}
+
 /// Overall status for a tool execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
     Running,
     Success,
+    Hydrated,
     Failed,
 }
 
@@ -722,6 +890,8 @@ pub struct ExecCell {
     pub command: String,
     pub status: ToolStatus,
     pub output: Option<String>,
+    pub live_output: Option<String>,
+    pub shell_task_id: Option<String>,
     pub started_at: Option<Instant>,
     pub duration_ms: Option<u64>,
     pub source: ExecSource,
@@ -778,7 +948,7 @@ impl ExecCell {
         }
 
         if self.interaction.is_none() {
-            if let Some(output) = self.output.as_ref() {
+            if let Some(output) = self.output.as_ref().or(self.live_output.as_ref()) {
                 lines.extend(render_exec_output_mode(
                     output,
                     width,
@@ -787,11 +957,14 @@ impl ExecCell {
                 ));
             } else if self.status == ToolStatus::Running && self.source == ExecSource::Assistant {
                 lines.extend(wrap_plain_line(
-                    "  Ctrl+B opens shell controls.",
+                    "  Ctrl+B backgrounds this command.",
                     Style::default().fg(palette::TEXT_MUTED),
                     width,
                 ));
-            } else if self.status != ToolStatus::Running {
+            } else if self.status != ToolStatus::Running && mode == RenderMode::Transcript {
+                // #3031: Suppress "(no output)" in compact/Live mode;
+                // the success header is enough signal. Transcript still
+                // records it for exports/clipboard/pager.
                 lines.push(Line::from(Span::styled(
                     "  (no output)",
                     Style::default().fg(palette::TEXT_MUTED).italic(),
@@ -800,13 +973,17 @@ impl ExecCell {
         }
 
         if let Some(duration_ms) = self.duration_ms {
-            let seconds = f64::from(u32::try_from(duration_ms).unwrap_or(u32::MAX)) / 1000.0;
-            lines.extend(render_compact_kv(
-                "time",
-                &format!("{seconds:.2}s"),
-                Style::default().fg(palette::TEXT_DIM),
-                width,
-            ));
+            // #3031: Suppress sub-second timing in compact mode.
+            // Transcript mode always shows exact timing.
+            if mode == RenderMode::Transcript || duration_ms >= 1000 {
+                let seconds = f64::from(u32::try_from(duration_ms).unwrap_or(u32::MAX)) / 1000.0;
+                lines.extend(render_compact_kv(
+                    "time",
+                    &format!("{seconds:.2}s"),
+                    Style::default().fg(palette::TEXT_DIM),
+                    width,
+                ));
+            }
         }
 
         wrap_card_rail(lines)
@@ -834,8 +1011,16 @@ impl ExploringCell {
             .entries
             .iter()
             .all(|entry| entry.status != ToolStatus::Running);
+        let any_hydrated = self
+            .entries
+            .iter()
+            .any(|entry| entry.status == ToolStatus::Hydrated);
         let status = if all_done {
-            ToolStatus::Success
+            if any_hydrated {
+                ToolStatus::Hydrated
+            } else {
+                ToolStatus::Success
+            }
         } else {
             ToolStatus::Running
         };
@@ -843,7 +1028,11 @@ impl ExploringCell {
         lines.push(render_tool_header_with_summary(
             "Workspace",
             header_summary.as_deref(),
-            if all_done { "done" } else { "running" },
+            if all_done {
+                tool_status_label(status)
+            } else {
+                "running"
+            },
             status,
             None,
             low_motion,
@@ -853,6 +1042,7 @@ impl ExploringCell {
             let prefix = match entry.status {
                 ToolStatus::Running => "live",
                 ToolStatus::Success => "done",
+                ToolStatus::Hydrated => "loaded",
                 ToolStatus::Failed => "issue",
             };
             lines.extend(render_compact_kv(
@@ -883,8 +1073,7 @@ pub struct ExploringEntry {
 /// Cell for plan updates emitted by the plan tool.
 #[derive(Debug, Clone)]
 pub struct PlanUpdateCell {
-    pub explanation: Option<String>,
-    pub steps: Vec<PlanStep>,
+    pub snapshot: PlanSnapshot,
     pub status: ToolStatus,
 }
 
@@ -900,39 +1089,68 @@ impl PlanUpdateCell {
             low_motion,
         ));
 
-        if let Some(explanation) = self.explanation.as_ref() {
-            lines.extend(render_message(
-                "",
-                system_label_style(),
-                system_body_style(),
-                explanation,
-                width,
-            ));
-        }
-
-        for step in &self.steps {
-            let marker = match step.status.as_str() {
-                "completed" => "done",
-                "in_progress" => "live",
-                _ => "next",
-            };
-            lines.extend(render_compact_kv(
-                marker,
-                &step.step,
-                tool_value_style(),
-                width,
-            ));
-        }
+        render_plan_snapshot_lines(&self.snapshot, &mut lines, width);
 
         lines
     }
 }
 
-/// Single plan step rendered in the UI.
-#[derive(Debug, Clone)]
-pub struct PlanStep {
-    pub step: String,
-    pub status: String,
+fn render_plan_snapshot_lines(snapshot: &PlanSnapshot, lines: &mut Vec<Line<'static>>, width: u16) {
+    render_plan_optional(lines, "title", snapshot.title.as_deref(), width);
+    render_plan_optional(lines, "objective", snapshot.objective.as_deref(), width);
+    render_plan_optional(lines, "context", snapshot.context_summary.as_deref(), width);
+    render_plan_optional(lines, "explain", snapshot.explanation.as_deref(), width);
+    render_plan_list(lines, "source", &snapshot.sources_used, width);
+    render_plan_list(lines, "file", &snapshot.critical_files, width);
+    render_plan_list(lines, "constraint", &snapshot.constraints, width);
+    render_plan_optional(
+        lines,
+        "approach",
+        snapshot.recommended_approach.as_deref(),
+        width,
+    );
+    render_plan_optional(
+        lines,
+        "verify",
+        snapshot.verification_plan.as_deref(),
+        width,
+    );
+    render_plan_optional(lines, "risk", snapshot.risks_and_unknowns.as_deref(), width);
+    render_plan_optional(lines, "handoff", snapshot.handoff_packet.as_deref(), width);
+
+    for step in &snapshot.items {
+        let marker = match step.status {
+            StepStatus::Completed => "done",
+            StepStatus::InProgress => "live",
+            StepStatus::Pending => "next",
+        };
+        lines.extend(render_compact_kv(
+            marker,
+            &step.step,
+            tool_value_style(),
+            width,
+        ));
+    }
+}
+
+fn render_plan_optional(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: Option<&str>,
+    width: u16,
+) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        lines.extend(render_compact_kv(label, value, tool_value_style(), width));
+    }
+}
+
+fn render_plan_list(lines: &mut Vec<Line<'static>>, label: &str, values: &[String], width: u16) {
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() {
+            lines.extend(render_compact_kv(label, value, tool_value_style(), width));
+        }
+    }
 }
 
 /// Cell for patch summaries emitted by the patch tool.
@@ -2166,13 +2384,13 @@ fn render_thinking(
     let mut lines = Vec::new();
 
     // Header: `…` opener (replaces the spinner; reasoning isn't a tool, it's
-    // a slow exhale) followed by the `thinking` label and live status.
+    // a slow exhale) followed by the reasoning label and live status.
     let mut header_spans = vec![
         Span::styled(
             format!("{REASONING_OPENER} "),
             Style::default().fg(thinking_state_accent(state)),
         ),
-        Span::styled("thinking", thinking_title_style()),
+        Span::styled("reasoning", thinking_title_style()),
     ];
     header_spans.push(Span::styled(" ", Style::default()));
     header_spans.push(Span::styled(
@@ -2238,7 +2456,7 @@ fn render_thinking(
 
     if rendered.is_empty() && streaming {
         let mut spans = vec![Span::styled(REASONING_RAIL.to_string(), rail_style)];
-        spans.push(Span::styled("thinking...", body_style.italic()));
+        spans.push(Span::styled("reasoning...", body_style.italic()));
         if !low_motion {
             spans.push(Span::styled(format!(" {REASONING_CURSOR}"), cursor_style));
         }
@@ -2296,7 +2514,7 @@ fn render_hidden_thinking_activity(
             format!("{REASONING_OPENER} "),
             Style::default().fg(thinking_state_accent(state)),
         ),
-        Span::styled("thinking", thinking_title_style()),
+        Span::styled("reasoning", thinking_title_style()),
         Span::styled(" ", Style::default()),
         Span::styled(thinking_status_label(state), thinking_status_style(state)),
     ];
@@ -2614,10 +2832,10 @@ fn render_exec_output_mode(
     render_preserved_output_mode(output, width, line_limit, mode, "output")
 }
 
-#[derive(Debug, Clone)]
-struct OutputRow {
-    text: String,
-    intact: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputRow {
+    pub text: String,
+    pub intact: bool,
 }
 
 fn render_preserved_output_mode(
@@ -2629,14 +2847,22 @@ fn render_preserved_output_mode(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if output.trim().is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  (no output)",
-            Style::default().fg(palette::TEXT_MUTED).italic(),
-        )));
+        // #3031: In compact/Live mode, suppress "(no output)" — the tool
+        // header already carries the success/failure status.  Transcript
+        // mode still records it for exports/clipboard/pager.
+        if mode == RenderMode::Transcript {
+            lines.push(Line::from(Span::styled(
+                "  (no output)",
+                Style::default().fg(palette::TEXT_MUTED).italic(),
+            )));
+        }
         return lines;
     }
 
-    let all_lines = output_rows(output, width);
+    let content_hash = crate::tui::output_rows_cache::hash_str(output);
+    let all_lines = crate::tui::output_rows_cache::get_or_compute_rows(output, width, || {
+        output_rows(output, width)
+    });
 
     if matches!(mode, RenderMode::Transcript) {
         // Full-content path: emit every wrapped line with no head/tail split,
@@ -2652,7 +2878,12 @@ fn render_preserved_output_mode(
         return lines;
     }
 
-    let selected = selected_output_indices(&all_lines, line_limit);
+    let selected = crate::tui::output_rows_cache::get_or_compute_indices(
+        content_hash,
+        width,
+        line_limit,
+        || selected_output_indices(&all_lines, line_limit),
+    );
     let mut previous: Option<usize> = None;
     for (rendered_idx, idx) in selected.iter().copied().enumerate() {
         if let Some(prev) = previous {
@@ -2958,7 +3189,7 @@ fn status_symbol(started_at: Option<Instant>, status: ToolStatus, low_motion: bo
                 .map_or(0, |d| d % (TOOL_RUNNING_SYMBOLS.len() as u128));
             TOOL_RUNNING_SYMBOLS[usize::try_from(idx).unwrap_or_default()].to_string()
         }
-        ToolStatus::Success => TOOL_DONE_SYMBOL.to_string(),
+        ToolStatus::Success | ToolStatus::Hydrated => TOOL_DONE_SYMBOL.to_string(),
         ToolStatus::Failed => TOOL_FAILED_SYMBOL.to_string(),
     }
 }
@@ -3249,6 +3480,7 @@ fn tool_status_label(status: ToolStatus) -> &'static str {
     match status {
         ToolStatus::Running => "running",
         ToolStatus::Success => "done",
+        ToolStatus::Hydrated => "tool loaded - retry required",
         ToolStatus::Failed => "issue",
     }
 }
@@ -3426,8 +3658,8 @@ fn looks_like_file_path(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
-        PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
+        ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanUpdateCell,
+        REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
         TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
         running_status_label_with_elapsed,
@@ -3435,6 +3667,7 @@ mod tests {
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
+    use crate::tools::plan::{PlanSnapshot, StepStatus};
     use ratatui::style::Modifier;
     use std::time::{Duration, Instant};
 
@@ -3916,6 +4149,40 @@ mod tests {
     }
 
     #[test]
+    fn history_replays_update_plan_tool_use_as_plan_card() {
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "plan-1".to_string(),
+                name: "update_plan".to_string(),
+                input: serde_json::json!({
+                    "objective": "Make Plan mode reviewable",
+                    "sources_used": ["gh issue view 2691"],
+                    "critical_files": ["crates/tui/src/tools/plan.rs"],
+                    "plan": [
+                        { "step": "render replay card", "status": "completed" }
+                    ]
+                }),
+                caller: None,
+            }],
+        };
+
+        let cells = super::history_cells_from_message(&msg);
+        assert_eq!(cells.len(), 1);
+        let HistoryCell::Tool(ToolCell::PlanUpdate(cell)) = &cells[0] else {
+            panic!("expected update_plan replay cell");
+        };
+
+        assert_eq!(cell.status, ToolStatus::Success);
+        assert_eq!(
+            cell.snapshot.objective.as_deref(),
+            Some("Make Plan mode reviewable")
+        );
+        assert_eq!(cell.snapshot.sources_used, vec!["gh issue view 2691"]);
+        assert_eq!(cell.snapshot.items[0].status, StepStatus::Completed);
+    }
+
+    #[test]
     fn render_thinking_collapsed_shows_details_affordance() {
         let lines = render_thinking(
             "Summary: First line\nSecond line\nThird line\nFourth line\nFifth line",
@@ -3930,7 +4197,26 @@ mod tests {
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
         assert!(text.contains("Full reasoning in Ctrl+O"));
-        assert!(text.contains("thinking"));
+        // Pin the actual header shape ("… reasoning done") — a bare
+        // `contains("reasoning")` is already satisfied by the Ctrl+O
+        // affordance line above and would never fail on its own.
+        let header = lines
+            .first()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        assert!(
+            header.starts_with(REASONING_OPENER),
+            "header opens with the dotted opener: {header:?}"
+        );
+        assert!(
+            header.contains("reasoning done"),
+            "header carries the reasoning title and done status: {header:?}"
+        );
     }
 
     #[test]
@@ -4053,6 +4339,8 @@ mod tests {
             command: "echo hi".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -4392,6 +4680,8 @@ mod tests {
             command: "ls".to_string(),
             status: ToolStatus::Success,
             output: Some("a\nb\n".to_string()),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(10),
             source: ExecSource::Assistant,
@@ -4422,6 +4712,8 @@ mod tests {
             command: "cargo test --workspace --all-features".to_string(),
             status: ToolStatus::Running,
             output: None,
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -4594,21 +4886,23 @@ mod tests {
     fn plan_update_cell_renders_with_dark_theme_tokens() {
         let theme = Theme::dark();
         let cell = PlanUpdateCell {
-            explanation: None,
-            steps: vec![
-                PlanStep {
-                    step: "scan repo".to_string(),
-                    status: "completed".to_string(),
-                },
-                PlanStep {
-                    step: "extract theme".to_string(),
-                    status: "in_progress".to_string(),
-                },
-                PlanStep {
-                    step: "land tests".to_string(),
-                    status: "pending".to_string(),
-                },
-            ],
+            snapshot: PlanSnapshot {
+                items: vec![
+                    crate::tools::plan::PlanItemArg {
+                        step: "scan repo".to_string(),
+                        status: StepStatus::Completed,
+                    },
+                    crate::tools::plan::PlanItemArg {
+                        step: "extract theme".to_string(),
+                        status: StepStatus::InProgress,
+                    },
+                    crate::tools::plan::PlanItemArg {
+                        step: "land tests".to_string(),
+                        status: StepStatus::Pending,
+                    },
+                ],
+                ..PlanSnapshot::default()
+            },
             status: ToolStatus::Running,
         };
 
@@ -4684,12 +4978,60 @@ mod tests {
     }
 
     #[test]
+    fn plan_update_cell_renders_rich_artifact_metadata() {
+        let cell = PlanUpdateCell {
+            snapshot: PlanSnapshot {
+                objective: Some("Make Plan mode reviewable".to_string()),
+                context_summary: Some("Grounded in issue #2691".to_string()),
+                sources_used: vec!["gh issue view 2691".to_string()],
+                critical_files: vec!["crates/tui/src/tools/plan.rs".to_string()],
+                constraints: vec!["Keep checklist primary".to_string()],
+                recommended_approach: Some(
+                    "Enrich update_plan without breaking legacy calls".to_string(),
+                ),
+                verification_plan: Some("Run focused renderer tests".to_string()),
+                risks_and_unknowns: Some("Metadata-only plans can disappear".to_string()),
+                handoff_packet: Some("Next agent should inspect relay output".to_string()),
+                items: vec![crate::tools::plan::PlanItemArg {
+                    step: "Render artifact sections".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+                ..PlanSnapshot::default()
+            },
+            status: ToolStatus::Success,
+        };
+
+        let visible = cell
+            .lines_with_motion(120, true)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(visible.contains("objective:"));
+        assert!(visible.contains("Make Plan mode reviewable"));
+        assert!(visible.contains("source:"));
+        assert!(visible.contains("gh issue view 2691"));
+        assert!(visible.contains("file:"));
+        assert!(visible.contains("verify:"));
+        assert!(visible.contains("handoff:"));
+        assert!(visible.contains("Render artifact sections"));
+    }
+
+    #[test]
     fn exec_cell_failed_status_renders_with_dark_theme_tokens() {
         let theme = Theme::dark();
         let cell = ExecCell {
             command: "false".to_string(),
             status: ToolStatus::Failed,
             output: Some("boom".to_string()),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(42),
             source: ExecSource::Assistant,
@@ -4743,6 +5085,49 @@ mod tests {
 
     fn lines_text(lines: &[ratatui::text::Line<'static>]) -> String {
         lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn exec_cell_renders_live_shell_output_before_final_output() {
+        let cell = ExecCell {
+            command: "cargo test".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: Some("running line 1\nrunning line 2".to_string()),
+            shell_task_id: Some("shell_live".to_string()),
+            started_at: None,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        };
+
+        let text = lines_text(&cell.lines_with_motion(80, true));
+
+        assert!(text.contains("running line 1"));
+        assert!(text.contains("running line 2"));
+        assert!(!text.contains("Ctrl+B backgrounds this command"));
+    }
+
+    #[test]
+    fn exec_cell_prefers_final_output_over_live_shell_tail() {
+        let cell = ExecCell {
+            command: "cargo test".to_string(),
+            status: ToolStatus::Success,
+            output: Some("final output".to_string()),
+            live_output: Some("stale live tail".to_string()),
+            shell_task_id: Some("shell_live".to_string()),
+            started_at: None,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        };
+
+        let text = lines_text(&cell.lines_with_motion(80, true));
+
+        assert!(text.contains("final output"));
+        assert!(!text.contains("stale live tail"));
     }
 
     #[test]
@@ -4861,6 +5246,8 @@ mod tests {
             command: "noisy_script.sh".to_string(),
             status: ToolStatus::Success,
             output: Some(output),
+            live_output: None,
+            shell_task_id: None,
             started_at: None,
             duration_ms: Some(120),
             source: ExecSource::Assistant,
@@ -5266,5 +5653,145 @@ mod tests {
         let label_span = &lines[0].spans[0];
         assert_eq!(label_span.content.as_ref(), "Info");
         assert_eq!(label_span.style.fg, Some(palette::TEXT_DIM));
+    }
+
+    fn success_generic_tool(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some(format!("args for {name}")),
+            output: Some(format!("output for {name}")),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    fn failed_generic_tool(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Failed,
+            input_summary: None,
+            output: Some("failed".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    fn running_generic_tool(name: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Running,
+            input_summary: None,
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    fn shell_tool(command: &str) -> HistoryCell {
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: command.to_string(),
+            status: ToolStatus::Success,
+            output: Some("ok".to_string()),
+            live_output: None,
+            shell_task_id: None,
+            started_at: None,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        }))
+    }
+
+    #[test]
+    fn detect_tool_runs_finds_contiguous_successful_safe_tools() {
+        let history = vec![
+            HistoryCell::User {
+                content: "go".to_string(),
+            },
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+            success_generic_tool("web_search"),
+            HistoryCell::Assistant {
+                content: "done".to_string(),
+                streaming: false,
+            },
+        ];
+
+        let runs = super::detect_tool_runs(&history, 3);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].start, 1);
+        assert_eq!(runs[0].count, 3);
+        assert_eq!(
+            runs[0].tool_families,
+            vec!["read_file", "list_dir", "web_search"]
+        );
+    }
+
+    #[test]
+    fn detect_tool_runs_honors_threshold_and_boundaries() {
+        let short = vec![
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+        ];
+        assert!(super::detect_tool_runs(&short, 3).is_empty());
+
+        let with_assistant_boundary = vec![
+            success_generic_tool("read_file"),
+            HistoryCell::Assistant {
+                content: "pause".to_string(),
+                streaming: false,
+            },
+            success_generic_tool("list_dir"),
+            success_generic_tool("web_search"),
+        ];
+        assert!(super::detect_tool_runs(&with_assistant_boundary, 3).is_empty());
+    }
+
+    #[test]
+    fn detect_tool_runs_keeps_failed_running_and_shell_cells_visible() {
+        let history = vec![
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+            failed_generic_tool("web_search"),
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+            running_generic_tool("web_search"),
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+            shell_tool("rm -rf target"),
+            success_generic_tool("read_file"),
+            success_generic_tool("list_dir"),
+            success_generic_tool("web_search"),
+        ];
+
+        let runs = super::detect_tool_runs(&history, 3);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].start, 9);
+        assert_eq!(runs[0].count, 3);
+    }
+
+    #[test]
+    fn tool_run_summary_reports_compact_success_group() {
+        let run = super::ToolRun {
+            start: 4,
+            count: 5,
+            tool_families: vec!["read_file".to_string(), "list_dir".to_string()],
+        };
+
+        let summary = super::tool_run_summary(&run);
+
+        assert!(summary.contains("5 tools"));
+        assert!(summary.contains("read_file"));
+        assert!(summary.contains("list_dir"));
+        assert!(summary.contains("all ok"));
     }
 }

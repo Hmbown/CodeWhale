@@ -73,21 +73,32 @@ jobs:
             }
 
             const gateMessage = enforceGate
-              ? 'This repository currently uses a maintainer-managed contribution gate, so pull requests from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.'
-              : 'This repository is currently observing a maintainer-managed contribution gate in dry-run mode, so this pull request is staying open. When enforcement is enabled, pull requests from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS` will be closed automatically.';
+              ? 'This repository currently limits automated PR intake to contributors listed in `.github/APPROVED_CONTRIBUTORS`. This is a maintainer-safety control for code review and CI load, not a judgment on the contribution. A maintainer can grant recurring PR access with `/lgtm` after review; once the generated allowlist PR is merged, this pull request can be reopened or resubmitted.'
+              : 'This repository is observing a maintainer-managed PR intake gate in dry-run mode, so this pull request is staying open. This note helps maintainers prepare the allowlist before any enforcement is considered.';
 
-            await github.rest.issues.createComment({
+            const marker = '<!-- codewhale-pr-gate -->';
+            const { data: comments } = await github.rest.issues.listComments({
               owner,
               repo,
               issue_number: pr.number,
-              body: [
-                `Thanks @${pr.user.login} for taking the time to contribute.`,
-                '',
-                gateMessage,
-                '',
-                'Please read `CONTRIBUTING.md` for the expected contribution shape. A maintainer can grant PR access by commenting `/lgtm` on a pull request.',
-              ].join('\n'),
+              per_page: 100,
             });
+            const alreadyNoted = comments.some(comment => (comment.body || '').includes(marker));
+            if (!alreadyNoted) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body: [
+                  marker,
+                  `Thanks @${pr.user.login} for taking the time to contribute.`,
+                  '',
+                  gateMessage,
+                  '',
+                  'Please read `CONTRIBUTING.md` for the expected contribution shape. A maintainer can grant recurring PR access by commenting `/lgtm` on a pull request.',
+                ].join('\n'),
+              });
+            }
 
             if (!enforceGate) return;
 

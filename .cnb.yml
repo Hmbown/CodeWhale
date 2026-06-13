@@ -38,6 +38,7 @@
       script: |
         set -eu
         ./scripts/release/check-versions.sh
+        ./scripts/release/check-ohos-deps.sh
         cargo fmt --all -- --check
         cargo check --workspace --all-targets --locked
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -51,8 +52,6 @@
         node scripts/release/npm-wrapper-smoke.js
         ./target/release/codewhale --version
         ./target/release/codewhale-tui --version
-        ./target/release/deepseek --version
-        ./target/release/deepseek-tui --version
 
 .linux_release_preflight: &linux_release_preflight
   name: linux release preflight
@@ -75,6 +74,7 @@
       script: |
         set -eu
         ./scripts/release/check-versions.sh
+        ./scripts/release/check-ohos-deps.sh
         cargo fmt --all -- --check
         cargo check --workspace --all-targets --locked
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -93,8 +93,6 @@
         node scripts/release/npm-wrapper-smoke.js
         ./target/release/codewhale --version
         ./target/release/codewhale-tui --version
-        ./target/release/deepseek --version
-        ./target/release/deepseek-tui --version
 
 main:
   push:
@@ -115,26 +113,27 @@ $:
     - docker:
         image: rust:1.88-bookworm
       stages:
-        - name: build linux x64 release assets
+        - name: build linux x64 release assets (static)
           script: |
             set -eu
 
             apt-get update
-            apt-get install -y git libdbus-1-dev nodejs pkg-config
+            apt-get install -y git musl-tools nodejs pkg-config
+            rustup target add x86_64-unknown-linux-musl
 
             ./scripts/release/check-versions.sh
-            cargo build --release --locked -p codewhale-cli -p codewhale-tui
+            ./scripts/release/check-ohos-deps.sh
+            cargo build --release --locked \
+              --target x86_64-unknown-linux-musl \
+              -p codewhale-cli -p codewhale-tui
 
             mkdir -p target/cnb-release
-            cp target/release/codewhale target/cnb-release/codewhale-linux-x64
-            cp target/release/codewhale-tui target/cnb-release/codewhale-tui-linux-x64
-            cp target/release/deepseek target/cnb-release/deepseek-linux-x64
-            cp target/release/deepseek-tui target/cnb-release/deepseek-tui-linux-x64
+            BIN_DIR="target/x86_64-unknown-linux-musl/release"
+            cp "$BIN_DIR/codewhale" target/cnb-release/codewhale-linux-x64
+            cp "$BIN_DIR/codewhale-tui" target/cnb-release/codewhale-tui-linux-x64
             strip \
               target/cnb-release/codewhale-linux-x64 \
               target/cnb-release/codewhale-tui-linux-x64 \
-              target/cnb-release/deepseek-linux-x64 \
-              target/cnb-release/deepseek-tui-linux-x64 \
               || true
 
             (
@@ -142,10 +141,7 @@ $:
               sha256sum \
                 codewhale-linux-x64 \
                 codewhale-tui-linux-x64 \
-                deepseek-linux-x64 \
-                deepseek-tui-linux-x64 \
                 > codewhale-artifacts-sha256.txt
-              cp codewhale-artifacts-sha256.txt deepseek-artifacts-sha256.txt
             )
 
             tag_name="${CNB_BRANCH:-}"
@@ -153,6 +149,11 @@ $:
               tag_name="$(git describe --tags --exact-match 2>/dev/null || true)"
             fi
             version="${tag_name#v}"
+            cargo_version="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
+            if [ -n "$tag_name" ] && [ "$version" != "$cargo_version" ]; then
+              echo "ERROR: tag ${tag_name} does not match Cargo.toml version ${cargo_version}" >&2
+              exit 1
+            fi
             commit_sha="${CNB_COMMIT:-$(git rev-parse HEAD)}"
             {
               echo "# ${tag_name:-CNB release}"
@@ -169,9 +170,6 @@ $:
               echo "- codewhale-linux-x64"
               echo "- codewhale-tui-linux-x64"
               echo "- codewhale-artifacts-sha256.txt"
-              echo "- deepseek-linux-x64"
-              echo "- deepseek-tui-linux-x64"
-              echo "- deepseek-artifacts-sha256.txt"
             } > target/cnb-release/CNB_RELEASE.md
 
         - name: create cnb release
@@ -187,6 +185,3 @@ $:
               - target/cnb-release/codewhale-linux-x64
               - target/cnb-release/codewhale-tui-linux-x64
               - target/cnb-release/codewhale-artifacts-sha256.txt
-              - target/cnb-release/deepseek-linux-x64
-              - target/cnb-release/deepseek-tui-linux-x64
-              - target/cnb-release/deepseek-artifacts-sha256.txt

@@ -72,7 +72,7 @@ pub enum HookEvent {
     /// mapping it to a more specific variant.
     GenericEventFrame {
         /// The raw event frame to forward.
-        frame: EventFrame,
+        frame: Box<EventFrame>,
     },
 }
 
@@ -331,6 +331,21 @@ mod tests {
         assert_eq!(encoded["tool_name"], "shell");
         assert_eq!(encoded["phase"], "end");
         assert_eq!(encoded["payload"]["exit_code"], 0);
+    }
+
+    #[test]
+    fn generic_event_frame_serialization_is_unchanged_by_boxing() {
+        let event = HookEvent::GenericEventFrame {
+            frame: Box::new(EventFrame::ResponseStart {
+                response_id: "resp-1".to_string(),
+            }),
+        };
+
+        let encoded = event.to_json();
+
+        assert_eq!(encoded["type"], "generic_event_frame");
+        assert_eq!(encoded["frame"]["event"], "response_start");
+        assert_eq!(encoded["frame"]["response_id"], "resp-1");
     }
 
     #[tokio::test]

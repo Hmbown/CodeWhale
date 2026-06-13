@@ -48,7 +48,7 @@ feed the mock in CI.
 Quick example:
 
 ```bash
-cargo run --bin deepseek -- eval --record crates/tui/tests/fixtures
+cargo run --bin codewhale -- eval --record crates/tui/tests/fixtures
 cat crates/tui/tests/fixtures/offline-tool-loop.jsonl | jq .
 ```
 

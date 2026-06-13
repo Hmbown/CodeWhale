@@ -569,6 +569,89 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // Together AI provider models
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Together,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "together-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Together,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "together-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // Qwen 3.7 Max (OpenRouter)
+            ModelInfo {
+                id: "qwen/qwen3.7-max".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.7-max".to_string(), "qwen-3.7-max".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // OpenAI Codex (ChatGPT OAuth) models
+            ModelInfo {
+                id: "gpt-5.5".to_string(),
+                provider: ProviderKind::OpenaiCodex,
+                aliases: vec!["codex-gpt-5.5".to_string(), "chatgpt-gpt-5.5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // Anthropic native Messages API models (#3014)
+            ModelInfo {
+                id: "claude-opus-4-8".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["opus".to_string(), "claude-opus".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "claude-sonnet-4-6".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["sonnet".to_string(), "claude-sonnet".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "claude-haiku-4-5".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["haiku".to_string(), "claude-haiku".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
+            // MiniMax 2.7 (OpenRouter)
+            ModelInfo {
+                id: "minimax/minimax-2.7".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "minimax-2.7".to_string(),
+                    "minimax-2-7".to_string(),
+                    "openrouter-minimax-2.7".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // NVIDIA Nemotron 3 Ultra (OpenRouter)
+            ModelInfo {
+                id: "nvidia/nemotron-3-ultra".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "nemotron-3-ultra".to_string(),
+                    "nvidia-nemotron-3-ultra".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
         ];
         Self::new(models)
     }

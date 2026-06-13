@@ -51,6 +51,24 @@ impl EngineHandle {
         }
     }
 
+    /// Pause or resume the current pausable command.
+    pub fn set_paused(&self, paused: bool) {
+        match self.shared_paused.lock() {
+            Ok(mut slot) => *slot = paused,
+            Err(poisoned) => *poisoned.into_inner() = paused,
+        }
+    }
+
+    /// Check whether the engine pause gate is set.
+    #[cfg(test)]
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        match self.shared_paused.lock() {
+            Ok(slot) => *slot,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+
     /// Approve a pending tool call
     pub async fn approve_tool_call(&self, id: impl Into<String>) -> Result<()> {
         self.tx_approval

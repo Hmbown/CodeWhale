@@ -6,6 +6,11 @@ Step through this in order from a clean worktree on the release branch
 
 For deeper context on the underlying tools (preflight scripts, npm smoke,
 publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
+For v0.9.0, also complete the dedicated
+[`V0_9_0_RELEASE_ACCEPTANCE.md`](V0_9_0_RELEASE_ACCEPTANCE.md) matrix before
+tagging; it covers provider routes, WhaleFlow feature gates, GUI/runtime smoke,
+remote workbench decisions, and credit hygiene that the generic checklist does
+not enumerate.
 
 ## 1. CHANGELOG entry exists for the version
 
@@ -26,19 +31,27 @@ publish-crates), see [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
       if there is something material the user must work around.
 - [ ] The entry mentions all referenced issue/PR numbers as `#NNNN` so the
       auto-linker on GitHub picks them up.
+- [ ] Run `scripts/sync-changelog.sh` to regenerate `crates/tui/CHANGELOG.md`
+      (the recent-releases slice embedded in the binary for `/change`). Do
+      not edit that file by hand, and do not copy the full root changelog
+      into it — older entries live in `docs/CHANGELOG_ARCHIVE.md`.
 
 ## 2. Version pins are in sync
 
-- [ ] `Cargo.toml` workspace `version` is bumped.
-- [ ] All per-crate `crates/*/Cargo.toml` path-dependency `version = "..."`
-      pins match the new workspace version.
-- [ ] `npm/codewhale/package.json` `version` AND `codewhaleBinaryVersion`
-      are both bumped.
+- [ ] Run `./scripts/release/prepare-release.sh X.Y.Z` — it bumps the
+      workspace version, every per-crate dependency pin,
+      `npm/codewhale/package.json` (`version` + `codewhaleBinaryVersion`),
+      the README install-tag examples, refreshes `Cargo.lock`, regenerates
+      `crates/tui/CHANGELOG.md` and `web/lib/facts.generated.ts`, and ends
+      by running `check-versions.sh`. Write the CHANGELOG entry **before**
+      running it.
 - [ ] `npm/deepseek-tui/package.json` remains private/compatibility-only and
       is **not** bumped or published.
-- [ ] `Cargo.lock` is refreshed (`cargo update --workspace --offline`).
 - [ ] `./scripts/release/check-versions.sh` reports
       `Version state OK: workspace=X.Y.Z, npm=X.Y.Z, lockfile in sync.`
+- [ ] `./scripts/release/check-ohos-deps.sh` reports that the OpenHarmony
+      target graph does not pull the unsupported `nix` 0.28/0.29,
+      `portable-pty`, `starlark`, `arboard`, or `keyring` crates.
 
 ## 3. Preflight gates
 

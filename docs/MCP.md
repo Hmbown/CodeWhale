@@ -61,6 +61,56 @@ manager snapshot. Config edits made from the TUI are written immediately, but
 the model-visible MCP tool pool is not hot-reloaded; the manager marks this as
 restart-required until the TUI is restarted.
 
+## Hugging Face MCP
+
+Hugging Face provides a hosted MCP server for Hub resources, documentation,
+datasets, Spaces, and community tools. CodeWhale does not call Hugging Face's
+Hub HTTP APIs from `/hf`; it only helps you inspect and set up the MCP config
+that the regular MCP manager will load.
+
+The recommended setup path is Hugging Face's settings-generated configuration:
+
+1. Visit <https://huggingface.co/settings/mcp> while signed in.
+2. Choose the MCP client closest to your CodeWhale config shape and copy the
+   generated server snippet.
+3. Paste the Hugging Face server entry into your resolved MCP config file.
+4. Restart CodeWhale, or run `/mcp reload` for the manager snapshot and restart
+   if the model-visible tool pool still needs to rebuild.
+
+CodeWhale reads both `servers` and `mcpServers`, so settings-generated snippets
+can be adapted without changing the rest of the MCP file. A placeholder-only
+shape looks like this:
+
+```json
+{
+  "servers": {
+    "huggingface": {
+      "url": "https://huggingface.co/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HF_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+The placeholder above is not a runnable secret. Use the settings-generated
+value in your private MCP config and never commit real Hugging Face tokens.
+
+Interactive helpers:
+
+```text
+/hf mcp status
+/hf mcp setup
+/hf concepts
+```
+
+`/hf mcp status` checks the configured MCP file for common Hugging Face server
+names or Hugging Face MCP URLs. `/hf concepts` explains the difference between
+the Hugging Face provider route, Hugging Face MCP, and explicit Hub workflows.
+
+Official docs: <https://huggingface.co/docs/hub/hf-mcp-server>
+
 ## Config File Location
 
 Default path:

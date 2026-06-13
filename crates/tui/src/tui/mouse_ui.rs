@@ -42,6 +42,20 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     }
 }
 
+fn toggle_tool_run_expand(app: &mut App, mouse: MouseEvent) -> bool {
+    if !app.tool_collapse_active() {
+        return false;
+    }
+    let Some(rendered_idx) = transcript_cell_index_from_mouse(app, mouse) else {
+        return false;
+    };
+    let original_idx = app.original_cell_index_for_rendered(rendered_idx);
+    if app.tool_run_start_for_history_index(original_idx) != Some(original_idx) {
+        return false;
+    }
+    app.toggle_tool_run_expansion_at(original_idx)
+}
+
 /// Handle mouse events on the sidebar resize handle (the 1-col vertical bar
 /// between the chat area and the sidebar). Returns true when the event was
 /// consumed so other handlers skip it.
@@ -289,11 +303,9 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             // Update last mouse position for tooltip rendering.
             app.last_mouse_pos = Some((mouse.column, mouse.row));
 
-            // Check sidebar sections for hover tooltip. Only surface a tooltip
-            // when the hovered line was actually truncated to fit the panel
-            // width — otherwise it just paints a redundant copy of
-            // already-visible text over the neighbouring row, which reads as
-            // visual corruption.
+            // Check sidebar sections for hover popovers. Only surface a
+            // popover when the hovered row lost information in the compact
+            // sidebar view.
             let mut found = false;
             for section in &app.sidebar_hover.sections {
                 if mouse.column >= section.content_area.x
@@ -309,17 +321,35 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                             .y
                             .saturating_add(section.content_area.height)
                 {
-                    let line_idx = (mouse.row.saturating_sub(section.content_area.y)) as usize;
-                    if let Some(full) = section.lines.get(line_idx) {
-                        let truncated = UnicodeWidthStr::width(full.as_str())
-                            > section.content_area.width as usize;
-                        let desired = truncated.then(|| full.clone());
+                    if let Some(row) = section.rows.iter().find(|row| row.row_y == mouse.row) {
+                        let desired = row.is_truncated.then(|| {
+                            if let Some(detail) = row.detail.as_deref()
+                                && !detail.trim().is_empty()
+                            {
+                                format!("{}\n{detail}", row.full_text)
+                            } else {
+                                row.full_text.clone()
+                            }
+                        });
                         if app.sidebar_hover_tooltip != desired {
                             app.sidebar_hover_tooltip = desired;
                             app.needs_redraw = true;
                         }
                         found = true;
                         break;
+                    } else if section.rows.is_empty() {
+                        let line_idx = (mouse.row.saturating_sub(section.content_area.y)) as usize;
+                        if let Some(full) = section.lines.get(line_idx) {
+                            let truncated =
+                                text_display_width(full) > section.content_area.width as usize;
+                            let desired = truncated.then(|| full.clone());
+                            if app.sidebar_hover_tooltip != desired {
+                                app.sidebar_hover_tooltip = desired;
+                                app.needs_redraw = true;
+                            }
+                            found = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -354,6 +384,16 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             app.viewport.transcript_scrollbar_dragging = false;
             app.viewport.selection_autoscroll = None;
 
+            // #3028: Check sidebar hover state for clickable rows before
+            // falling through to transcript selection.  Reuses the existing
+            // command-palette dispatch pipeline.
+            if let Some(action) = sidebar_click_action(app, mouse) {
+                use crate::tui::views::CommandPaletteAction;
+                return vec![ViewEvent::CommandPaletteSelected {
+                    action: CommandPaletteAction::ExecuteCommand { command: action },
+                }];
+            }
+
             // Click on the transcript scrollbar gutter starts a scrollbar
             // drag so the visible thumb remains interactive for users who
             // prefer mouse-based navigation.
@@ -364,6 +404,10 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
 
             if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
                 app.scroll_to_bottom();
+                return Vec::new();
+            }
+
+            if toggle_tool_run_expand(app, mouse) {
                 return Vec::new();
             }
 
@@ -414,6 +458,30 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     }
 
     Vec::new()
+}
+
+/// Resolve a left-click in the sidebar to a slash command, if the clicked
+/// row has a click_action assigned (#3028).
+fn sidebar_click_action(app: &App, mouse: MouseEvent) -> Option<String> {
+    for section in &app.sidebar_hover.sections {
+        if mouse.column >= section.content_area.x
+            && mouse.column
+                < section
+                    .content_area
+                    .x
+                    .saturating_add(section.content_area.width)
+            && mouse.row >= section.content_area.y
+            && mouse.row
+                < section
+                    .content_area
+                    .y
+                    .saturating_add(section.content_area.height)
+            && let Some(row) = section.rows.iter().find(|row| row.row_y == mouse.row)
+        {
+            return row.click_action.clone();
+        }
+    }
+    None
 }
 
 pub(crate) fn mouse_hits_transcript_scrollbar(app: &App, mouse: MouseEvent) -> bool {
@@ -620,14 +688,7 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
     }
 
     if let Some(filtered_cell_index) = transcript_cell_index_from_mouse(app, mouse) {
-        // Convert filtered index → original virtual index using the
-        // mapping built in ChatWidget::new. When no cells are collapsed
-        // this is an identity mapping.
-        let cell_index = app
-            .collapsed_cell_map
-            .get(filtered_cell_index)
-            .copied()
-            .unwrap_or(filtered_cell_index);
+        let cell_index = app.original_cell_index_for_rendered(filtered_cell_index);
 
         let target = detail_target_label(app, cell_index)
             .map(|label| truncate_line_to_width(label.as_str(), 28))
@@ -961,4 +1022,117 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
             .or(Some("\n"));
     }
     Some(selected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_click_action;
+    use crate::config::Config;
+    use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection, TuiOptions};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+    use std::path::PathBuf;
+
+    fn create_test_app() -> App {
+        let options = TuiOptions {
+            model: "deepseek-v4-pro".to_string(),
+            workspace: PathBuf::from("."),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        App::new(options, &Config::default())
+    }
+
+    fn hover_row(row_y: u16, action: Option<&str>) -> SidebarHoverRow {
+        SidebarHoverRow {
+            row_y,
+            display_text: "row".to_string(),
+            full_text: "row".to_string(),
+            detail: None,
+            is_truncated: false,
+            click_action: action.map(str::to_string),
+        }
+    }
+
+    fn left_click(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn sidebar_click_resolves_row_actions_inside_section() {
+        let mut app = create_test_app();
+        app.sidebar_hover.sections.push(SidebarHoverSection {
+            content_area: Rect::new(60, 4, 20, 6),
+            lines: vec![
+                "header".to_string(),
+                "job row".to_string(),
+                "job detail".to_string(),
+                "agent row".to_string(),
+            ],
+            rows: vec![
+                hover_row(4, None),
+                hover_row(5, Some("/jobs show shell_x")),
+                hover_row(6, Some("/jobs cancel shell_x")),
+                hover_row(7, Some("/subagents")),
+            ],
+        });
+
+        assert_eq!(
+            sidebar_click_action(&app, left_click(65, 5)).as_deref(),
+            Some("/jobs show shell_x"),
+            "job label row resolves to its show action"
+        );
+        assert_eq!(
+            sidebar_click_action(&app, left_click(79, 6)).as_deref(),
+            Some("/jobs cancel shell_x"),
+            "job detail row resolves to its cancel action"
+        );
+        assert_eq!(
+            sidebar_click_action(&app, left_click(60, 7)).as_deref(),
+            Some("/subagents"),
+            "agent row opens the agents view"
+        );
+        assert_eq!(
+            sidebar_click_action(&app, left_click(65, 4)),
+            None,
+            "header row has no action"
+        );
+    }
+
+    #[test]
+    fn sidebar_click_outside_section_resolves_to_none() {
+        let mut app = create_test_app();
+        app.sidebar_hover.sections.push(SidebarHoverSection {
+            content_area: Rect::new(60, 4, 20, 6),
+            lines: vec!["job row".to_string()],
+            rows: vec![hover_row(4, Some("/jobs show shell_x"))],
+        });
+
+        // Left of the sidebar (transcript area).
+        assert_eq!(sidebar_click_action(&app, left_click(10, 4)), None);
+        // Below the section's content area.
+        assert_eq!(sidebar_click_action(&app, left_click(65, 30)), None);
+        // Inside the section but on an empty row without metadata.
+        assert_eq!(sidebar_click_action(&app, left_click(65, 8)), None);
+    }
 }

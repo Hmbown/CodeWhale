@@ -1,0 +1,18 @@
+# HarmonyOS/OpenHarmony cross-build paths are intentionally not configured
+# here. Cargo does not expand environment variables inside target linker paths
+# or CMake toolchain paths, so checked-in absolute SDK paths make the workspace
+# machine-specific.
+#
+# See docs/HarmonyOS.md for setup details.
+#
+# Set OHOS_NATIVE_SDK to the OpenHarmony native SDK directory, then load one of:
+#
+#   PowerShell:
+#     . .\scripts\ohos-env.ps1
+#
+#   Linux/macOS:
+#     . ./scripts/ohos-env.sh
+#
+# The setup scripts export Cargo's target-specific linker, AR, CC, CXX, CFLAGS,
+# CXXFLAGS, CARGO_ENCODED_RUSTFLAGS, CC_SHELL_ESCAPED_FLAGS, and
+# CMAKE_TOOLCHAIN_FILE variables for aarch64-unknown-linux-ohos.

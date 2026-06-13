@@ -16,11 +16,6 @@ use tokio::time::timeout as tokio_timeout;
 
 use crate::config::wire_model_for_provider;
 
-/// Default idle timeout for SSE stream reads (300 seconds = 5 minutes).
-/// After this period with no data, the stream is considered stalled and
-/// yields a recoverable error so the caller can retry.
-const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Default timeout for the initial streaming response headers.
 ///
 /// `doctor` uses a bounded non-streaming request, but normal TUI turns first
@@ -45,17 +40,6 @@ fn stream_open_timeout_from_env(value: Option<&str>) -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_STREAM_OPEN_TIMEOUT.as_secs())
         .clamp(5, 300);
-    Duration::from_secs(secs)
-}
-
-/// Reads the `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` env var, falling back to
-/// the default 300s. The parsed value is clamped to [1, 3600] seconds.
-fn stream_idle_timeout() -> Duration {
-    let secs = std::env::var("DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_STREAM_IDLE_TIMEOUT.as_secs())
-        .clamp(1, 3600);
     Duration::from_secs(secs)
 }
 
@@ -91,6 +75,7 @@ impl DeepSeekClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
+        let cacheable = crate::llm_response_cache::request_is_cacheable(request);
         let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
         let model = wire_model_for_provider(self.api_provider, &request.model);
         let mut body = json!({
@@ -137,6 +122,24 @@ impl DeepSeekClient {
             self.api_provider,
         );
 
+        let response_cache_key = if cacheable {
+            let wire_body =
+                serde_json::to_vec(&body).context("Failed to serialize Chat API cache key")?;
+            let key = crate::llm_response_cache::ResponseCache::make_key(
+                self.api_provider.as_str(),
+                &self.base_url,
+                self.path_suffix.as_deref(),
+                &self.api_key,
+                &wire_body,
+            );
+            if let Some(cached) = crate::llm_response_cache::response_cache().get(&key) {
+                return Ok(cached);
+            }
+            Some(key)
+        } else {
+            None
+        };
+
         let url = api_url_with_suffix(
             &self.base_url,
             "chat/completions",
@@ -171,10 +174,17 @@ impl DeepSeekClient {
             anyhow::bail!("Failed to call DeepSeek Chat API: HTTP {status}: {error_text}");
         }
 
-        let response_text = response.text().await.unwrap_or_default();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read Chat API response body")?;
         let value: Value =
             serde_json::from_str(&response_text).context("Failed to parse Chat API JSON")?;
-        parse_chat_message(&value)
+        let parsed = parse_chat_message(&value)?;
+        if let Some(key) = response_cache_key {
+            crate::llm_response_cache::response_cache().put(key, parsed.clone());
+        }
+        Ok(parsed)
     }
 }
 
@@ -283,6 +293,7 @@ impl DeepSeekClient {
         // gzip-compressor failure when investigating #103.
         let response_headers = format_stream_headers(response.headers());
         let byte_stream = response.bytes_stream();
+        let stream_idle_timeout = self.stream_idle_timeout;
 
         let stream = async_stream::stream! {
             use futures_util::StreamExt;
@@ -315,7 +326,7 @@ impl DeepSeekClient {
             let is_reasoning_model = is_reasoning_model_for_stream(api_provider, &model);
 
             let mut byte_stream = std::pin::pin!(byte_stream);
-            let idle = stream_idle_timeout();
+            let idle = stream_idle_timeout;
 
             // Telemetry for #103 stream-decode diagnostics: bytes received
             // since the start of this stream and last successful event time.
@@ -439,12 +450,11 @@ impl DeepSeekClient {
                 }
             }
 
-            // Close any open blocks
-            if thinking_started {
-                yield Ok(StreamEvent::ContentBlockStop { index: content_index.saturating_sub(1) });
-            }
-            if text_started {
-                yield Ok(StreamEvent::ContentBlockStop { index: content_index.saturating_sub(1) });
+            // Close any open blocks — content_index points to the
+            // currently active open block (it is only incremented
+            // *after* a block is closed, not when opened).
+            if thinking_started || text_started {
+                yield Ok(StreamEvent::ContentBlockStop { index: content_index });
             }
 
             release_stream_buffer(byte_buf);
@@ -1405,7 +1415,7 @@ fn build_chat_messages_with_reasoning(
                         },
                     }));
                 }
-                ContentBlock::Thinking { thinking } => thinking_parts.push(thinking.clone()),
+                ContentBlock::Thinking { thinking, .. } => thinking_parts.push(thinking.clone()),
                 ContentBlock::ToolUse {
                     id,
                     name,
@@ -1982,8 +1992,11 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Novita
             | ApiProvider::Fireworks
             | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
+            | ApiProvider::Volcengine
             | ApiProvider::Arcee
             | ApiProvider::Sglang
+            | ApiProvider::Moonshot // #3016: Kimi thinking traces use reasoning_content
     )
 }
 
@@ -2032,6 +2045,7 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
         reasoning_field(message).filter(|reasoning| !reasoning.trim().is_empty())
     {
         content_blocks.push(ContentBlock::Thinking {
+            signature: None,
             thinking: reasoning.to_string(),
         });
     }
@@ -2130,7 +2144,7 @@ fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
                 }
                 events.push(StreamEvent::ContentBlockStop { index });
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 events.push(StreamEvent::ContentBlockStart {
                     index,
                     content_block: ContentBlockStart::Thinking {
@@ -2734,6 +2748,76 @@ mod stream_decoder_tests {
     }
 
     #[test]
+    fn decoder_streams_moonshot_multi_chunk_reasoning_as_thinking() {
+        // #3016: recorded shape from Moonshot's native endpoint — kimi-k2.6
+        // streams `reasoning_content` deltas before the answer text. The
+        // thinking deltas must accumulate into ONE thinking block and the
+        // answer must arrive as text, not be glued into the trace.
+        let chunks = [
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me check"}}]}"#,
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"reasoning_content":" the config."}}]}"#,
+            r#"{"id":"cmpl-kimi","model":"kimi-k2.6","choices":[{"index":0,"delta":{"content":"The answer is 42."}}]}"#,
+        ];
+
+        let is_reasoning =
+            is_reasoning_model_for_stream(crate::config::ApiProvider::Moonshot, "kimi-k2.6");
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+        let mut events = Vec::new();
+        for chunk in chunks {
+            let value: Value = serde_json::from_str(chunk).expect("valid SSE JSON");
+            events.extend(parse_sse_chunk(
+                &value,
+                &mut content_index,
+                &mut text_started,
+                &mut thinking_started,
+                &mut tool_indices,
+                is_reasoning,
+            ));
+        }
+
+        let thinking: String = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { thinking },
+                    ..
+                } => Some(thinking.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking, "Let me check the config.");
+
+        let thinking_starts = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StreamEvent::ContentBlockStart {
+                        content_block: ContentBlockStart::Thinking { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(thinking_starts, 1, "one thinking block: {events:?}");
+
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::TextDelta { text },
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "The answer is 42.");
+    }
+
+    #[test]
     fn decoder_accepts_openrouter_reasoning_delta_with_extra_fields() {
         let events = decode_chunk(
             r#"{"id":"or-1","choices":[{"delta":{"reasoning":"openrouter thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
@@ -3062,6 +3146,22 @@ mod stream_decoder_tests {
         }
     }
 
+    fn user_message_with_tail_turn_meta(task: &str, turn_meta: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: task.to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: turn_meta.to_string(),
+                    cache_control: None,
+                },
+            ],
+        }
+    }
+
     fn tool_message_content(messages: &[Value], index: usize) -> &str {
         messages
             .iter()
@@ -3126,6 +3226,30 @@ mod stream_decoder_tests {
             format!("{expected_ref}\nsecond task"),
             "ref text must stay stable"
         );
+    }
+
+    #[test]
+    fn request_builder_keeps_tail_turn_meta_after_user_text_for_wire() {
+        let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
+        let messages = vec![
+            user_message_with_tail_turn_meta("first task", turn_meta),
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "first answer".to_string(),
+                    cache_control: None,
+                }],
+            },
+            user_message_with_tail_turn_meta("second task", turn_meta),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let first = user_message_content(&built, 0);
+        let second = user_message_content(&built, 1);
+        let expected_ref = "<turn_meta_unchanged />";
+
+        assert_eq!(first, format!("first task\n{turn_meta}"));
+        assert_eq!(second, format!("second task\n{expected_ref}"));
     }
 
     #[test]
@@ -3597,6 +3721,22 @@ mod alias_thinking_detection_tests {
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
         assert!(provider_accepts_reasoning_content(ApiProvider::XiaomiMimo));
         assert!(provider_accepts_reasoning_content(ApiProvider::Arcee));
+        // #3016: Moonshot's native endpoint streams Kimi thinking as
+        // reasoning_content.
+        assert!(provider_accepts_reasoning_content(ApiProvider::Moonshot));
+    }
+
+    #[test]
+    fn stream_classifies_moonshot_kimi_as_reasoning() {
+        // #3016: without this, kimi-k2.6 thinking leaked into answer text.
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Moonshot,
+            "kimi-k2.6"
+        ));
+        assert!(
+            !is_reasoning_model_for_stream(ApiProvider::Moonshot, "kimi-for-coding"),
+            "kimi-for-coding is Moonshot's documented non-thinking model"
+        );
     }
 
     #[test]

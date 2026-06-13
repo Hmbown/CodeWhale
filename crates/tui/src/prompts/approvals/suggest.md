@@ -1,4 +1,4 @@
-## Approval Policy: Suggest — Tier 2 (Statute)
+##### Approval Policy: Suggest — Tier 2 (Statute)
 
 Read-only operations run silently. Write operations (file edits, patches, shell execution, sub-agent spawns, CSV batches) require user approval before executing.
 

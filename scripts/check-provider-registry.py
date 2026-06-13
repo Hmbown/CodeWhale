@@ -28,7 +28,7 @@ PROVIDERS_MD = ROOT / "docs" / "PROVIDERS.md"
 
 API_PROVIDER_ONLY_IDS = {"deepseek-cn"}
 SHARED_PROVIDER_TABLES = {
-    "siliconflow-CN": "siliconflow",
+    "siliconflow-CN": "siliconflow_cn",
 }
 
 

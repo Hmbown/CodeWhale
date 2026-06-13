@@ -23,7 +23,7 @@ pub struct ImageAnalyzeTool {
 impl ImageAnalyzeTool {
     #[must_use]
     pub fn new(config: VisionModelConfig) -> Self {
-        let client = reqwest::Client::builder()
+        let client = crate::tls::reqwest_client_builder()
             .timeout(Duration::from_secs(120))
             .build()
             .expect("Failed to build HTTP client");

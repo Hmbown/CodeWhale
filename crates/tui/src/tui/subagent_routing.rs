@@ -4,12 +4,14 @@ use std::time::Instant;
 
 use crate::task_manager::{TaskRecord, TaskStatus, TaskSummary};
 use crate::tools::subagent::{MailboxMessage, SubAgentResult, SubAgentStatus};
-use crate::tui::app::{App, AppMode, TaskPanelEntry};
+use crate::tui::app::{App, AppMode, TaskPanelEntry, TaskPanelEntryKind};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::pager::PagerView;
+use crate::tui::tool_routing::refreshes_workspace_context_on_completion;
 use crate::tui::widgets::agent_card::{
     AgentLifecycle, DelegateCard, FanoutCard, apply_to_delegate, apply_to_fanout,
 };
+use crate::tui::workspace_context;
 
 pub(super) fn running_agent_count(app: &App) -> usize {
     let mut ids: std::collections::HashSet<&str> =
@@ -88,6 +90,14 @@ pub(super) fn sort_subagents_in_place(agents: &mut [SubAgentResult]) {
     });
 }
 
+pub(super) fn subagent_message_refreshes_workspace_context(message: &MailboxMessage) -> bool {
+    matches!(
+        message,
+        MailboxMessage::ToolCallCompleted { tool_name, .. }
+            if refreshes_workspace_context_on_completion(tool_name)
+    )
+}
+
 /// Route a `MailboxMessage` envelope to the matching in-transcript card,
 /// allocating a `DelegateCard` or `FanoutCard` on first sight (issue #128).
 pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &MailboxMessage) {
@@ -106,6 +116,9 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     // is special — it always belongs to the active fanout card if one
     // exists; otherwise it seeds a new one.
     let agent_id = message.agent_id().to_string();
+    if subagent_message_refreshes_workspace_context(message) {
+        workspace_context::refresh_now(app, Instant::now());
+    }
 
     if matches!(message, MailboxMessage::ChildSpawned { .. })
         && let Some(idx) = app.last_fanout_card_index
@@ -113,7 +126,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     {
         apply_to_fanout(card, message);
         app.subagent_card_index.insert(agent_id, idx);
-        app.mark_history_updated();
+        app.bump_history_cell(idx);
         return;
     }
 
@@ -129,7 +142,9 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             _ => false,
         };
         if updated {
-            app.mark_history_updated();
+            // idx is already in scope from the outer
+            // `if let Some(&idx) = app.subagent_card_index.get(&agent_id)`.
+            app.bump_history_cell(idx);
         }
         return;
     }
@@ -153,6 +168,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
         {
             card.claim_pending_worker(&agent_id, AgentLifecycle::Running);
             app.subagent_card_index.insert(agent_id, idx);
+            app.bump_history_cell(idx);
         } else {
             let mut card = FanoutCard::new(
                 dispatch_kind.unwrap_or("rlm_eval").to_string(),
@@ -163,18 +179,19 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             let idx = app.history.len().saturating_sub(1);
             app.last_fanout_card_index = Some(idx);
             app.subagent_card_index.insert(agent_id, idx);
+            app.bump_history_cell(idx);
         }
     } else {
         let card = DelegateCard::new(agent_id.clone(), agent_type.clone());
         app.add_message(HistoryCell::SubAgent(SubAgentCell::Delegate(card)));
         let idx = app.history.len().saturating_sub(1);
-        app.subagent_card_index.insert(agent_id, idx);
+        app.subagent_card_index.insert(agent_id.clone(), idx);
         // Single delegate consumes the pending dispatch label so a follow-on
         // tool call doesn't accidentally inherit it.
         app.pending_subagent_dispatch = None;
+        // idx was just inserted on the line above — no need to re-query.
+        app.bump_history_cell(idx);
     }
-
-    app.mark_history_updated();
 }
 
 pub(super) fn task_mode_label(mode: AppMode) -> &'static str {
@@ -187,6 +204,7 @@ pub(super) fn task_summary_to_panel_entry(summary: TaskSummary) -> TaskPanelEntr
         status: task_status_label(summary.status).to_string(),
         prompt_summary: summary.prompt_summary,
         duration_ms: summary.duration_ms,
+        kind: TaskPanelEntryKind::Background,
     }
 }
 

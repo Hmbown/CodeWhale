@@ -45,6 +45,11 @@ use thiserror::Error;
 
 use crate::network_policy::{Decision, NetworkPolicy, host_from_url};
 
+fn reqwest_client() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::new()
+}
+
 /// Cache directory for registry-synced skills.
 ///
 /// Lives at `~/.codewhale/cache/skills/` so it's separate from user-installed
@@ -497,7 +502,9 @@ pub async fn fetch_registry(
         Decision::Deny => return Ok(RegistryFetchResult::Denied(host)),
         Decision::Prompt => return Ok(RegistryFetchResult::NeedsApproval(host)),
     }
-    let body = reqwest::get(registry_url)
+    let body = reqwest_client()
+        .get(registry_url)
+        .send()
         .await
         .with_context(|| format!("failed to fetch registry {registry_url}"))?
         .error_for_status()
@@ -665,7 +672,7 @@ async fn sync_one_skill(
             .flatten();
 
         // Build the request — add If-None-Match if we have a cached ETag.
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
         let mut req = client.get(url);
         if let Some(ref meta) = existing_meta
             && let Some(ref etag) = meta.etag
@@ -981,7 +988,9 @@ enum DownloadAttempt {
 /// would push the buffer over `max_size * 4` (the *4 accounts for compression;
 /// the unpack step still enforces `max_size` on the *uncompressed* bytes).
 async fn download_with_cap(url: &str, max_size: u64) -> Result<DownloadAttempt> {
-    let resp = reqwest::get(url)
+    let resp = reqwest_client()
+        .get(url)
+        .send()
         .await
         .with_context(|| format!("failed to GET {url}"))?;
     let status = resp.status();

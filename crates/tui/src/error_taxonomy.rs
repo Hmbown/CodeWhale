@@ -234,12 +234,12 @@ impl From<LlmError> for ErrorEnvelope {
                 "llm_timeout",
                 format!("Request timed out after {duration:?}"),
             ),
-            LlmError::AuthenticationError(message) => Self::new(
+            LlmError::AuthenticationError(auth) => Self::new(
                 ErrorCategory::Authentication,
                 ErrorSeverity::Critical,
                 false,
                 "llm_auth_error",
-                message,
+                auth.to_user_message(),
             ),
             LlmError::AuthorizationError(message) => Self::new(
                 ErrorCategory::Authorization,
@@ -342,6 +342,10 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
     if lower.contains("network")
         || lower.contains("connection")
         || lower.contains("dns")
+        || lower.contains("stream read error")
+        || lower.contains("error decoding response body")
+        || lower.contains("chunk decode error")
+        || lower.contains("body decode")
         || lower.contains("temporarily unavailable")
         || lower.contains(" 502 ")
         || lower.contains(" 503 ")
@@ -549,6 +553,22 @@ mod tests {
     }
 
     #[test]
+    fn network_catches_stream_body_decode_failures() {
+        for msg in [
+            "Warn Stream read error: error decoding response body",
+            "Stream read error: error decoding response body",
+            "chunk decode error",
+            "provider body decode failed mid-stream",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Network,
+                "expected Network for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
     fn authentication_beats_authorization_when_api_key_phrasing_is_used() {
         // "api key" landing on Authentication (not Authorization) keeps
         // the operator-facing message correct: the user needs to fix
@@ -564,6 +584,35 @@ mod tests {
                 "expected Authentication for `{msg}`",
             );
         }
+    }
+
+    #[test]
+    fn llm_auth_error_envelope_renders_context_without_secret() {
+        let api_key = "tp-secret-token-plan-value";
+        let env = ErrorEnvelope::from(LlmError::from_http_response_with_request_context(
+            401,
+            &format!("Invalid API Key: {api_key}"),
+            Some("Xiaomi MiMo"),
+            Some("https://token-plan-sgp.xiaomimimo.com/v1"),
+            Some("mimo-v2.5"),
+            Some("env"),
+            Some(api_key),
+        ));
+
+        assert_eq!(env.category, ErrorCategory::Authentication);
+        assert_eq!(env.severity, ErrorSeverity::Critical);
+        assert!(!env.recoverable);
+        assert!(env.message.contains("provider: Xiaomi MiMo"));
+        assert!(
+            env.message
+                .contains("base URL authority: token-plan-sgp.xiaomimimo.com")
+        );
+        assert!(env.message.contains("model: mimo-v2.5"));
+        assert!(env.message.contains("key source: env"));
+        assert!(env.message.contains("key fingerprint: tp-... (len=26)"));
+        assert!(env.message.contains("key type: Xiaomi MiMo Token Plan key"));
+        assert!(!env.message.contains(api_key));
+        assert!(!env.message.contains("secret-token-plan-value"));
     }
 
     #[test]

@@ -107,6 +107,9 @@ impl<'a> PtySessionBuilder<'a> {
         }
         if self.clear_env {
             cmd.env_clear();
+            if let Some(path) = std::env::var_os("PATH") {
+                cmd.env("PATH", path);
+            }
         }
         // TERM must be set to something xterm-ish so crossterm enables the
         // capabilities the TUI assumes (256 color, bracketed paste, …).

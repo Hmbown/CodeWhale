@@ -23,6 +23,8 @@
 //! module is the vocabulary, not the layout engine. Keeping it small means
 //! a future visual refresh only has to touch the constants here.
 
+use crate::localization::Locale;
+
 /// Tool family — the verb the agent is performing. Used to pick a glyph
 /// and label for the card header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +99,9 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
 
 /// User-facing label for an arbitrary tool name. Known tools collapse to the
 /// semantic verb; unknown tools keep their exact name for debugging.
+#[cfg(test)]
 #[must_use]
-pub fn tool_display_label_for_name(name: &str) -> String {
+fn tool_display_label_for_name(name: &str) -> String {
     let family = tool_family_for_name(name);
     if matches!(family, ToolFamily::Generic) {
         name.to_string()
@@ -107,15 +110,31 @@ pub fn tool_display_label_for_name(name: &str) -> String {
     }
 }
 
+fn family_message_id(family: ToolFamily) -> crate::localization::MessageId {
+    match family {
+        ToolFamily::Read => crate::localization::MessageId::ToolFamilyRead,
+        ToolFamily::Patch => crate::localization::MessageId::ToolFamilyPatch,
+        ToolFamily::Run => crate::localization::MessageId::ToolFamilyRun,
+        ToolFamily::Find => crate::localization::MessageId::ToolFamilyFind,
+        ToolFamily::Delegate => crate::localization::MessageId::ToolFamilyDelegate,
+        ToolFamily::Fanout => crate::localization::MessageId::ToolFamilyFanout,
+        ToolFamily::Rlm => crate::localization::MessageId::ToolFamilyRlm,
+        ToolFamily::Verify => crate::localization::MessageId::ToolFamilyVerify,
+        ToolFamily::Think => crate::localization::MessageId::ToolFamilyThink,
+        ToolFamily::Generic => crate::localization::MessageId::ToolFamilyGeneric,
+    }
+}
+
 /// Compact activity/status label for arbitrary tool names. Known built-ins use
 /// the semantic verb; unknown tools keep the `tool NAME` form.
 #[must_use]
-pub fn tool_activity_label_for_name(name: &str) -> String {
+pub fn tool_activity_label_for_name(name: &str, locale: Locale) -> String {
     let family = tool_family_for_name(name);
+    let mid = family_message_id(family);
     if matches!(family, ToolFamily::Generic) {
-        format!("tool {name}")
+        format!("{} {name}", crate::localization::tr(locale, mid))
     } else {
-        tool_display_label_for_name(name)
+        crate::localization::tr(locale, mid).to_string()
     }
 }
 
@@ -237,6 +256,7 @@ mod tests {
         tool_display_label_for_name, tool_family_for_name, tool_family_for_title,
         tool_header_summary_for_name,
     };
+    use crate::localization::{Locale, MessageId, tr};
 
     #[test]
     fn legacy_titles_route_to_expected_families() {
@@ -275,10 +295,16 @@ mod tests {
             "future_private_tool"
         );
 
-        assert_eq!(tool_activity_label_for_name("exec_shell"), "run");
-        assert_eq!(tool_activity_label_for_name("run_verifiers"), "verify");
         assert_eq!(
-            tool_activity_label_for_name("future_private_tool"),
+            tool_activity_label_for_name("exec_shell", Locale::En),
+            "run"
+        );
+        assert_eq!(
+            tool_activity_label_for_name("run_verifiers", Locale::En),
+            "verify"
+        );
+        assert_eq!(
+            tool_activity_label_for_name("future_private_tool", Locale::En),
             "tool future_private_tool"
         );
     }
@@ -343,5 +369,81 @@ mod tests {
         assert_eq!(rail_glyph(CardRail::Middle), "\u{2502}");
         assert_eq!(rail_glyph(CardRail::Bottom), "\u{2570}");
         assert!(rail_glyph(CardRail::Single).is_empty());
+    }
+
+    #[test]
+    fn tool_family_labels_localized_no_english_leak() {
+        let checks: &[(MessageId, &str, &str)] = &[
+            (MessageId::ToolFamilyRead, "read", "đọc,读,読,读取,ler,leer"),
+            (
+                MessageId::ToolFamilyPatch,
+                "patch",
+                "vá,補,パ,修补,corrigir,parchear",
+            ),
+            (
+                MessageId::ToolFamilyRun,
+                "run",
+                "chạy,執,実,运行,executar,ejecutar",
+            ),
+            (
+                MessageId::ToolFamilyFind,
+                "find",
+                "tìm,搜,検,搜索,buscar,buscar",
+            ),
+            (
+                MessageId::ToolFamilyVerify,
+                "verify",
+                "xác minh,驗,検,验,verificar,verificar",
+            ),
+        ];
+        for locale in [
+            Locale::Ja,
+            Locale::ZhHans,
+            Locale::ZhHant,
+            Locale::PtBr,
+            Locale::Es419,
+            Locale::Vi,
+        ] {
+            for (id, eng, _) in checks {
+                let msg = tr(locale, *id);
+                assert!(
+                    !msg.eq_ignore_ascii_case(eng),
+                    "{} leaked exact English '{}' for '{:?}': {msg}",
+                    locale.tag(),
+                    eng,
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_family_activity_label_localized_no_english_leak() {
+        let known = [
+            "exec_shell",
+            "read_file",
+            "apply_patch",
+            "grep_files",
+            "run_verifiers",
+        ];
+        let english_labels = ["run", "read", "patch", "find", "verify"];
+        for locale in [
+            Locale::Ja,
+            Locale::ZhHans,
+            Locale::ZhHant,
+            Locale::PtBr,
+            Locale::Es419,
+            Locale::Vi,
+        ] {
+            for (tool, eng) in known.iter().zip(english_labels.iter()) {
+                let label = tool_activity_label_for_name(tool, locale);
+                assert!(
+                    !label.eq_ignore_ascii_case(eng),
+                    "{} leaked English '{}' for tool '{tool}': {label}",
+                    locale.tag(),
+                    eng,
+                );
+            }
+        }
     }
 }

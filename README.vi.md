@@ -1,515 +1,88 @@
-# 🐳 CodeWhale
+# CodeWhale
 
-> **Agent lập trình gốc terminal dành cho DeepSeek V4. Chương trình chạy từ lệnh `codewhale`, hỗ trợ stream các khối suy nghĩ (reasoning blocks), chỉnh sửa workspace cục bộ thông qua các lớp phê duyệt, và đi kèm chế độ tự động để tự chọn mô hình cũng như mức độ suy nghĩ phù hợp cho mỗi lượt.**
+> Harness agent local cho DeepSeek V4 và model mở: bản ngã vận hành, thứ bậc quyền lực, và vòng chứng cứ.
 
-[English README](README.md)
-[简体中文 README](README.zh-CN.md)
-[日本語 README](README.ja-JP.md)
+[English README](README.md) · [简体中文 README](README.zh-CN.md) · [日本語 README](README.ja-JP.md)
+
+![codewhale screenshot](assets/screenshot.png)
+
+## Ý tưởng chính
+
+Phần lớn coding agent bắt đầu bằng sức mạnh: nhiều công cụ hơn, context dài hơn, tự động hóa nhiều hơn. CodeWhale bắt đầu bằng trách nhiệm.
+
+Trước khi một agent sửa repo, nó cần một địa chỉ: terminal này, người dùng này, branch này, session này. Đó là lớp ego. Không phải khoe mẽ, mà là tính liên tục. Không phải mặt nạ personality, mà là nơi trách nhiệm bám vào.
+
+Sau đó nó cần luật. Workspace thật là một chồng xung đột: ý định hiện tại của người dùng, hướng dẫn trong repo, output từ shell, memory cũ, handoff cũ, chính sách an toàn và thay đổi đang dang dở có thể va vào nhau trong cùng một lượt. Constitution của CodeWhale xếp thứ tự cho các nguồn đó: yêu cầu hiện tại cao hơn ngữ cảnh cũ; bằng chứng trực tiếp cao hơn phỏng đoán; kiểm chứng cao hơn sự tự tin; personality chỉ điều chỉnh giọng nói, không quyết định hành động.
+
+Sản phẩm thật là lớp sắp thứ tự quanh model: ai đang hành động, luật nào thắng, chứng cứ nào tồn tại, và người hoặc agent tiếp theo có thể tiếp tục ra sao.
+
+## CodeWhale cung cấp gì
+
+- TUI chạy cục bộ trong terminal.
+- Công cụ có schema cho file, Shell, Git, Web, MCP, RLM và sub-agent.
+- Cổng phê duyệt, sandbox, snapshot side-git và rollback bằng `/restore`.
+- Phản hồi diagnostics từ language server sau khi chỉnh sửa.
+- Sub-agent chạy song song, session bền, fork, relay handoff và Runtime API.
+- DeepSeek V4 là đường chính, cùng các provider rõ ràng như OpenRouter, Xiaomi MiMo, NVIDIA NIM, Arcee, SiliconFlow, Fireworks, Novita, SGLang/vLLM tự host, Ollama và các bề mặt Hugging Face khi chúng được hoàn thiện.
+
+DeepSeek là first-class, nhưng không phải giới hạn duy nhất. Provider, model, base URL và credentials là các lựa chọn tách biệt.
 
 ## Cài đặt
 
-`codewhale` được cài đặt dưới dạng một cặp binary tự chạy bằng Rust đồng bộ với nhau:
-Lệnh điều phối `codewhale` (dispatcher) và môi trường chạy giao diện `codewhale-tui` (runtime) do nó khởi chạy để thực hiện các phiên làm việc tương tác. npm và Docker sẽ tự động cài đặt cả hai cho bạn; đối với Cargo hoặc cài đặt thủ công, bạn phải đặt cả hai tệp binary này trong cùng một thư mục (thông thường là một thư mục nằm trong biến môi trường `PATH` của bạn). Gói npm chỉ là một trình cài đặt/bao bọc (wrapper) cho các tệp binary phát hành này; agent không chạy trên môi trường Node.js.
-
 ```bash
-# 1. npm — dễ nhất nếu bạn đã cài đặt Node. Gói này sẽ tự động tải các
-#    binary Rust dựng sẵn tương ứng từ GitHub Releases.
-npm install -g codewhale
-
-# 2. Cargo — không cần Node. Yêu cầu phiên bản Rust từ 1.88 trở lên (các crate sử dụng
-#    phiên bản Rust edition 2024; các toolchain cũ hơn sẽ báo lỗi "feature `edition2024` is
-#    required"). Hãy chạy lệnh `rustup update` trước, hoặc sử dụng các cách cài đặt không qua Cargo ở dưới.
-cargo install codewhale-cli --locked   # cài đặt `codewhale` (điểm truy cập CLI chính)
-cargo install codewhale-tui     --locked   # cài đặt `codewhale-tui` (giao diện TUI)
-
-# 3. Homebrew — chỉ dành cho khả năng tương thích với cài đặt cũ.
-#    Tap/formula vẫn dùng tên deepseek-tui cũ. Với cài đặt mới, hãy ưu tiên
-#    npm, Cargo, Docker hoặc tải trực tiếp cho đến khi formula được đổi tên.
-brew tap Hmbown/deepseek-tui
-brew install deepseek-tui
-
-# 4. Tải xuống trực tiếp — các gói lưu trữ theo nền tảng từ GitHub Releases.
-#    https://github.com/Hmbown/CodeWhale/releases
-#    Gói nén bao gồm cả codewhale và codewhale-tui cùng một tập lệnh cài đặt.
-#    Các binary riêng lẻ cũng được đính kèm cho các tập lệnh; hãy giữ cặp này ở cùng một nơi.
-
-# 5. Docker — hình ảnh phát hành dựng sẵn.
-docker volume create codewhale-home
-docker run --rm -it \
-  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.codewhale \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  ghcr.io/hmbown/codewhale:latest
-```
-
-> Tại Trung Quốc đại lục, bạn có thể tăng tốc độ tải qua npm bằng tham số
-> `--registry=https://registry.npmmirror.com`, hoặc sử dụng
-> [Cargo mirror](#china--cai-dat-than-thien-qua-mirror) bên dưới.
->
-> An toàn tải xuống: Các binary phát hành chính thức chỉ nằm tại
-> `https://github.com/Hmbown/CodeWhale/releases`. Nếu tải thủ công,
-> vui lòng xác minh mã băm SHA-256 manifest và tránh các kho lưu trữ giả mạo hoặc các
-> trang web mirror trên kết quả tìm kiếm. Xem [an toàn tải xuống và mã xác thực](docs/INSTALL.md#2-download-safety-and-checksums).
-
-Đã cài đặt từ trước? Sử dụng lệnh cập nhật tương ứng với cách bạn đã cài đặt:
-
-```bash
-codewhale update                         # trình cập nhật binary phát hành trực tiếp
-npm install -g codewhale@latest      # thông qua trình bao bọc npm
-brew update && brew upgrade deepseek-tui  # chỉ cho cài đặt Homebrew cũ
-cargo install codewhale-cli --locked --force
-cargo install codewhale-tui     --locked --force
-```
-
-[![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
-[![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
-[Mục lục dự án DeepWiki](https://deepwiki.com/Hmbown/CodeWhale)
-
-![ảnh chụp màn hình codewhale](assets/screenshot.png)
-
----
-
-## CodeWhale là gì?
-
-Mô hình AI chỉ trả lời câu hỏi. Agent hoàn thành một nhiệm vụ. Sự khác biệt nằm ở
-**khung ràng buộc (harness)** — một hệ thống các quy tắc, bằng chứng và phản hồi giúp giữ cho
-mô hình đi đúng hướng thay vì bị trôi lệch mục tiêu.
-
-CodeWhale chính là khung ràng buộc đó, được xây dựng xung quanh DeepSeek V4 và được dẫn dắt bởi ba ý tưởng chính:
-
-| Nguyên tắc | Cách thức hoạt động |
-|---|---|
-| **Bắt đầu với sự tin tưởng** | Mỗi lượt bắt đầu bằng chữ "A" — tìm kiếm khả năng trước khi khẳng định chắc chắn, chú trọng chất lượng trước sự tiện lợi |
-| **Thẩm quyền rõ ràng** | Một bản Hiến pháp bằng văn bản với chín cấp bậc thẩm quyền. Ý định của người dùng quan trọng hơn các hướng dẫn cũ kỹ. Sự xác minh quan trọng hơn sự tự tin. |
-| **Cải tiến đệ quy** | V4 đã tham gia viết nên một phần của khung ràng buộc này. Khi khung ràng buộc tốt lên, V4 hoạt động hiệu quả hơn — và giúp cải tiến khung ràng buộc hơn nữa. Mỗi lượt chạy mới đều bắt đầu mạnh mẽ hơn. |
-
-Dự án này là mã nguồn mở, hoạt động trực tiếp trên terminal và được đóng gói thành một cặp binary Rust đồng bộ là `codewhale` / `codewhale-tui`.
-
-## Khung Ràng Buộc Hoạt Động Thế Nào?
-
-Các mô hình dạng Agent phải xử lý lượng thông tin xung đột rất lớn trên quy mô lớn: ý định của người dùng, quy tắc dự án, cấu hình mặc định của hệ thống, đầu ra của công cụ và bộ nhớ cũ đều cạnh tranh thẩm quyền trong một lượt chạy duy nhất. LLM hoạt động như một thẩm phán cần có thẩm quyền rõ ràng — nguồn thông tin nào sẽ thắng thế khi xảy ra xung đột?
-
-CodeWhale giải quyết vấn đề này bằng một bản **Hiến pháp** (`prompts/base.md`). Đây là một hệ thống phân cấp luật chính thức — Điều VII xếp hạng chín nguồn thông tin từ các điều khoản của chính Hiến pháp xuống đến thông tin bàn giao từ phiên làm việc trước. Tin nhắn hiện tại của người dùng có thẩm quyền cao hơn các hướng dẫn dự án cũ kỹ. Đầu ra trực tiếp từ công cụ có thẩm quyền cao hơn các giả định. Việc xác minh thực tế có thẩm quyền cao hơn sự tự tin của mô hình. Mô hình kế thừa một chuỗi thẩm quyền rõ ràng qua từng lượt và không bao giờ phải đoán xem nên làm theo chỉ thị nào.
-
-Có bảy điều khoản đứng đầu hệ thống phân cấp này, định nghĩa danh tính, nghĩa vụ và quyền hạn của mô hình: yêu cầu xác minh (Điều V — mọi hành động phải để lại bằng chứng thực tế, không bao giờ tuyên bố thành công dựa trên niềm tin mơ hồ), di sản điều phối (Điều VI — giữ cho workspace dễ đọc để trí tuệ tiếp theo có thể tiếp quản), và điều khoản ưu tiên sự thật (Điều II — không có quy tắc cấp dưới nào được phép ghi đè lên nó).
-
-Bộ nhớ đệm tiền tố (prefix caching) của DeepSeek V4 làm cho điều này trở nên khả thi và thực tế. Bản Hiến pháp rất dài và chi tiết, nhưng một khi đã được cache, nó sẽ tốn ít hơn khoảng 100 lần chi phí cho mỗi lượt so với một lần đọc mới hoàn toàn. Mô hình tham chiếu nó một cách đệ quy — xem qua, quét và truy vấn thông qua các phiên RLM — truy cập lại thông tin theo nhu cầu thay vì chỉ dựa trên một lượt ghi nhớ duy nhất. Nó hoạt động giống như một bài kiểm tra mở sách hơn là kiểm tra đóng sách.
-
-Bởi vì cấu trúc thẩm quyền là tường minh, các lỗi và thất bại không bao giờ bị che giấu. Các mã thoát (exit codes) khác không, lỗi kiểu dữ liệu từ rust-analyzer trả về giữa các lượt, từ chối của sandbox — tất cả đều được đưa ngược lại như các vectơ sửa lỗi. Mô hình sử dụng chính sự chệch hướng của mình để tự sửa sai.
-
-Ba chế độ kiểm soát không gian hành động: **Plan** là chế độ chỉ đọc. **Agent** chặn các thao tác can thiệp thay đổi file đằng sau quyền phê duyệt của người dùng. **YOLO** tự động phê duyệt tất cả các công cụ trong các workspace đáng tin cậy. Chế độ Sandbox hoạt động trên macOS Seatbelt; Linux Landlock đã được phát hiện nhưng chưa được áp dụng bắt buộc; chế độ sandboxing trên Windows hiện chưa được hỗ trợ.
-
-**Fin** — một cuộc gọi Flash giá rẻ và tắt chức năng suy nghĩ — xử lý việc tự động định tuyến mô hình cho mỗi lượt. Tham số mặc định là `--model auto`.
-
-Mỗi lượt chạy đều ghi lại một ảnh chụp nhanh side-git bên ngoài thư mục `.git` của repo. Các lệnh `/restore` và `revert_turn` giúp khôi phục nhanh workspace về trạng thái trước đó.
-
-Các sub-agent chạy đồng thời (tối đa 20). Lệnh `agent_open` trả về kết quả ngay lập tức; kết quả trả về nội tuyến dưới dạng các sentinel hoàn thành kèm theo bản tóm tắt. Nhật ký chi tiết của sub-agent được lưu trữ và truy cập thông qua `agent_eval`. Xem chi tiết tại [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
-
-Các tính năng khác của hệ thống bao gồm: chẩn đoán lỗi LSP sau mỗi lần chỉnh sửa file (rust-analyzer, pyright, typescript-language-server, gopls, clangd), các phiên làm việc RLM để phân tích hàng loạt, giao thức MCP, API runtime HTTP/SSE, hàng đợi tác vụ liên tục, adapter ACP cho trình soạn thảo Zed, xuất kết quả định dạng SWE-bench và theo dõi chi phí trực tiếp với bảng phân tích chi tiết lượt hit/miss cache.
-
----
-
-## Khung Kết Nối (Harness)
-
-`codewhale` (CLI điều phối) → `codewhale-tui` (binary giao diện) → giao diện ratatui ↔ công cụ bất đồng bộ ↔ máy khách streaming tương thích với OpenAI. Các lượt gọi công cụ được định tuyến qua một registry có phân loại (shell, thao tác file, git, web, sub-agent, MCP, RLM) và kết quả được truyền trực tuyến trở lại transcript. Công cụ quản lý trạng thái phiên làm việc, theo dõi lượt chạy, hàng đợi tác vụ bền bỉ và một phân hệ LSP cung cấp thông tin chẩn đoán sau khi chỉnh sửa vào ngữ cảnh của mô hình trước bước suy nghĩ tiếp theo.
-
-Xem tài liệu [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) để biết chi tiết toàn bộ luồng hoạt động.
-
-### Sub-agents: Khởi chạy Tác vụ Nền Đồng thời
-
-CodeWhale có thể điều phối nhiều sub-agent chạy song song — hoạt động giống như một hàng đợi tác vụ đồng thời:
-
-- **Khởi chạy không chặn:** Lệnh `agent_open` trả về ngay lập tức. Sub-agent con có một ngữ cảnh độc lập mới và hệ thống đăng ký công cụ riêng để chạy tự chủ. Agent cha vẫn tiếp tục làm việc bình thường.
-- **Thực thi dưới nền:** Các sub-agent chạy đồng thời (giới hạn mặc định: 10, có thể cấu hình lên đến 20). Hệ thống tự quản lý pool tài nguyên này mà không cần vòng lặp thăm dò (polling loop).
-- **Thông báo hoàn thành:** Khi một sub-agent hoàn thành, hệ thống sẽ chèn một khóa sentinel `<codewhale:subagent.done>` vào transcript của agent cha. Một bản tóm tắt thân thiện với con người — bao gồm phát hiện của sub-agent con, các file đã thay đổi và các rủi ro có thể xảy ra — nằm ngay dòng phía trên khóa sentinel. Mô hình cha sẽ đọc tóm tắt đó và tích hợp kết quả thu được mà không cần phải thực hiện thêm bất kỳ lệnh gọi công cụ nào khác.
-- **Truy xuất kết quả có giới hạn:** Nhật ký chi tiết của agent con nằm dưới dạng một `transcript_handle` có thể truy cập qua `agent_eval`. Khi bản tóm tắt là chưa đủ, agent cha có thể gọi `handle_read` để đọc một phần, các dòng cụ thể hoặc lọc qua JSONPath — giúp ngữ cảnh của agent cha luôn tinh gọn mà không làm mất đi các chi tiết quan trọng.
-
-Xem thêm tài liệu [docs/SUBAGENTS.md](docs/SUBAGENTS.md) để tham khảo thông tin đầy đủ về sub-agent.
-
----
-
-## Khởi động nhanh
-
-```bash
-npm install -g codewhale
+cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked
 codewhale --version
 codewhale --model auto
 ```
 
-Cặp binary dựng sẵn và gói nén nền tảng được phát hành cho các kiến trúc **Linux x64**, **Linux ARM64** (từ v0.8.8 trở lên), **macOS x64**, **macOS ARM64**, và **Windows x64**. Đối với các mục tiêu khác (musl, riscv64, FreeBSD, v.v.), xem phần [Cài đặt từ nguồn](#install-from-source) hoặc tài liệu [docs/INSTALL.md](docs/INSTALL.md).
-
-Trong lần chạy đầu tiên, bạn sẽ được nhắc nhập [API key của DeepSeek](https://platform.deepseek.com/api_keys). Khóa này được lưu vào tệp cấu hình `~/.codewhale/config.toml` (tương thích cả tệp cũ `~/.deepseek/config.toml`) để nó hoạt động từ bất kỳ thư mục nào mà không cần nhắc thông tin đăng nhập của hệ điều hành.
-
-Bạn cũng có thể thiết lập trước:
+Các đường khác:
 
 ```bash
-codewhale auth set --provider deepseek   # lưu vào ~/.codewhale/config.toml
-codewhale auth status                    # hiển thị nguồn thông tin đăng nhập đang hoạt động
+# GitHub Releases có archive theo nền tảng:
+# https://github.com/Hmbown/CodeWhale/releases
 
-export DEEPSEEK_API_KEY="YOUR_KEY"      # cách thiết lập qua biến môi trường thay thế; sử dụng ~/.zshenv cho terminal không tương tác
+# Nếu GitHub không ổn định, dùng CNB mirror:
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.58 codewhale-tui --locked --force
+
+# Homebrew legacy trong lúc formula vẫn dùng tên deepseek-tui
+brew tap Hmbown/deepseek-tui
+brew install deepseek-tui
+```
+
+Wrapper npm `codewhale` cũng có thể được cài đặt qua `npm install -g codewhale`.
+
+Docker, tải trực tiếp, mirror Trung Quốc, Windows/Scoop, Nix, checksum và troubleshooting nằm trong [docs/INSTALL.md](docs/INSTALL.md).
+
+## Lần chạy đầu tiên
+
+```bash
+codewhale auth set --provider deepseek
+codewhale auth status
+codewhale doctor
 codewhale
-
-codewhale doctor                         # kiểm tra và xác minh thiết lập
 ```
 
-Nếu lệnh `codewhale doctor` báo lỗi API key bị từ chối đến từ biến môi trường `DEEPSEEK_API_KEY`, hãy xóa cấu hình xuất biến môi trường cũ trong tệp khởi chạy shell của bạn, mở một shell mới hoặc chạy lệnh `codewhale auth set --provider deepseek`. Sử dụng `codewhale auth status` để xem trạng thái của cấu hình, keyring hệ thống và biến môi trường mà không hiển thị trực tiếp khóa API. Các khóa lưu trong file cấu hình sẽ được ưu tiên cao hơn keyring và môi trường để dễ dàng thay đổi khi cần.
+Các lệnh trong TUI thường dùng: `/provider`, `/model`, `/config`, `/statusline`, `/skills`, `/restore`. Bắt đầu dòng bằng `!` để chạy lệnh Shell qua cơ chế approval và sandbox bình thường.
 
-> Để thay đổi hoặc xóa khóa đã lưu: `codewhale auth clear --provider deepseek`.
+## Tài liệu chi tiết
 
-### Tencent Cloud / CNB Remote-First Path
+README chỉ giữ ý tưởng và đường đi nhanh nhất. Chi tiết nằm trong docs và [codewhale.net](https://codewhale.net/):
 
-Đối với không gian làm việc luôn trực tuyến mà bạn có thể điều khiển từ điện thoại, hãy sử dụng đường dẫn gốc của Tencent: CNB mirror/source, Tencent Lighthouse HK, cầu kết nối dài hạn Feishu/Lark, và EdgeOne tùy chọn cho một cổng HTTPS công cộng có kiểm soát. API runtime luôn được giới hạn chạy tại localhost; EdgeOne không được sử dụng để hiển thị công khai đường dẫn `/v1/*`.
+- [User guide](docs/GUIDE.md)
+- [Install guide](docs/INSTALL.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Provider registry](docs/PROVIDERS.md)
+- [Sub-agents](docs/SUBAGENTS.md)
+- [Runtime API](docs/RUNTIME_API.md)
+- [Model Lab](docs/MODEL_LAB.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [v0.9.0 release acceptance](docs/V0_9_0_RELEASE_ACCEPTANCE.md)
 
-Bắt đầu với tài liệu [docs/TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md), sau đó xem thêm tài liệu [docs/TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) để biết các vận hành máy chủ.
+## Track v0.9.0
 
-### Chế độ Tự động (Auto Mode)
-
-Sử dụng `codewhale --model auto` hoặc gõ lệnh `/model auto` khi bạn muốn hệ thống tự động quyết định sức mạnh của mô hình và cấp độ suy nghĩ cần thiết cho mỗi lượt.
-
-Chế độ tự động điều khiển hai cài đặt cùng nhau:
-
-- Mô hình: `deepseek-v4-flash` hoặc `deepseek-v4-pro`
-- Cấp độ suy nghĩ: `off`, `high`, hoặc `max`
-
-Trước khi lượt gửi chính thức được thực hiện, ứng dụng sẽ thực hiện một cuộc gọi định tuyến nhỏ thông qua mô hình `deepseek-v4-flash` tắt chế độ suy nghĩ. Trình định tuyến đó sẽ đánh giá yêu cầu mới nhất và ngữ cảnh gần đây, từ đó chọn mô hình cụ thể và cấp độ suy nghĩ phù hợp cho lượt gọi thực tế. Các lượt tương tác ngắn/đơn giản sẽ được chạy trên mô hình Flash tắt suy nghĩ; các công việc lập trình phức tạp, gỡ lỗi, phát hành, kiến trúc phần mềm, kiểm tra bảo mật hoặc các tác vụ nhiều bước mơ hồ sẽ được đẩy lên mô hình Pro với cấp độ suy nghĩ cao hơn.
-
-Cơ chế `auto` hoạt động hoàn toàn cục bộ trên máy của bạn. API ở máy chủ upstream không bao giờ nhận được chuỗi `model: "auto"`; nó luôn nhận được mô hình cụ thể và cấu hình suy nghĩ đã được chọn cho lượt chạy đó. Giao diện TUI hiển thị tuyến đường định tuyến được chọn và bộ theo dõi chi phí sẽ tính tiền cho mô hình thực tế đã chạy. Nếu cuộc gọi định tuyến thất bại hoặc trả về câu trả lời không hợp lệ, ứng dụng sẽ chuyển sang thuật toán phỏng đoán cục bộ. Các sub-agent con sẽ kế thừa chế độ tự động này trừ khi bạn chỉ định rõ một mô hình cho chúng.
-
-Hãy chỉ định mô hình hoặc cấp độ suy nghĩ cố định nếu bạn muốn chạy benchmark lặp lại nhất quán, kiểm soát nghiêm ngặt chi phí trần hoặc có cấu hình ánh xạ nhà cung cấp/mô hình tùy chỉnh cụ thể.
-
-### Linux ARM64 (Raspberry Pi, Asahi, Graviton, HarmonyOS PC)
-
-Lệnh cài đặt `npm i -g codewhale` hoạt động trên môi trường Linux ARM64 nền glibc từ phiên bản v0.8.8 trở đi. Bạn cũng có thể tải trực tiếp các tệp binary dựng sẵn từ [trang phát hành Releases](https://github.com/Hmbown/CodeWhale/releases) và đặt chúng cạnh nhau trong một thư mục thuộc biến `PATH`.
-
-### Cài đặt thân thiện qua Mirror (Tại Trung Quốc)
-
-Nếu việc tải xuống từ GitHub hoặc npm bị chậm từ Trung Quốc đại lục, bạn hãy sử dụng mirror registry cho Cargo:
-
-```toml
-# ~/.cargo/config.toml
-[source.crates-io]
-replace-with = "tuna"
-
-[source.tuna]
-registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"
-```
-
-Sau đó cài đặt cả hai binary (trình điều phối sẽ ủy quyền cho TUI tại thời điểm chạy):
-
-```bash
-cargo install codewhale-cli --locked   # cung cấp lệnh `codewhale`
-cargo install codewhale-tui     --locked   # cung cấp giao diện `codewhale-tui`
-codewhale --version
-```
-
-Các binary dựng sẵn cũng có thể được tải từ [GitHub Releases](https://github.com/Hmbown/CodeWhale/releases). Thiết lập biến `DEEPSEEK_TUI_RELEASE_BASE_URL` để sử dụng mirror tải các tệp tài nguyên phát hành.
-
-### Windows (Scoop)
-
-[Scoop](https://scoop.sh) là một trình quản lý gói phổ biến trên Windows. Gói `codewhale` đã được liệt kê trong bucket chính của Scoop, tuy nhiên gói cài đặt này hoạt động độc lập và đôi khi cập nhật chậm hơn các bản phát hành chính thức trên GitHub/npm/Cargo. Chạy lệnh `scoop update` trước, sau đó xác minh phiên bản đã cài bằng `codewhale --version`:
-
-```bash
-scoop update
-scoop install codewhale
-codewhale --version
-```
-
-Vui lòng sử dụng phương pháp npm hoặc tải trực tiếp từ GitHub Releases nếu bạn muốn trải nghiệm phiên bản mới nhất trước khi Scoop cập nhật.
-
-<details id="install-from-source">
-<summary>Cài đặt từ mã nguồn</summary>
-
-Cách này hoạt động trên bất kỳ kiến trúc mục tiêu Tier-1 nào được Rust hỗ trợ — bao gồm cả musl, riscv64, FreeBSD và các bản phân phối ARM64 Linux cũ.
-
-```bash
-# Các thư viện phụ thuộc để build trên Linux (Debian/Ubuntu/RHEL):
-#   sudo apt-get install -y build-essential pkg-config libdbus-1-dev
-#   sudo dnf install -y gcc make pkgconf-pkg-config dbus-devel
-
-git clone https://github.com/Hmbown/CodeWhale.git
-cd CodeWhale
-
-cargo install --path crates/cli --locked   # yêu cầu Rust 1.88+; cung cấp `codewhale`
-cargo install --path crates/tui --locked   # cung cấp giao diện `codewhale-tui`
-```
-
-Cả hai tệp binary đều bắt buộc phải cài đặt. Xem hướng dẫn biên dịch chéo và ghi chú riêng theo nền tảng tại: [docs/INSTALL.md](docs/INSTALL.md).
-
-</details>
-
-### Các Nhà Cung Cấp API Khác
-
-Để xem danh sách đầy đủ tất cả các nhà cung cấp được hỗ trợ chính thức, bao gồm mã định danh mô hình, biến xác thực, URL cơ sở và ranh giới tính năng, xem thêm tài liệu [docs/PROVIDERS.md](docs/PROVIDERS.md).
-
-```bash
-# NVIDIA NIM
-codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
-codewhale --provider nvidia-nim
-
-# AtlasCloud
-codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
-codewhale --provider atlascloud
-
-# Wanjie Ark
-codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"
-codewhale --provider wanjie-ark --model deepseek-reasoner
-
-# OpenRouter
-codewhale auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
-codewhale --provider openrouter --model deepseek/deepseek-v4-pro
-
-# Novita
-codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
-codewhale --provider novita --model deepseek/deepseek-v4-pro
-
-# Fireworks
-codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
-codewhale --provider fireworks --model deepseek-v4-pro
-
-# Các endpoint tương thích định dạng OpenAI chung
-codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
-OPENAI_BASE_URL="https://openai-compatible.example/v4" codewhale --provider openai --model glm-5
-
-# Tự host bằng SGLang
-SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model deepseek-v4-flash
-
-# Tự host bằng vLLM
-VLLM_BASE_URL="http://localhost:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
-# Sử dụng vLLM qua kết nối HTTP trong mạng LAN đáng tin cậy
-DEEPSEEK_ALLOW_INSECURE_HTTP=1 VLLM_BASE_URL="http://192.168.0.110:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
-
-# Tự host bằng Ollama
-ollama pull codewhale-coder:1.3b
-codewhale --provider ollama --model codewhale-coder:1.3b
-
-# Hugging Face Inference Providers
-codewhale auth set --provider huggingface --api-key "YOUR_HF_TOKEN"
-codewhale --provider huggingface --model deepseek-ai/DeepSeek-V4-Pro
-```
-
-Bên trong giao diện TUI, lệnh `/provider` mở bảng chọn nhà cung cấp và `/model` mở bảng chọn mô hình/cấp độ suy nghĩ cục bộ. Lệnh `/provider openrouter` và `/model <id>` chuyển đổi trực tiếp, trong khi lệnh `/models` sẽ truy vấn trực tiếp và hiển thị danh sách các mô hình API trực tuyến từ nhà cung cấp (nếu nhà cung cấp hỗ trợ tính năng liệt kê mô hình).
-
----
-
-## Nhật ký thay đổi (Release Notes)
-
-Chi tiết thay đổi giữa các phiên bản được cập nhật tại [CHANGELOG.md](CHANGELOG.md). File README này chỉ tập trung vào các đường dẫn cài đặt hiện tại, quy trình làm việc cốt lõi, thiết lập nhà cung cấp API, giao diện và các điểm mở rộng tính năng của dự án.
-
----
-
-## Cách sử dụng
-
-```bash
-codewhale                                         # giao diện tương tác TUI chính
-codewhale "explain this function"                 # thực thi prompt nhanh một lượt
-codewhale exec --auto --output-format stream-json "fix this bug"  # truyền phát luồng dữ liệu NDJSON backend
-codewhale exec --resume <SESSION_ID> "follow up"  # tiếp tục phiên làm việc không tương tác cũ
-codewhale --model deepseek-v4-flash "summarize"   # ghi đè mô hình chạy chỉ định
-codewhale --model auto "fix this bug"             # tự động chọn mô hình và cấp độ suy nghĩ thích hợp
-codewhale --yolo                                  # tự động phê duyệt chạy các công cụ
-codewhale auth set --provider deepseek            # lưu trữ API key
-codewhale doctor                                  # tự động kiểm tra cài đặt và kết nối mạng
-codewhale doctor --json                           # trả về chuẩn đoán định dạng máy đọc được
-codewhale setup --status                          # chỉ đọc trạng thái thiết lập hiện tại
-codewhale setup --tools --plugins                 # tạo sẵn cấu trúc thư mục tool/plugin
-codewhale models                                  # liệt kê các mô hình khả dụng trực tuyến
-codewhale sessions                                # liệt kê các phiên làm việc đã lưu
-codewhale resume --last                           # tiếp tục phiên làm việc gần nhất trong thư mục này
-codewhale resume <SESSION_ID>                     # tiếp tục một phiên làm việc cụ thể theo mã UUID
-codewhale fork <SESSION_ID>                       # tạo một nhánh (fork) phiên làm việc đã lưu sang đường dẫn mới
-codewhale serve --http                            # khởi chạy máy chủ API định dạng HTTP/SSE
-codewhale serve --acp                             # khởi chạy adapter ACP qua stdio cho trình soạn thảo Zed/agent tùy chỉnh
-codewhale run pr <N>                              # tải PR về và nạp sẵn vào prompt đánh giá
-codewhale mcp list                                # liệt kê các máy chủ MCP đã cấu hình
-codewhale mcp validate                            # kiểm tra cấu hình và kết nối máy chủ MCP
-codewhale mcp-server                              # khởi chạy máy chủ MCP điều phối qua cổng stdio
-codewhale update                                  # kiểm tra và cài đặt phiên bản binary mới nhất
-```
-
-### Tạo nhánh phiên làm việc (Branching)
-
-Các phiên làm việc được lưu có thể được phân nhánh một cách có chủ đích. Lệnh `codewhale fork <SESSION_ID>` sao chép toàn bộ phiên làm việc cũ sang một phiên mới song song, lưu trữ mã ID của phiên cha trong siêu dữ liệu (metadata) và mở phiên fork đó ra để bạn có thể thử nghiệm hướng phát triển mới mà không làm ảnh hưởng đến lịch sử phiên làm việc gốc. Trình chọn phiên làm việc và danh sách `codewhale sessions` sẽ đánh dấu rõ ràng các phiên được fork kèm theo mã ID của phiên cha.
-
-Bên trong giao diện TUI, bạn có thể nhấn phím `Esc` hai lần (`Esc-Esc`) để quay ngược lại transcript và đưa prompt cũ về lại phần soạn thảo để chỉnh sửa lại nội dung. Các lệnh `/restore` và `revert_turn` là công cụ khôi phục workspace độc lập: chúng khôi phục lại các tệp tin dựa trên ảnh chụp nhanh side-git nhưng không làm thay đổi hay ghi đè lịch sử trò chuyện của phiên làm việc.
-
-Các hình ảnh Docker được phát hành lên GHCR cho các bản dựng phát hành chính thức:
-
-```bash
-docker volume create codewhale-home
-
-docker run --rm -it \
-  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.codewhale \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  ghcr.io/hmbown/codewhale:latest
-```
-
-Xem tài liệu [docs/DOCKER.md](docs/DOCKER.md) để biết thêm thông tin về thẻ phiên bản (pinned tags), cách tự dựng image cục bộ, lưu ý quyền sở hữu volume và cách sử dụng cho pipeline không tương tác.
-
-### Zed / ACP
-
-DeepSeek có thể chạy dưới dạng một máy chủ Agent Client Protocol (ACP) cục bộ cho các trình soạn thảo mã nguồn hỗ trợ giao tiếp ACP qua cổng stdio. Trong trình soạn thảo Zed, bạn hãy thêm cấu hình máy chủ agent tùy chỉnh sau:
-
-```json
-{
-  "agent_servers": {
-    "DeepSeek": {
-      "type": "custom",
-      "command": "codewhale",
-      "args": ["serve", "--acp"],
-      "env": {}
-    }
-  }
-}
-```
-
-Phân hệ ACP ban đầu hỗ trợ khởi tạo phiên làm việc mới và nhận phản hồi prompt qua cấu hình và API key hiện tại của DeepSeek. Tính năng chỉnh sửa tích hợp công cụ và phát lại checkpoint hiện chưa được hỗ trợ qua giao diện ACP.
-
-Adapter do cộng đồng phát triển: [acp-codewhale-adapter](https://github.com/rockeverm3m/acp-codewhale-adapter) hỗ trợ cầu nối lệnh `codewhale exec --auto` với `cc-connect` cho người dùng cần quy trình làm việc ACP có tích hợp công cụ bên ngoài trình soạn thảo Zed.
-
-### Phím Tắt Tiêu Biểu
-
-| Phím | Hành động |
-|---|---|
-| `Tab` | Hoàn thành gợi ý lệnh `/` hoặc các nhãn tệp `@`; khi đang chạy, xếp tin nhắn nháp vào hàng đợi chạy tiếp theo; hoặc chuyển đổi qua lại giữa các chế độ |
-| `Shift+Tab` | Thay đổi nhanh cấp độ suy nghĩ: off → high → max |
-| `F1` | Mở màn hình trợ giúp phím tắt có thanh tìm kiếm |
-| `Esc` | Quay lại / đóng cửa sổ popup |
-| `Ctrl+K` | Mở bảng lệnh nhanh (Command palette) |
-| `Ctrl+R` | Tiếp tục một phiên làm việc cũ |
-| `Alt+R` | Tìm kiếm lịch sử prompt cũ để khôi phục tin nháp đã xóa |
-| `Ctrl+S` | Cất tin nháp hiện tại vào bộ nhớ tạm (dùng `/stash list`, `/stash pop` để lấy lại) |
-| `@path` | Đính kèm ngữ cảnh file hoặc thư mục trực tiếp tại trình soạn thảo văn bản |
-| `↑` (tại đầu composer) | Chọn hàng tệp tin đính kèm để xóa |
-
-Xem danh sách phím tắt đầy đủ tại: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
-
----
-
-## Chế độ hoạt động (Modes)
-
-| Chế độ | Hành vi hoạt động |
-| --- | --- |
-| **Plan** 🔍 | Chế độ khảo sát chỉ đọc — mô hình tìm hiểu cấu trúc và đề xuất kế hoạch hành động cụ thể trước khi sửa đổi file; các cuộc khảo sát nhiều bước sử dụng công cụ `checklist_write` |
-| **Agent** 🤖 | Chế độ tương tác mặc định — thực thi tác vụ nhiều bước có kiểm soát đằng sau các cổng phê duyệt; các tác vụ lớn sẽ được theo dõi qua `checklist_write` |
-| **YOLO** ⚡ | Tự động phê duyệt tất cả các lệnh gọi công cụ trong các workspace tin cậy; các tác vụ nhiều bước vẫn duy trì checklist hiển thị trực quan |
-
----
-
-## Cấu hình
-
-Cấu hình của người dùng lưu tại: `~/.codewhale/config.toml` (tự động fallback về tệp cũ `~/.deepseek/config.toml` nếu có). Cấu hình riêng của dự án ghi đè tại: `<workspace>/.codewhale/config.toml` (hoặc `<workspace>/.deepseek/config.toml`) (lưu ý các trường sau bị cấm ghi đè ở cấp dự án: `api_key`, `base_url`, `provider`, `mcp_config_path`). Tham khảo tệp [config.example.toml](config.example.toml) để xem đầy đủ tất cả cấu hình mẫu.
-
-Các biến môi trường chính:
-
-| Biến môi trường | Mục đích sử dụng |
-|---|---|
-| `DEEPSEEK_API_KEY` | Khóa API key chính |
-| `DEEPSEEK_BASE_URL` | Địa chỉ URL cơ sở của máy chủ API |
-| `DEEPSEEK_HTTP_HEADERS` | Các header tùy chỉnh gửi kèm yêu cầu API, ví dụ `X-Model-Provider-Id=your-model-provider` |
-| `DEEPSEEK_MODEL` | Mô hình mặc định |
-| `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Thời gian chờ tối đa khi stream bị rảnh (giây), mặc định là `300`, giới hạn trong khoảng `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | Các nhà cung cấp: `deepseek` (mặc định), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface` |
-| `DEEPSEEK_PROFILE` | Tên cấu hình profile sử dụng |
-| `DEEPSEEK_MEMORY` | Thiết lập là `on` để kích hoạt tính năng tự ghi nhớ thông tin người dùng |
-| `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Cho phép sử dụng các đường dẫn API dạng `http://` không mã hóa trong các mạng LAN tin cậy |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `VOLCENGINE_API_KEY` / `ARK_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SILICONFLOW_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Thông tin đăng nhập theo từng nhà cung cấp tương ứng |
-| `OPENAI_BASE_URL` / `OPENAI_MODEL` | Điểm cuối (endpoint) và mã mô hình cho nhà cung cấp tương thích định dạng OpenAI chung |
-| `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | Endpoint và mô hình ghi đè cho AtlasCloud |
-| `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Endpoint và mô hình ghi đè cho Wanjie Ark |
-| `VOLCENGINE_BASE_URL` / `ARK_BASE_URL` / `VOLCENGINE_MODEL` / `ARK_MODEL` | Endpoint và mô hình ghi đè cho Volcengine Ark |
-| `OPENROUTER_BASE_URL` | Endpoint ghi đè cho OpenRouter |
-| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` | Endpoint và mô hình ghi đè cho Xiaomi MiMo |
-| `NOVITA_BASE_URL` | Endpoint ghi đè cho Novita |
-| `FIREWORKS_BASE_URL` | Endpoint ghi đè cho Fireworks |
-| `SILICONFLOW_BASE_URL` / `SILICONFLOW_MODEL` | Endpoint và mô hình ghi đè cho SiliconFlow |
-| `MOONSHOT_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_BASE_URL` / `KIMI_MODEL` | Endpoint và mô hình ghi đè cho Moonshot/Kimi |
-| `SGLANG_BASE_URL` | Endpoint cho máy chủ SGLang tự host |
-| `SGLANG_MODEL` | Mã mô hình cho máy chủ SGLang tự host |
-| `VLLM_BASE_URL` | Endpoint cho máy chủ vLLM tự host |
-| `VLLM_MODEL` | Mã mô hình cho máy chủ vLLM tự host |
-| `OLLAMA_BASE_URL` | Endpoint cho máy chủ Ollama tự host |
-| `OLLAMA_MODEL` | Thẻ mô hình (model tag) cho máy chủ Ollama tự host |
-| `HUGGINGFACE_API_KEY` / `HF_TOKEN` | Xác thực Hugging Face |
-| `HUGGINGFACE_BASE_URL` / `HUGGINGFACE_MODEL` | Ghi đè endpoint và mô hình Hugging Face |
-| `NO_ANIMATIONS=1` | Bắt buộc chạy ở chế độ hỗ trợ khả năng tiếp cận (Accessibility mode), tắt hiệu ứng khi khởi động |
-| `SSL_CERT_FILE` | Đường dẫn file CA bundle tùy chỉnh khi sử dụng proxy nội bộ doanh nghiệp |
-
-Thiết lập thuộc tính `locale` trong file `settings.toml`, sử dụng lệnh `/config locale vi`, hoặc dựa vào cài đặt biến `LC_ALL`/`LANG` của hệ điều hành để lựa chọn ngôn ngữ cho giao diện TUI và ngôn ngữ nhắc nhở gửi kèm tới các mô hình V4. Tin nhắn mới nhất của người dùng vẫn có mức độ ưu tiên cao nhất để mô hình tự động chọn ngôn ngữ phản hồi tương ứng, do đó các câu hỏi bằng Tiếng Việt của người dùng vẫn sẽ luôn nhận được câu trả lời bằng Tiếng Việt ngay cả khi hệ điều hành đang thiết lập giao diện hiển thị mặc định bằng tiếng Anh. Xem tài liệu hướng dẫn cấu hình tại [docs/CONFIGURATION.md](docs/CONFIGURATION.md) và [docs/MCP.md](docs/MCP.md).
-
----
-
-## Mô hình & Giá cả
-
-| Mô hình | Ngữ cảnh | Đầu vào (Hit Cache) | Đầu vào (Miss Cache) | Đầu ra |
-|---|---|---|---|---|
-| `deepseek-v4-pro` | 1M | $0.003625 / 1M | $0.435 / 1M | $0.87 / 1M |
-| `deepseek-v4-flash` | 1M | $0.0028 / 1M | $0.14 / 1M | $0.28 / 1M |
-
-Nền tảng DeepSeek mặc định sử dụng đường dẫn `https://api.deepseek.com/beta` để bạn có thể trải nghiệm các tính năng API beta mà không cần thiết lập cấu hình phức tạp. Thiết lập thuộc tính `base_url = "https://api.deepseek.com"` nếu muốn tắt tính năng này.
-
-Các tên định danh cũ `deepseek-chat` / `deepseek-reasoner` sẽ được tự động ánh xạ đến `deepseek-v4-flash` và sẽ chính thức dừng hoạt động sau ngày 24 tháng 7 năm 2026. Các biến thể NVIDIA NIM sẽ áp dụng theo điều khoản tài khoản NVIDIA của bạn.
-
-> [!Note]
-> Trang cấu trúc giá của DeepSeek hiện đã cập nhật bảng giá trên của dòng V4 Pro làm mức giá cố định vĩnh viễn: Chương trình khuyến mãi giảm giá 75% trước đó đã được chính thức tích hợp thẳng vào giá cơ sở từ sau khi thời hạn khuyến mãi kết thúc vào lúc 15:59 UTC ngày 31 tháng 5 năm 2026. Trình tính toán chi phí trên giao diện TUI của CodeWhale đã cập nhật các giá trị mới này, do đó bạn không cần thực hiện thêm thay đổi nào. Để theo dõi các thay đổi giá trong tương lai, vui lòng tham khảo [trang giá chính thức của DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing).
-
----
-
-## Chia Sẻ Skill Tự Viết
-
-CodeWhale sẽ tự động quét và tìm kiếm các skill được định nghĩa từ các thư mục của dự án (`.agents/skills` → `skills` → `.opencode/skills` → `.claude/skills` → `.cursor/skills`) và các thư mục cấu hình toàn cục (`~/.agents/skills` → `~/.claude/skills` → `~/.codewhale/skills` → `~/.deepseek/skills`). Mỗi skill là một thư mục chứa một tệp tin `SKILL.md`:
-
-```text
-~/.agents/skills/my-skill/
-└── SKILL.md
-```
-
-Yêu cầu định nghĩa phần Frontmatter ở đầu file:
-
-```markdown
----
-name: my-skill
-description: Sử dụng skill này khi bạn muốn DeepSeek tuân thủ theo quy trình làm việc tùy chỉnh của tôi.
----
-
-# My Skill
-Các hướng dẫn chi tiết dành cho agent được viết tại đây.
-```
-
-Các lệnh tương tác: `/skills` (liệt kê), `/skill <name>` (kích hoạt), `/skill new` (tạo khung mẫu), `/skill install github:<owner>/<repo>` (cài đặt từ cộng đồng GitHub), `/skill update` / `uninstall` / `trust` để quản lý. Cài đặt các skill từ cộng đồng GitHub không yêu cầu chạy thêm bất kỳ dịch vụ nền nào. Các skill sau khi cài đặt sẽ hiển thị trong phần ngữ cảnh phiên làm việc mà mô hình AI có thể đọc được; agent có thể tự chọn skill phù hợp qua công cụ `load_skill` khi nhiệm vụ của bạn khớp với phần mô tả của skill.
-
-Trong lần chạy đầu tiên, chương trình cũng tự động cài đặt sẵn một số skill hệ thống cho các quy trình phổ biến:
-`skill-creator`, `delegate`, `v4-best-practices`, `plugin-creator`, `skill-installer`, `mcp-builder`, `documents`, `presentations`, `spreadsheets`, `pdf`, và `feishu`. Các skill này nằm trong thư mục `~/.codewhale/skills` (hoặc thư mục cũ `~/.deepseek/skills`) và được quản lý phiên bản để các bản nâng cấp mới được cài đặt tự động mà không làm ảnh hưởng đến các skill do người dùng tự chủ động xóa trước đó.
-
----
-
-## Tài liệu hướng dẫn
-
-| Tài liệu | Chủ đề chi tiết |
-|---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Cấu trúc bên trong của cơ sở mã nguồn |
-| [CONFIGURATION.md](docs/CONFIGURATION.md) | Hướng dẫn cấu hình chi tiết và đầy đủ nhất |
-| [MODES.md](docs/MODES.md) | Các chế độ hoạt động: Plan / Agent / YOLO |
-| [MCP.md](docs/MCP.md) | Tích hợp giao thức Model Context Protocol |
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | Hướng dẫn sử dụng máy chủ API HTTP/SSE |
-| [INSTALL.md](docs/INSTALL.md) | Hướng dẫn cài đặt riêng theo từng nền tảng |
-| [DOCKER.md](docs/DOCKER.md) | Sử dụng Docker image trên GHCR, volume lưu trữ |
-| [CNB_MIRROR.md](docs/CNB_MIRROR.md) | CNB mirror và các lưu ý cài đặt tại Trung Quốc |
-| [TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md) | Hướng dẫn kết nối Tencent/CNB/Lighthouse/Feishu từ xa |
-| [TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) | Thiết lập máy chủ Lighthouse Hồng Kông |
-| [MEMORY.md](docs/MEMORY.md) | Hướng dẫn tính năng tự ghi nhớ thông tin người dùng |
-| [SUBAGENTS.md](docs/SUBAGENTS.md) | Phân loại vai trò và vòng đời của các sub-agent con |
-| [KEYBINDINGS.md](docs/KEYBINDINGS.md) | Danh sách phím tắt đầy đủ |
-| [RELEASE_RUNBOOK.md](docs/RELEASE_RUNBOOK.md) | Quy trình đóng gói và phát hành phiên bản mới |
-| [LOCALIZATION.md](docs/LOCALIZATION.md) | Ma trận đa ngôn ngữ giao diện & cách chuyển đổi |
-| [OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md) | Vận hành và phục hồi hệ thống |
-
-Lịch sử cập nhật chi tiết: [CHANGELOG.md](CHANGELOG.md).
-
----
+v0.9.0 vẫn là nhánh tích hợp, chưa phải release công khai cho đến khi tag, GitHub Release, npm, Cargo và artifact phát hành thật sự được tạo và kiểm chứng. Trọng tâm hiện tại: relay/handoff, transcript gọn hơn, kiến trúc command/provider, Runtime API cho VS Code/GUI, HarnessProfile, WhaleFlow và credit hygiene cho cộng đồng đóng góp.
 
 ## Lời cảm ơn
 
@@ -520,7 +93,7 @@ Lịch sử cập nhật chi tiết: [CHANGELOG.md](CHANGELOG.md).
 
 Dự án này được phát triển và vận hành trơn tru với sự đóng góp của cộng đồng các nhà phát triển ngày càng lớn mạnh:
 
-Các đóng góp đã được merge hoặc được harvest trong v0.8.48: **[@cy2311](https://github.com/cy2311)**, **[@LING71671](https://github.com/LING71671)**, **[@axobase001](https://github.com/axobase001)**, **[@dzyuan](https://github.com/dzyuan)**, **[@mvanhorn](https://github.com/mvanhorn)**, **[@malsony](https://github.com/malsony)**, **[@gaord](https://github.com/gaord)**, **[@yuanchenglu](https://github.com/yuanchenglu)**, **[@idling11](https://github.com/idling11)**, **[@h3c-hexin](https://github.com/h3c-hexin)**, **[@AdityaVG13](https://github.com/AdityaVG13)**, **[@Sskift](https://github.com/Sskift)**, **[@cyq1017](https://github.com/cyq1017)**, **[@HUQIANTAO](https://github.com/HUQIANTAO)**, **[@New2Niu](https://github.com/New2Niu)**, **[@AiurArtanis](https://github.com/AiurArtanis)**, **[@Lee-take](https://github.com/Lee-take)**, **[@nightt5879](https://github.com/nightt5879)**, **[@AresNing](https://github.com/AresNing)**, **[@AccMoment](https://github.com/AccMoment)**, **[@reidliu41](https://github.com/reidliu41)**, **[@aboimpinto](https://github.com/aboimpinto)**, **[@zhuangbiaowei](https://github.com/zhuangbiaowei)**, **[@donglovejava](https://github.com/donglovejava)**, **[@hongqitai](https://github.com/hongqitai)**, **[@zlh124](https://github.com/zlh124)**, **[@encyc](https://github.com/encyc)**, **[@Implementist](https://github.com/Implementist)**, **[@lihuan215](https://github.com/lihuan215)**, **[@LeoAlex0](https://github.com/LeoAlex0)**, **[@jimmyzhuu](https://github.com/jimmyzhuu)**, **[@rockyzhang](https://github.com/rockyzhang)**, **[@mo-vic](https://github.com/mo-vic)**, **[@hufanexplore](https://github.com/hufanexplore)**, **[@hoclaptrinh33](https://github.com/hoclaptrinh33)** và **[@BryonGo](https://github.com/BryonGo)**.
+Các đóng góp đã được merge hoặc được harvest trong v0.8.48: **[@cy2311](https://github.com/cy2311)**, **[@LING71671](https://github.com/LING71671)**, **[@axobase001](https://github.com/axobase001)**, **[@dzyuan](https://github.com/dzyuan)**, **[@mvanhorn](https://github.com/mvanhorn)**, **[@malsony](https://github.com/malsony)**, **[@gaord](https://github.com/gaord)**, **[@yuanchenglu](https://github.com/yuanchenglu)**, **[@idling11](https://github.com/idling11)**, **[@h3c-hexin](https://github.com/h3c-hexin)**, **[@AdityaVG13](https://github.com/AdityaVG13)**, **[@Sskift](https://github.com/Sskift)**, **[@cyq1017](https://github.com/cyq1017)**, **[@HUQIANTAO](https://github.com/HUQIANTAO)**, **[@New2Niu](https://github.com/New2Niu)**, **[@AiurArtanis](https://github.com/AiurArtanis)**, **[@Lee-take](https://github.com/Lee-take)**, **[@nightt5879](https://github.com/nightt5879)**, **[@AresNing](https://github.com/AresNing)**, **[@AccMoment](https://github.com/AccMoment)**, **[@reidliu41](https://github.com/reidliu41)**, **[@aboimpinto](https://github.com/aboimpinto)**, **[@zhuangbiaowei](https://github.com/zhuangbiaowei)**, **[@donglovejava](https://github.com/donglovejava)**, **[@hongqitai](https://github.com/hongqitai)**, **[@zlh124](https://github.com/zlh124)**, **[@encyc](https://github.com/encyc)**, **[@Implementist](https://github.com/Implementist)**, **[@lihuan215](https://github.com/lihuan215)**, **[@LeoAlex0](https://github.com/LeoAlex0)**, **[@jimmyzhuu](https://github.com/jimmyzhuu)**, **[@rockyzhang](https://github.com/rockyzhang)**, **[@mo-vic](https://github.com/mo-vic)**, **[@hufanexplore](https://github.com/hufanexplore)**, **[@hoclaptrinh33](https://github.com/hoclaptrinh33)** , **[@BryonGo](https://github.com/BryonGo)**, **[@gordonlu](https://github.com/gordonlu)** và **[@hongchen1993](https://github.com/hongchen1993)**.
 
 Xin cảm ơn các báo cáo, bước tái hiện lỗi và xác minh từ **[@buko](https://github.com/buko)**, **[@yyyCode](https://github.com/yyyCode)**, **[@gaslebinh-glitch](https://github.com/gaslebinh-glitch)**, **[@Dr3259](https://github.com/Dr3259)**, **[@lpeng1711694086-lang](https://github.com/lpeng1711694086-lang)**, **[@VerrPower](https://github.com/VerrPower)**, **[@yan-zay](https://github.com/yan-zay)**, **[@jretz](https://github.com/jretz)**, **[@Neo-millunnium](https://github.com/Neo-millunnium)**, **[@caeserchen](https://github.com/caeserchen)**, **[@T-Phuong-Nguyen](https://github.com/T-Phuong-Nguyen)**, **[@zhyuzhyu](https://github.com/zhyuzhyu)**, **[@0gl20shk0sbt36](https://github.com/0gl20shk0sbt36)**, **[@hatakes](https://github.com/hatakes)**, **[@goodvecn-dev](https://github.com/goodvecn-dev)**, **[@bevis-wong](https://github.com/bevis-wong)**, **[@PurplePulse](https://github.com/PurplePulse)** và **[@nbiish](https://github.com/nbiish)** đã giúp định hình v0.8.48.
 

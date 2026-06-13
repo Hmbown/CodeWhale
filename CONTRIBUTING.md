@@ -98,8 +98,12 @@ When this happens:
 - If the maintainer copies or adapts your code, the harvested commit also
   keeps attribution with the original author identity when possible: either by
   preserving the commit author on a cherry-pick or by adding a
-  `Co-authored-by: Name <email>` trailer from the original PR commit. This is
+  `Co-authored-by: Name <id+login@users.noreply.github.com>` trailer. This is
   what lets GitHub's contribution surfaces recognize more than prose credit.
+  Maintainers should use `.github/AUTHOR_MAP`, or run
+  `gh api users/<login> --jq '"\(.id)+\(.login)@users.noreply.github.com"'`,
+  rather than copying raw, `.local`, or old-style noreply emails from a
+  contributor's machine.
 - The `CHANGELOG.md` entry for the next release credits you by handle.
 - The auto-close workflow closes your PR with a templated thank-you and
   a link to the commit on `main`.
@@ -172,16 +176,24 @@ Validation:
 CodeWhale uses a maintainer-managed contribution gate for the community front
 door. Maintainers and collaborators bypass this gate automatically. The gate
 workflows default to dry-run / comment-only mode so maintainers can observe the
-signal before closing contributor work. In dry-run mode, unapproved external
-issues and pull requests receive a short thank-you / CONTRIBUTING pointer and
-remain open.
+signal before changing contributor flow.
 
-When maintainers are ready to enforce the gate, set
-`CONTRIBUTION_GATE_MODE: enforce` in the PR and issue gate workflows. In enforce
-mode, external contributors must be listed in
-`.github/APPROVED_CONTRIBUTORS` before their issues or pull requests remain
-open. Before enabling enforcement, seed the allowlist broadly enough for active
-external contributors who should not be interrupted by the rollout.
+The maintainer posture is documented in
+[docs/AGENT_ETHOS.md](docs/AGENT_ETHOS.md): automation should reduce load while
+keeping good-faith contributors seen, credited, and able to keep helping.
+
+Issues are never auto-closed by the contribution gate. Unapproved external
+issues receive a short welcome note that asks for reproduction details and then
+remain open for maintainer triage. CodeWhale depends on real edge cases from
+real users, so issue intake should stay warm and open.
+
+Pull requests are different because they can touch code, CI, release plumbing,
+auth, sandboxing, provider policy, and other trust-boundary surfaces. The PR
+gate can be switched from dry-run to enforcement when maintainers decide they
+need that safety control, but it should be treated as a review-load control,
+not a judgment on contributor quality. Before enabling PR enforcement, seed the
+allowlist broadly enough for active external contributors who should not be
+interrupted by the rollout.
 
 The allowlist is scoped:
 
@@ -198,11 +210,10 @@ discussion.
 Approvals do not edit `main` directly. The approval workflow opens a small
 allowlist update PR so the new entry is reviewable before it takes effect.
 
-If the gate fires on a good contributor incorrectly, use the same approval flow
-to restore them: comment `/lgtm` or `/lgtmi`, merge the generated allowlist PR,
-then reopen the affected issue or pull request. If GitHub will not allow the
-closed item to be reopened, ask the contributor to resubmit after the allowlist
-PR is merged.
+If the PR gate fires on a good contributor incorrectly, use the same approval
+flow to restore them: comment `/lgtm`, merge the generated allowlist PR, then
+reopen the affected pull request. If GitHub will not allow the closed PR to be
+reopened, ask the contributor to resubmit after the allowlist PR is merged.
 
 ## Agent-Assisted Improvements
 
@@ -212,6 +223,11 @@ to be shaped for human review. The recommended workflow is the
 from a fresh fork or branch, let the agent find exactly one small friction point,
 and stop after one patch. DeepSeek V4 Pro is the first-class path for this loop
 today, but the review shape matters more than the provider.
+
+Agents and maintainers should follow the stewardship posture in
+[docs/AGENT_ETHOS.md](docs/AGENT_ETHOS.md): use automation for evidence,
+verification, and narrow patches while keeping the final community decision
+human-reviewed.
 
 The useful output is not "ideas for improvement." The useful output is a
 specific reproduction, a minimal diff, focused checks, and a PR description that

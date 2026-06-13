@@ -18,8 +18,8 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-06-01T04:44:32.528Z",
-  "version": "0.8.48",
+  "generatedAt": "2026-06-11T05:54:56.679Z",
+  "version": "0.8.58",
   "crates": [
     "agent",
     "app-server",
@@ -35,7 +35,8 @@ export const FACTS: RepoFacts = {
     "state",
     "tools",
     "tui",
-    "tui-core"
+    "tui-core",
+    "whaleflow"
   ],
   "sandboxBackends": [
     "bwrap",
@@ -101,6 +102,16 @@ export const FACTS: RepoFacts = {
       "env": "SILICONFLOW_API_KEY"
     },
     {
+      "id": "siliconflow-CN",
+      "label": "SiliconFlow CN",
+      "env": "SILICONFLOW_API_KEY"
+    },
+    {
+      "id": "arcee",
+      "label": "Arcee AI",
+      "env": "ARCEE_API_KEY"
+    },
+    {
       "id": "moonshot",
       "label": "Moonshot/Kimi",
       "env": "MOONSHOT_API_KEY / KIMI_API_KEY"
@@ -119,11 +130,16 @@ export const FACTS: RepoFacts = {
       "id": "ollama",
       "label": "Ollama",
       "env": "OLLAMA_API_KEY"
+    },
+    {
+      "id": "huggingface",
+      "label": "Hugging Face",
+      "env": "HUGGINGFACE_API_KEY / HF_TOKEN"
     }
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 75,
+  "toolCount": 76,
   "license": "MIT",
   "latestRelease": null
 };

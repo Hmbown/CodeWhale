@@ -48,8 +48,10 @@ All action-capable modes have access to persistent RLM sessions through `rlm_ope
 
 ## Opt-In Pro Plan Profile
 
-`/mode pro-plan` enters an explicit Pro Plan routing profile. It is intentionally
-not part of the default `Tab` cycle or `/mode` picker.
+Pro Plan is config-gated and disabled by default. Enable it explicitly with
+`/config pro_plan_profile true --save`, then use `/mode pro-plan` to enter the
+routing profile. It is intentionally not part of the default `Tab` cycle or
+`/mode` picker.
 
 In Pro Plan, the user chooses the profile, then CodeWhale chooses the phase
 model:
@@ -157,7 +159,8 @@ DeepSeek-TUI has three related but intentionally separate recovery paths:
 - Esc-Esc backtrack rewinds the live transcript to a previous user prompt and
   restores that prompt into the composer for editing.
 - `/restore` and the `revert_turn` tool restore workspace files from side-git
-  snapshots. They do not rewrite conversation history.
+  snapshots. `/restore list [N]` lists more snapshot options before choosing a
+  rollback point. They do not rewrite conversation history.
 
 A Pi-style in-file tree browser is a larger UI/data-model project. v0.8.40
 ships the bounded fork/backtrack primitives and explicit lineage metadata.

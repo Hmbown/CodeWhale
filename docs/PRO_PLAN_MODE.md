@@ -1,9 +1,11 @@
 # Pro Plan Profile
 
-Pro Plan is an explicit `/mode pro-plan` routing profile, not part of the
-default `Tab` mode cycle or `/mode` picker. The user chooses the profile; then
-CodeWhale chooses the model route for each phase. Planning and review stay on
-the stronger model while implementation uses the faster model when available:
+Pro Plan is a config-gated routing profile, not part of the default `Tab` mode
+cycle or `/mode` picker. Enable it with
+`/config pro_plan_profile true --save`, then enter it with `/mode pro-plan`.
+The user chooses the profile; then CodeWhale chooses the model route for each
+phase. Planning and review stay on the stronger model while implementation uses
+the faster model when available:
 
 - Plan phase: use `deepseek-v4-pro` with the existing Plan mode prompt and
   read-only tool policy.

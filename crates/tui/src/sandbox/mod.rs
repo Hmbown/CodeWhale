@@ -35,13 +35,13 @@ pub mod process_hardening;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod landlock;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod seccomp;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod bwrap;
 
 #[cfg(target_os = "windows")]
@@ -223,7 +223,7 @@ pub enum SandboxType {
     MacosSeatbelt,
 
     /// Linux Landlock sandboxing (kernel 5.13+).
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     LinuxLandlock,
 
     /// Windows process-containment helper.
@@ -240,7 +240,7 @@ impl std::fmt::Display for SandboxType {
             SandboxType::None => write!(f, "none"),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => write!(f, "macos-seatbelt"),
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             SandboxType::LinuxLandlock => write!(f, "linux-landlock"),
             #[cfg(target_os = "windows")]
             SandboxType::Windows => write!(f, "windows-sandbox"),
@@ -305,7 +305,7 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         if landlock::is_available() {
             return Some(SandboxType::LinuxLandlock);
@@ -410,7 +410,7 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => Self::prepare_seatbelt(spec),
 
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             SandboxType::LinuxLandlock => self.prepare_landlock(spec),
 
             #[cfg(target_os = "windows")]
@@ -467,7 +467,7 @@ impl SandboxManager {
     /// If `prefer_bwrap` is set and `/usr/bin/bwrap` is available, routes the
     /// command through bubblewrap for stronger filesystem isolation (#2184).
     /// Otherwise falls back to Landlock markers.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn prepare_landlock(&self, spec: &CommandSpec) -> ExecEnv {
         // Check if bwrap passthrough should be used (#2184).
         if self.prefer_bwrap && bwrap::is_available() {
@@ -539,7 +539,10 @@ impl SandboxManager {
     /// This helps distinguish between legitimate command failures and
     /// sandbox-blocked operations.
     pub fn was_denied(sandbox_type: SandboxType, exit_code: i32, stderr: &str) -> bool {
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )))]
         let _ = (exit_code, stderr);
 
         match sandbox_type {
@@ -548,7 +551,7 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => seatbelt::detect_denial(exit_code, stderr),
 
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             SandboxType::LinuxLandlock => landlock::detect_denial(exit_code, stderr),
 
             #[cfg(target_os = "windows")]
@@ -558,7 +561,10 @@ impl SandboxManager {
 
     /// Get a human-readable description of why a command was blocked.
     pub fn denial_message(sandbox_type: SandboxType, stderr: &str) -> String {
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )))]
         let _ = stderr;
 
         match sandbox_type {
@@ -578,7 +584,7 @@ impl SandboxManager {
                 }
             }
 
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             SandboxType::LinuxLandlock => {
                 // Seccomp patterns checked first because they are more specific (#2182).
                 if stderr.contains("Bad system call")
@@ -825,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn test_parity_linux_landlock_available() {
         let st = get_platform_sandbox();
         assert!(matches!(st, Some(SandboxType::LinuxLandlock)));
@@ -844,7 +850,7 @@ mod tests {
             0,
             ""
         ));
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         assert!(!SandboxManager::was_denied(
             SandboxType::LinuxLandlock,
             0,
@@ -855,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn test_parity_seccomp_sigsys_detected() {
         assert!(SandboxManager::was_denied(
             SandboxType::LinuxLandlock,
@@ -891,7 +897,7 @@ mod tests {
         let spec = CommandSpec::shell("true", PathBuf::from("/tmp"), Duration::from_secs(5))
             .with_policy(SandboxPolicy::default());
         let env = manager.prepare(&spec);
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             let marker = env.env.get("DEEPSEEK_SANDBOX");
             assert!(marker.is_none_or(|v| v != "bwrap"));
@@ -905,7 +911,7 @@ mod tests {
         let spec = CommandSpec::shell("true", PathBuf::from("/tmp"), Duration::from_secs(5))
             .with_policy(SandboxPolicy::default());
         let env = manager.prepare(&spec);
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             if crate::sandbox::bwrap::is_available() {
                 let marker = env.env.get("DEEPSEEK_SANDBOX");

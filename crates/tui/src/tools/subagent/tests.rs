@@ -1,4 +1,7 @@
 use super::*;
+use axum::{Json, Router, routing::post};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 fn make_assignment() -> SubAgentAssignment {
@@ -11,6 +14,8 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         agent_id: "agent_test".to_string(),
         context_mode: "fresh".to_string(),
         fork_context: false,
+        workspace: None,
+        git_branch: None,
         agent_type: SubAgentType::General,
         assignment: make_assignment(),
         model: "deepseek-v4-flash".to_string(),
@@ -18,9 +23,87 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         status,
         result: None,
         steps_taken: 0,
+        checkpoint: None,
         duration_ms: 0,
         from_prior_session: false,
     }
+}
+
+fn init_subagent_git_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("tempdir");
+
+    let init = Command::new("git")
+        .arg("init")
+        .current_dir(dir.path())
+        .output()
+        .expect("git init should run");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let autocrlf = Command::new("git")
+        .args(["config", "core.autocrlf", "false"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git config core.autocrlf should run");
+    assert!(
+        autocrlf.status.success(),
+        "git config core.autocrlf failed: {}",
+        String::from_utf8_lossy(&autocrlf.stderr)
+    );
+
+    let commit = Command::new("git")
+        .args([
+            "-c",
+            "user.name=codewhale Tests",
+            "-c",
+            "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("git commit should run");
+    assert!(
+        commit.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    dir
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn text_message(role: &str, text: &str) -> Message {
+    Message {
+        role: role.to_string(),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+            cache_control: None,
+        }],
+    }
+}
+
+fn make_checkpoint(agent_id: &str, steps_taken: u32, messages: Vec<Message>) -> SubAgentCheckpoint {
+    build_subagent_checkpoint(agent_id, "test_checkpoint", &messages, steps_taken, true)
 }
 
 fn message_text(message: &Message) -> &str {
@@ -28,6 +111,74 @@ fn message_text(message: &Message) -> &str {
         Some(ContentBlock::Text { text, .. }) => text.as_str(),
         other => panic!("expected text content block, got {other:?}"),
     }
+}
+
+async fn delayed_chat_client(
+    first_delay: Duration,
+    response_text: &str,
+) -> (
+    DeepSeekClient,
+    Arc<AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<Value>>>,
+) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let response_text = response_text.to_string();
+    let app = Router::new().route(
+        "/{*path}",
+        post({
+            let calls = Arc::clone(&calls);
+            let bodies = Arc::clone(&bodies);
+            move |Json(body): Json<Value>| {
+                let calls = Arc::clone(&calls);
+                let bodies = Arc::clone(&bodies);
+                let response_text = response_text.clone();
+                async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    bodies
+                        .lock()
+                        .expect("request body recorder mutex poisoned")
+                        .push(body);
+                    if attempt == 1 {
+                        tokio::time::sleep(first_delay).await;
+                    }
+                    Json(json!({
+                        "id": format!("chatcmpl-test-{attempt}"),
+                        "model": "deepseek-v4-flash",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake chat server");
+    let addr = listener.local_addr().expect("fake chat server addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(format!("http://{addr}/v1")),
+        ..crate::config::Config::default()
+    };
+    let client = DeepSeekClient::new(&config).expect("fake chat client");
+    (client, calls, bodies)
 }
 
 fn estimate_tool_description_tokens_conservative(text: &str) -> usize {
@@ -424,6 +575,51 @@ async fn terminal_session_projection_prefers_full_transcript_handle() {
 
     assert_eq!(projection.transcript_handle, full_handle);
     assert_eq!(projection.transcript_handle.name, "full_transcript");
+}
+
+#[tokio::test]
+async fn interrupted_projection_exposes_checkpoint_metadata_and_messages() {
+    let mut snapshot = make_snapshot(SubAgentStatus::Interrupted(
+        "API call timed out after 10ms".to_string(),
+    ));
+    let checkpoint = make_checkpoint(
+        &snapshot.agent_id,
+        1,
+        vec![text_message("user", "inspect checkpoint recovery")],
+    );
+    snapshot.steps_taken = checkpoint.steps_taken;
+    snapshot.checkpoint = Some(checkpoint.clone());
+
+    let ctx = ToolContext::new(".");
+    let projection = subagent_session_projection(snapshot, false, &ctx).await;
+
+    assert_eq!(projection.status, "interrupted");
+    assert!(projection.terminal);
+    assert!(projection.continuable);
+    assert_eq!(
+        projection
+            .checkpoint
+            .as_ref()
+            .expect("checkpoint projected")
+            .continuation_handle,
+        checkpoint.continuation_handle
+    );
+    assert_eq!(
+        projection
+            .snapshot
+            .checkpoint
+            .as_ref()
+            .map(|cp| cp.message_count),
+        Some(1)
+    );
+    assert_eq!(
+        projection
+            .checkpoint
+            .as_ref()
+            .and_then(|cp| cp.messages.first())
+            .map(message_text),
+        Some("inspect checkpoint recovery")
+    );
 }
 
 #[test]
@@ -845,10 +1041,28 @@ fn subagent_auto_route_respects_explicit_or_role_model() {
 }
 
 #[tokio::test]
-async fn tool_agent_route_forces_flash_with_thinking_off() {
-    let runtime = stub_runtime()
+async fn tool_agent_route_inherits_parent_model_with_thinking_off() {
+    let mut runtime = stub_runtime()
         .with_auto_model(false)
         .with_reasoning_effort(Some("max".to_string()), false);
+    runtime.model = "local-provider/tool-fast".to_string();
+
+    let route = resolve_subagent_assignment_route(
+        &runtime,
+        None,
+        "run OCR on this screenshot",
+        &SubAgentType::ToolAgent,
+    )
+    .await;
+
+    assert_eq!(route.model, "local-provider/tool-fast");
+    assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
+}
+
+#[tokio::test]
+async fn tool_agent_route_respects_explicit_model_with_thinking_off() {
+    let mut runtime = stub_runtime().with_auto_model(false);
+    runtime.model = "local-provider/tool-fast".to_string();
 
     let route = resolve_subagent_assignment_route(
         &runtime,
@@ -858,7 +1072,7 @@ async fn tool_agent_route_forces_flash_with_thinking_off() {
     )
     .await;
 
-    assert_eq!(route.model, "deepseek-v4-flash");
+    assert_eq!(route.model, "deepseek-v4-pro");
     assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
 }
 
@@ -962,6 +1176,7 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let agent_id = agent.id.clone();
@@ -994,6 +1209,7 @@ async fn agent_eval_on_completed_session_returns_full_projection_not_running_err
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let full_output = "Per-issue analysis:\n".to_string() + &"detail line\n".repeat(400);
@@ -1049,6 +1265,7 @@ async fn agent_eval_resolves_session_via_agent_name_alias() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.session_name = "researcher".to_string();
@@ -1072,6 +1289,155 @@ async fn agent_eval_resolves_session_via_agent_name_alias() {
 }
 
 #[tokio::test]
+async fn api_timeout_preserves_checkpoint_and_agent_eval_continues_from_it() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_checkpoint_timeout".to_string();
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "Inspect checkpoint behavior".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec![]),
+        task_input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    manager.write().await.agents.insert(agent_id.clone(), agent);
+
+    let (client, calls, bodies) =
+        delayed_chat_client(Duration::from_millis(80), "resumed answer").await;
+    let mut runtime = stub_runtime().with_step_api_timeout(Duration::from_millis(50));
+    runtime.client = client;
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+
+    let task = SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime: runtime.clone(),
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "Inspect checkpoint behavior".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 3,
+        input_rx: task_input_rx,
+    };
+    let task_handle = tokio::spawn(run_subagent_task(task));
+
+    let interrupted = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = {
+                let manager = manager.read().await;
+                manager
+                    .get_result(&agent_id)
+                    .expect("agent should stay registered")
+            };
+            if matches!(snapshot.status, SubAgentStatus::Interrupted(_)) {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("agent should become interrupted after API timeout");
+
+    let checkpoint = interrupted
+        .checkpoint
+        .as_ref()
+        .expect("timeout should preserve checkpoint");
+    assert!(checkpoint.continuable);
+    assert_eq!(checkpoint.steps_taken, 1);
+    assert!(
+        checkpoint
+            .messages
+            .iter()
+            .any(|message| message_text(message).contains("Inspect checkpoint behavior")),
+        "checkpoint should preserve local child prompt: {checkpoint:?}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if calls.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first timed-out API attempt should reach the test server");
+
+    let ctx = runtime.context.clone();
+    let tool = AgentEvalTool::new(Arc::clone(&manager));
+    let result = tool
+        .execute(json!({ "agent_id": agent_id, "block": false }), &ctx)
+        .await
+        .expect("agent_eval should project interrupted checkpoint");
+    let projection: SubAgentSessionProjection =
+        serde_json::from_str(&result.content).expect("projection deserializes");
+    assert_eq!(projection.status, "interrupted");
+    assert!(projection.continuable);
+    assert!(projection.checkpoint.is_some());
+
+    let result = tool
+        .execute(
+            json!({
+                "agent_id": agent_id,
+                "continue": true,
+                "message": "Please continue with the prior checkpoint.",
+                "timeout_ms": 2000
+            }),
+            &ctx,
+        )
+        .await
+        .expect("agent_eval should continue checkpointed interrupted session");
+    let meta = result.metadata.expect("metadata present");
+    assert_eq!(
+        meta["message_delivery"]["continued_from_checkpoint"],
+        json!(true)
+    );
+    let projection: SubAgentSessionProjection =
+        serde_json::from_str(&result.content).expect("projection deserializes");
+    assert_eq!(projection.status, "completed");
+    assert_eq!(
+        projection.snapshot.result.as_deref(),
+        Some("resumed answer")
+    );
+    assert!(
+        projection
+            .checkpoint
+            .as_ref()
+            .expect("completed projection keeps latest checkpoint")
+            .messages
+            .iter()
+            .any(|message| message_text(message)
+                .contains("Please continue with the prior checkpoint.")),
+        "continuation instruction should be part of resumed transcript"
+    );
+
+    task_handle.await.expect("sub-agent task should finish");
+    assert!(
+        calls.load(Ordering::SeqCst) >= 2,
+        "continuation should make a second API request"
+    );
+    let bodies = bodies
+        .lock()
+        .expect("request body recorder mutex poisoned")
+        .clone();
+    let second_request = serde_json::to_string(&bodies[1]).expect("second request body serializes");
+    assert!(second_request.contains("Inspect checkpoint behavior"));
+    assert!(second_request.contains("Please continue with the prior checkpoint."));
+}
+
+#[tokio::test]
 async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
     // #2656: the duplicate-name error must identify the conflicting agent so a
     // model can recover deterministically (reuse the id, or pick a new name).
@@ -1086,6 +1452,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     existing.session_name = "researcher".to_string();
@@ -1122,6 +1489,12 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         msg.contains("running"),
         "includes the conflicting status: {msg}"
     );
+    // #3020: elapsed time lets the parent distinguish a live worker from a
+    // stale earlier spawn.
+    assert!(
+        msg.contains("started ") && msg.contains(" ago"),
+        "includes elapsed time since spawn: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -1137,6 +1510,7 @@ async fn test_running_count_counts_only_agents_with_live_task_handles() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1169,6 +1543,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1190,6 +1565,7 @@ async fn test_running_count_counts_running_agents_until_status_reconciles() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1217,6 +1593,7 @@ async fn cleanup_auto_cancels_stale_running_agent_and_releases_slot() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.task_handle = Some(tokio::spawn(async {
@@ -1261,6 +1638,7 @@ async fn cleanup_keeps_recent_running_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.last_activity_at = Instant::now();
@@ -1286,8 +1664,15 @@ async fn cleanup_keeps_recent_running_agent() {
 
 #[tokio::test]
 async fn touch_refreshes_stale_running_agent_heartbeat() {
+    // Use a heartbeat timeout that is comfortably larger than the synchronous
+    // work between `touch()` and the `cleanup()` assertion below. With a 1ms
+    // timeout the test was flaky on loaded CI runners (notably Windows, whose
+    // scheduler can deschedule this thread for >1ms): the just-touched agent
+    // would tip back over the staleness threshold before `cleanup()` ran and
+    // get reaped, so `cleanup()` returned 1 instead of 0. A 50ms timeout keeps
+    // the staleness logic exercised while removing the timing race.
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1)
-        .with_running_heartbeat_timeout(Duration::from_millis(1));
+        .with_running_heartbeat_timeout(Duration::from_millis(50));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
         "test_agent_touched".to_string(),
@@ -1298,6 +1683,7 @@ async fn touch_refreshes_stale_running_agent_heartbeat() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.task_handle = Some(tokio::spawn(async {
@@ -1305,7 +1691,9 @@ async fn touch_refreshes_stale_running_agent_heartbeat() {
     }));
     let agent_id = agent.id.clone();
     manager.agents.insert(agent_id.clone(), agent);
-    tokio::time::sleep(Duration::from_millis(5)).await;
+    // Sleep well past the 50ms heartbeat timeout so the agent is reliably stale
+    // even if the timer fires early under coarse OS timer granularity.
+    tokio::time::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(manager.running_count(), 0);
     assert!(manager.touch(&agent_id));
@@ -1332,6 +1720,7 @@ fn test_assign_updates_running_agent_and_sends_message() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let agent_id = agent.id.clone();
@@ -1370,6 +1759,7 @@ fn test_assign_rejects_message_for_non_running_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Completed;
@@ -1395,6 +1785,7 @@ fn test_assign_updates_non_running_metadata_without_message() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Completed;
@@ -1431,6 +1822,7 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let running_id = running.id.clone();
@@ -1448,6 +1840,53 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
         SubAgentStatus::Interrupted(ref message)
             if message.contains(SUBAGENT_RESTART_REASON)
     ));
+}
+
+#[test]
+fn persist_and_reload_preserves_checkpoint_for_interrupted_running_agent() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().to_path_buf();
+    let state_path = default_state_path(tmp.path());
+
+    let mut manager = SubAgentManager::new(workspace.clone(), 2).with_state_path(state_path);
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut running = SubAgent::new(
+        "test_agent_checkpoint_reload".to_string(),
+        SubAgentType::General,
+        "work".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        PathBuf::from("."),
+        "boot_test".to_string(),
+    );
+    running.checkpoint = Some(make_checkpoint(
+        &running.id,
+        2,
+        vec![
+            text_message("user", "initial task"),
+            text_message("assistant", "partial progress"),
+        ],
+    ));
+    let running_id = running.id.clone();
+    manager.agents.insert(running_id.clone(), running);
+    manager.persist_state().expect("persist state");
+
+    let mut reloaded =
+        SubAgentManager::new(workspace, 2).with_state_path(default_state_path(tmp.path()));
+    reloaded.load_state().expect("load state");
+    let snapshot = reloaded
+        .get_result(&running_id)
+        .expect("reloaded agent should exist");
+
+    assert!(matches!(snapshot.status, SubAgentStatus::Interrupted(_)));
+    let checkpoint = snapshot.checkpoint.expect("checkpoint should reload");
+    assert!(checkpoint.continuable);
+    assert_eq!(checkpoint.steps_taken, 2);
+    assert_eq!(checkpoint.messages.len(), 2);
+    assert_eq!(message_text(&checkpoint.messages[1]), "partial progress");
 }
 
 #[test]
@@ -1641,6 +2080,23 @@ fn annotate_child_model_error_adds_actionable_hint() {
 
     let unrelated = annotate_child_model_error("connection reset by peer", "kimi-k2");
     assert_eq!(unrelated, "connection reset by peer");
+
+    // #3020: provider rejections that classify as Internal (not
+    // Authorization/State) still get the hint via raw-text matching.
+    let not_exist = annotate_child_model_error("Model Not Exist", "kimi-k2");
+    assert!(
+        not_exist.contains("retry agent_open"),
+        "DeepSeek-style rejection gets the hint: {not_exist}"
+    );
+
+    let openai_style = annotate_child_model_error(
+        "The model `gpt-5.5-nano` does not exist or you do not have access to it.",
+        "gpt-5.5-nano",
+    );
+    assert!(
+        openai_style.contains("retry agent_open"),
+        "OpenAI-style rejection gets the hint: {openai_style}"
+    );
 }
 
 #[test]
@@ -2209,7 +2665,37 @@ fn stub_runtime() -> SubAgentRuntime {
 /// *some* `DeepSeekClient` because `SubAgentRuntime.client` isn't
 /// `Option<...>`. `Config::default()` is enough — `DeepSeekClient::new`
 /// only validates that an API key field exists, not that the key works.
+fn stub_runtime_for_provider(provider: &str) -> SubAgentRuntime {
+    let mut runtime = stub_runtime();
+    runtime.client = stub_client_for_provider(provider);
+    runtime
+}
+
+fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut providers = crate::config::ProvidersConfig::default();
+    match provider {
+        "moonshot" => {
+            providers.moonshot = crate::config::ProviderConfig {
+                api_key: Some("test-key".to_string()),
+                ..Default::default()
+            };
+        }
+        // Ollama is keyless (local runtime); extend per-provider as needed.
+        "ollama" => {}
+        other => panic!("extend stub_client_for_provider for provider {other}"),
+    }
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        provider: Some(provider.to_string()),
+        providers: Some(providers),
+        ..crate::config::Config::default()
+    };
+    DeepSeekClient::new(&config).expect("stub client should construct")
+}
+
 fn stub_client() -> DeepSeekClient {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = crate::config::Config {
         api_key: Some("test-key".to_string()),
         ..crate::config::Config::default()
@@ -2241,6 +2727,7 @@ fn insert_prior_session_agent(
         None,
         None,
         input_tx,
+        manager.workspace.clone(),
         boot_id.to_string(),
     );
     agent.status = status;
@@ -2300,6 +2787,38 @@ fn list_filtered_drops_prior_session_terminals_by_default() {
         .find(|s| s.agent_id == "current_running")
         .unwrap();
     assert!(!current.from_prior_session);
+}
+
+#[test]
+fn list_snapshots_refresh_git_branch_from_agent_workspace() {
+    let repo = init_subagent_git_repo();
+    git(repo.path(), &["checkout", "-b", "feature/agent-old"]);
+
+    let mut manager = SubAgentManager::new(repo.path().to_path_buf(), 5);
+    let current_boot = manager.session_boot_id().to_string();
+    insert_prior_session_agent(
+        &mut manager,
+        "current_running",
+        SubAgentStatus::Running,
+        &current_boot,
+    );
+
+    let listed = manager.list_filtered(false);
+    let agent = listed
+        .iter()
+        .find(|agent| agent.agent_id == "current_running")
+        .expect("current agent should be listed");
+    assert_eq!(agent.git_branch.as_deref(), Some("feature/agent-old"));
+    assert_eq!(agent.workspace.as_deref(), Some(repo.path()));
+
+    git(repo.path(), &["checkout", "-b", "feature/agent-new"]);
+
+    let refreshed = manager.list_filtered(false);
+    let agent = refreshed
+        .iter()
+        .find(|agent| agent.agent_id == "current_running")
+        .expect("current agent should still be listed");
+    assert_eq!(agent.git_branch.as_deref(), Some("feature/agent-new"));
 }
 
 #[test]
@@ -2518,6 +3037,7 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
         None,
         None,
         task_input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -2657,4 +3177,164 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
         !second.contains("Found three errors."),
         "sentinel should not duplicate the human summary line"
     );
+}
+
+/// #2683 — Verify the model-facing tool catalog only advertises canonical
+/// subagent tools and never exposes legacy superseded names.
+#[test]
+fn model_catalog_only_advertises_canonical_subagent_tools() {
+    use crate::tools::ToolRegistryBuilder;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime = stub_runtime();
+    let manager = runtime.manager.clone();
+    let ctx = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+    let registry = ToolRegistryBuilder::new()
+        .with_subagent_tools(manager, runtime)
+        .build(ctx);
+
+    let api_names: Vec<String> = registry
+        .to_api_tools()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+
+    // Canonical tools must be model-visible.
+    for canonical in ["agent_open", "agent_eval", "agent_close", "tool_agent"] {
+        assert!(
+            api_names.iter().any(|n| n == canonical),
+            "{canonical} should be in the model-facing catalog"
+        );
+    }
+
+    // Legacy/superseded names must NOT appear in the model catalog.
+    for legacy in [
+        "agent_spawn",
+        "agent_result",
+        "agent_cancel",
+        "resume_agent",
+        "agent_list",
+        "agent_send_input",
+        "agent_assign",
+        "agent_wait",
+        "delegate_to_agent",
+    ] {
+        assert!(
+            api_names.iter().all(|n| n != legacy),
+            "{legacy} should be hidden from the model-facing catalog"
+        );
+    }
+}
+
+// ── #3018: provider-aware auto routing and model validation ─────────────────
+
+#[tokio::test]
+async fn auto_route_on_provider_without_cheap_tier_stays_on_parent_model() {
+    // AC: Ollama + auto-model must never build a request with a DeepSeek id;
+    // the routed model equals the session model for any prompt class.
+    let mut runtime = stub_runtime_for_provider("ollama").with_auto_model(true);
+    runtime.model = "qwen3:32b".to_string();
+
+    for prompt in ["hi", "please refactor the whole auth module for security"] {
+        let route =
+            resolve_subagent_assignment_route(&runtime, None, prompt, &SubAgentType::General).await;
+        assert_eq!(route.model, "qwen3:32b", "prompt {prompt:?}");
+        assert!(
+            !route.model.contains("deepseek"),
+            "no DeepSeek id may be fabricated: {route:?}"
+        );
+    }
+}
+
+#[test]
+fn flash_router_gate_requires_cheap_tier() {
+    let deepseek = stub_runtime().with_auto_model(true);
+    assert!(
+        should_use_subagent_flash_router(&deepseek),
+        "DeepSeek keeps the network router"
+    );
+
+    let mut moonshot = stub_runtime_for_provider("moonshot").with_auto_model(true);
+    moonshot.model = "kimi-k2.6".to_string();
+    assert!(
+        !should_use_subagent_flash_router(&moonshot),
+        "providers without a cheap tier skip the network router"
+    );
+}
+
+#[test]
+fn role_model_validation_accepts_provider_native_ids() {
+    // AC: [subagents] worker_model = "kimi-k2.5" on Moonshot must not fail
+    // with "Expected a DeepSeek model id".
+    let mut runtime = stub_runtime_for_provider("moonshot");
+    runtime
+        .role_models
+        .insert("worker".to_string(), "kimi-k2.5".to_string());
+
+    let model = configured_model_for_role_or_type(&runtime, Some("worker"), &SubAgentType::General)
+        .expect("provider-native id is accepted");
+    assert_eq!(model.as_deref(), Some("kimi-k2.5"));
+}
+
+#[test]
+fn role_model_validation_stays_strict_on_official_deepseek() {
+    let mut runtime = stub_runtime();
+    runtime
+        .role_models
+        .insert("worker".to_string(), "kimi-k2.5".to_string());
+
+    let err = configured_model_for_role_or_type(&runtime, Some("worker"), &SubAgentType::General)
+        .expect_err("non-DeepSeek id is rejected on the official API");
+    let msg = err.to_string();
+    assert!(msg.contains("kimi-k2.5"), "names the bad id: {msg}");
+    assert!(
+        msg.contains("deepseek-v4-pro"),
+        "lists accepted ids from model_completion_names_for_provider: {msg}"
+    );
+}
+
+#[test]
+fn normalize_requested_subagent_model_is_provider_aware() {
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "kimi-k2.5",
+            "model",
+            crate::config::ApiProvider::Moonshot
+        )
+        .expect("Moonshot accepts its own ids"),
+        "kimi-k2.5"
+    );
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "qwen3:32b",
+            "model",
+            crate::config::ApiProvider::Ollama
+        )
+        .expect("Ollama tags pass through"),
+        "qwen3:32b"
+    );
+    assert!(
+        normalize_requested_subagent_model(
+            "kimi-k2.5",
+            "model",
+            crate::config::ApiProvider::Deepseek
+        )
+        .is_err(),
+        "official DeepSeek API rejects foreign ids"
+    );
+}
+
+// ── #3030: step-counter formatting ──────────────────────────────────────────
+
+#[test]
+fn format_step_counter_hides_unbounded_sentinel() {
+    // DEFAULT_MAX_STEPS is u32::MAX, meaning "unbounded" — rendering the
+    // sentinel as a denominator produced "step 16/4294967295".
+    assert_eq!(format_step_counter(16, u32::MAX), "step 16");
+}
+
+#[test]
+fn format_step_counter_keeps_concrete_budgets() {
+    assert_eq!(format_step_counter(3, 25), "step 3/25");
+    assert_eq!(format_step_counter(0, 1), "step 0/1");
 }

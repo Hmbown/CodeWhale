@@ -67,11 +67,7 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "write_file",
 ];
 
-pub(super) fn should_default_defer_tool(
-    name: &str,
-    _mode: AppMode,
-    always_load: &HashSet<String>,
-) -> bool {
+pub(super) fn should_default_defer_tool(name: &str, always_load: &HashSet<String>) -> bool {
     if always_load.contains(name) {
         return false;
     }
@@ -85,13 +81,9 @@ pub(super) fn should_default_defer_tool(
         .any(|core_tool| core_tool == &name)
 }
 
-pub(super) fn apply_native_tool_deferral(
-    catalog: &mut [Tool],
-    mode: AppMode,
-    always_load: &HashSet<String>,
-) {
+pub(super) fn apply_native_tool_deferral(catalog: &mut [Tool], always_load: &HashSet<String>) {
     for tool in catalog {
-        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
+        tool.defer_loading = Some(should_default_defer_tool(&tool.name, always_load));
     }
 }
 
@@ -185,7 +177,7 @@ pub(super) fn build_model_tool_catalog(
     mode: AppMode,
     always_load: &HashSet<String>,
 ) -> Vec<Tool> {
-    apply_native_tool_deferral(&mut native_tools, mode, always_load);
+    apply_native_tool_deferral(&mut native_tools, always_load);
     apply_mcp_tool_deferral(&mut mcp_tools, mode);
     // Sort each partition by name for prefix-cache stability (#263). The
     // upstream `to_api_tools()` already sorts the registry's HashMap output;
@@ -229,7 +221,6 @@ pub(super) fn ensure_advanced_tooling(
             allowed_callers: Some(vec!["direct".to_string()]),
             defer_loading: Some(should_default_defer_tool(
                 CODE_EXECUTION_TOOL_NAME,
-                mode,
                 always_load,
             )),
             input_examples: None,
@@ -248,7 +239,7 @@ pub(super) fn ensure_advanced_tooling(
         && crate::dependencies::resolve_node().is_some()
     {
         let mut tool = crate::tools::js_execution::js_execution_tool_definition();
-        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
+        tool.defer_loading = Some(should_default_defer_tool(&tool.name, always_load));
         catalog.push(tool);
     }
 
@@ -544,7 +535,8 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
 }
 
 fn shell_tool_allow_shell_hint() -> &'static str {
-    "Shell tools require top-level `allow_shell = true`. \
+    "Shell tools are disabled because top-level `allow_shell = false`; \
+     they require `allow_shell = true`. \
      In Agent mode, run `/config allow_shell true` for this session or add `--save` \
      for future sessions; the next turn will expose shell with approval gating"
 }

@@ -472,6 +472,9 @@ pub struct ExecApprovalRequestEvent {
     pub cwd: String,
     /// Human-readable reason why approval is needed.
     pub reason: String,
+    /// Policy rule that matched this approval request, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_rule: Option<Box<str>>,
     /// Network context if the approval involves network access.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_approval_context: Option<NetworkApprovalContext>,

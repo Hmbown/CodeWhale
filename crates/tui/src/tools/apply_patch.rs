@@ -1106,13 +1106,18 @@ fn apply_hunk(
         .collect();
 
     // Try to find the location with fuzzy matching
-    // Apply cumulative offset from previous hunks
+    // Apply cumulative offset from previous hunks, clamping to valid range.
     let base_idx = if hunk.old_start > 0 {
         hunk.old_start - 1
     } else {
         0
     };
-    let start_idx = ((base_idx as isize) + *cumulative_offset).max(0) as usize;
+    // Use checked_add_signed to safely handle negative offsets without
+    // risking isize overflow on adversarial input.
+    let start_idx = base_idx
+        .checked_add_signed(*cumulative_offset)
+        .unwrap_or(0)
+        .min(lines.len());
 
     for fuzz in 0..=max_fuzz {
         // Try at exact position first, then nearby

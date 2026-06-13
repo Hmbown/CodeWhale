@@ -12,6 +12,30 @@ fn temp_state_path(label: &str) -> PathBuf {
     ))
 }
 
+fn assert_workflow_trace_schema(conn: &Connection) {
+    let user_version: u32 = conn
+        .query_row("PRAGMA user_version;", [], |row| row.get(0))
+        .expect("read user_version");
+    assert_eq!(user_version, 2);
+
+    for table in [
+        "workflow_runs",
+        "branch_runs",
+        "leaf_runs",
+        "control_node_runs",
+        "teacher_candidates",
+    ] {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|err| panic!("read sqlite_master for {table}: {err}"));
+        assert!(exists, "missing workflow trace table {table}");
+    }
+}
+
 #[test]
 fn upsert_and_resume_thread_metadata() {
     let path = temp_state_path("upsert_resume");
@@ -155,6 +179,102 @@ fn init_schema_migration() {
 
     // Test idempotent
     StateStore::open(Some(path.clone())).expect("open state store");
+}
+
+#[test]
+fn fresh_schema_includes_workflow_trace_tables() {
+    let path = temp_state_path("fresh_schema_includes_workflow_trace_tables");
+
+    StateStore::open(Some(path.clone())).expect("open state store");
+
+    let conn = Connection::open(&path).expect("open state db");
+    assert_workflow_trace_schema(&conn);
+}
+
+#[test]
+fn v1_schema_migrates_workflow_trace_tables() {
+    let path = temp_state_path("v1_schema_migrates_workflow_trace_tables");
+    let conn = Connection::open(&path).expect("open state db");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT,
+            preview TEXT NOT NULL,
+            ephemeral INTEGER NOT NULL,
+            model_provider TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            path TEXT,
+            cwd TEXT NOT NULL,
+            cli_version TEXT NOT NULL,
+            source TEXT NOT NULL,
+            title TEXT,
+            sandbox_policy TEXT,
+            approval_mode TEXT,
+            archived INTEGER NOT NULL DEFAULT 0,
+            archived_at INTEGER,
+            git_sha TEXT,
+            git_branch TEXT,
+            git_origin_url TEXT,
+            memory_mode TEXT,
+            current_leaf_id INTEGER
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            item_json TEXT,
+            created_at INTEGER NOT NULL,
+            parent_entry_id INTEGER
+        );
+        CREATE TABLE checkpoints (
+            thread_id TEXT NOT NULL,
+            checkpoint_id TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(thread_id, checkpoint_id)
+        );
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            progress INTEGER,
+            detail TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE thread_dynamic_tools (
+            thread_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            input_schema TEXT NOT NULL,
+            PRIMARY KEY (thread_id, position)
+        );
+        INSERT INTO threads (
+            id, preview, ephemeral, model_provider, created_at, updated_at, status, cwd, cli_version, source, archived
+        )
+        VALUES (
+            'thread-test-1', 'hello', false, 'deepseek', 0, 0, 'running', '/tmp/project', '0.0.0-test', 'interactive', false
+        );
+        PRAGMA user_version = 1;
+        "#,
+    )
+    .expect("create v1 schema");
+    drop(conn);
+
+    let store = StateStore::open(Some(path.clone())).expect("open state store");
+    let thread = store
+        .get_thread("thread-test-1")
+        .expect("read thread")
+        .expect("thread survives migration");
+    assert_eq!(thread.preview, "hello");
+
+    let conn = Connection::open(&path).expect("open state db");
+    assert_workflow_trace_schema(&conn);
 }
 
 #[test]

@@ -525,10 +525,12 @@ pub(super) fn extract_compaction_summary_prompt(
     }
 }
 
+#[allow(dead_code)] // exposed for future engine-side callers; current call path goes through compaction::estimate_input_tokens_conservative via token_estimate_cache.
 fn estimate_text_tokens_conservative(text: &str) -> usize {
     text.chars().count().div_ceil(3)
 }
 
+#[allow(dead_code)] // see estimate_text_tokens_conservative above
 fn estimate_system_tokens_conservative(system: Option<&SystemPrompt>) -> usize {
     match system {
         Some(SystemPrompt::Text(text)) => estimate_text_tokens_conservative(text),
@@ -540,6 +542,7 @@ fn estimate_system_tokens_conservative(system: Option<&SystemPrompt>) -> usize {
     }
 }
 
+#[allow(dead_code)] // see estimate_text_tokens_conservative above
 pub(super) fn estimate_input_tokens_conservative(
     messages: &[Message],
     system: Option<&SystemPrompt>,

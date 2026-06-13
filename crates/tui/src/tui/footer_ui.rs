@@ -4,7 +4,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::coherence::CoherenceState;
-use crate::localization::MessageId;
+use crate::localization::{Locale, MessageId};
 use crate::palette;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::app::App;
@@ -314,7 +314,7 @@ pub(crate) fn active_tool_status_label(app: &App) -> Option<String> {
 
     let mut snapshot = ActiveToolStatusSnapshot::default();
     for cell in active.entries() {
-        collect_active_tool_status(cell, &mut snapshot);
+        collect_active_tool_status(cell, &mut snapshot, app.ui_locale);
     }
     if snapshot.total() == 0 {
         return None;
@@ -345,7 +345,11 @@ pub(crate) fn active_tool_status_label(app: &App) -> Option<String> {
     Some(parts.join(" \u{00B7} "))
 }
 
-fn collect_active_tool_status(cell: &HistoryCell, snapshot: &mut ActiveToolStatusSnapshot) {
+fn collect_active_tool_status(
+    cell: &HistoryCell,
+    snapshot: &mut ActiveToolStatusSnapshot,
+    locale: Locale,
+) {
     let HistoryCell::Tool(tool) = cell else {
         return;
     };
@@ -401,7 +405,7 @@ fn collect_active_tool_status(cell: &HistoryCell, snapshot: &mut ActiveToolStatu
                 return;
             }
             snapshot.record(
-                tool_activity_label_for_name(&generic.name),
+                tool_activity_label_for_name(&generic.name, locale),
                 generic.status,
                 None,
             );

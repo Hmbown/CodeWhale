@@ -147,28 +147,28 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
             <h1 className="font-display tracking-crisp">
               {isZh
-                ? "DeepSeek V4 的最强智能体运行框架。"
-                : "The most agentic harness for DeepSeek V4."}
+                ? "先有自我，再有法律，永远留下证据。"
+                : "Ego first. Law next. Evidence always."}
             </h1>
 
             <p className="mt-6 text-lg text-ink-soft leading-relaxed max-w-2xl">
               <span className="font-cjk text-indigo font-semibold">CodeWhale</span>
               {isZh
-                ? " 就是那个框架——围绕 DeepSeek V4 Pro 和 Flash 构建，用规则、工具、证据和反馈循环让模型持续工作并不断进步。DeepSeek V4 参与了编写。V4 越强，框架越强——每一轮对话留下更好的提示词和更清晰的交接，下一轮从更高起点出发。这个递归循环正是项目的核心使命：借助国际开源社区，构建一个让 V4 自主管理环境的自改进框架。"
-                : " is that harness — built around DeepSeek V4 Pro and Flash, with rules, tools, evidence, and feedback loops that help the model keep working and keep improving. DeepSeek V4 helped write it. As V4 improves, the harness improves with it. Each turn leaves behind better prompts and better handoffs — so the next turn starts stronger. That's the recursive loop at the heart of this project: an international open source community building a harness that lets V4 manage its own environment, turn after turn."}
+                ? " 是 DeepSeek V4 和开放模型的本地运行层。它给 Agent 一个可追责的自我、一套处理冲突的 law，以及把工具、审批、回滚、子 Agent 和交接都留在明面上的证据循环。"
+                : " is a local operating layer for DeepSeek V4 and open-model coding work. It gives an agent an accountable self, a conflict law for the workspace, and an evidence loop where tools, approvals, rollback, sub-agents, and handoffs stay visible."}
             </p>
 
             {/* MISSION CALLOUT */}
             <div className="mt-6 px-4 py-3 bg-indigo-pale border-l-4 border-indigo text-sm leading-relaxed max-w-2xl">
               {isZh ? (
                 <>
-                  <span className="font-display text-indigo font-semibold mr-1">使命</span>
-                  构建一个递归自改进的 DeepSeek V4 运行框架——通过国际开源社区的力量，让 V4 在每一轮对话中学会更好地管理自己的环境。
+                  <span className="font-display text-indigo font-semibold mr-1">设计骨架</span>
+                  ego 是责任落点：这个用户、这个仓库、这个会话。constitution 是冲突法：当上下文吵起来时，谁赢。
                 </>
               ) : (
                 <>
-                  <span className="font-display text-indigo font-semibold mr-1">Mission</span>
-                  Build a recursive, self-improving harness for DeepSeek V4 — by leveraging the international open source community and V4's own ability to manage its environment, turn after turn.
+                  <span className="font-display text-indigo font-semibold mr-1">Design thesis</span>
+                  Ego is where responsibility attaches: this user, this repo, this session. Constitution is conflict law for a noisy workspace.
                 </>
               )}
             </div>
@@ -245,61 +245,61 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="flex items-baseline gap-4 mb-2 hairline-b pb-4">
           <Seal char="是" />
           <h2 className="font-display">
-            {isZh ? "核心思想" : "The ideas that make it what it is"}
+            {isZh ? "判断栈" : "The judgment stack"}
           </h2>
         </div>
         <p className={`mb-8 text-ink-soft max-w-2xl ${isZh ? "leading-[1.9] tracking-wide" : "text-sm leading-relaxed"}`}>
           {isZh
-            ? "一个模型回答问题，一个智能体完成任务。区别在于框架——围绕模型构建的规则、工具、证据和反馈循环的运行环境。CodeWhale 围绕三条原则运作。"
-            : "A model answers a question. An agent finishes a task. The difference is the harness — the operating environment that surrounds the model with rules, tools, evidence, and feedback loops. CodeWhale operates on three principles."}
+            ? "模型会生成文本；Agent 会留下后果。CodeWhale 把后果需要的结构放在模型外面：自我、权威、证据、工具，各在其位。"
+            : "A model generates text; an agent leaves consequences. CodeWhale puts the structure for those consequences around the model: self, authority, evidence, and tools, each in its place."}
         </p>
 
         <div className="grid md:grid-cols-3 gap-0 col-rule hairline-t hairline-b">
           {isZh ? (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · 宪政层级</div>
-                <h3 className="font-display text-xl mb-3">七层权威链，从不模糊</h3>
+                <div className="eyebrow mb-3">01 · 自我模型</div>
+                <h3 className="font-display text-xl mb-3">责任要有地址</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  《宪法》第七条定义了九层权威层级——用户当前消息覆盖过时项目规则，实时工具输出覆盖假设，验证覆盖自信。模型不需要猜测该服从哪条指令。
+                  Agent 不是模型卡片，也不是排行榜数字。它是这个终端、这个工作区、这个会话里的实例。先有地址，责任才有落点。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · 自己写的框架</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4 参与构建</h3>
+                <div className="eyebrow mb-3">02 · 嵌套宪法</div>
+                <h3 className="font-display text-xl mb-3">冲突时有法律</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  V4 编写了框架的部分代码。每一轮对话的缓存前缀让《宪法》的实际成本接近免费。V4 越强，框架越强；框架越强，V4 在其中越高效——递归循环。
+                  全局 Constitution、当前用户请求、运行时规则、仓库本地 law、实时证据、记忆、个性和旧交接各有顺位。冲突时不靠感觉。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · 开源协作</div>
-                <h3 className="font-display text-xl mb-3">国际社区，小补丁驱动</h3>
+                <div className="eyebrow mb-3">03 · 本地执行</div>
+                <h3 className="font-display text-xl mb-3">证据留在本地</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  100:1 贡献模型——一个提示词、大量智能体小时、一个小补丁、一次维护者审查。无 CLA，无赞助商优先通道。每一条内容都被阅读。
+                  文件、Shell、Git、Web、MCP、子 Agent、回滚和诊断都由 runtime 管理。模型不需要假装验证；它必须留下证据。
                 </p>
               </div>
             </>
           ) : (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · constitutional hierarchy</div>
-                <h3 className="font-display text-xl mb-3">Seven tiers of authority, never ambiguous</h3>
+                <div className="eyebrow mb-3">01 · self-model</div>
+                <h3 className="font-display text-xl mb-3">Responsibility needs an address</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Article VII of the Constitution ranks nine sources from the Articles themselves to prior-session handoffs. The user's current message outranks stale project rules. Live tool output outranks assumptions. Verification outranks confidence. The model never guesses which instruction to follow.
+                  The agent is not a model card or leaderboard score. It is an instance in this terminal, this workspace, this session. Give it an address before you ask it to act.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · self-written harness</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4 helped build it</h3>
+                <div className="eyebrow mb-3">02 · nested constitution</div>
+                <h3 className="font-display text-xl mb-3">Conflict has law</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  V4 wrote parts of this harness. DeepSeek's prefix caching makes the Constitution nearly free to reference every turn. As V4 improves, the harness improves with it. A more effective V4 makes the harness better — the recursive loop that defines this project.
+                  Global Constitution, current user request, runtime statutes, repo-local law, live evidence, memory, personality, and old handoffs each have a rank. When they conflict, the agent has an order to follow.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · open by design</div>
-                <h3 className="font-display text-xl mb-3">International community, small patches</h3>
+                <div className="eyebrow mb-3">03 · local execution</div>
+                <h3 className="font-display text-xl mb-3">Evidence stays local</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  The 100-to-1 contribution model: one prompt, many agent-hours, one small patch, one maintainer review. No CLA. No sponsor lockouts. The maintainer reads everything personally, issues are triaged in the open, releases cut from main.
+                  Files, shell, git, web, MCP, sub-agents, rollback, and diagnostics are runtime surfaces. The model does not claim verification as a mood; it has to leave evidence.
                 </p>
               </div>
             </>
@@ -318,61 +318,61 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
 
-      {/* 100-TO-1 MODEL */}
+      {/* MAINTAINER LOOP */}
       <section className="bg-paper-deep hairline-t hairline-b">
         <div className="mx-auto max-w-[1400px] px-6 py-16">
           <div className="grid lg:grid-cols-12 gap-10 items-start">
             <div className="lg:col-span-5">
               <div className="flex items-baseline gap-4 mb-4">
                 <Seal char="百" />
-                <div className="eyebrow">{isZh ? "100:1 模型" : "100-to-1 model"}</div>
+                <div className="eyebrow">{isZh ? "维护者循环" : "maintainer loop"}</div>
               </div>
               <h2 className="font-display">
-                {isZh ? "递归自我改进的开源智能体框架" : "A recursive harness, modelled at 100-to-1"}
+                {isZh ? "长任务要能被继承" : "Long work has to be inheritable"}
               </h2>
               <p className={`mt-5 text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
                 {isZh
-                  ? "1948 年，Ralph Bown 用 100:1 的晶体管模型，把微小的结构讲清楚。CodeWhale 借用同样的形状：一个清晰提示词，把 DeepSeek V4 Pro 的缓存注意力、工具调用与子智能体凝结为一个可审查的小补丁。"
-                  : "In 1948, Ralph Bown used a 100-to-1 model of the transistor to make a tiny structure legible. CodeWhale uses the same shape: one clear prompt turns DeepSeek V4 Pro's cached attention, tool use, and sub-agents into one small, reviewable patch."}
+                  ? "难点不是让模型一次做更多事，而是让用户意图、权威顺序、证据和贡献者上下文足够清楚，让下一个维护者可以接住。"
+                  : "The hard part is not making the model do more at once. It is keeping intent, authority, evidence, and contributor context clear enough for the next maintainer to inherit."}
               </p>
               <p className={`mt-4 text-sm text-ink-mute ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
                 {isZh
-                  ? "100:1 不是性能基准，而是贡献形状：一个提示词、许多智能体小时、一个小补丁、一次维护者审查。"
-                  : "100-to-1 is not a throughput benchmark. It is a contribution shape: one prompt, many agent-hours, one small patch, one maintainer review."}
+                  ? "好的 Agent 工作不是一团活动记录，而是一条可以复核的线：请求、调查、补丁、验证、署名。"
+                  : "Good agent work is not a pile of activity. It is a reviewable line: request, investigation, patch, verification, credit."}
               </p>
               <p className={`mt-4 text-sm text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
                 {isZh
-                  ? "框架承担了繁重工作：宪政提示、结构化信任、反馈循环和跨会话存活的交接。模型可以专注于任务本身。因为 DeepSeek V4 参与构建了这套框架，每一次改进都让 V4 在其中变得更有效——这让下一次改进变得更容易。"
-                  : "The harness does the heavy lifting: constitutional prompts, structured trust, feedback loops, and handoffs that survive the session. The model is free to focus on the task. And because DeepSeek V4 helped build this harness, each improvement makes V4 more effective within it — which makes the next improvement easier."}
+                  ? "框架承担了繁重工作：宪政提示、结构化信任、反馈循环、回滚和跨会话存活的交接。模型可以把注意力放在任务本身。"
+                  : "The harness carries the heavy parts: constitutional prompts, structured trust, feedback loops, rollback, and handoffs that survive the session. The model can keep its attention on the task itself."}
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
-                <Link href={isZh ? "/zh/contribute#recursive-harness" : "/contribute#recursive-harness"} className="px-4 py-2 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors">
-                  {isZh ? "运行提示词 →" : "Run the prompt →"}
+                <Link href={isZh ? "/zh/docs#constitution" : "/docs#constitution"} className="px-4 py-2 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors">
+                  {isZh ? "阅读宪法 →" : "Read the docs →"}
                 </Link>
-                <Link href="https://api-docs.deepseek.com/quick_start/pricing" className="px-4 py-2 font-mono text-sm uppercase tracking-wider text-ink-mute hover:text-indigo transition-colors">
-                  {isZh ? "DeepSeek 价格 →" : "DeepSeek pricing →"}
+                <Link href={isZh ? "/zh/contribute" : "/contribute"} className="px-4 py-2 font-mono text-sm uppercase tracking-wider text-ink-mute hover:text-indigo transition-colors">
+                  {isZh ? "贡献指南 →" : "Contribute →"}
                 </Link>
               </div>
             </div>
 
             <div className="lg:col-span-7 hairline-t hairline-b hairline-l hairline-r bg-paper">
               <div className="bg-ink text-paper px-4 py-3 flex items-center justify-between gap-4">
-                <div className="font-mono text-sm uppercase tracking-widest">CodeWhale / 100:1</div>
-                <div className="font-cjk text-sm text-paper-deep/80">{isZh ? "演示模型" : "demonstration model"}</div>
+                <div className="font-mono text-sm uppercase tracking-widest">CodeWhale / review loop</div>
+                <div className="font-cjk text-sm text-paper-deep/80">{isZh ? "维护者工作流" : "maintainer workflow"}</div>
               </div>
               <div className="grid sm:grid-cols-2 gap-0 col-rule">
                 {(isZh
                   ? [
-                      { n: "01", t: "输入", d: "贡献者在 fork 中运行 CodeWhale，并给出递归改进提示词。" },
-                      { n: "02", t: "相互作用", d: "DeepSeek V4 Pro 读取代码库、调用工具、协调子智能体，前缀缓存让长程注意力保持低成本。" },
-                      { n: "03", t: "输出", d: "智能体返回一个可复现、可测试、可审查的小补丁。" },
-                      { n: "04", t: "反馈", d: "维护者审查、合并、发布。下一轮在更好的框架上开始。" },
+                      { n: "01", t: "意图", d: "当前用户请求定义目标、约束和成功标准。" },
+                      { n: "02", t: "调查", d: "Agent 读取代码、调用工具、必要时分派子 Agent，并保留证据。" },
+                      { n: "03", t: "补丁", d: "输出保持小、可复现、可测试，并尊重现有分支和贡献者上下文。" },
+                      { n: "04", t: "审查", d: "维护者看到改变、验证结果、风险和应被感谢的人。" },
                     ]
                   : [
-                      { n: "01", t: "Input", d: "A contributor runs CodeWhale in a fork with the recursive harness prompt." },
-                      { n: "02", t: "Interaction", d: "DeepSeek V4 Pro reads the repo, uses tools, coordinates sub-agents; prefix caching keeps long attention cheap." },
-                      { n: "03", t: "Output", d: "The agent returns one reproducible, tested, reviewable patch." },
-                      { n: "04", t: "Feedback", d: "The maintainer reviews, lands, releases. The next run starts from a better harness." },
+                      { n: "01", t: "Intent", d: "The current user request defines the goal, constraints, and success bar." },
+                      { n: "02", t: "Investigation", d: "The agent reads code, uses tools, delegates when useful, and keeps the evidence visible." },
+                      { n: "03", t: "Patch", d: "The output stays small, reproducible, testable, and respectful of branch and contributor context." },
+                      { n: "04", t: "Review", d: "The maintainer sees what changed, what was verified, what risk remains, and who deserves credit." },
                     ]
                 ).map((item) => (
                   <div key={item.n} className="p-5">
@@ -482,7 +482,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="flex items-baseline gap-4 mb-5 hairline-b pb-4">
           <Seal char="谢" />
           <div>
-            <div className="eyebrow mb-2">{isZh ? "v0.8.48 致谢" : "v0.8.48 credits"}</div>
+            <div className="eyebrow mb-2">{isZh ? "v0.8.56 致谢" : "v0.8.56 credits"}</div>
             <h2 className="font-display text-3xl">
               {isZh ? "每个补丁和报告都算数" : "Every patch and report counts"}
             </h2>
@@ -495,7 +495,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 ? "这一版合并和吸收了来自社区的大量工作。完整条目在 CHANGELOG 中；这里保留最新发布的公开致谢入口。"
                 : "This release merged and harvested a large community tranche. The full notes live in the changelog; this keeps the latest public credit surface easy to find."}
             </p>
-            <Link href="https://github.com/Hmbown/CodeWhale/blob/main/CHANGELOG.md#0848---2026-05-31" className="inline-block mt-4 font-mono text-xs uppercase tracking-wider text-indigo hover:underline">
+            <Link href="https://github.com/Hmbown/CodeWhale/blob/main/CHANGELOG.md#0856---2026-06-09" className="inline-block mt-4 font-mono text-xs uppercase tracking-wider text-indigo hover:underline">
               {isZh ? "查看完整 changelog →" : "Full changelog →"}
             </Link>
           </div>

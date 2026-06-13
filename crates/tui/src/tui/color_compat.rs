@@ -43,6 +43,11 @@ pub(crate) struct ColorCompatBackend<W: Write> {
     /// Forcing the expected size prevents ratatui's internal `autoresize` from
     /// shrinking the viewport back to the stale dimension inside `draw()`.
     forced_size: Option<Size>,
+    /// Cached terminal size from `crossterm::terminal::size()`, set after
+    /// re-entering alt-screen to avoid stale buffer dimensions on Windows.
+    /// Used as the primary fallback in `size()` before falling through to
+    /// the live crossterm query.
+    terminal_size: Option<Size>,
     render_debug: Option<RenderDebugLog>,
 }
 
@@ -59,6 +64,7 @@ impl<W: Write> ColorCompatBackend<W> {
             // to a community preset.
             active_ui_theme: UiTheme::detect(),
             forced_size: None,
+            terminal_size: None,
             render_debug: RenderDebugLog::from_env(),
         }
     }
@@ -69,6 +75,10 @@ impl<W: Write> ColorCompatBackend<W> {
 
     pub(crate) fn clear_forced_size(&mut self) {
         self.forced_size = None;
+    }
+
+    pub(crate) fn set_terminal_size(&mut self, size: Size) {
+        self.terminal_size = Some(size);
     }
 
     pub(crate) fn set_palette_mode(&mut self, palette_mode: PaletteMode) {
@@ -119,8 +129,52 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
         if let Some(render_debug) = &mut self.render_debug {
             render_debug.record(viewport, &adapted);
         }
-        self.inner
-            .draw(adapted.iter().map(|(x, y, cell)| (*x, *y, cell)))
+        // #3029: Emit OSC 8 hyperlinks out-of-band through the backend's
+        // Write impl.  ratatui's buffer pipeline strips ESC bytes, so the
+        // open/close sequences must be interleaved with the cell stream
+        // here.  OSC 8 is stateful and last-writer-wins: every cell painted
+        // between an open and the next close links to that open's target,
+        // so each region's cells must be bracketed by their OWN open/close
+        // pair — never batched.
+        let mut frame_links = crate::tui::osc8::take_frame_links();
+        if frame_links.is_empty() || !crate::tui::osc8::enabled() {
+            self.inner
+                .draw(adapted.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+            return Ok(());
+        }
+        // Deterministic region lookup when regions are adjacent/overlapping:
+        // the first (top-left-most) region wins.
+        frame_links.sort_unstable_by_key(|link| (link.row, link.col_start));
+        let region_for = |x: u16, y: u16| -> Option<usize> {
+            frame_links
+                .iter()
+                .position(|link| y == link.row && x >= link.col_start && x <= link.col_end)
+        };
+
+        // Walk the diff in its original order and split it into runs at
+        // region boundaries, so the visible byte stream stays identical to
+        // a no-link render apart from the inserted OSC 8 sequences.
+        let mut idx = 0;
+        while idx < adapted.len() {
+            let current_region = region_for(adapted[idx].0, adapted[idx].1);
+            let run_start = idx;
+            while idx < adapted.len()
+                && region_for(adapted[idx].0, adapted[idx].1) == current_region
+            {
+                idx += 1;
+            }
+            let run = &adapted[run_start..idx];
+            if let Some(region_idx) = current_region {
+                crate::tui::osc8::write_osc8_open(self, &frame_links[region_idx].target)?;
+                self.inner
+                    .draw(run.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+                crate::tui::osc8::write_osc8_close(self)?;
+            } else {
+                self.inner
+                    .draw(run.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+            }
+        }
+        Ok(())
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
@@ -152,10 +206,14 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
     }
 
     fn size(&self) -> io::Result<Size> {
-        match self.forced_size {
-            Some(size) => Ok(size),
-            None => self.inner.size(),
+        // forced_size takes priority: it is set during resize events to prevent
+        // ratatui's autoresize from shrinking the viewport back to a stale
+        // dimension. terminal_size is the cached real terminal size used as a
+        // fallback after alt-screen re-entry (Windows buffer width workaround).
+        if let Some(size) = self.forced_size.or(self.terminal_size) {
+            return Ok(size);
         }
+        self.inner.size()
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {
@@ -495,5 +553,159 @@ mod tests {
         assert!(body.contains("frame=1"), "{body}");
         assert!(body.contains("diff_cells=1"), "{body}");
         assert!(body.contains("sample=3:4"), "{body}");
+    }
+
+    #[test]
+    fn size_returns_terminal_size_when_set() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        backend.set_terminal_size(Size::new(120, 40));
+        assert_eq!(backend.size().unwrap(), Size::new(120, 40));
+    }
+
+    #[test]
+    fn forced_size_takes_priority_over_terminal_size() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        // forced_size is set during resize events to temporarily override the
+        // cached terminal_size — it must win to prevent viewport shrinking.
+        backend.set_terminal_size(Size::new(120, 40));
+        backend.force_size(Size::new(80, 25));
+        assert_eq!(backend.size().unwrap(), Size::new(80, 25));
+    }
+
+    #[test]
+    fn size_falls_back_to_forced_size_when_terminal_size_unset() {
+        let writer = SharedWriter::default();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+
+        backend.force_size(Size::new(80, 25));
+        assert_eq!(backend.size().unwrap(), Size::new(80, 25));
+    }
+
+    // ── #3029: OSC 8 emission through the backend byte stream ──────────────
+
+    fn row_cells(symbols: &str) -> Vec<(u16, u16, Cell)> {
+        symbols
+            .chars()
+            .enumerate()
+            .map(|(i, ch)| {
+                let mut cell = Cell::default();
+                cell.set_symbol(&ch.to_string());
+                (u16::try_from(i).unwrap(), 0u16, cell)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn osc8_open_close_bracket_only_their_region_cells() {
+        use crate::tui::osc8::LinkRegion;
+
+        // Baseline: identical cells, no link regions.
+        let baseline_writer = SharedWriter::default();
+        let baseline_capture = baseline_writer.0.clone();
+        let mut baseline =
+            ColorCompatBackend::new(baseline_writer, ColorDepth::TrueColor, PaletteMode::Dark);
+        let cells = row_cells("ABCDE");
+        baseline
+            .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+        let baseline_out = String::from_utf8_lossy(&baseline_capture.borrow()).to_string();
+
+        // Linked render: columns 2..=3 ("CD") carry one link region.
+        crate::tui::osc8::set_frame_links(vec![LinkRegion {
+            row: 0,
+            col_start: 2,
+            col_end: 3,
+            target: "https://example.test/1".to_string(),
+        }]);
+        let writer = SharedWriter::default();
+        let capture = writer.0.clone();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+        let cells = row_cells("ABCDE");
+        backend
+            .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+        let out = String::from_utf8_lossy(&capture.borrow()).to_string();
+
+        let open = "\x1b]8;;https://example.test/1\x1b\\";
+        let close = "\x1b]8;;\x1b\\";
+        assert_eq!(out.matches(open).count(), 1, "exactly one open: {out:?}");
+        assert_eq!(out.matches(close).count(), 1, "exactly one close: {out:?}");
+
+        // The open must precede the first linked glyph and the close must sit
+        // between the last linked glyph and the first glyph after the region.
+        let open_at = out.find(open).expect("open present");
+        let close_at = out.find(close).expect("close present");
+        let c_at = out.find('C').expect("glyph C");
+        let d_at = out.find('D').expect("glyph D");
+        let e_at = out.find('E').expect("glyph E");
+        assert!(open_at < c_at, "open before linked cells: {out:?}");
+        assert!(d_at < close_at, "close after linked cells: {out:?}");
+        assert!(
+            close_at < e_at,
+            "cells after the region must not inherit the link: {out:?}"
+        );
+
+        // Visible glyph stream is unchanged by link insertion.
+        let mut baseline_visible = String::new();
+        crate::tui::osc8::strip_ansi_into(&baseline_out, &mut baseline_visible);
+        let mut linked_visible = String::new();
+        crate::tui::osc8::strip_ansi_into(&out, &mut linked_visible);
+        assert_eq!(
+            baseline_visible, linked_visible,
+            "link emission must not move or alter visible cells"
+        );
+    }
+
+    #[test]
+    fn osc8_two_regions_link_to_their_own_targets() {
+        use crate::tui::osc8::LinkRegion;
+
+        crate::tui::osc8::set_frame_links(vec![
+            LinkRegion {
+                row: 0,
+                col_start: 0,
+                col_end: 1,
+                target: "https://example.test/first".to_string(),
+            },
+            LinkRegion {
+                row: 0,
+                col_start: 3,
+                col_end: 4,
+                target: "https://example.test/second".to_string(),
+            },
+        ]);
+        let writer = SharedWriter::default();
+        let capture = writer.0.clone();
+        let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
+        let cells = row_cells("ABZCD");
+        backend
+            .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            .unwrap();
+        let out = String::from_utf8_lossy(&capture.borrow()).to_string();
+
+        let first = "\x1b]8;;https://example.test/first\x1b\\";
+        let second = "\x1b]8;;https://example.test/second\x1b\\";
+        let close = "\x1b]8;;\x1b\\";
+        assert_eq!(out.matches(first).count(), 1, "{out:?}");
+        assert_eq!(out.matches(second).count(), 1, "{out:?}");
+        assert_eq!(out.matches(close).count(), 2, "{out:?}");
+
+        // Pre-#3029-audit bug: both opens were emitted before any cell, so
+        // the whole frame linked to the LAST region's target. Each region's
+        // open must close before the next region's open begins.
+        let first_at = out.find(first).expect("first open");
+        let first_close_at = out[first_at..].find(close).expect("first close") + first_at;
+        let second_at = out.find(second).expect("second open");
+        assert!(
+            first_close_at < second_at,
+            "region one must close before region two opens: {out:?}"
+        );
+        // The unlinked middle glyph sits between the two link spans.
+        let z_at = out.find('Z').expect("unlinked glyph");
+        assert!(first_close_at < z_at && z_at < second_at, "{out:?}");
     }
 }

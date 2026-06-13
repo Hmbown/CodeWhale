@@ -114,7 +114,11 @@ impl ToolSpec for ReadFileTool {
                     "start_line must be 1-based and greater than 0".to_string(),
                 ));
             }
-            Some(v) => v as usize,
+            Some(v) => usize::try_from(v).map_err(|_| {
+                ToolError::invalid_input(
+                    "start_line exceeds platform addressable range".to_string(),
+                )
+            })?,
             None => 1,
         };
 
@@ -124,7 +128,14 @@ impl ToolSpec for ReadFileTool {
                     "max_lines must be greater than 0".to_string(),
                 ));
             }
-            Some(v) => std::cmp::min(v as usize, HARD_MAX_READ_LINES),
+            Some(v) => {
+                let converted = usize::try_from(v).map_err(|_| {
+                    ToolError::invalid_input(
+                        "max_lines exceeds platform addressable range".to_string(),
+                    )
+                })?;
+                std::cmp::min(converted, HARD_MAX_READ_LINES)
+            }
             None => DEFAULT_READ_LINES,
         };
 
@@ -292,7 +303,9 @@ fn clean_pdf_text(raw: &str) -> String {
     if any_content {
         let start = out.find(|c: char| c != '\n').unwrap_or(0);
         // Walk back from end to find the last non-newline character.
-        let end = out.rfind(|c: char| c != '\n').map_or(out.len(), |i| i + 1);
+        let end = out.rfind(|c: char| c != '\n').map_or(out.len(), |i| {
+            i + out[i..].chars().next().map_or(1, |c| c.len_utf8())
+        });
         out[start..end].to_string()
     } else {
         String::new()
@@ -320,7 +333,8 @@ fn read_pdf(path: &Path, pages: Option<&str>) -> Result<ToolResult, ToolError> {
     // path). Users with column-heavy / complex-table PDFs (academic
     // papers, financial filings) can opt into the historical
     // `pdftotext -layout` route by setting
-    // `prefer_external_pdftotext = true` in `~/.config/deepseek/settings.toml`.
+    // `prefer_external_pdftotext = true` in `~/.codewhale/settings.toml`
+    // (legacy: `~/.config/deepseek/settings.toml`).
     let prefer_external = crate::settings::Settings::load()
         .map(|s| s.prefer_external_pdftotext)
         .unwrap_or(false);
@@ -361,12 +375,18 @@ fn read_pdf_via_pdf_extract(
             }
         }
     } else {
-        pdf_extract::extract_text(path).map_err(|e| {
-            ToolError::execution_failed(format!(
-                "pdf-extract failed on {}: {e} (set `prefer_external_pdftotext = true` in settings.toml to retry via pdftotext)",
-                path.display()
-            ))
-        })?
+        // Call extract_text_by_pages even when the caller wants every page:
+        // extract_text uses an internal codepath that can hang on certain PDF
+        // cross-reference tables or font encodings (#2641). The per-page path
+        // avoids that hang and produces identical output when joined.
+        pdf_extract::extract_text_by_pages(path)
+            .map(|pages| pages.join("\n"))
+            .map_err(|e| {
+                ToolError::execution_failed(format!(
+                    "pdf-extract failed on {}: {e} (set `prefer_external_pdftotext = true` in settings.toml to retry via pdftotext)",
+                    path.display()
+                ))
+            })?
     };
     Ok(ToolResult::success(clean_pdf_text(&text)))
 }
@@ -726,7 +746,18 @@ fn leading_whitespace_fuzzy_matches(contents: &str, search: &str) -> Vec<(usize,
         let Some(&mapped_start) = byte_map.get(norm_start) else {
             break;
         };
-        let original_start = line_start_before(contents, mapped_start);
+        // Use the actual match start position, expanding to line start only
+        // when the match begins at a line boundary in the normalized text.
+        // This prevents destroying preceding text on the same line when
+        // the match starts mid-line after whitespace stripping.
+        let original_start =
+            if norm_start == 0 || normalized_contents.as_bytes()[norm_start - 1] == b'\n' {
+                // Match starts at a line boundary — use line start for full-line replacement.
+                line_start_before(contents, mapped_start)
+            } else {
+                // Match starts mid-line — use the exact mapped position.
+                mapped_start
+            };
         let original_end = byte_map.get(norm_end).copied().unwrap_or(contents.len());
         matches.push((original_start, original_end));
         cursor = norm_start.saturating_add(1);

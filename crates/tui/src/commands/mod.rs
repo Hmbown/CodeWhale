@@ -12,6 +12,7 @@ mod core;
 mod debug;
 mod feedback;
 mod goal;
+mod hf;
 mod hooks;
 mod init;
 mod jobs;
@@ -19,6 +20,7 @@ mod mcp;
 mod memory;
 mod network;
 mod note;
+mod plugins;
 mod provider;
 mod queue;
 mod rename;
@@ -77,7 +79,6 @@ impl CommandResult {
     }
 
     /// Create a result with both message and action
-    #[allow(dead_code)]
     pub fn with_message_and_action(msg: impl Into<String>, action: AppAction) -> Self {
         Self {
             message: Some(msg.into()),
@@ -225,6 +226,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdFeedbackDescription,
     },
     CommandInfo {
+        name: "hf",
+        aliases: &["huggingface"],
+        usage: "/hf [mcp <status|setup>|concepts]",
+        description_id: MessageId::CmdHfDescription,
+    },
+    CommandInfo {
         name: "home",
         aliases: &["stats", "overview", "zhuye", "shouye"],
         usage: "/home",
@@ -277,6 +284,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         usage: "/network [list|allow <host>|deny <host>|remove <host>|default <allow|deny|prompt>]",
         description_id: MessageId::CmdNetworkDescription,
+    },
+    CommandInfo {
+        name: "plugins",
+        aliases: &["plugin"],
+        usage: "/plugins [name]",
+        description_id: MessageId::CmdPluginDescription,
     },
     // Session commands
     CommandInfo {
@@ -353,9 +366,15 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdConfigDescription,
     },
     CommandInfo {
+        name: "sidebar",
+        aliases: &[],
+        usage: "/sidebar [on|off|auto|work|tasks|agents|context] [--save]",
+        description_id: MessageId::CmdSidebarDescription,
+    },
+    CommandInfo {
         name: "mode",
         aliases: &["jihua", "zidong"],
-        usage: "/mode [agent|plan|yolo|pro-plan|1|2|3]",
+        usage: "/mode [agent|plan|yolo|1|2|3]",
         description_id: MessageId::CmdModeDescription,
     },
     CommandInfo {
@@ -495,7 +514,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "restore",
         aliases: &[],
-        usage: "/restore [N]",
+        usage: "/restore [N|list [N]]",
         description_id: MessageId::CmdRestoreDescription,
     },
     // RLM command
@@ -571,6 +590,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "agent" | "daili" => agent(app, arg),
         "links" | "dashboard" | "api" | "lianjie" => core::deepseek_links(app),
         "feedback" => feedback::feedback(app, arg),
+        "hf" | "huggingface" => hf::hf(app, arg),
         "home" | "stats" | "overview" | "zhuye" | "shouye" => core::home_dashboard(app),
         "workspace" | "cwd" => core::workspace_switch(app, arg),
         "note" => note::note(app, arg),
@@ -580,6 +600,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
         "network" => network::network(app, arg),
+        "plugins" | "plugin" => plugins::plugins(app, arg),
 
         // Session commands
         "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
@@ -595,6 +616,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 
         // Config commands
         "config" => config::config_command(app, arg),
+        "sidebar" => config::sidebar(app, arg),
         "settings" => config::show_settings(app),
         "status" => status::status(app),
         "statusline" => config::status_line(app),
@@ -668,8 +690,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         _ => {
             // Third source: skills (lowest precedence after native and user-config).
             // Try to run a skill whose name matches the command.
-            if skills::run_skill_by_name(app, command, arg).is_some() {
-                return skills::run_skill_by_name(app, command, arg).unwrap();
+            if let Some(result) = skills::run_skill_by_name(app, command, arg) {
+                return result;
             }
             let suggestions = suggest_command_names(command, 3);
             if suggestions.is_empty() {
@@ -695,37 +717,9 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     config::set_config_value(app, key, value, persist)
 }
 
-/// Persist the user's chosen footer items to `~/.deepseek/config.toml` under
-/// `tui.status_items`. See [`config::persist_status_items`] for details.
-pub fn persist_status_items(
-    items: &[crate::config::StatusItem],
-) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_status_items(items)
-}
-
-/// Persist a root-level string key in `config.toml`.
-pub fn persist_root_string_key(
-    config_path: Option<&std::path::Path>,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_root_string_key(config_path, key, value)
-}
-
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     config::switch_mode(app, mode)
 }
-
-/// Auto-select a model based on request complexity.
-pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
-    config::auto_model_heuristic(input, current_model)
-}
-
-pub use config::{
-    AutoRouteRecommendation, AutoRouteSelection, normalize_auto_route_effort,
-    parse_auto_route_recommendation, resolve_auto_route_with_flash,
-};
-
 /// Execute a Recursive Language Model (RLM) turn — Algorithm 1 from
 /// Zhang et al. (arXiv:2512.24601).
 ///
@@ -854,11 +848,35 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
 
     if let Ok(plan) = app.plan_state.try_lock() {
         let snapshot = plan.snapshot();
-        if snapshot.explanation.is_some() || !snapshot.items.is_empty() {
+        if !snapshot.is_empty() {
             let _ = writeln!(out, "\nOptional strategy metadata from update_plan:");
-            if let Some(explanation) = snapshot.explanation.as_deref() {
-                let _ = writeln!(out, "- Explanation: {explanation}");
-            }
+            write_plan_field(&mut out, "Title", snapshot.title.as_deref());
+            write_plan_field(&mut out, "Objective", snapshot.objective.as_deref());
+            write_plan_field(&mut out, "Context", snapshot.context_summary.as_deref());
+            write_plan_field(&mut out, "Explanation", snapshot.explanation.as_deref());
+            write_plan_list(&mut out, "Source", &snapshot.sources_used);
+            write_plan_list(&mut out, "Critical file", &snapshot.critical_files);
+            write_plan_list(&mut out, "Constraint", &snapshot.constraints);
+            write_plan_field(
+                &mut out,
+                "Recommended approach",
+                snapshot.recommended_approach.as_deref(),
+            );
+            write_plan_field(
+                &mut out,
+                "Verification plan",
+                snapshot.verification_plan.as_deref(),
+            );
+            write_plan_field(
+                &mut out,
+                "Risks and unknowns",
+                snapshot.risks_and_unknowns.as_deref(),
+            );
+            write_plan_field(
+                &mut out,
+                "Handoff packet",
+                snapshot.handoff_packet.as_deref(),
+            );
             for item in snapshot.items {
                 let _ = writeln!(out, "- [{}] {}", plan_status_label(&item.status), item.step);
             }
@@ -902,6 +920,21 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
         "\nKeep it under about 900 words unless the session genuinely needs more. After writing, report the path and the single next action."
     );
     out
+}
+
+fn write_plan_field(out: &mut String, label: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        let _ = writeln!(out, "- {label}: {value}");
+    }
+}
+
+fn write_plan_list(out: &mut String, label: &str, values: &[String]) {
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() {
+            let _ = writeln!(out, "- {label}: {value}");
+        }
+    }
 }
 
 fn plan_status_label(status: &crate::tools::plan::StepStatus) -> &'static str {
@@ -950,45 +983,6 @@ pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
     COMMANDS
         .iter()
         .find(|cmd| cmd.name == name || cmd.aliases.contains(&name))
-}
-
-/// Get all command names matching a prefix, including both built-in
-/// static commands and user-defined commands, formatted as `/name`.
-///
-/// `workspace` is used to also scan workspace-local command directories;
-/// pass `None` when no workspace context is available.
-#[allow(dead_code)]
-pub fn all_command_names_matching(
-    prefix: &str,
-    workspace: Option<&std::path::Path>,
-) -> Vec<String> {
-    let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    let mut result: Vec<String> = COMMANDS
-        .iter()
-        .filter(|cmd| {
-            cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
-        })
-        .map(|cmd| format!("/{}", cmd.name))
-        .collect();
-
-    // Add user-defined commands
-    result.extend(user_commands::user_commands_matching(&prefix, workspace));
-
-    result.sort();
-    result.dedup();
-    result
-}
-
-/// Get all commands matching a prefix (for autocomplete)
-#[allow(dead_code)]
-pub fn commands_matching(prefix: &str) -> Vec<&'static CommandInfo> {
-    let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_lowercase();
-    COMMANDS
-        .iter()
-        .filter(|cmd| {
-            cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
-        })
-        .collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -1078,7 +1072,7 @@ mod tests {
     use crate::config::{ApiProvider, Config};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
-    use crate::tui::app::{App, AppAction, TuiOptions};
+    use crate::tui::app::{App, AppAction, SidebarFocus, TuiOptions};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::MutexGuard;
@@ -1112,7 +1106,24 @@ mod tests {
     #[test]
     fn command_registry_contains_config_and_links_but_not_set_or_deepseek() {
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "config"));
+        let sidebar = COMMANDS
+            .iter()
+            .find(|cmd| cmd.name == "sidebar")
+            .expect("sidebar command should exist");
+        assert_eq!(sidebar.description_id, MessageId::CmdSidebarDescription);
+        assert!(
+            sidebar
+                .description_for(Locale::En)
+                .contains("right sidebar")
+        );
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "links"));
+        let hf = COMMANDS
+            .iter()
+            .find(|cmd| cmd.name == "hf")
+            .expect("hf command should exist");
+        assert_eq!(hf.aliases, &["huggingface"]);
+        assert_eq!(hf.description_id, MessageId::CmdHfDescription);
+        assert!(hf.description_for(Locale::En).contains("Hugging Face"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "memory"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "set"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "deepseek"));
@@ -1125,6 +1136,17 @@ mod tests {
             .find(|cmd| cmd.name == "links")
             .expect("links command should exist");
         assert_eq!(links.aliases, &["dashboard", "api", "lianjie"]);
+    }
+
+    #[test]
+    fn hf_alias_dispatches_to_concepts_helper() {
+        let mut app = create_test_app();
+        let result = execute("/huggingface concepts", &mut app);
+        assert!(!result.is_error);
+        let message = result.message.expect("concepts message");
+        assert!(message.contains("Hugging Face provider route"));
+        assert!(message.contains("Hugging Face MCP"));
+        assert!(message.contains("Hub workflows"));
     }
 
     #[test]
@@ -1166,11 +1188,18 @@ mod tests {
         {
             let mut plan = app.plan_state.try_lock().expect("plan lock");
             plan.update(UpdatePlanArgs {
+                objective: Some("Keep relays grounded".to_string()),
                 explanation: Some("RLM-style strategy".to_string()),
+                sources_used: vec!["transcript context".to_string()],
+                critical_files: vec!["crates/tui/src/commands/mod.rs".to_string()],
+                constraints: vec!["Do not invent verification".to_string()],
+                verification_plan: Some("Check relay prompt assertions".to_string()),
+                handoff_packet: Some("Next thread should read the Work checklist".to_string()),
                 plan: vec![PlanItemArg {
                     step: "keep checklist primary".to_string(),
                     status: StepStatus::InProgress,
                 }],
+                ..UpdatePlanArgs::default()
             });
         }
 
@@ -1197,7 +1226,13 @@ mod tests {
         assert!(message.contains("#1 [completed] inspect workspace"));
         assert!(message.contains("#2 [in_progress] patch relay command"));
         assert!(message.contains("Optional strategy metadata from update_plan"));
+        assert!(message.contains("Objective: Keep relays grounded"));
         assert!(message.contains("Explanation: RLM-style strategy"));
+        assert!(message.contains("Source: transcript context"));
+        assert!(message.contains("Critical file: crates/tui/src/commands/mod.rs"));
+        assert!(message.contains("Constraint: Do not invent verification"));
+        assert!(message.contains("Verification plan: Check relay prompt assertions"));
+        assert!(message.contains("Handoff packet: Next thread should read the Work checklist"));
         assert!(message.contains("[in_progress] keep checklist primary"));
     }
 
@@ -1240,6 +1275,127 @@ mod tests {
                 );
                 assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
             }
+        }
+    }
+
+    #[test]
+    fn command_registry_metadata_is_complete_and_palette_safe() {
+        for command in COMMANDS {
+            assert!(!command.name.is_empty(), "command name must not be empty");
+            assert_eq!(
+                command.name.trim(),
+                command.name,
+                "/{} command name must not need trimming",
+                command.name
+            );
+            assert!(
+                command
+                    .name
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()),
+                "/{} command names must stay lowercase ASCII",
+                command.name
+            );
+
+            let expected_usage_prefix = format!("/{}", command.name);
+            assert!(
+                command.usage.starts_with(&expected_usage_prefix),
+                "/{} usage must start with its canonical slash command, got {:?}",
+                command.name,
+                command.usage
+            );
+
+            let description = command.description_for(Locale::En);
+            assert!(
+                !description.trim().is_empty(),
+                "/{} must have non-empty English help text",
+                command.name
+            );
+
+            let palette_command = command.palette_command();
+            assert!(
+                palette_command.starts_with(&expected_usage_prefix),
+                "/{} palette command must use the canonical command, got {:?}",
+                command.name,
+                palette_command
+            );
+            assert_eq!(
+                palette_command.ends_with(' '),
+                command.requires_argument(),
+                "/{} palette command spacing must match argument requirement",
+                command.name
+            );
+
+            for &alias in command.aliases {
+                assert!(
+                    !alias.trim().is_empty(),
+                    "/{} alias must not be empty",
+                    command.name
+                );
+                assert_eq!(
+                    alias.trim(),
+                    alias,
+                    "/{} alias /{alias} must not need trimming",
+                    command.name
+                );
+                assert!(
+                    !alias.starts_with('/'),
+                    "/{} alias /{alias} must be stored without a slash",
+                    command.name
+                );
+                assert!(
+                    !alias.chars().any(char::is_whitespace),
+                    "/{} alias /{alias} must not contain whitespace",
+                    command.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn command_info_resolves_canonical_names_and_aliases() {
+        for command in COMMANDS {
+            for lookup in [command.name.to_string(), format!("/{}", command.name)] {
+                let resolved = get_command_info(&lookup)
+                    .unwrap_or_else(|| panic!("{lookup:?} should resolve to /{}", command.name));
+                assert_eq!(resolved.name, command.name);
+            }
+
+            for &alias in command.aliases {
+                for lookup in [alias.to_string(), format!("/{alias}")] {
+                    let resolved = get_command_info(&lookup).unwrap_or_else(|| {
+                        panic!("{lookup:?} should resolve to /{}", command.name)
+                    });
+                    assert_eq!(resolved.name, command.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_registered_command_has_a_help_topic() {
+        let mut app = create_test_app();
+        for command in COMMANDS {
+            let result = execute(&format!("/help {}", command.name), &mut app);
+            assert!(
+                !result.is_error,
+                "/help {} returned an error: {result:?}",
+                command.name
+            );
+            let message = result
+                .message
+                .unwrap_or_else(|| panic!("/help {} should return text", command.name));
+            assert!(
+                message.contains(command.name),
+                "/help {} should mention the command name, got {message:?}",
+                command.name
+            );
+            assert!(
+                message.contains(command.usage),
+                "/help {} should include usage {:?}, got {message:?}",
+                command.name,
+                command.usage
+            );
         }
     }
 
@@ -1301,6 +1457,68 @@ mod tests {
         assert!(!result.is_error);
         assert!(!app.verbose_transcript);
         assert!(result.message.unwrap().contains("off"));
+    }
+
+    #[test]
+    fn execute_sidebar_toggles_visibility() {
+        let mut app = create_test_app();
+        app.set_sidebar_focus(SidebarFocus::Auto);
+
+        let result = execute("/sidebar", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+        assert_eq!(result.message.as_deref(), Some("Sidebar is hidden"));
+
+        let result = execute("/sidebar", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert!(app.status_message.is_none());
+        assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
+    }
+
+    #[test]
+    fn execute_sidebar_accepts_explicit_focus_targets() {
+        let mut app = create_test_app();
+
+        let result = execute("/sidebar tasks", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Tasks);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar off", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar closed", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar none", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert!(app.status_message.is_none());
+
+        let result = execute("/sidebar on", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn execute_sidebar_rejects_invalid_args() {
+        let mut app = create_test_app();
+        let result = execute("/sidebar maybe", &mut app);
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Usage: /sidebar")
+        );
     }
 
     #[test]
@@ -1443,6 +1661,86 @@ mod tests {
     /// stays parallel-safe.
     fn skip_in_dispatch_smoke(name: &str) -> bool {
         name == "restore"
+    }
+
+    #[test]
+    fn slash_parser_preserves_arguments_after_the_command_name() {
+        let mut app = create_test_app();
+        let result = execute("/agent 2 review   this   carefully", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected /agent to send a model instruction");
+        };
+        assert!(message.contains(r#"prompt: "review   this   carefully""#));
+        assert!(message.contains("max_depth: 2"));
+
+        let mut app = create_test_app();
+        let result = execute("   /relay   ship   command   harness   ", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected /relay to send a model instruction");
+        };
+        assert!(message.contains("Requested relay focus: ship   command   harness"));
+
+        let mut app = create_test_app();
+        let result = execute("/rlm 3 inspect   this   corpus", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected /rlm to send a model instruction");
+        };
+        assert!(message.contains(r#"content: "inspect   this   corpus""#));
+        assert!(message.contains("sub_rlm_max_depth: 3"));
+    }
+
+    #[test]
+    fn representative_command_groups_keep_dispatch_surfaces() {
+        let mut app = create_test_app();
+        let help = execute("/help clear", &mut app)
+            .message
+            .expect("/help clear should return text");
+        assert!(help.contains("clear"));
+        assert!(help.contains("/clear"));
+
+        let mut app = create_test_app();
+        let result = execute("/config", &mut app);
+        assert!(matches!(result.action, Some(AppAction::OpenConfigView)));
+
+        let mut app = create_test_app();
+        let result = execute("/relay command boundary", &mut app);
+        assert!(!result.is_error);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SendMessage(message))
+                if message.contains("Requested relay focus: command boundary")
+        ));
+
+        let mut app = create_test_app();
+        let note_help = execute("/note help", &mut app)
+            .message
+            .expect("/note help should return text");
+        assert!(note_help.contains("Usage: /note"));
+
+        let mut app = create_test_app();
+        let result = execute("/hunt ship layer 2 | budget: 100", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.hunt.quarry.as_deref(), Some("ship layer 2"));
+        assert_eq!(app.hunt.token_budget, Some(100));
+
+        let (mut app, _tmpdir, _guard) = create_isolated_test_app();
+        let skills = execute("/skills", &mut app)
+            .message
+            .expect("/skills should return text");
+        assert!(skills.contains("Skills location:"));
+
+        let mut app = create_test_app();
+        let result = execute("/task list", &mut app);
+        assert!(matches!(result.action, Some(AppAction::TaskList)));
+
+        let mut app = create_test_app();
+        let tokens = execute("/tokens", &mut app)
+            .message
+            .expect("/tokens should return text");
+        assert!(tokens.contains("deepseek-v4-pro"));
     }
 
     /// Smoke test: every entry in `COMMANDS` must dispatch to a real handler.

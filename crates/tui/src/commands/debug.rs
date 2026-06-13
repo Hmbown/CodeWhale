@@ -1183,6 +1183,22 @@ mod tests {
         let _spill_guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
             .lock()
             .unwrap_or_else(|err| err.into_inner());
+        // Set a temporary spillover root so wire-dedup can persist
+        // SHA-addressed tool-result files without depending on a
+        // writable $HOME (nix sandboxes have a read-only home tree).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _restore = {
+            let prior = crate::tools::truncate::set_test_spillover_root(Some(
+                tmp.path().join(".deepseek").join("tool_outputs"),
+            ));
+            struct Restore(Option<std::path::PathBuf>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    crate::tools::truncate::set_test_spillover_root(self.0.take());
+                }
+            }
+            Restore(prior)
+        };
         let mut app = create_test_app();
         let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
         app.api_messages.push(Message {
@@ -1225,10 +1241,25 @@ mod tests {
         let result = cache(&mut app, Some("inspect"));
         let msg = result.message.expect("inspect output");
 
-        assert!(msg.contains("original_chars=14000"), "got: {msg}");
-        assert!(msg.contains("truncated=true"), "got: {msg}");
-        assert!(msg.contains("deduplicated=false"), "got: {msg}");
-        assert!(msg.contains("deduplicated=true"), "got: {msg}");
+        let tool_budget_lines: Vec<_> = msg
+            .lines()
+            .filter(|line| line.contains("original_chars=14000"))
+            .collect();
+        assert_eq!(tool_budget_lines.len(), 2, "got: {msg}");
+
+        let first_sighting = tool_budget_lines
+            .iter()
+            .find(|line| line.contains("deduplicated=false"))
+            .expect("first tool-result sighting should report non-dedup metadata");
+        assert!(first_sighting.contains("sent_chars="), "got: {msg}");
+        assert!(first_sighting.contains("truncated=true"), "got: {msg}");
+
+        let repeat_sighting = tool_budget_lines
+            .iter()
+            .find(|line| line.contains("deduplicated=true"))
+            .expect("repeat tool-result sighting should report dedup metadata");
+        assert!(repeat_sighting.contains("sent_chars="), "got: {msg}");
+        assert!(repeat_sighting.contains("truncated=false"), "got: {msg}");
     }
 
     #[test]

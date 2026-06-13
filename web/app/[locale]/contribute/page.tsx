@@ -75,7 +75,7 @@ const stepsZh = [
   },
 ];
 
-const recursivePromptEn = `You are running inside CodeWhale on DeepSeek V4 Pro.
+const smallPatchPromptEn = `You are running inside CodeWhale.
 
 Improve CodeWhale itself by finding exactly one small, reviewable friction point in the harness, docs, tests, or contributor workflow.
 
@@ -92,7 +92,7 @@ Working rules:
 
 Output: issue summary, files changed, checks run, risks or follow-up, and a suggested PR title.`;
 
-const recursivePromptZh = `你正在 DeepSeek V4 Pro 驱动的 CodeWhale 中运行。
+const smallPatchPromptZh = `你正在 CodeWhale 中运行。
 
 请改进 CodeWhale 本身：只找一个很小、可审查的摩擦点，范围可以是智能体框架、文档、测试或贡献流程。
 
@@ -113,7 +113,7 @@ export default async function ContributePage({ params }: { params: Promise<{ loc
   const { locale } = await params;
   const isZh = locale === "zh";
   const steps = isZh ? stepsZh : stepsEn;
-  const recursivePrompt = isZh ? recursivePromptZh : recursivePromptEn;
+  const smallPatchPrompt = isZh ? smallPatchPromptZh : smallPatchPromptEn;
 
   return (
     <>
@@ -146,20 +146,20 @@ export default async function ContributePage({ params }: { params: Promise<{ loc
             </ol>
           </section>
 
-          <section id="recursive-harness" className="mx-auto max-w-[1400px] px-6 py-16 grid lg:grid-cols-12 gap-10 min-w-0">
+          <section id="small-patch-prompt" className="mx-auto max-w-[1400px] px-6 py-16 grid lg:grid-cols-12 gap-10 min-w-0">
             <div className="lg:col-span-4 min-w-0">
-              <Seal char="递" />
-              <div className="eyebrow mt-5 mb-3">100:1 模型 · Recursive harness</div>
-              <h2 className="font-display text-3xl">让 CodeWhale 改进 CodeWhale</h2>
+              <Seal char="补" />
+              <div className="eyebrow mt-5 mb-3">小补丁提示词 · Small-patch prompt</div>
+              <h2 className="font-display text-3xl">用 CodeWhale 改进 CodeWhale</h2>
               <p className="mt-4 text-ink-soft leading-[1.9] tracking-wide">
-                100:1 提示词把 DeepSeek V4 Pro 的缓存注意力、工具调用与子智能体，凝结为一个可审查的小补丁——而不是一堆点子。
+                好的贡献提示词不是让 Agent 表演勤奋，而是让它留下一个可以合并的事实：一个真实摩擦点、一个小补丁、最小相关检查，以及审查者需要知道的风险。
               </p>
-              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/RECURSIVE_SELF_IMPROVEMENT.md" className="inline-block mt-5 font-mono text-[0.72rem] uppercase tracking-wider text-indigo hover:underline">
-                完整多语言提示词 →
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/CONTRIBUTING.md" className="inline-block mt-5 font-mono text-[0.72rem] uppercase tracking-wider text-indigo hover:underline">
+                贡献指南 →
               </Link>
             </div>
             <div className="lg:col-span-8 min-w-0">
-              <InstallCodeBlock cmd={recursivePrompt} copyLabel="复制" copiedLabel="已复制" />
+              <InstallCodeBlock cmd={smallPatchPrompt} copyLabel="复制" copiedLabel="已复制" />
             </div>
           </section>
 
@@ -267,20 +267,20 @@ gh pr create --fill`}
             </ol>
           </section>
 
-          <section id="recursive-harness" className="mx-auto max-w-[1400px] px-6 py-16 grid lg:grid-cols-12 gap-10 min-w-0">
+          <section id="small-patch-prompt" className="mx-auto max-w-[1400px] px-6 py-16 grid lg:grid-cols-12 gap-10 min-w-0">
             <div className="lg:col-span-4 min-w-0">
-              <Seal char="递" />
-              <div className="eyebrow mt-5 mb-3">100-to-1 model · 递归框架</div>
-              <h2 className="font-display text-3xl">Let CodeWhale improve CodeWhale</h2>
+              <Seal char="补" />
+              <div className="eyebrow mt-5 mb-3">Small-patch prompt · 小补丁提示词</div>
+              <h2 className="font-display text-3xl">Use CodeWhale on CodeWhale</h2>
               <p className="mt-4 text-ink-soft leading-relaxed">
-                The 100-to-1 prompt turns DeepSeek V4 Pro's cached attention, tool use, and sub-agents into one small, reviewable patch — not a pile of ideas.
+                A good contribution prompt does not reward motion. It asks for one mergeable fact: one real friction point, one small patch, the smallest relevant checks, and the risk a reviewer needs to know.
               </p>
-              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/RECURSIVE_SELF_IMPROVEMENT.md" className="inline-block mt-5 font-mono text-[0.72rem] uppercase tracking-wider text-indigo hover:underline">
-                Full multilingual prompt →
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/CONTRIBUTING.md" className="inline-block mt-5 font-mono text-[0.72rem] uppercase tracking-wider text-indigo hover:underline">
+                Contributor guide →
               </Link>
             </div>
             <div className="lg:col-span-8 min-w-0">
-              <InstallCodeBlock cmd={recursivePrompt} />
+              <InstallCodeBlock cmd={smallPatchPrompt} />
             </div>
           </section>
 
