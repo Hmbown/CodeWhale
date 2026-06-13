@@ -102,6 +102,13 @@ const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
+// Z.ai (GLM Coding Plan) defaults
+const DEFAULT_ZAI_MODEL: &str = "GLM-5.1";
+const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
+// StepFun / StepFlash defaults
+const DEFAULT_STEPFUN_MODEL: &str = "step-3.7-flash";
+const DEFAULT_STEPFUN_BASE_URL: &str = "https://api.stepfun.ai/v1";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
@@ -158,10 +165,25 @@ pub enum ProviderKind {
     OpenaiCodex,
     #[serde(alias = "claude")]
     Anthropic,
+    #[serde(
+        alias = "z-ai",
+        alias = "z_ai",
+        alias = "z.ai"
+    )]
+    Zai,
+    #[serde(
+        alias = "step-fun",
+        alias = "step_fun",
+        alias = "stepfun",
+        alias = "stepflash",
+        alias = "step-flash",
+        alias = "step_flash"
+    )]
+    Stepfun,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 23] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -183,6 +205,8 @@ impl ProviderKind {
         Self::Together,
         Self::OpenaiCodex,
         Self::Anthropic,
+        Self::Zai,
+        Self::Stepfun,
     ];
 
     #[must_use]
@@ -206,6 +230,11 @@ impl ProviderKind {
             Self::Vllm,
             Self::Ollama,
             Self::Huggingface,
+            Self::Together,
+            Self::OpenaiCodex,
+            Self::Anthropic,
+            Self::Zai,
+            Self::Stepfun,
         ]
     }
 
@@ -314,6 +343,23 @@ pub struct ProvidersToml {
     pub openai_codex: ProviderConfigToml,
     #[serde(default)]
     pub anthropic: ProviderConfigToml,
+    #[serde(
+        default,
+        alias = "z-ai",
+        alias = "z_ai",
+        alias = "z.ai"
+    )]
+    pub zai: ProviderConfigToml,
+    #[serde(
+        default,
+        alias = "step-fun",
+        alias = "step_fun",
+        alias = "stepfun",
+        alias = "stepflash",
+        alias = "step-flash",
+        alias = "step_flash"
+    )]
+    pub stepfun: ProviderConfigToml,
 }
 
 /// Sibling `permissions.toml` schema.
@@ -365,6 +411,8 @@ impl ProvidersToml {
             ProviderKind::Together => &self.together,
             ProviderKind::OpenaiCodex => &self.openai_codex,
             ProviderKind::Anthropic => &self.anthropic,
+            ProviderKind::Zai => &self.zai,
+            ProviderKind::Stepfun => &self.stepfun,
         }
     }
 
@@ -391,6 +439,8 @@ impl ProvidersToml {
             ProviderKind::Together => &mut self.together,
             ProviderKind::OpenaiCodex => &mut self.openai_codex,
             ProviderKind::Anthropic => &mut self.anthropic,
+            ProviderKind::Zai => &mut self.zai,
+            ProviderKind::Stepfun => &mut self.stepfun,
         }
     }
 }
@@ -2114,6 +2164,8 @@ impl ConfigToml {
                 ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
                 ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
                 ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
+                ProviderKind::Zai => DEFAULT_ZAI_BASE_URL.to_string(),
+                ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
             })
         };
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
@@ -2580,6 +2632,8 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Together => DEFAULT_TOGETHER_MODEL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_MODEL,
+        ProviderKind::Zai => DEFAULT_ZAI_MODEL,
+        ProviderKind::Stepfun => DEFAULT_STEPFUN_MODEL,
     }
 }
 
@@ -2606,6 +2660,8 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
+        ProviderKind::Zai => DEFAULT_ZAI_BASE_URL,
+        ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL,
     }
 }
 
@@ -3387,6 +3443,10 @@ struct EnvRuntimeOverrides {
     openai_codex_model: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_model: Option<String>,
+    zai_base_url: Option<String>,
+    zai_model: Option<String>,
+    stepfun_base_url: Option<String>,
+    stepfun_model: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -3558,6 +3618,22 @@ impl EnvRuntimeOverrides {
             anthropic_model: std::env::var("ANTHROPIC_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            zai_base_url: std::env::var("ZAI_BASE_URL")
+                .or_else(|_| std::env::var("Z_AI_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            zai_model: std::env::var("ZAI_MODEL")
+                .or_else(|_| std::env::var("Z_AI_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            stepfun_base_url: std::env::var("STEPFUN_BASE_URL")
+                .or_else(|_| std::env::var("STEP_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            stepfun_model: std::env::var("STEPFUN_MODEL")
+                .or_else(|_| std::env::var("STEP_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 
@@ -3601,6 +3677,8 @@ impl EnvRuntimeOverrides {
             ProviderKind::Together => self.together_base_url.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_base_url.clone(),
             ProviderKind::Anthropic => self.anthropic_base_url.clone(),
+            ProviderKind::Zai => self.zai_base_url.clone(),
+            ProviderKind::Stepfun => self.stepfun_base_url.clone(),
         }
     }
 

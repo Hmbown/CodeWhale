@@ -1294,6 +1294,7 @@ pub(super) fn apply_reasoning_effort(
                     "thinking": false,
                 });
             }
+            ApiProvider::Zai | ApiProvider::Stepfun => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
             // DeepSeek compatibility: low/medium both map to high
@@ -1367,6 +1368,7 @@ pub(super) fn apply_reasoning_effort(
                     "reasoning_effort": "high",
                 });
             }
+            ApiProvider::Zai | ApiProvider::Stepfun => {}
         },
         "xhigh" | "max" | "highest" => match provider {
             ApiProvider::Deepseek
@@ -1420,6 +1422,7 @@ pub(super) fn apply_reasoning_effort(
                     "reasoning_effort": "max",
                 });
             }
+            ApiProvider::Zai | ApiProvider::Stepfun => {}
         },
         _ => {}
     }

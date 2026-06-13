@@ -121,6 +121,7 @@ impl ProviderPickerView {
             ApiProvider::Huggingface => "HUGGINGFACE_API_KEY / HF_TOKEN",
             ApiProvider::Together => "TOGETHER_API_KEY",
             ApiProvider::OpenaiCodex => "OPENAI_CODEX_ACCESS_TOKEN / CODEX_ACCESS_TOKEN",
+            ApiProvider::Zai | ApiProvider::Stepfun => "OPENAI_API_KEY",
         }
     }
 

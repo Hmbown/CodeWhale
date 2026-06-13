@@ -780,6 +780,8 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Together => "together",
         ProviderKind::OpenaiCodex => "openai-codex",
         ProviderKind::Anthropic => "anthropic",
+        ProviderKind::Zai => "zai",
+        ProviderKind::Stepfun => "stepfun",
     }
 }
 
@@ -915,6 +917,8 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Together => &["TOGETHER_API_KEY"],
         ProviderKind::OpenaiCodex => &["OPENAI_CODEX_ACCESS_TOKEN", "CODEX_ACCESS_TOKEN"],
         ProviderKind::Anthropic => &["ANTHROPIC_API_KEY"],
+        ProviderKind::Zai => &["ZAI_API_KEY", "Z_AI_API_KEY"],
+        ProviderKind::Stepfun => &["STEPFUN_API_KEY", "STEP_API_KEY"],
     }
 }
 

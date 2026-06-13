@@ -171,6 +171,10 @@ pub const COMMON_DEEPSEEK_MODELS: &[&str] = &[
     "deepseek/deepseek-v4-flash",
 ];
 pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
+pub const DEFAULT_ZAI_MODEL: &str = "GLM-5.1";
+pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
+pub const DEFAULT_STEPFUN_MODEL: &str = "step-3.7-flash";
+pub const DEFAULT_STEPFUN_BASE_URL: &str = "https://api.stepfun.ai/v1";
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 pub const ANTHROPIC_OPUS_MODEL: &str = "claude-opus-4-8";
 pub const ANTHROPIC_HAIKU_MODEL: &str = "claude-haiku-4-5";
@@ -201,6 +205,8 @@ pub enum ApiProvider {
     Together,
     OpenaiCodex,
     Anthropic,
+    Zai,
+    Stepfun,
 }
 
 impl ApiProvider {
@@ -258,7 +264,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 22] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 24] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::NvidiaNim),
@@ -281,10 +287,12 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Together),
         Some(codewhale_config::ProviderKind::OpenaiCodex),
         Some(codewhale_config::ProviderKind::Anthropic),
+        Some(codewhale_config::ProviderKind::Zai),
+        Some(codewhale_config::ProviderKind::Stepfun),
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 21] = [
+    const FROM_KIND_LOOKUP: [Self; 23] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -306,6 +314,8 @@ impl ApiProvider {
         Self::Together,
         Self::OpenaiCodex,
         Self::Anthropic,
+        Self::Zai,
+        Self::Stepfun,
     ];
 
     /// Map to the config-level `ProviderKind`.
@@ -889,6 +899,8 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openai | ApiProvider::Atlascloud => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
+        ApiProvider::Zai => vec![DEFAULT_ZAI_MODEL],
+        ApiProvider::Stepfun => vec![DEFAULT_STEPFUN_MODEL],
         ApiProvider::Anthropic => vec![
             ANTHROPIC_OPUS_MODEL,
             DEFAULT_ANTHROPIC_MODEL,
@@ -2050,6 +2062,10 @@ pub struct ProvidersConfig {
     pub openai_codex: ProviderConfig,
     #[serde(default, alias = "claude")]
     pub anthropic: ProviderConfig,
+    #[serde(default)]
+    pub zai: ProviderConfig,
+    #[serde(default)]
+    pub stepfun: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2217,6 +2233,8 @@ impl Config {
             ApiProvider::Together => "providers.together",
             ApiProvider::OpenaiCodex => "providers.openai_codex",
             ApiProvider::Anthropic => "providers.anthropic",
+            ApiProvider::Zai => "providers.zai",
+            ApiProvider::Stepfun => "providers.stepfun",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
         tracing::warn!(
@@ -2374,6 +2392,8 @@ impl Config {
             ApiProvider::Together => &providers.together,
             ApiProvider::OpenaiCodex => &providers.openai_codex,
             ApiProvider::Anthropic => &providers.anthropic,
+            ApiProvider::Zai => &providers.zai,
+            ApiProvider::Stepfun => &providers.stepfun,
         })
     }
 
@@ -2402,6 +2422,8 @@ impl Config {
             ApiProvider::Together => &mut providers.together,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
             ApiProvider::Anthropic => &mut providers.anthropic,
+            ApiProvider::Zai => &mut providers.zai,
+            ApiProvider::Stepfun => &mut providers.stepfun,
         }
     }
 
@@ -2543,6 +2565,8 @@ impl Config {
             ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
             ApiProvider::Together => DEFAULT_TOGETHER_MODEL,
             ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
+            ApiProvider::Zai => DEFAULT_ZAI_MODEL,
+            ApiProvider::Stepfun => DEFAULT_STEPFUN_MODEL,
             ApiProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
         }
         .to_string()
@@ -2583,7 +2607,9 @@ impl Config {
             | ApiProvider::Volcengine
             | ApiProvider::Huggingface
             | ApiProvider::Together
-            | ApiProvider::OpenaiCodex => None,
+            | ApiProvider::OpenaiCodex
+            | ApiProvider::Zai
+            | ApiProvider::Stepfun => None,
         };
         let configured_base_url = provider_base.or(root_base);
         let base = if provider == ApiProvider::XiaomiMimo {
@@ -2630,6 +2656,8 @@ impl Config {
                     ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
                     ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
                     ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+                    ApiProvider::Zai => DEFAULT_ZAI_BASE_URL,
+                    ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
                     ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
                 }
                 .to_string()
@@ -2680,6 +2708,8 @@ impl Config {
             ApiProvider::Huggingface => "huggingface",
             ApiProvider::Together => "together",
             ApiProvider::OpenaiCodex => "openai_codex",
+            ApiProvider::Zai => "zai",
+            ApiProvider::Stepfun => "stepfun",
             ApiProvider::Anthropic => "anthropic",
         };
 
@@ -2850,6 +2880,14 @@ impl Config {
             ApiProvider::Together => anyhow::bail!(
                 "Together AI API key not found. Run 'codewhale auth set --provider together', \
                  set TOGETHER_API_KEY, or add [providers.together] api_key in ~/.codewhale/config.toml."
+            ),
+            ApiProvider::Zai => anyhow::bail!(
+                "Z.ai (GLM Coding) API key not found. Run 'codewhale auth set --provider zai', \
+                 set ZAI_API_KEY, or add [providers.zai] api_key in ~/.codewhale/config.toml."
+            ),
+            ApiProvider::Stepfun => anyhow::bail!(
+                "StepFun API key not found. Run 'codewhale auth set --provider stepfun', \
+                 set STEPFUN_API_KEY, or add [providers.stepfun] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::Anthropic => anyhow::bail!(
                 "Anthropic API key not found. Run 'codewhale auth set --provider anthropic', \
@@ -3707,6 +3745,20 @@ fn apply_env_overrides(config: &mut Config) {
                     .openai_codex
                     .base_url = Some(value);
             }
+            ApiProvider::Zai => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .zai
+                    .base_url = Some(value);
+            }
+            ApiProvider::Stepfun => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .stepfun
+                    .base_url = Some(value);
+            }
         }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
@@ -3914,6 +3966,8 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Together => &mut providers.together,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
             ApiProvider::Anthropic => &mut providers.anthropic,
+            ApiProvider::Zai => &mut providers.zai,
+            ApiProvider::Stepfun => &mut providers.stepfun,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -4109,6 +4163,8 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Together => &mut providers.together,
                 ApiProvider::OpenaiCodex => &mut providers.openai_codex,
                 ApiProvider::Anthropic => &mut providers.anthropic,
+                ApiProvider::Zai => &mut providers.zai,
+                ApiProvider::Stepfun => &mut providers.stepfun,
             };
             entry.model = Some(value);
         }
@@ -4448,6 +4504,8 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
         ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
         ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+        ApiProvider::Zai => DEFAULT_ZAI_BASE_URL,
+        ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
         ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
     }
 }
@@ -4894,6 +4952,8 @@ fn merge_providers(
             huggingface: merge_provider_config(base.huggingface, override_cfg.huggingface),
             together: merge_provider_config(base.together, override_cfg.together),
             openai_codex: merge_provider_config(base.openai_codex, override_cfg.openai_codex),
+            zai: merge_provider_config(base.zai, override_cfg.zai),
+            stepfun: merge_provider_config(base.stepfun, override_cfg.stepfun),
         }),
     }
 }
@@ -5400,6 +5460,14 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
             std::env::var("OPENAI_CODEX_ACCESS_TOKEN").is_ok_and(|k| !k.trim().is_empty())
                 || std::env::var("CODEX_ACCESS_TOKEN").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::Zai => {
+            std::env::var("ZAI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("Z_AI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
+        ApiProvider::Stepfun => {
+            std::env::var("STEPFUN_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("STEP_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
     }
 }
 
@@ -5434,6 +5502,8 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
         ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
+        ApiProvider::Zai => "ZAI_API_KEY",
+        ApiProvider::Stepfun => "STEPFUN_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -5561,6 +5631,8 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Volcengine => "providers.volcengine",
         ApiProvider::Together => "providers.together",
         ApiProvider::OpenaiCodex => "providers.openai_codex",
+        ApiProvider::Zai => "providers.zai",
+        ApiProvider::Stepfun => "providers.stepfun",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -5607,6 +5679,8 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Volcengine => "volcengine",
         ApiProvider::Together => "together",
         ApiProvider::OpenaiCodex => "openai_codex",
+        ApiProvider::Zai => "zai",
+        ApiProvider::Stepfun => "stepfun",
     };
     let entry = providers
         .entry(key_inside.to_string())
@@ -5705,6 +5779,8 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::Ollama => Ok("ollama"),
         ApiProvider::Together => Ok("together"),
         ApiProvider::OpenaiCodex => Ok("openai_codex"),
+        ApiProvider::Zai => Ok("zai"),
+        ApiProvider::Stepfun => Ok("stepfun"),
     }
 }
 

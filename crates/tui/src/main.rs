@@ -2600,6 +2600,14 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
                     ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
+                crate::config::ApiProvider::Zai => (
+                    "OPENAI_API_KEY",
+                    "codewhale auth set --provider zai --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Stepfun => (
+                    "OPENAI_API_KEY",
+                    "codewhale auth set --provider stepfun --api-key \"...\"",
+                ),
             };
             println!(
                 "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.codewhale/config.toml; or run `{login_hint}`)",
@@ -2627,6 +2635,8 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::OpenaiCodex => "openai_codex",
                     crate::config::ApiProvider::Deepseek
                     | crate::config::ApiProvider::DeepseekCN => "deepseek",
+                    crate::config::ApiProvider::Zai => "zai",
+                    crate::config::ApiProvider::Stepfun => "stepfun",
                 }
             );
         }

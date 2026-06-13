@@ -14,10 +14,12 @@ use super::{
     DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL,
     DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
     DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
-    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_TOGETHER_BASE_URL,
-    DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
+    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
+    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
+    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
     DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
-    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, ProviderKind,
+    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
+    DEFAULT_ZAI_MODEL, ProviderKind,
 };
 
 /// Wire protocol spoken by a provider.
@@ -434,6 +436,30 @@ impl Provider for Anthropic {
     }
 }
 
+provider!(
+    Zai,
+    Zai,
+    "zai",
+    "Z.ai (GLM Coding)",
+    DEFAULT_ZAI_BASE_URL,
+    DEFAULT_ZAI_MODEL,
+    ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    "zai",
+    aliases: ["z-ai", "z_ai", "z.ai"]
+);
+
+provider!(
+    Stepfun,
+    Stepfun,
+    "stepfun",
+    "StepFun / StepFlash",
+    DEFAULT_STEPFUN_BASE_URL,
+    DEFAULT_STEPFUN_MODEL,
+    ["STEPFUN_API_KEY", "STEP_API_KEY"],
+    "stepfun",
+    aliases: ["step-fun", "step_fun", "stepflash", "step-flash", "step_flash"]
+);
+
 static DEEPSEEK: Deepseek = Deepseek;
 static NVIDIA_NIM: NvidiaNim = NvidiaNim;
 static OPENAI: Openai = Openai;
@@ -455,8 +481,10 @@ static HUGGINGFACE: Huggingface = Huggingface;
 static TOGETHER: Together = Together;
 static OPENAI_CODEX: OpenaiCodex = OpenaiCodex;
 static ANTHROPIC: Anthropic = Anthropic;
+static ZAI: Zai = Zai;
+static STEPFUN: Stepfun = Stepfun;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 21] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 23] = [
     &DEEPSEEK,
     &NVIDIA_NIM,
     &OPENAI,
@@ -478,6 +506,8 @@ static PROVIDER_REGISTRY: [&dyn Provider; 21] = [
     &TOGETHER,
     &OPENAI_CODEX,
     &ANTHROPIC,
+    &ZAI,
+    &STEPFUN,
 ];
 
 /// Return all built-in provider metadata entries in `ProviderKind::ALL` order.
