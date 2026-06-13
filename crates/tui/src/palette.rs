@@ -78,7 +78,12 @@ pub const WHALE_TOOL_OUTPUT_RGB: (u8, u8, u8) = (194, 208, 224); // #C2D0E0
 pub const WHALE_TOOL_SURFACE_RGB: (u8, u8, u8) = (28, 40, 62); // #1C283E
 pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (38, 54, 80); // #263650
 
-// Backward-compatible aliases for existing call sites.
+// Backward-compatible aliases for existing downstream users.
+#[allow(dead_code)]
+#[deprecated(
+    since = "0.8.61",
+    note = "use WHALE_ACCENT_PRIMARY_RGB instead; this alias will be removed after the rename window"
+)]
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = WHALE_ACCENT_PRIMARY_RGB;
 pub const DEEPSEEK_SKY_RGB: (u8, u8, u8) = WHALE_INFO_RGB;
 pub const DEEPSEEK_INK_RGB: (u8, u8, u8) = WHALE_BG_RGB;
@@ -217,11 +222,17 @@ pub const MATRIX_BORDER_RGB: (u8, u8, u8) = (0, 204, 0); // #00CC00
 // New semantic colors
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = WHALE_BORDER_RGB; // #2A4A7F
 
-pub const DEEPSEEK_BLUE: Color = Color::Rgb(
-    DEEPSEEK_BLUE_RGB.0,
-    DEEPSEEK_BLUE_RGB.1,
-    DEEPSEEK_BLUE_RGB.2,
+pub const WHALE_ACCENT_PRIMARY: Color = Color::Rgb(
+    WHALE_ACCENT_PRIMARY_RGB.0,
+    WHALE_ACCENT_PRIMARY_RGB.1,
+    WHALE_ACCENT_PRIMARY_RGB.2,
 );
+#[allow(dead_code)]
+#[deprecated(
+    since = "0.8.61",
+    note = "use WHALE_ACCENT_PRIMARY instead; this alias will be removed after the rename window"
+)]
+pub const DEEPSEEK_BLUE: Color = WHALE_ACCENT_PRIMARY;
 /// Now maps to the secondary accent (Seafoam) for backward compat.
 pub const DEEPSEEK_SKY: Color =
     Color::Rgb(DEEPSEEK_SKY_RGB.0, DEEPSEEK_SKY_RGB.1, DEEPSEEK_SKY_RGB.2);
@@ -1513,7 +1524,7 @@ fn adapt_fg_for_light_palette(color: Color) -> Color {
     } else if color == BORDER_COLOR {
         LIGHT_BORDER
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
-        DEEPSEEK_BLUE
+        WHALE_ACCENT_PRIMARY
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
         Color::Rgb(146, 64, 14)
     } else if color == ACCENT_TOOL_ISSUE {
@@ -1711,7 +1722,7 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
         ui.error_fg
     } else if color == DIFF_ADDED || color == USER_BODY {
         theme_green(ui)
-    } else if color == DEEPSEEK_BLUE {
+    } else if color == WHALE_ACCENT_PRIMARY {
         ui.mode_agent
     } else {
         color
@@ -1774,7 +1785,7 @@ fn adapt_fg_for_grayscale_palette(color: Color) -> Color {
         || color == LIGHT_TEXT_SOFT
         || color == TEXT_ACCENT
         || color == DEEPSEEK_SKY
-        || color == DEEPSEEK_BLUE
+        || color == WHALE_ACCENT_PRIMARY
         || color == ACCENT_TOOL_LIVE
         || color == STATUS_SUCCESS
         || color == STATUS_INFO

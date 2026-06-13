@@ -10,7 +10,7 @@ pub fn lines() -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "codewhale",
             Style::default()
-                .fg(palette::DEEPSEEK_BLUE)
+                .fg(palette::WHALE_ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(

@@ -46,7 +46,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             .title(Line::from(Span::styled(
                 " CodeWhale ",
                 Style::default()
-                    .fg(palette::DEEPSEEK_BLUE)
+                    .fg(palette::WHALE_ACCENT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)

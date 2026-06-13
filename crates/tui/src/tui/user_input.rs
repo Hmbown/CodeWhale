@@ -15,7 +15,7 @@ fn modal_block(title: &str) -> Block<'static> {
     Block::default()
         .title(Line::from(vec![Span::styled(
             title.to_string(),
-            Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
+            Style::default().fg(palette::WHALE_ACCENT_PRIMARY).bold(),
         )]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::BORDER_COLOR))
@@ -321,7 +321,7 @@ impl ModalView for UserInputView {
                     } else {
                         self.other_input.clone()
                     },
-                    Style::default().fg(palette::DEEPSEEK_BLUE),
+                    Style::default().fg(palette::WHALE_ACCENT_PRIMARY),
                 ),
             ]));
         }

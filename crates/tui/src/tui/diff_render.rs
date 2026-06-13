@@ -274,7 +274,7 @@ fn render_header_line(line: &str, width: u16) -> Vec<Line<'static>> {
 }
 
 fn render_hunk_header(line: &str, width: u16) -> Vec<Line<'static>> {
-    let style = Style::default().fg(palette::DEEPSEEK_BLUE);
+    let style = Style::default().fg(palette::WHALE_ACCENT_PRIMARY);
     wrap_with_style(line, style, width)
 }
 
