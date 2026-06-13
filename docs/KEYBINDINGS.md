@@ -80,11 +80,11 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 
 ## Slash-command palette (after `Ctrl-K` or typing `/`)
 
-| Chord                | Action                                              |
-|----------------------|-----------------------------------------------------|
-| `↑` / `↓`            | Move selection                                     |
-| `Enter` / `Tab`      | Run / complete the highlighted command             |
-| `Esc`                | Dismiss palette                                     |
+| Chord                          | Action                                              |
+|--------------------------------|-----------------------------------------------------|
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N`| Move selection                                     |
+| `Enter` / `Tab`                | Run / complete the highlighted command             |
+| `Esc`                          | Dismiss palette                                     |
 
 ## Session Picker (`Ctrl-R` or `/sessions`)
 

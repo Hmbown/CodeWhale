@@ -3901,6 +3901,11 @@ async fn run_event_loop(
                 KeyCode::Up if key.modifiers.is_empty() && slash_menu_open => {
                     select_previous_slash_menu_entry(app, slash_menu_entries.len());
                 }
+                KeyCode::Char('p')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && slash_menu_open =>
+                {
+                    select_previous_slash_menu_entry(app, slash_menu_entries.len());
+                }
                 KeyCode::Up
                     if key.modifiers.is_empty()
                         && app.selected_composer_attachment_index().is_some() =>
@@ -3945,6 +3950,11 @@ async fn run_event_loop(
                         .min(mention_menu_entries.len().saturating_sub(1));
                 }
                 KeyCode::Down if key.modifiers.is_empty() && slash_menu_open => {
+                    select_next_slash_menu_entry(app, slash_menu_entries.len());
+                }
+                KeyCode::Char('n')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && slash_menu_open =>
+                {
                     select_next_slash_menu_entry(app, slash_menu_entries.len());
                 }
                 KeyCode::Down
