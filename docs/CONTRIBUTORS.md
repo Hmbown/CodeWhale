@@ -1,31 +1,35 @@
 # Contributors
 
-CodeWhale is built in the open with a growing community of contributors. Every issue report and pull request is real project work — welcome at any experience level. This page is the full per-PR contributor record, relocated from the README so the README stays readable.
+CodeWhale is built in the open with a growing community of contributors. Every
+issue report and pull request is real project work — welcome at any experience
+level. This is the full per-PR contributor record in **chronological order**
+(newest first), collapsed into time bands so it stays scannable. Expand any band
+to see everyone.
 
-For the live list, see the [GitHub contributors page](https://github.com/Hmbown/CodeWhale/graphs/contributors), [`AUTHOR_MAP`](https://github.com/Hmbown/CodeWhale/blob/main/.github/AUTHOR_MAP), and [CHANGELOG.md](../CHANGELOG.md).
+For the live list, see the
+[GitHub contributors page](https://github.com/Hmbown/CodeWhale/graphs/contributors),
+[`AUTHOR_MAP`](https://github.com/Hmbown/CodeWhale/blob/main/.github/AUTHOR_MAP),
+and [CHANGELOG.md](../CHANGELOG.md).
 
-## Thanks
+## Organizational thanks
 
-- **[DeepSeek](https://github.com/deepseek-ai)** — thank you for the models and support that power every turn. 感谢 DeepSeek 提供模型与支持，让每一次交互成为可能。
-- **[DataWhale](https://github.com/datawhalechina)** 🐋 — thank you for your support and for welcoming us into the Whale Brother family. 感谢 DataWhale 的支持，并欢迎我们加入“鲸兄弟”大家庭。
-- **[OpenWarp](https://github.com/zerx-lab/warp)** — thank you for prioritizing codewhale support and for collaborating on a better terminal-agent experience.
-- **[Open Design](https://github.com/nexu-io/open-design)** — thank you for support and collaboration around design-forward agent workflows.
+- **[DeepSeek](https://github.com/deepseek-ai)** — the models and support that got this project started. 感谢 DeepSeek 提供模型与支持。
+- **[DataWhale](https://github.com/datawhalechina)** 🐋 — for the support and for welcoming us into the Whale Brother family. 感谢 DataWhale 的支持。
+- **[OpenWarp](https://github.com/zerx-lab/warp)** — for prioritizing codewhale support and collaborating on a better terminal-agent experience.
+- **[Open Design](https://github.com/nexu-io/open-design)** — for support and collaboration around design-forward agent workflows.
 
-This project ships with help from a growing community of contributors. The
-maintainer rule is simple: reports and PRs are real project work, even when the
-final patch has to be narrowed, delayed, or harvested into a maintainer branch.
+The maintainer rule: reports and PRs are real project work, even when the final
+patch has to be narrowed, delayed, or harvested into a maintainer branch.
+Harvested PRs keep visible credit in the commit/PR body, changelog or release
+notes, and relevant issue/PR comments.
 
-For forward-track work, harvested PRs should keep visible credit in the commit
-or PR body, changelog or release notes, and relevant issue/PR comments.
-Contributor credit should use mappable GitHub identities from
-`.github/AUTHOR_MAP` or numeric noreply addresses, not placeholder local emails.
-The contribution gate is kept in dry-run mode unless a maintainer deliberately
-enables enforcement; when it comments, the tone should be warm and practical
-rather than treating the reporter as the problem. Recurring contributors should
-be recognized so the automation gets out of their way and the public record
-shows their repeated help.
+---
 
-Current forward-track credits:
+## Contributors by time
+
+<details>
+<summary><strong>Forward track — recent v0.9 work (newest)</strong></summary>
+
 
 - **[xyuai](https://github.com/xyuai)** — canonical CodeWhale settings path,
   provider persistence, provider picker, logout-scope, and MiMo auth cleanup
@@ -88,7 +92,12 @@ Current forward-track credits:
   OpenAI-compatible path-suffix report and follow-up review trail (#1874,
   #2508, #2506)
 
-Current and recurring contributors include:
+
+</details>
+
+<details>
+<summary><strong>Recurring &amp; historical contributors</strong></summary>
+
 
 - **[merchloubna70-dot](https://github.com/merchloubna70-dot)** — 28 PRs spanning features, fixes, and VS Code extension scaffolding (#645–#681)
 - **[WyxBUPT-22](https://github.com/WyxBUPT-22)** — Markdown rendering for tables, bold/italic, and horizontal rules (#579)
@@ -187,6 +196,12 @@ Current and recurring contributors include:
 - **[xyuai](https://github.com/xyuai)** — provider persistence to config, /logout scope clarification, provider picker key replacement shortcut, MiMo auth state cleanup (#2714, #2715, #2717, #2718)
 - **[RefuseOdd](https://github.com/RefuseOdd)** — configurable `path_suffix` for OpenAI-compatible endpoints (#2558)
 
+
+</details>
+
+<details>
+<summary><strong>v0.8.48 — reports, repros &amp; verification (earliest listed)</strong></summary>
+
 Reports, repros, and verification that shaped v0.8.48 also deserve visible
 credit: **[@buko](https://github.com/buko)**, **[@yyyCode](https://github.com/yyyCode)**,
 **[@gaslebinh-glitch](https://github.com/gaslebinh-glitch)**, **[@Dr3259](https://github.com/Dr3259)**,
@@ -199,3 +214,9 @@ credit: **[@buko](https://github.com/buko)**, **[@yyyCode](https://github.com/yy
 **[@PurplePulse](https://github.com/PurplePulse)**, and **[@nbiish](https://github.com/nbiish)**.
 
 ---
+
+</details>
+
+---
+
+Missed someone? Open an issue or PR — credit is kept current, and names are happily added. See [CONTRIBUTING.md](../CONTRIBUTING.md) to get started.

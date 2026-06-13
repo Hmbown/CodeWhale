@@ -1,31 +1,47 @@
 # CodeWhale
 
-> DeepSeek V4 とオープンモデルのためのローカル Agent ハーネス。自己、権威、証拠のループを扱います。
+> コミュニティで作る、使える最良のモデルでコードを書くためのエージェントターミナル。
 
 [English README](README.md) · [简体中文 README](README.zh-CN.md) · [Tiếng Việt README](README.vi.md)
 
+[![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
+[![DeepWiki project index](https://img.shields.io/badge/DeepWiki-project-blue)](https://deepwiki.com/Hmbown/CodeWhale)
+
 ![codewhale screenshot](assets/screenshot.png)
 
-## 考え方
+## CodeWhale とは
 
-多くのコーディング Agent は「もっと強く」から始めます。もっと多くのツール、もっと長いコンテキスト、もっと多い自動化。CodeWhale は責任から始めます。
+CodeWhale は、あなた自身のマシンでローカルに動くオープンソースのターミナルエージェントです。自分のリポジトリで実仕事をこなします――コードを読み、コマンドを走らせ、ファイルを編集し、パッチをShipする。しかも**あなたが選んだモデル**で。シェル・ファイル編集・git・Web・MCP・サブエージェントからなる完全なツール面を、承認ゲート、巻き戻せるスナップショット、再開できるセッションと組み合わせて提供します。
 
-Agent がリポジトリを編集する前に、まず住所が必要です。このターミナル、このユーザー、このブランチ、このセッション。それが ego の層です。誇示ではなく、継続性。人格の仮面ではなく、責任が結びつく場所です。
+もともとは DeepSeek に触発された TUI として始まりました。コミュニティがそれをより広いものへと育てました。大多数の人の手元にある最良のモデルで仕事ができるハーネス――それがどのプロバイダであれ。DeepSeek はここでも第一級の扱いですが、もはや唯一の良い選択肢ではなく、必須でもありません。
 
-その次に法が必要です。実際の作業ディレクトリでは、現在のユーザー意図、リポジトリの指示、Shell 出力、古い記憶、前回の引き継ぎ、安全ポリシー、未完了の変更が同じターンで衝突します。CodeWhale の Constitution は、その衝突に順序を与えます。現在のユーザー要求は古い文脈より上、ライブの証拠は推測より上、検証は自信より上、人格は声だけを決めて行動は決めません。
+すべてはあなた自身のマシンで動きます。鍵もリポジトリも判断も、あなたの手元にあります。
 
-CodeWhale の本体は、モデルの外側にある順序づけの層です。誰が行動しているのか、どの法に従うのか、どんな証拠があるのか、次の人間や Agent がどう続けられるのかを扱います。
+## なぜ使われるのか
 
-## できること
+- **承認ゲート付きツール。** ファイル編集・シェル・git・Web・MCP・サブエージェント呼び出しはすべて、サンドボックスとあなたが制御する承認ポリシーを経由します。
+- **サブエージェントと Fleet。** ヘッドレスなサブエージェントワーカーに並列の調査や実装を振り分け、複数ステップの実行を編成します。
+- **スナップショットと巻き戻し。** 毎ターン side-git にスナップショットが残るので、`/restore` はリポジトリの `.git` に触れずに変更を取り消せます。
+- **リアルタイム診断。** 編集後に（利用可能な環境では）言語サーバーが即座に反応し、型エラーや警告をその場で表示します。
+- **永続セッション。** ターン・セッション・マシンをまたいで再開・分岐・引き継ぎ――さらにエディタや GUI 向けのランタイム API。
+- **モデルは自由に。** タスクごとに最も適したプロバイダへルーティングできます。
 
-- ローカルファーストのターミナル TUI。
-- ファイル、Shell、Git、Web、MCP、RLM、サブ Agent の型付きツール。
-- 承認ゲート、サンドボックス、side-git スナップショット、`/restore` ロールバック。
-- 編集後の Language Server 診断フィードバック。
-- 並行サブ Agent、永続セッション、fork、relay 引き継ぎ、Runtime API。
-- DeepSeek V4 を第一級として扱いながら、OpenRouter、Xiaomi MiMo、NVIDIA NIM、Arcee、SiliconFlow、Fireworks、Novita、自前の SGLang/vLLM、Ollama なども明示的な provider として扱います。
+## 対応するモデルとプロバイダ
 
-DeepSeek は第一級ですが、唯一の経路ではありません。provider、model、base URL、認証情報は別々の選択です。
+CodeWhale は、人々が実際に使っているプロバイダの第一級ルートを同梱しています。キーを用意して、タスクに合うモデルを選んでください：
+
+- **DeepSeek** ―― V4 Pro / Flash、および DeepSeek 互換ゲートウェイ
+- **GLM / Z.ai** ―― GLM-5.1、GLM-5.2（Z.ai Coding Plan）
+- **Kimi（Moonshot）** ―― Kimi K2.6 / K2.7 Code
+- **MiniMax** ―― 第一級ルート
+- **OpenRouter** ―― ひとつのキーで数百のモデル
+- **NVIDIA NIM · Xiaomi MiMo · SiliconFlow · Fireworks · Novita · StepFun / StepFlash**
+- **セルフホスト** ―― vLLM、SGLang、Ollama
+- **任意の OpenAI 互換ゲートウェイ**
+
+`/provider` と `/model` で切り替えられます。認証情報・ベース URL・能力の境界は
+[docs/PROVIDERS.md](docs/PROVIDERS.md) を参照してください。
 
 ## インストール
 
@@ -33,97 +49,116 @@ DeepSeek は第一級ですが、唯一の経路ではありません。provider
 cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 codewhale --version
-codewhale --model auto
 ```
 
-他の方法：
+初回起動時に、CodeWhale はプロバイダキーを尋ね、`~/.codewhale/config.toml`
+に保存します。互換のため、従来の `~/.deepseek/` 設定も引き続き読み込まれます。
+
+その他のインストール方法：
 
 ```bash
-# GitHub Releases にプラットフォーム別アーカイブがあります:
+# npm ラッパー
+npm install -g codewhale
+
+# プラットフォーム別アーカイブは GitHub Releases に
 # https://github.com/Hmbown/CodeWhale/releases
 
-# GitHub に安定して到達できない場合は CNB mirror を使えます:
+# CNB ミラー（GitHub への接続が不安定な場合）
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.60 codewhale-cli --locked --force
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.60 codewhale-tui --locked --force
 
-# 旧 Homebrew 互換。formula はまだ deepseek-tui 名を使います。
-brew tap Hmbown/deepseek-tui
-brew install deepseek-tui
+# Homebrew（formula 改名中の互換運用）
+brew tap Hmbown/deepseek-tui && brew install deepseek-tui
 ```
 
-`codewhale` npm wrapper も `npm install -g codewhale` で利用できます。
+Docker、直接ダウンロード、中国ミラー、Windows/Scoop、Nix、チェックサム、トラブルシューティングは
+[docs/INSTALL.md](docs/INSTALL.md) を参照してください。
 
-Docker、直接ダウンロード、中国ミラー、Windows/Scoop、Nix、チェックサム、トラブルシュートは [docs/INSTALL.md](docs/INSTALL.md) を見てください。
+**従来の `deepseek-tui` パッケージからのアップグレードですか？** 設定・セッション・スキル・MCP の設定はすべて保持されます。[docs/REBRAND.md](docs/REBRAND.md) を確認したうえで、`codewhale doctor` を走らせて移行を確かめてください。
 
-## 最初の起動
+## クイックスタート
 
 ```bash
-codewhale auth set --provider deepseek
+codewhale auth set --provider zai     # または：deepseek、openrouter、kimi ……
 codewhale auth status
 codewhale doctor
-codewhale
+codewhale                              # TUI を起動
 ```
 
-よく使う入口は `/provider`、`/model`、`/config`、`/statusline`、`/skills`、`/restore` です。入力の先頭に `!` を付けると、通常の承認とサンドボックス経路で Shell コマンドを実行できます。
+セッション内でよく使うコマンド：
 
-## 詳細ドキュメント
+- `/provider` と `/model` ―― ルートとモデルを選ぶ。
+- `/config` ―― ランタイム設定を編集する。
+- `/statusline` ―― 現在のルート・コスト・セッション状態。
+- `/skills` ―― `~/.codewhale/skills/` から再利用可能なワークフローを読み込む。
+- `/restore` ―― side-git のスナップショットから過去のターンを巻き戻す。
+- `! cargo test` ―― 通常の承認・サンドボックス経路でシェルコマンドを走らせる。
 
-README は考え方と最短経路だけを持ちます。詳細はドキュメントと [codewhale.net](https://codewhale.net/) にあります。
+## コミュニティとコントリビュート
 
-- [User guide](docs/GUIDE.md)
-- [Install guide](docs/INSTALL.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Provider registry](docs/PROVIDERS.md)
-- [Sub-agents](docs/SUBAGENTS.md)
-- [Runtime API](docs/RUNTIME_API.md)
-- [Model Lab](docs/MODEL_LAB.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [v0.9.0 release acceptance](docs/V0_9_0_RELEASE_ACCEPTANCE.md)
+CodeWhale はオープンに作られています――それがこのプロジェクトの要点です。目標はシンプルです。より多くの目と手によって、より多くの人々のための最良のエージェントハーネスを作る。ひとりのDeepSeek触発の個人プロジェクトが、コミュニティによって、当初の想像を超えるものへと形作られてきました。
 
-## v0.9.0 トラック
+**経験の有無を問わず、issue も pull requestも大歓迎です。** バグ報告、機能のアイデア、ドキュメントの修正、「初めてのPR」、ちょっとした疑問、どれも立派なプロジェクトへの貢献です。最終的なパッチが絞り込まれたり、遅れたり、メンテナのコミットに折り畳まれたりする場合であっても、メンテナは報告や PR を貢献として扱います――そして繰り返し貢献してくれる人は、公開記録に残り続けます。
 
-v0.9.0 はまだ統合トラックです。tag、GitHub Release、npm、Cargo、リリース成果物が実際に作成され検証されるまで、公開済みリリースとは呼びません。現在の焦点は relay / 引き継ぎ、転写の落ち着き、コマンドと provider アーキテクチャ、VS Code / GUI Runtime API、HarnessProfile、WhaleFlow、そして貢献者 credit hygiene です。
+- [Open issues](https://github.com/Hmbown/CodeWhale/issues) ―― 初回コントリビューション向けのものが揃っています。
+- [CONTRIBUTING.md](CONTRIBUTING.md) ―― 開発ループを整えて PR を出す。
+- [行動規範](CODE_OF_CONDUCT.md) ―― 互いに親切に。
+- [コントリビューター](docs/CONTRIBUTORS.md) ―― CodeWhale を形作ってきた人々。
+
+## ドキュメント
+
+README はスタートラインです。詳しくは [`docs/`](docs) と [codewhale.net](https://codewhale.net/) にあります：
+
+- [ユーザーガイド](docs/GUIDE.md) ―― CodeWhale との最初の1時間。
+- [インストールガイド](docs/INSTALL.md) ―― すべてのパッケージパスとトラブルシューティング。
+- [設定](docs/CONFIGURATION.md) ―― 設定ファイルとプロバイダ設定。
+- [プロバイダ](docs/PROVIDERS.md) ―― モデルルート・認証情報・能力。
+- [モード](docs/MODES.md) ―― Agent、Plan、YOLO。
+- [サブエージェント](docs/SUBAGENTS.md) ―― 役割・ライフサイクル・リカバリ。
+- [Fleet](docs/FLEET.md) ―― マルチワーカー実行とヘッドレス編成。
+- [WhaleFlow 作成](docs/WHALEFLOW_AUTHORING.md) ―― 宣言的ワークフロー。
+- [ランタイム API](docs/RUNTIME_API.md) ―― HTTP/SSE・ACP・エディタ/GUI 契約。
+- [MCP](docs/MCP.md) ―― Model Context Protocol サーバー。
+- [アーキテクチャ](docs/ARCHITECTURE.md) ―― crate 構成・ランタイムフロー・セキュリティ。
+- [キーバインド](docs/KEYBINDINGS.md) ―― 完全なキーマップ。
+- [サンドボックスと承認](docs/SANDBOX.md) · [アクセシビリティ](docs/ACCESSIBILITY.md)
+  · [Docker](docs/DOCKER.md) · [メモリ](docs/MEMORY.md)
+- [ドキュメント総目次](docs) ―― その他すべて。
+
+## 実行アイデンティティと憲法
+
+CodeWhale は、エージェントが実際のワークスペースで**どう振る舞うべきか**について、明確な主張を持っています。できることだけでなく。その主張は
+[CodeWhale 憲法](docs/AGENT_ETHOS.md) として書き下ろされており、いくつかの考えに要約されます：
+
+- **エージェントには居場所がある。** それは*この*ターミナル・*この*ワークスペースにおけるひとつのインスタンスであり、モデルカードでもリーダーボードのスコアでもありません。
+- **証拠は叙述に勝る。** ツールの出力は推測に勝ります。失敗したコマンドは失敗として報告され、検証はタスクの一部です。
+- **ユーザーの意図が至上。** あなたの現在の要求は、古いリポジトリの指示・記憶・以前の引き継ぎよりも優先されます。
+- **ローカルの掟は明示的。** リポジトリは `.codewhale/constitution.json` を置いて、永続するプロジェクト権威・保護される不変条件・検証ルールを定義できます。
+- **ランタイムポリシーは強制される。** モード・承認ゲート・サンドボックス・巻き戻し・ツールスキーマはコードであり、モデルが覚えておくべき助言ではありません。
+
+このプロダクトは、モデルを取り巻く「順序のレイヤー」です。誰が行動しているか、誰の掟が適用されるか、どのような証拠があるか、そして次の人やエージェントがどう続けられるか。もしこの枠組みが役に立つなら、それは素晴らしいことです。役に立たなければ、無視してツールとしてだけ使っても構いません。
 
 ## 謝辞
 
-このプロジェクトは、増え続けるコントリビューターのコミュニティから助けを得て出荷されています:
+CodeWhale が存在するのは、それを使い、壊し、直してくれる人たちのおかげです。
 
-v0.8.48 でマージまたは取り込まれた貢献者: **[@cy2311](https://github.com/cy2311)**、**[@LING71671](https://github.com/LING71671)**、**[@axobase001](https://github.com/axobase001)**、**[@dzyuan](https://github.com/dzyuan)**、**[@mvanhorn](https://github.com/mvanhorn)**、**[@malsony](https://github.com/malsony)**、**[@gaord](https://github.com/gaord)**、**[@yuanchenglu](https://github.com/yuanchenglu)**、**[@idling11](https://github.com/idling11)**、**[@h3c-hexin](https://github.com/h3c-hexin)**、**[@AdityaVG13](https://github.com/AdityaVG13)**、**[@Sskift](https://github.com/Sskift)**、**[@cyq1017](https://github.com/cyq1017)**、**[@HUQIANTAO](https://github.com/HUQIANTAO)**、**[@New2Niu](https://github.com/New2Niu)**、**[@AiurArtanis](https://github.com/AiurArtanis)**、**[@Lee-take](https://github.com/Lee-take)**、**[@nightt5879](https://github.com/nightt5879)**、**[@AresNing](https://github.com/AresNing)**、**[@AccMoment](https://github.com/AccMoment)**、**[@reidliu41](https://github.com/reidliu41)**、**[@aboimpinto](https://github.com/aboimpinto)**、**[@zhuangbiaowei](https://github.com/zhuangbiaowei)**、**[@donglovejava](https://github.com/donglovejava)**、**[@hongqitai](https://github.com/hongqitai)**、**[@zlh124](https://github.com/zlh124)**、**[@encyc](https://github.com/encyc)**、**[@Implementist](https://github.com/Implementist)**、**[@lihuan215](https://github.com/lihuan215)**、**[@LeoAlex0](https://github.com/LeoAlex0)**、**[@jimmyzhuu](https://github.com/jimmyzhuu)**、**[@rockyzhang](https://github.com/rockyzhang)**、**[@mo-vic](https://github.com/mo-vic)**、**[@hufanexplore](https://github.com/hufanexplore)**、**[@hoclaptrinh33](https://github.com/hoclaptrinh33)**、**[@BryonGo](https://github.com/BryonGo)**、**[@gordonlu](https://github.com/gordonlu)**、**[@hongchen1993](https://github.com/hongchen1993)**。
+- **[DeepSeek](https://github.com/deepseek-ai)** ―― このプロジェクトを始められたモデルと支援。感謝 DeepSeek 提供模型与支持。
+- **[DataWhale](https://github.com/datawhalechina)** 🐋 ―― 支援と、「鯨兄弟」ファミリーへの歓迎に感謝します。
+- **[OpenWarp](https://github.com/zerx-lab/warp)** と
+  **[Open Design](https://github.com/nexu-io/open-design)** ―― より良いターミナルエージェント体験の協業に感謝します。
+- **すべてのコントリビューター** ―― PR ごとの完全な記録は
+  [docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md) にあります。ありがとうございます。
 
-報告、再現手順、検証で v0.8.48 を支えてくれた **[@buko](https://github.com/buko)**、**[@yyyCode](https://github.com/yyyCode)**、**[@gaslebinh-glitch](https://github.com/gaslebinh-glitch)**、**[@Dr3259](https://github.com/Dr3259)**、**[@lpeng1711694086-lang](https://github.com/lpeng1711694086-lang)**、**[@VerrPower](https://github.com/VerrPower)**、**[@yan-zay](https://github.com/yan-zay)**、**[@jretz](https://github.com/jretz)**、**[@Neo-millunnium](https://github.com/Neo-millunnium)**、**[@caeserchen](https://github.com/caeserchen)**、**[@T-Phuong-Nguyen](https://github.com/T-Phuong-Nguyen)**、**[@zhyuzhyu](https://github.com/zhyuzhyu)**、**[@0gl20shk0sbt36](https://github.com/0gl20shk0sbt36)**、**[@hatakes](https://github.com/hatakes)**、**[@goodvecn-dev](https://github.com/goodvecn-dev)**、**[@bevis-wong](https://github.com/bevis-wong)**、**[@PurplePulse](https://github.com/PurplePulse)**、**[@nbiish](https://github.com/nbiish)** にも感謝します。
+## コントリビュート
 
-- **[merchloubna70-dot](https://github.com/merchloubna70-dot)** — 機能、修正、VS Code 拡張のスキャフォールドにまたがる 28 件の PR (#645–#681)
-- **[WyxBUPT-22](https://github.com/WyxBUPT-22)** — 表、太字／斜体、水平線の Markdown レンダリング (#579)
-- **[loongmiaow-pixel](https://github.com/loongmiaow-pixel)** — Windows と中国向けインストールドキュメント (#578)
-- **[20bytes](https://github.com/20bytes)** — ユーザーメモリのドキュメントとヘルプの磨き込み (#569)
-- **[staryxchen](https://github.com/staryxchen)** — glibc 互換性のプリフライト (#556)
-- **[Vishnu1837](https://github.com/Vishnu1837)** — glibc 互換性の改善 (#565)
-- **[shentoumengxin](https://github.com/shentoumengxin)** — シェル `cwd` の境界バリデーション (#524)
-- **[toi500](https://github.com/toi500)** — Windows 貼り付け修正の報告
-- **[xsstomy](https://github.com/xsstomy)** — ターミナル起動時の再描画報告
-- **[melody0709](https://github.com/melody0709)** — スラッシュ接頭辞の Enter アクティベーション報告
-- **[lloydzhou](https://github.com/lloydzhou)** と **[jeoor](https://github.com/jeoor)** — コンパクションコストの報告
-- **[Agent-Skill-007](https://github.com/Agent-Skill-007)** — README の明瞭化対応 (#685)
-- **[woyxiang](https://github.com/woyxiang)** — Windows Scoop インストールドキュメント (#696)
-- **[wangfeng](mailto:wangfengcsu@qq.com)** — 料金／割引情報の更新 (#692)
-- **[zichen0116](https://github.com/zichen0116)** — CODE_OF_CONDUCT.md (#686)
-- **Hafeez Pizofreude** — `fetch_url` の SSRF 保護と Star History チャート
-- **Unic (YuniqueUnic)** — スキーマ駆動の設定 UI（TUI + Web）
-- **Jason** — SSRF セキュリティの強化
-
----
-
-## コントリビューション
-
-[CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。プルリクエストを歓迎します。良い初コントリビューションは [Open Issues](https://github.com/Hmbown/CodeWhale/issues) を確認してください。
-
-> [!Note]
-> *DeepSeek Inc. とは関係ありません。*
+[CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。pull request をお待ちしています――まずは [open issues](https://github.com/Hmbown/CodeWhale/issues) からどうぞ。
 
 ## ライセンス
 
 [MIT](LICENSE)
 
-## Star History
+> *CodeWhale は独立したコミュニティプロジェクトであり、いかなるモデルプロバイダとも提携していません。*
+
+## Star 履歴
 
 [![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date&logscale=&legend=top-left)

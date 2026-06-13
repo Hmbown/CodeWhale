@@ -5,6 +5,7 @@ import { getFacts } from "@/lib/facts";
 import { Ticker } from "@/components/ticker";
 import { StatGrid } from "@/components/stat-grid";
 import { Seal } from "@/components/seal";
+import { ThinkingTrace } from "@/components/thinking-trace";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
 import type { CuratedDispatch, FeedItem, RepoStats } from "@/lib/types";
 
@@ -142,33 +143,33 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="mx-auto max-w-[1400px] px-4 sm:px-6 pt-10 sm:pt-14 pb-12 grid lg:grid-cols-12 gap-10">
           <div className="lg:col-span-7">
             <div className="mb-6">
-              <span className="pill pill-hot">DeepSeek V4 · 1M context</span>
+              <span className="pill pill-hot">{isZh ? "开源 · 多模型 · 本地优先" : "Open source · multi-model · local-first"}</span>
             </div>
 
             <h1 className="font-display tracking-crisp">
               {isZh
-                ? "先有自我，再有法律，永远留下证据。"
-                : "Ego first. Law next. Evidence always."}
+                ? "面向最佳可用模型的终端智能体。"
+                : "An agentic terminal for the best available models."}
             </h1>
 
             <p className="mt-6 text-lg text-ink-soft leading-relaxed max-w-2xl">
               <span className="font-cjk text-indigo font-semibold">CodeWhale</span>
               {isZh
-                ? " 是 DeepSeek V4 和开放模型的本地运行层。它给 Agent 一个可追责的自我、一套处理冲突的 law，以及把工具、审批、回滚、子 Agent 和交接都留在明面上的证据循环。"
-                : " is a local operating layer for DeepSeek V4 and open-model coding work. It gives an agent an accountable self, a conflict law for the workspace, and an evidence loop where tools, approvals, rollback, sub-agents, and handoffs stay visible."}
+                ? " 是社区共建的终端智能体，本地运行，支持你真正在用的模型——GLM、DeepSeek、Kimi、MiniMax、OpenRouter 等等。完整的工具面、审批闸门、快照回滚、子智能体与可恢复会话，都在你的终端里。"
+                : " is a community-built terminal agent that runs locally and works with the models you actually use — GLM, DeepSeek, Kimi, MiniMax, OpenRouter, and more. A full tool surface, approval gates, snapshots you can roll back, sub-agents, and sessions you can resume."}
             </p>
 
-            {/* MISSION CALLOUT */}
+            {/* COMMUNITY CALLOUT */}
             <div className="mt-6 px-4 py-3 bg-indigo-pale border-l-4 border-indigo text-sm leading-relaxed max-w-2xl">
               {isZh ? (
                 <>
-                  <span className="font-display text-indigo font-semibold mr-1">设计骨架</span>
-                  ego 是责任落点：这个用户、这个仓库、这个会话。constitution 是冲突法：当上下文吵起来时，谁赢。
+                  <span className="font-display text-indigo font-semibold mr-1">社区共建</span>
+                  在公开环境中打造，目标是把最好的智能体工具带给最多的人。无论你经验如何，议题和 PR 都欢迎。
                 </>
               ) : (
                 <>
-                  <span className="font-display text-indigo font-semibold mr-1">Design thesis</span>
-                  Ego is where responsibility attaches: this user, this repo, this session. Constitution is conflict law for a noisy workspace.
+                  <span className="font-display text-indigo font-semibold mr-1">Built in the open</span>
+                  Community-shaped to bring the best agent harness to the most people. Issues and pull requests are welcome at any experience level.
                 </>
               )}
             </div>
@@ -239,6 +240,27 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       </section>
 
       <StatGrid stats={stats} />
+ 
+      {/* SEE HOW IT DECIDES — real reasoning traces prove the constitution operates */}
+      <section className="mx-auto max-w-[1400px] px-6 py-16">
+        <div className="flex items-baseline gap-4 mb-3 hairline-b pb-4">
+          <Seal char="判" />
+          <h2 className="font-display">
+            {isZh ? "看它如何决策" : "See how it decides"}
+          </h2>
+        </div>
+        <p className={`mb-8 text-ink-soft max-w-2xl ${isZh ? "leading-[1.9] tracking-wide" : "text-sm leading-relaxed"}`}>
+          {isZh
+            ? "别的 Agent 声称自己「对齐」「可信」。CodeWhale 能证明——因为宪法会在模型的推理中现身：它决策时会援引「第 II 条」「第 V 条」。下面是真实会话中的推理摘录，以及它们所促成的决定。"
+            : "Every agent claims to be aligned and trustworthy. CodeWhale can prove it — the Constitution shows up in the model's reasoning, citing \"Article II\" and \"Article V\" as it decides. These are real traces from an actual session, paired with the decision each produced."}
+        </p>
+        <ThinkingTrace locale={locale} />
+        <div className="mt-6 text-[0.72rem] font-mono uppercase tracking-wider text-ink-mute">
+          {isZh
+            ? "这些是真实推理的忠实摘录，非杜撰。宪法不是墙上的口号，而是模型决策时真正遵循的顺序。"
+            : "Faithful excerpts from real reasoning — not invented. The constitution isn't a poster on the wall; it's the order the model actually follows when it decides."}
+        </div>
+      </section>
 
       {/* WHAT IT IS — the core ideas behind the harness */}
       <section className="mx-auto max-w-[1400px] px-6 py-16">
