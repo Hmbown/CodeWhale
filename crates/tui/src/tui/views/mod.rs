@@ -516,6 +516,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Permissions,
+                key: "pro_plan_profile".to_string(),
+                value: settings.pro_plan_profile.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Permissions,
                 key: "allow_shell".to_string(),
                 value: app.allow_shell.to_string(),
                 editable: true,
@@ -1119,6 +1126,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         | "show_thinking"
         | "show_tool_details"
         | "composer_border"
+        | "pro_plan_profile"
         | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
         "tool_collapse" => "compact | expanded | calm",

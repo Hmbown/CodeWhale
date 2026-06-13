@@ -75,6 +75,7 @@ pub struct SettingsSection {
     pub status_indicator: StatusIndicatorValue,
     pub synchronized_output: SynchronizedOutputValue,
     pub default_mode: DefaultModeValue,
+    pub pro_plan_profile: bool,
     #[schemars(range(min = 10, max = 50))]
     pub sidebar_width: u16,
     pub sidebar_focus: SidebarFocusValue,
@@ -346,6 +347,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             status_indicator: settings.status_indicator.as_str().into(),
             synchronized_output: settings.synchronized_output.as_str().into(),
             default_mode: settings.default_mode.as_str().into(),
+            pro_plan_profile: settings.pro_plan_profile,
             sidebar_width: settings.sidebar_width_percent,
             sidebar_focus: settings.sidebar_focus.as_str().into(),
             context_panel: settings.context_panel,
@@ -543,6 +545,7 @@ pub fn apply_document(
             doc.settings.synchronized_output.as_setting(),
         ),
         ("default_mode", doc.settings.default_mode.as_setting()),
+        ("pro_plan_profile", bool_str(doc.settings.pro_plan_profile)),
         ("sidebar_width", &doc.settings.sidebar_width.to_string()),
         ("sidebar_focus", doc.settings.sidebar_focus.as_setting()),
         ("context_panel", bool_str(doc.settings.context_panel)),
@@ -940,6 +943,7 @@ impl From<&str> for DefaultModeValue {
             AppMode::Agent => Self::Agent,
             AppMode::Plan => Self::Plan,
             AppMode::Yolo => Self::Yolo,
+            AppMode::ProPlan => Self::Agent,
         }
     }
 }

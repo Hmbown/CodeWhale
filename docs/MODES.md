@@ -3,6 +3,8 @@
 codewhale has two related concepts:
 
 - **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO).
+- **Opt-in routing profile**: an explicit workflow that can route models across
+  phases after the user chooses it.
 - **Approval mode**: how aggressively the UI asks before executing tools.
 
 Model selection is separate. `--model auto` and `/model auto` route each turn to
@@ -43,6 +45,26 @@ auto-approval, which is why shell commands may work there even when the Agent
 mode catalog does not list them.
 
 All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+
+## Opt-In Pro Plan Profile
+
+Pro Plan is config-gated and disabled by default. Enable it explicitly with
+`/config pro_plan_profile true --save`, then use `/mode pro-plan` to enter the
+routing profile. It is intentionally not part of the default `Tab` cycle or
+`/mode` picker.
+
+In Pro Plan, the user chooses the profile, then CodeWhale chooses the phase
+model:
+
+- **Plan** and **Review** use the resolved Pro route and run with Plan-mode
+  read-only tool policy.
+- **Execute** uses the resolved Flash route. If Flash is not advertised by the
+  active provider, Execute falls back to the Pro route rather than sending an
+  invalid model id.
+- The existing Plan Confirmation gate decides whether execution starts. Accept
+  uses Agent-style approvals; Accept (YOLO) enables auto-approval only for that
+  execution pass. If review asks for follow-up changes, Pro Plan returns to
+  Agent-style approvals unless the user explicitly chooses YOLO again.
 
 The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
 language. Fin is a seam for routing, summaries, cheap child calls, and

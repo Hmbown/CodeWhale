@@ -447,6 +447,15 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomePlanModeTip));
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomePlanModeChecklistTip));
         }
+        AppMode::ProPlan => {
+            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomePlanModeTip));
+            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeProPlanModeTip));
+            let _ = writeln!(
+                stats,
+                "{}",
+                tr(locale, MessageId::HomeProPlanModeAutoSwitchTip)
+            );
+        }
     }
 
     CommandResult::message(stats)

@@ -2648,7 +2648,7 @@ fn approval_mode_for(
 ) -> crate::tui::approval::ApprovalMode {
     match mode {
         AppMode::Yolo => crate::tui::approval::ApprovalMode::Auto,
-        AppMode::Plan => crate::tui::approval::ApprovalMode::Never,
+        AppMode::Plan | AppMode::ProPlan => crate::tui::approval::ApprovalMode::Never,
         AppMode::Agent => session_approval,
     }
 }
@@ -2678,7 +2678,7 @@ fn runtime_prompt_text(
 ) -> String {
     let mode_str = match mode {
         AppMode::Agent => "agent",
-        AppMode::Plan => "plan",
+        AppMode::Plan | AppMode::ProPlan => "plan",
         AppMode::Yolo => "yolo",
     };
     let approval_str = match approval_mode {
@@ -2822,7 +2822,8 @@ use self::dispatch::{
     ToolExecutionBatch, ToolExecutionPlan, caller_allowed_for_tool, caller_type_for_tool_use,
     final_tool_input, format_tool_error, mcp_tool_approval_description, mcp_tool_is_parallel_safe,
     mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
-    plan_tool_execution_batches, should_force_update_plan_first, should_stop_after_plan_tool,
+    plan_tool_execution_batches, should_force_update_plan_first, should_force_update_plan_step,
+    should_stop_after_plan_tool,
 };
 use self::loop_guard::{AttemptDecision, LoopGuard, OutcomeDecision};
 #[cfg(test)]

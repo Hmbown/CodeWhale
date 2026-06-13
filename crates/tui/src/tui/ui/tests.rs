@@ -5,6 +5,7 @@ use crate::config::{
 };
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
+use crate::core::events::TurnOutcomeStatus;
 use crate::tui::active_cell::ActiveCell;
 use crate::tui::app::ToolDetailRecord;
 use crate::tui::file_mention::{
@@ -1348,6 +1349,125 @@ fn plan_prompt_view_escape_emits_dismiss_event() {
     assert!(matches!(
         action,
         ViewAction::EmitAndClose(ViewEvent::PlanPromptDismissed)
+    ));
+}
+
+#[test]
+fn pro_plan_effective_mode_tracks_phase_and_auto_approval() {
+    let mut app = create_test_app();
+    app.pro_plan_profile_enabled = true;
+    app.set_mode(AppMode::ProPlan);
+
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Plan);
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.start_execution(false);
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Agent);
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.start_execution(true);
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Yolo);
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.transition("<pro_plan execute_complete=\"true\">");
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Plan);
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.transition("<pro_plan review=\"changes_requested\">");
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+    assert!(!router.execute_auto_approve());
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Agent);
+}
+
+#[test]
+fn pro_plan_done_resets_before_next_user_turn() {
+    let mut app = create_test_app();
+    app.pro_plan_profile_enabled = true;
+    app.set_mode(AppMode::ProPlan);
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.start_execution(false);
+    router.transition("<pro_plan execute_complete=\"true\">");
+    router.transition("<pro_plan review=\"approved\">");
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Done);
+
+    prepare_pro_plan_for_user_turn(&mut app);
+
+    assert_eq!(
+        app.pro_plan_router
+            .as_ref()
+            .expect("pro plan router")
+            .phase(),
+        crate::tui::pro_plan::ProPlanPhase::Plan
+    );
+}
+
+#[test]
+fn pro_plan_phase_does_not_advance_on_aborted_turns() {
+    let config = crate::tui::pro_plan::ProPlanConfig::default();
+    let mut router = ProPlanRouter::new(config);
+    router.start_execution(false);
+
+    let (_, interrupted_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Interrupted,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(!interrupted_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+
+    let (_, failed_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Failed,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(!failed_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+
+    let (_, completed_changed) = apply_pro_plan_turn_completion(
+        &mut router,
+        TurnOutcomeStatus::Completed,
+        "<pro_plan execute_complete=\"true\">",
+        false,
+    );
+    assert!(completed_changed);
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Review);
+}
+
+#[test]
+fn pro_plan_planning_instruction_only_wraps_actionable_plan_turns() {
+    let mut app = create_test_app();
+    app.pro_plan_profile_enabled = true;
+    app.set_mode(AppMode::ProPlan);
+
+    assert!(should_add_pro_plan_planning_instruction(
+        &app,
+        "帮我修复 ProPlan 的循环问题"
+    ));
+    assert!(should_add_pro_plan_planning_instruction(
+        &app,
+        "Add a README note for Pro Plan"
+    ));
+    assert!(!should_add_pro_plan_planning_instruction(
+        &app,
+        "为什么不能直接用 deepseek-tui？只回答一句话"
+    ));
+    assert!(!should_add_pro_plan_planning_instruction(
+        &app,
+        "What is prefix cache?"
+    ));
+    assert!(!should_add_pro_plan_planning_instruction(
+        &app,
+        "优化一下整体体验，先聊聊方向"
+    ));
+
+    let router = app.pro_plan_router.as_mut().expect("pro plan router");
+    router.start_execution(false);
+    assert!(!should_add_pro_plan_planning_instruction(
+        &app,
+        "继续实现刚才的计划"
     ));
 }
 
@@ -5236,6 +5356,40 @@ async fn numeric_plan_choice_still_queues_follow_up_when_busy() {
             .front()
             .map(crate::tui::app::QueuedMessage::content),
         Some("Proceed with the accepted plan.".to_string())
+    );
+}
+
+#[tokio::test]
+async fn pro_plan_accept_yolo_uses_auto_approval_for_one_execution_pass() {
+    let mut app = create_test_app();
+    app.pro_plan_profile_enabled = true;
+    app.set_mode(AppMode::ProPlan);
+    app.plan_prompt_pending = true;
+    app.is_loading = true;
+
+    let engine = crate::core::engine::mock_engine_handle();
+    let config = Config::default();
+
+    let handled = handle_plan_choice(&mut app, &config, &engine.handle, "2")
+        .await
+        .expect("plan choice");
+
+    assert!(handled);
+    assert!(!app.plan_prompt_pending);
+    assert_eq!(app.mode, AppMode::ProPlan);
+    let router = app.pro_plan_router.as_ref().expect("pro plan router");
+    assert_eq!(router.phase(), crate::tui::pro_plan::ProPlanPhase::Execute);
+    assert!(router.execute_auto_approve());
+    assert_eq!(effective_mode_for_turn(&app), AppMode::Yolo);
+    assert_eq!(app.queued_message_count(), 1);
+    assert_eq!(
+        app.queued_messages
+            .front()
+            .map(crate::tui::app::QueuedMessage::content),
+        Some(
+            "Proceed with the accepted plan using auto-approval. Implement it now. When implementation is complete, summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+                .to_string()
+        )
     );
 }
 

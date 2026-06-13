@@ -47,7 +47,7 @@ use crate::config::{
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
-use crate::core::events::Event as EngineEvent;
+use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
 use crate::llm_client::LlmClient;
@@ -92,6 +92,7 @@ use crate::tui::onboarding;
 use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
+use crate::tui::pro_plan::{ProPlanFollowUp, ProPlanPhase, ProPlanRouter};
 use crate::tui::scrolling::TranscriptScroll;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
@@ -858,7 +859,7 @@ fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
 
 fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
     EngineConfig {
-        model: app.model.clone(),
+        model: app.effective_model_for_budget().to_string(),
         workspace: app.workspace.clone(),
         allow_shell: app.allow_shell,
         trust_mode: app.trust_mode,
@@ -930,6 +931,176 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
     }
+}
+
+fn effective_mode_for_turn(app: &App) -> AppMode {
+    if app.mode != AppMode::ProPlan {
+        return app.mode;
+    }
+
+    match app.pro_plan_router.as_ref() {
+        Some(router) if router.phase() == ProPlanPhase::Execute => {
+            if router.execute_auto_approve() {
+                AppMode::Yolo
+            } else {
+                AppMode::Agent
+            }
+        }
+        // Planning and review are intentionally read-only, matching the
+        // Pro Plan shape: think with the stronger model before/after writes.
+        Some(_) | None => AppMode::Plan,
+    }
+}
+
+fn prepare_pro_plan_for_user_turn(app: &mut App) {
+    if app.mode != AppMode::ProPlan {
+        return;
+    }
+
+    if let Some(router) = app.pro_plan_router.as_mut() {
+        if router.phase() == ProPlanPhase::Done {
+            router.reset();
+        }
+    }
+}
+
+fn should_add_pro_plan_planning_instruction(app: &App, input: &str) -> bool {
+    if app.mode != AppMode::ProPlan {
+        return false;
+    }
+
+    let Some(router) = app.pro_plan_router.as_ref() else {
+        return false;
+    };
+    if router.phase() != ProPlanPhase::Plan {
+        return false;
+    }
+
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let explicit_no_plan = [
+        "don't plan",
+        "do not plan",
+        "no plan",
+        "without a plan",
+        "don't use update_plan",
+        "do not use update_plan",
+        "不要计划",
+        "不用计划",
+        "别计划",
+        "不要用 update_plan",
+        "不要使用 update_plan",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if explicit_no_plan {
+        return false;
+    }
+
+    let words = lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty());
+    let asks_for_action_word = words.into_iter().any(|word| {
+        matches!(
+            word,
+            "implement"
+                | "add"
+                | "fix"
+                | "modify"
+                | "change"
+                | "update"
+                | "refactor"
+                | "create"
+                | "delete"
+                | "remove"
+                | "wire"
+                | "integrate"
+                | "build"
+        )
+    });
+
+    let asks_for_action_phrase = [
+        "implement",
+        "write code",
+        "write test",
+        "open a pr",
+        "create a pr",
+        "submit a pr",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+
+    let asks_for_cn_action = [
+        "帮我改",
+        "改一下",
+        "修改",
+        "修复",
+        "新增",
+        "添加",
+        "实现",
+        "接入",
+        "重构",
+        "删除",
+        "移除",
+        "提pr",
+        "提 pr",
+        "开pr",
+        "开 pr",
+    ]
+    .iter()
+    .any(|needle| trimmed.contains(needle));
+
+    asks_for_action_word || asks_for_action_phrase || asks_for_cn_action
+}
+
+fn pro_plan_planning_instruction() -> &'static str {
+    "\n\n<pro_plan_planning>\nYou are in Pro Plan's planning phase. Use the existing Plan mode behavior and call update_plan with the proposed implementation plan as the next tool call, then stop. Do not edit files in this phase. If the user only asked a question, answer normally without update_plan.\n</pro_plan_planning>"
+}
+
+fn apply_pro_plan_turn_completion(
+    router: &mut ProPlanRouter,
+    status: TurnOutcomeStatus,
+    last_assistant_text: &str,
+    plan_tool_used: bool,
+) -> (ProPlanPhase, bool) {
+    let phase_before = router.phase();
+    if status == TurnOutcomeStatus::Completed {
+        if !last_assistant_text.is_empty() {
+            router.transition(last_assistant_text);
+        }
+        if plan_tool_used && router.phase() == ProPlanPhase::Plan {
+            router.mark_plan_ready();
+        }
+    }
+    (phase_before, router.phase() != phase_before)
+}
+
+fn turn_auto_approve(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.mode == AppMode::Yolo
+}
+
+fn turn_allows_shell(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.allow_shell
+}
+
+fn turn_trust_mode(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.trust_mode
 }
 
 /// How long after a task finishes it should still appear in the Work
@@ -1949,7 +2120,9 @@ async fn run_event_loop(
                         }
 
                         // Update session cost
-                        let pricing_model = if app.auto_model {
+                        let pricing_model = if app.mode == AppMode::ProPlan {
+                            app.last_effective_model.as_deref().unwrap_or(&app.model)
+                        } else if app.auto_model {
                             app.last_effective_model.as_deref().unwrap_or(&app.model)
                         } else {
                             &app.model
@@ -2114,7 +2287,116 @@ async fn run_event_loop(
                             });
                             if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
                                 let plan = Some(app.plan_state.lock().await.snapshot());
-                                app.view_stack.push(PlanPromptView::new(plan));
+                                app.view_stack
+                                    .push(PlanPromptView::new_for_locale_with_plan(
+                                        app.ui_locale,
+                                        plan,
+                                    ));
+                            }
+                        }
+
+                        let queued_count = app.queued_message_count();
+                        let has_queued_draft = app.queued_draft.is_some();
+                        let mut show_pro_plan_prompt = false;
+                        if app.mode == AppMode::ProPlan {
+                            if let Some(ref mut router) = app.pro_plan_router {
+                                let last_assistant = app
+                                    .api_messages
+                                    .iter()
+                                    .rev()
+                                    .find(|m| m.role == "assistant");
+
+                                let last_assistant_text = last_assistant
+                                    .map(|m| {
+                                        m.content
+                                            .iter()
+                                            .filter_map(|block| match block {
+                                                crate::models::ContentBlock::Text {
+                                                    text, ..
+                                                } => Some(text.as_str()),
+                                                _ => None,
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    })
+                                    .unwrap_or_default();
+
+                                let (phase_before, transition_changed) =
+                                    apply_pro_plan_turn_completion(
+                                        router,
+                                        status,
+                                        &last_assistant_text,
+                                        app.plan_tool_used_in_turn,
+                                    );
+
+                                if status == TurnOutcomeStatus::Completed {
+                                    let no_pending_user_work =
+                                        queued_count == 0 && !has_queued_draft;
+                                    let phase_after = router.phase();
+
+                                    if phase_after == ProPlanPhase::Plan
+                                        && router.state().has_generated_plan
+                                        && !app.plan_prompt_pending
+                                        && no_pending_user_work
+                                    {
+                                        show_pro_plan_prompt = true;
+                                    }
+
+                                    if transition_changed
+                                        && no_pending_user_work
+                                        && queued_to_send.is_none()
+                                    {
+                                        let follow_up = ProPlanRouter::follow_up_after_transition(
+                                            phase_before,
+                                            phase_after,
+                                        );
+                                        if let Some(follow_up) = follow_up {
+                                            let follow_up_text = match follow_up {
+                                                ProPlanFollowUp::ReviewImplementation => {
+                                                    "Review the implementation against the accepted plan. Do not edit files during review. If it is correct, include `<pro_plan review=\"approved\">`; if changes are needed, include `<pro_plan review=\"changes_requested\">` and list the fixes."
+                                                }
+                                                ProPlanFollowUp::AddressReviewFeedback => {
+                                                    "Address the review feedback using the accepted plan, then summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+                                                }
+                                            };
+                                            queued_to_send = Some(QueuedMessage::new(
+                                                follow_up_text.to_string(),
+                                                None,
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                let phase_label = match router.phase() {
+                                    ProPlanPhase::Plan => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusPlan)
+                                    }
+                                    ProPlanPhase::Execute => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusExecute)
+                                    }
+                                    ProPlanPhase::Review => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusReview)
+                                    }
+                                    ProPlanPhase::Done => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusDone)
+                                    }
+                                };
+                                let model = router.current_model();
+                                app.status_message = Some(format!("{phase_label} ({model})"));
+                            }
+                        }
+                        if show_pro_plan_prompt {
+                            app.plan_prompt_pending = true;
+                            app.add_message(HistoryCell::System {
+                                content: plan_next_step_prompt(),
+                            });
+                            if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
+                                let plan = Some(app.plan_state.lock().await.snapshot());
+                                app.view_stack
+                                    .push(PlanPromptView::new_for_locale_with_plan(
+                                        app.ui_locale,
+                                        plan,
+                                    ));
                             }
                         }
                         app.plan_tool_used_in_turn = false;
@@ -2176,7 +2458,9 @@ async fn run_event_loop(
                         app.current_session_id = Some(session_id);
                         app.api_messages = messages;
                         app.system_prompt = system_prompt;
-                        if app.auto_model {
+                        if app.mode == AppMode::ProPlan {
+                            app.last_effective_model = Some(model);
+                        } else if app.auto_model {
                             app.last_effective_model = Some(model);
                         } else {
                             app.set_model_selection(model);
@@ -2448,6 +2732,7 @@ async fn run_event_loop(
                     } => {
                         let session_approved =
                             is_session_approved_for_tool(app, &tool_name, &approval_grouping_key);
+                        let read_only_turn = effective_mode_for_turn(app) == AppMode::Plan;
                         let session_denied = is_session_denied_for_key(app, &approval_key);
                         if session_denied {
                             // The user already said no to this exact tool /
@@ -2463,6 +2748,21 @@ async fn run_event_loop(
                                 }),
                             );
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
+                        } else if read_only_turn {
+                            log_sensitive_event(
+                                "tool.approval.auto_deny_read_only",
+                                serde_json::json!({
+                                    "tool_name": tool_name,
+                                    "approval_key": approval_key,
+                                    "session_id": app.current_session_id,
+                                    "mode": app.mode.label(),
+                                }),
+                            );
+                            let _ = engine_handle.deny_tool_call(id.clone()).await;
+                            app.status_message = Some(format!(
+                                "{}: {tool_name}",
+                                tr(app.ui_locale, MessageId::ToolBlockedReadOnly)
+                            ));
                         } else if session_approved || app.approval_mode == ApprovalMode::Auto {
                             log_sensitive_event(
                                 "tool.approval.auto_approve",
@@ -4444,6 +4744,7 @@ async fn run_event_loop(
                             AppMode::Plan => AppMode::Agent,
                             AppMode::Agent => AppMode::Yolo,
                             AppMode::Yolo => AppMode::Plan,
+                            AppMode::ProPlan => AppMode::Agent,
                         };
                         apply_mode_update(app, &engine_handle, new_mode).await;
                     }
@@ -5498,11 +5799,24 @@ async fn dispatch_user_message(
         &app.workspace,
         cwd.clone(),
     );
+    prepare_pro_plan_for_user_turn(app);
     let mut content = queued_message_content_for_app(app, &message, cwd);
     if let Some(note) = paused_note.as_deref() {
         content.push_str(note);
     }
+    if should_add_pro_plan_planning_instruction(app, &message.display) {
+        content.push_str(pro_plan_planning_instruction());
+    }
     let message_index = app.api_messages.len();
+    let turn_mode = effective_mode_for_turn(app);
+    let auto_approve = turn_auto_approve(app, turn_mode);
+    let allow_shell = turn_allows_shell(app, turn_mode);
+    let trust_mode = turn_trust_mode(app, turn_mode);
+    let prompt_model_id = if app.mode == AppMode::ProPlan {
+        app.effective_model_for_budget()
+    } else {
+        &app.model
+    };
     app.system_prompt = Some(
         prompts::system_prompt_for_mode_with_context_skills_and_session(
             &app.workspace,
@@ -5515,7 +5829,7 @@ async fn dispatch_user_message(
                 project_context_pack_enabled: config.project_context_pack_enabled(),
                 locale_tag: app.ui_locale.tag(),
                 translation_enabled: app.translation_enabled,
-                model_id: &app.model,
+                model_id: prompt_model_id,
                 show_thinking: app.show_thinking,
                 verbosity: app.verbosity.as_deref(),
             },
@@ -5558,7 +5872,9 @@ async fn dispatch_user_message(
         None
     };
 
-    let effective_model = if app.auto_model {
+    let effective_model = if app.mode == AppMode::ProPlan {
+        app.effective_model_for_budget().to_string()
+    } else if app.auto_model {
         auto_selection
             .as_ref()
             .map(|selection| selection.model.clone())
@@ -5599,6 +5915,8 @@ async fn dispatch_user_message(
             }
             app.status_message = Some(status);
         }
+    } else if app.mode == AppMode::ProPlan {
+        app.last_effective_model = Some(effective_model.clone());
     } else {
         app.last_effective_model = None;
     }
@@ -5606,15 +5924,15 @@ async fn dispatch_user_message(
     if let Err(err) = engine_handle
         .send(Op::SendMessage {
             content,
-            mode: app.mode,
+            mode: turn_mode,
             model: effective_model,
             goal_objective: app.hunt.quarry.clone(),
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_controls_reasoning,
             auto_model: app.auto_model,
-            allow_shell: app.allow_shell,
-            trust_mode: app.trust_mode,
-            auto_approve: app.mode == AppMode::Yolo,
+            allow_shell,
+            trust_mode,
+            auto_approve,
             approval_mode: app.approval_mode,
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
@@ -7062,7 +7380,7 @@ enum PlanChoice {
 fn plan_next_step_prompt() -> String {
     [
         "Action required: choose the next step for this plan.",
-        "  1) Accept + implement in Agent mode",
+        "  1) Accept + implement with approvals",
         "  2) Accept + implement in YOLO mode",
         "  3) Revise the plan / ask follow-ups",
         "  4) Return to Agent mode without implementing",
@@ -7102,45 +7420,92 @@ async fn apply_plan_choice(
 ) -> Result<()> {
     match choice {
         PlanChoice::AcceptAgent => {
-            apply_mode_update(app, engine_handle, AppMode::Agent).await;
+            let pro_plan = app.mode == AppMode::ProPlan;
+            if pro_plan {
+                if let Some(router) = app.pro_plan_router.as_mut() {
+                    router.start_execution(false);
+                }
+            } else {
+                apply_mode_update(app, engine_handle, AppMode::Agent).await;
+            }
             app.add_message(HistoryCell::System {
-                content: "Plan accepted. Switching to Agent mode and starting implementation."
-                    .to_string(),
+                content: if pro_plan {
+                    tr(app.ui_locale, MessageId::ProPlanAcceptedExecution).to_string()
+                } else {
+                    "Plan accepted. Switching to Agent mode and starting implementation."
+                        .to_string()
+                },
             });
-            let followup = QueuedMessage::new("Proceed with the accepted plan.".to_string(), None);
+            let followup_text = if pro_plan {
+                "Proceed with the accepted plan. Implement it now. When implementation is complete, summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+            } else {
+                "Proceed with the accepted plan."
+            };
+            let followup = QueuedMessage::new(followup_text.to_string(), None);
             if app.is_loading {
                 app.queue_message(followup);
-                app.status_message =
-                    Some("Queued accepted plan execution (agent mode).".to_string());
+                app.status_message = Some(if pro_plan {
+                    tr(app.ui_locale, MessageId::ProPlanExecutionQueued).to_string()
+                } else {
+                    "Queued accepted plan execution (agent mode).".to_string()
+                });
             } else {
                 dispatch_user_message(app, config, engine_handle, followup).await?;
             }
         }
         PlanChoice::AcceptYolo => {
-            apply_mode_update(app, engine_handle, AppMode::Yolo).await;
+            let pro_plan = app.mode == AppMode::ProPlan;
+            if pro_plan {
+                if let Some(router) = app.pro_plan_router.as_mut() {
+                    router.start_execution(true);
+                }
+            } else {
+                apply_mode_update(app, engine_handle, AppMode::Yolo).await;
+            }
             app.add_message(HistoryCell::System {
-                content: "Plan accepted. Switching to YOLO mode and starting implementation."
-                    .to_string(),
+                content: if pro_plan {
+                    tr(app.ui_locale, MessageId::ProPlanAcceptedAutoExecution).to_string()
+                } else {
+                    "Plan accepted. Switching to YOLO mode and starting implementation.".to_string()
+                },
             });
-            let followup = QueuedMessage::new("Proceed with the accepted plan.".to_string(), None);
+            let followup_text = if pro_plan {
+                "Proceed with the accepted plan using auto-approval. Implement it now. When implementation is complete, summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+            } else {
+                "Proceed with the accepted plan."
+            };
+            let followup = QueuedMessage::new(followup_text.to_string(), None);
             if app.is_loading {
                 app.queue_message(followup);
-                app.status_message =
-                    Some("Queued accepted plan execution (YOLO mode).".to_string());
+                app.status_message = Some(if pro_plan {
+                    tr(app.ui_locale, MessageId::ProPlanAutoExecutionQueued).to_string()
+                } else {
+                    "Queued accepted plan execution (YOLO mode).".to_string()
+                });
             } else {
                 dispatch_user_message(app, config, engine_handle, followup).await?;
             }
         }
         PlanChoice::RevisePlan => {
+            if app.mode == AppMode::ProPlan {
+                if let Some(router) = app.pro_plan_router.as_mut() {
+                    router.reset();
+                }
+            }
             let prompt = "Revise the plan: ";
             app.input = prompt.to_string();
             app.cursor_position = prompt.chars().count();
             app.status_message = Some("Revise the plan and press Enter.".to_string());
         }
         PlanChoice::ExitPlan => {
+            let content = if app.mode == AppMode::ProPlan {
+                tr(app.ui_locale, MessageId::ProPlanExitedToAgent)
+            } else {
+                "Exited Plan mode. Switched to Agent mode."
+            };
             apply_mode_update(app, engine_handle, AppMode::Agent).await;
             app.add_message(HistoryCell::System {
-                content: "Exited Plan mode. Switched to Agent mode.".to_string(),
+                content: content.to_string(),
             });
         }
     }

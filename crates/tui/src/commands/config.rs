@@ -202,6 +202,9 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             .to_string(),
         ),
         "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
+        "pro_plan_profile" | "pro_plan" | "proplan" => {
+            Some(app.pro_plan_profile_enabled.to_string())
+        }
         "max_history" | "history" => Some(app.max_input_history.to_string()),
         "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
         "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
@@ -768,6 +771,13 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             let mode = AppMode::from_setting(&settings.default_mode);
             app.set_mode(mode);
         }
+        "pro_plan_profile" | "pro_plan" | "proplan" => {
+            app.pro_plan_profile_enabled = settings.pro_plan_profile;
+            if !app.pro_plan_profile_enabled && app.mode == AppMode::ProPlan {
+                app.set_mode(AppMode::Plan);
+            }
+            app.needs_redraw = true;
+        }
         "max_history" | "history" => {
             app.max_input_history = settings.max_input_history;
         }
@@ -813,6 +823,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     let display_value = match key.as_str() {
         "default_mode" | "mode" => settings.default_mode.clone(),
+        "pro_plan_profile" | "pro_plan" | "proplan" => settings.pro_plan_profile.to_string(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
         "theme" | "ui_theme" => settings.theme.clone(),
         "synchronized_output" | "sync_output" | "sync" => settings.synchronized_output.clone(),
@@ -851,6 +862,11 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
     match parse_mode_arg(arg) {
         Some(mode) => {
+            if mode == AppMode::ProPlan && !app.pro_plan_profile_enabled {
+                return CommandResult::error(
+                    "Pro Plan profile is disabled. Enable it with `/config pro_plan_profile true --save`, then run `/mode pro-plan`.",
+                );
+            }
             let (message, changed) = switch_mode_with_status(app, mode);
             if changed {
                 CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
@@ -867,6 +883,12 @@ pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
 }
 
 fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
+    if mode == AppMode::ProPlan && !app.pro_plan_profile_enabled {
+        return (
+            "Pro Plan profile is disabled. Enable it with `/config pro_plan_profile true --save`, then run `/mode pro-plan`.".to_string(),
+            false,
+        );
+    }
     if app.set_mode(mode) {
         (
             format!("Switched to {} mode.", mode_display_name(mode)),
@@ -885,6 +907,7 @@ fn parse_mode_arg(arg: &str) -> Option<AppMode> {
         "agent" | "1" => Some(AppMode::Agent),
         "plan" | "2" => Some(AppMode::Plan),
         "yolo" | "3" => Some(AppMode::Yolo),
+        "pro-plan" | "proplan" => Some(AppMode::ProPlan),
         _ => None,
     }
 }
@@ -894,6 +917,7 @@ fn mode_display_name(mode: AppMode) -> &'static str {
         AppMode::Agent => "Agent",
         AppMode::Plan => "Plan",
         AppMode::Yolo => "YOLO",
+        AppMode::ProPlan => "Pro Plan",
     }
 }
 
@@ -1251,6 +1275,7 @@ mod tests {
         app.auto_model = false;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
+        app.pro_plan_profile_enabled = false;
         app
     }
 
@@ -1281,6 +1306,26 @@ mod tests {
         let result = mode(&mut app, Some("3"));
         assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
         assert_eq!(app.mode, AppMode::Yolo);
+        let result = mode(&mut app, Some("4"));
+        assert!(result.is_error);
+        assert_eq!(app.mode, AppMode::Yolo);
+        let result = mode(&mut app, Some("proplan"));
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("Pro Plan profile is disabled")
+        );
+        assert_eq!(app.mode, AppMode::Yolo);
+
+        app.pro_plan_profile_enabled = true;
+        let result = mode(&mut app, Some("proplan"));
+        assert_eq!(
+            result.action,
+            Some(AppAction::ModeChanged(AppMode::ProPlan))
+        );
+        assert_eq!(app.mode, AppMode::ProPlan);
     }
 
     #[test]

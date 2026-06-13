@@ -424,6 +424,42 @@ pub enum MessageId {
     KbToggleHelpSlash,
     HelpUsageLabel,
     HelpAliasesLabel,
+    PlanPromptTitle,
+    PlanPromptActionRequired,
+    PlanPromptChooseNextStep,
+    PlanPromptAcceptPlan,
+    PlanPromptAcceptPlanDescription,
+    PlanPromptAcceptPlanYolo,
+    PlanPromptAcceptPlanYoloDescription,
+    PlanPromptRevisePlan,
+    PlanPromptRevisePlanDescription,
+    PlanPromptExitToAgent,
+    PlanPromptExitToAgentDescription,
+    PlanPromptShortAccept,
+    PlanPromptShortYolo,
+    PlanPromptShortRevise,
+    PlanPromptShortExit,
+    PlanPromptExitConfirmTitle,
+    PlanPromptExitConfirmBody,
+    PlanPromptExitConfirmYes,
+    PlanPromptExitConfirmCancel,
+    PlanPromptExitConfirmFooterConfirm,
+    PlanPromptExitConfirmFooterCancel,
+    PlanPromptPlanSteps,
+    PlanPromptQuickPick,
+    PlanPromptMove,
+    PlanPromptConfirm,
+    PlanPromptClose,
+    ProPlanStatusPlan,
+    ProPlanStatusExecute,
+    ProPlanStatusReview,
+    ProPlanStatusDone,
+    ToolBlockedReadOnly,
+    ProPlanAcceptedExecution,
+    ProPlanAcceptedAutoExecution,
+    ProPlanExecutionQueued,
+    ProPlanAutoExecutionQueued,
+    ProPlanExitedToAgent,
     SettingsTitle,
     SettingsConfigFile,
     ClearConversation,
@@ -461,6 +497,8 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    HomeProPlanModeTip,
+    HomeProPlanModeAutoSwitchTip,
     HomeGoalModeTip,
     // Onboarding screens — language picker.
     OnboardLanguageTitle,
@@ -824,6 +862,42 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbToggleHelpSlash,
     MessageId::HelpUsageLabel,
     MessageId::HelpAliasesLabel,
+    MessageId::PlanPromptTitle,
+    MessageId::PlanPromptActionRequired,
+    MessageId::PlanPromptChooseNextStep,
+    MessageId::PlanPromptAcceptPlan,
+    MessageId::PlanPromptAcceptPlanDescription,
+    MessageId::PlanPromptAcceptPlanYolo,
+    MessageId::PlanPromptAcceptPlanYoloDescription,
+    MessageId::PlanPromptRevisePlan,
+    MessageId::PlanPromptRevisePlanDescription,
+    MessageId::PlanPromptExitToAgent,
+    MessageId::PlanPromptExitToAgentDescription,
+    MessageId::PlanPromptShortAccept,
+    MessageId::PlanPromptShortYolo,
+    MessageId::PlanPromptShortRevise,
+    MessageId::PlanPromptShortExit,
+    MessageId::PlanPromptExitConfirmTitle,
+    MessageId::PlanPromptExitConfirmBody,
+    MessageId::PlanPromptExitConfirmYes,
+    MessageId::PlanPromptExitConfirmCancel,
+    MessageId::PlanPromptExitConfirmFooterConfirm,
+    MessageId::PlanPromptExitConfirmFooterCancel,
+    MessageId::PlanPromptPlanSteps,
+    MessageId::PlanPromptQuickPick,
+    MessageId::PlanPromptMove,
+    MessageId::PlanPromptConfirm,
+    MessageId::PlanPromptClose,
+    MessageId::ProPlanStatusPlan,
+    MessageId::ProPlanStatusExecute,
+    MessageId::ProPlanStatusReview,
+    MessageId::ProPlanStatusDone,
+    MessageId::ToolBlockedReadOnly,
+    MessageId::ProPlanAcceptedExecution,
+    MessageId::ProPlanAcceptedAutoExecution,
+    MessageId::ProPlanExecutionQueued,
+    MessageId::ProPlanAutoExecutionQueued,
+    MessageId::ProPlanExitedToAgent,
     MessageId::SettingsTitle,
     MessageId::SettingsConfigFile,
     MessageId::ClearConversation,
@@ -861,6 +935,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::HomeProPlanModeTip,
+    MessageId::HomeProPlanModeAutoSwitchTip,
     MessageId::HomeGoalModeTip,
     MessageId::OnboardLanguageTitle,
     MessageId::OnboardLanguageBlurb,
@@ -1295,7 +1371,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdPluginDetailPath => "Path: {path}",
         MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
         MessageId::CmdModeDescription => {
-            "Switch mode or open picker: /mode [agent|plan|yolo|1|2|3]"
+            "Switch mode or open picker: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Switch or view current model",
         MessageId::CmdModelsDescription => "List available models from API",
@@ -1491,6 +1567,50 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbToggleHelpSlash => "Toggle help overlay",
         MessageId::HelpUsageLabel => "Usage:",
         MessageId::HelpAliasesLabel => "Aliases:",
+        MessageId::PlanPromptTitle => " Plan Confirmation ",
+        MessageId::PlanPromptActionRequired => "Action required",
+        MessageId::PlanPromptChooseNextStep => "Choose what should happen after this plan.",
+        MessageId::PlanPromptAcceptPlan => "Accept plan",
+        MessageId::PlanPromptAcceptPlanDescription => "Start implementation with approvals",
+        MessageId::PlanPromptAcceptPlanYolo => "Accept plan (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => "Start implementation with auto-approval",
+        MessageId::PlanPromptRevisePlan => "Revise plan",
+        MessageId::PlanPromptRevisePlanDescription => "Ask follow-ups or request plan changes",
+        MessageId::PlanPromptExitToAgent => "Exit to Agent",
+        MessageId::PlanPromptExitToAgentDescription => {
+            "Return to Agent mode without implementation"
+        }
+        MessageId::PlanPromptShortAccept => "Accept",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "Revise",
+        MessageId::PlanPromptShortExit => "Exit",
+        MessageId::PlanPromptExitConfirmTitle => "Exit without implementing?",
+        MessageId::PlanPromptExitConfirmBody => {
+            "You've scrolled through the plan content. Are you sure you want to exit?"
+        }
+        MessageId::PlanPromptExitConfirmYes => "Yes, exit Plan mode",
+        MessageId::PlanPromptExitConfirmCancel => "Cancel, go back to plan",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "confirm exit",
+        MessageId::PlanPromptExitConfirmFooterCancel => " cancel",
+        MessageId::PlanPromptPlanSteps => "Plan steps:",
+        MessageId::PlanPromptQuickPick => " quick pick",
+        MessageId::PlanPromptMove => " move",
+        MessageId::PlanPromptConfirm => " confirm",
+        MessageId::PlanPromptClose => " close",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: Plan",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: Execute",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: Review",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: Done",
+        MessageId::ToolBlockedReadOnly => "Blocked tool in read-only mode",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plan accepted. Starting Pro Plan execution with the Flash model."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plan accepted. Starting Pro Plan execution with auto-approval."
+        }
+        MessageId::ProPlanExecutionQueued => "Queued accepted plan execution (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => "Queued accepted plan execution (pro-plan auto).",
+        MessageId::ProPlanExitedToAgent => "Exited Pro Plan mode. Switched to Agent mode.",
         MessageId::SettingsTitle => "Settings:",
         MessageId::SettingsConfigFile => "Config file:",
         MessageId::ClearConversation => "Conversation cleared",
@@ -1530,6 +1650,12 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        MessageId::HomeProPlanModeTip => {
+            "Pro Plan mode - Plan with Pro, execute with Flash, review with Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  The model switches automatically based on the current phase"
+        }
         MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
@@ -1850,7 +1976,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdPluginDetailPath => "Path: {path}",
         MessageId::CmdMemoryDescription => "Kiểm tra hoặc quản lý tệp bộ nhớ người dùng liên tục",
         MessageId::CmdModeDescription => {
-            "Chuyển đổi chế độ hoặc mở bảng chọn: /mode [agent|plan|yolo|1|2|3]"
+            "Chuyển đổi chế độ hoặc mở bảng chọn: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Chuyển đổi hoặc xem mô hình AI hiện tại",
         MessageId::CmdModelsDescription => "Liệt kê các mô hình khả dụng từ API",
@@ -2112,6 +2238,10 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  Sử dụng /mode plan để tạo danh sách kiểm tra có cấu trúc"
         }
+        MessageId::HomeProPlanModeTip => {
+            "Chế độ Pro Plan - Lập kế hoạch bằng Pro, thực thi bằng Flash, rà soát bằng Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => "  Mô hình tự chuyển theo giai đoạn hiện tại",
         MessageId::HomeGoalModeTip => {
             "Theo dõi mục tiêu - Dùng /goal <mục_tiêu> để đặt mục tiêu làm việc"
         }
@@ -2193,6 +2323,52 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxMenuContextInspectorDesc => "ngữ cảnh đang hoạt động và gợi ý bộ nhớ đệm",
         MessageId::CtxMenuHelp => "Trợ giúp",
         MessageId::CtxMenuHelpDesc => "phím tắt và lệnh",
+        MessageId::PlanPromptTitle => " Xác nhận kế hoạch ",
+        MessageId::PlanPromptActionRequired => "Cần thao tác",
+        MessageId::PlanPromptChooseNextStep => "Chọn điều cần làm sau kế hoạch này.",
+        MessageId::PlanPromptAcceptPlan => "Chấp nhận kế hoạch",
+        MessageId::PlanPromptAcceptPlanDescription => "Bắt đầu triển khai có phê duyệt",
+        MessageId::PlanPromptAcceptPlanYolo => "Chấp nhận kế hoạch (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => {
+            "Bắt đầu triển khai với tự động phê duyệt"
+        }
+        MessageId::PlanPromptRevisePlan => "Sửa kế hoạch",
+        MessageId::PlanPromptRevisePlanDescription => "Hỏi thêm hoặc yêu cầu chỉnh kế hoạch",
+        MessageId::PlanPromptExitToAgent => "Thoát về Agent",
+        MessageId::PlanPromptExitToAgentDescription => "Quay về Agent mà không triển khai",
+        MessageId::PlanPromptShortAccept => "Chấp nhận",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "Sửa",
+        MessageId::PlanPromptShortExit => "Thoát",
+        MessageId::PlanPromptExitConfirmTitle => "Thoát mà không triển khai?",
+        MessageId::PlanPromptExitConfirmBody => {
+            "Bạn đã cuộn qua nội dung kế hoạch. Bạn có chắc muốn thoát?"
+        }
+        MessageId::PlanPromptExitConfirmYes => "Có, thoát Plan mode",
+        MessageId::PlanPromptExitConfirmCancel => "Hủy, quay lại kế hoạch",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "xác nhận thoát",
+        MessageId::PlanPromptExitConfirmFooterCancel => " hủy",
+        MessageId::PlanPromptPlanSteps => "Các bước kế hoạch:",
+        MessageId::PlanPromptQuickPick => " chọn nhanh",
+        MessageId::PlanPromptMove => " di chuyển",
+        MessageId::PlanPromptConfirm => " xác nhận",
+        MessageId::PlanPromptClose => " đóng",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: Lập kế hoạch",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: Thực thi",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: Rà soát",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: Hoàn tất",
+        MessageId::ToolBlockedReadOnly => "Đã chặn công cụ trong chế độ chỉ đọc",
+        MessageId::ProPlanAcceptedExecution => {
+            "Đã chấp nhận kế hoạch. Bắt đầu thực thi Pro Plan bằng mô hình Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Đã chấp nhận kế hoạch. Bắt đầu thực thi Pro Plan với tự động phê duyệt."
+        }
+        MessageId::ProPlanExecutionQueued => "Đã xếp hàng thực thi kế hoạch (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Đã xếp hàng thực thi kế hoạch (pro-plan tự động)."
+        }
+        MessageId::ProPlanExitedToAgent => "Đã thoát Pro Plan. Chuyển sang chế độ Agent.",
         MessageId::FanoutCounts => {
             "{done} hoàn thành · {running} đang chạy · {failed} thất bại · {pending} chờ"
         }
@@ -2557,7 +2733,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdPluginDetailPath => "Path: {path}",
         MessageId::CmdMemoryDescription => "永続ユーザーメモリファイルを確認・管理",
         MessageId::CmdModeDescription => {
-            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|1|2|3]"
+            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "現在のモデルを切り替え・確認",
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
@@ -2756,6 +2932,52 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbToggleHelpSlash => "ヘルプオーバーレイを切り替え",
         MessageId::HelpUsageLabel => "使い方：",
         MessageId::HelpAliasesLabel => "エイリアス：",
+        MessageId::PlanPromptTitle => " Plan 確認 ",
+        MessageId::PlanPromptActionRequired => "操作が必要です",
+        MessageId::PlanPromptChooseNextStep => "このプランの後に行うことを選んでください。",
+        MessageId::PlanPromptAcceptPlan => "プランを承認",
+        MessageId::PlanPromptAcceptPlanDescription => "承認付きで実装を開始",
+        MessageId::PlanPromptAcceptPlanYolo => "プランを承認 (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => "自動承認で実装を開始",
+        MessageId::PlanPromptRevisePlan => "プランを修正",
+        MessageId::PlanPromptRevisePlanDescription => "質問やプラン変更を依頼",
+        MessageId::PlanPromptExitToAgent => "Agent に戻る",
+        MessageId::PlanPromptExitToAgentDescription => "実装せず Agent モードへ戻る",
+        MessageId::PlanPromptShortAccept => "承認",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "修正",
+        MessageId::PlanPromptShortExit => "戻る",
+        MessageId::PlanPromptExitConfirmTitle => "実装せずに終了しますか？",
+        MessageId::PlanPromptExitConfirmBody => {
+            "プラン内容をスクロールしました。本当に終了しますか？"
+        }
+        MessageId::PlanPromptExitConfirmYes => "はい、Plan モードを終了",
+        MessageId::PlanPromptExitConfirmCancel => "キャンセルしてプランに戻る",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "終了を確認",
+        MessageId::PlanPromptExitConfirmFooterCancel => " キャンセル",
+        MessageId::PlanPromptPlanSteps => "プランの手順：",
+        MessageId::PlanPromptQuickPick => " クイック選択",
+        MessageId::PlanPromptMove => " 移動",
+        MessageId::PlanPromptConfirm => " 確定",
+        MessageId::PlanPromptClose => " 閉じる",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: 計画",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: 実行",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: レビュー",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: 完了",
+        MessageId::ToolBlockedReadOnly => "読み取り専用モードでツールをブロックしました",
+        MessageId::ProPlanAcceptedExecution => {
+            "プランを承認しました。Flash モデルで Pro Plan 実行を開始します。"
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "プランを承認しました。自動承認で Pro Plan 実行を開始します。"
+        }
+        MessageId::ProPlanExecutionQueued => "承認済みプランの実行をキューしました (pro-plan)。",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "承認済みプランの実行をキューしました (pro-plan auto)。"
+        }
+        MessageId::ProPlanExitedToAgent => {
+            "Pro Plan モードを終了し、Agent モードに切り替えました。"
+        }
         MessageId::SettingsTitle => "設定：",
         MessageId::SettingsConfigFile => "設定ファイル：",
         MessageId::ClearConversation => "会話履歴をクリアしました",
@@ -2797,6 +3019,10 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  /mode plan を使って構造化されたチェックリストを作成"
         }
+        MessageId::HomeProPlanModeTip => {
+            "Pro Plan モード - Pro で計画、Flash で実行、Pro でレビュー"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => "  現在のフェーズに応じてモデルを自動切り替え",
         MessageId::HomeGoalModeTip => "Goal 追跡 - /goal <目標> で持続的な目標を追跡",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "言語を選択",
@@ -3084,7 +3310,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdPluginDetailApproval => "Approval: {approval}",
         MessageId::CmdPluginDetailPath => "Path: {path}",
         MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
-        MessageId::CmdModeDescription => "切换运行模式或打开选择器：/mode [agent|plan|yolo|1|2|3]",
+        MessageId::CmdModeDescription => {
+            "切换运行模式或打开选择器：/mode [agent|plan|yolo|pro-plan|1|2|3]"
+        }
         MessageId::CmdModelDescription => "切换或查看当前模型",
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
@@ -3254,6 +3482,44 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbToggleHelpSlash => "切换帮助覆盖层",
         MessageId::HelpUsageLabel => "用法：",
         MessageId::HelpAliasesLabel => "别名：",
+        MessageId::PlanPromptTitle => " 计划确认 ",
+        MessageId::PlanPromptActionRequired => "需要操作",
+        MessageId::PlanPromptChooseNextStep => "选择计划完成后要执行的操作。",
+        MessageId::PlanPromptAcceptPlan => "接受计划",
+        MessageId::PlanPromptAcceptPlanDescription => "带审批开始执行",
+        MessageId::PlanPromptAcceptPlanYolo => "接受计划 (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => "自动审批并开始执行",
+        MessageId::PlanPromptRevisePlan => "修改计划",
+        MessageId::PlanPromptRevisePlanDescription => "继续提问或要求调整计划",
+        MessageId::PlanPromptExitToAgent => "退出到 Agent",
+        MessageId::PlanPromptExitToAgentDescription => "不执行，返回 Agent 模式",
+        MessageId::PlanPromptShortAccept => "接受",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "修改",
+        MessageId::PlanPromptShortExit => "退出",
+        MessageId::PlanPromptExitConfirmTitle => "不执行就退出？",
+        MessageId::PlanPromptExitConfirmBody => "你已经滚动查看了计划内容。确定要退出吗？",
+        MessageId::PlanPromptExitConfirmYes => "是，退出 Plan 模式",
+        MessageId::PlanPromptExitConfirmCancel => "取消，返回计划",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "确认退出",
+        MessageId::PlanPromptExitConfirmFooterCancel => " 取消",
+        MessageId::PlanPromptPlanSteps => "计划步骤：",
+        MessageId::PlanPromptQuickPick => " 快速选择",
+        MessageId::PlanPromptMove => " 移动",
+        MessageId::PlanPromptConfirm => " 确认",
+        MessageId::PlanPromptClose => " 关闭",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: 计划",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: 执行",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: 审查",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: 完成",
+        MessageId::ToolBlockedReadOnly => "只读模式已阻止工具",
+        MessageId::ProPlanAcceptedExecution => {
+            "计划已接受。正在使用 Flash 模型开始 Pro Plan 执行。"
+        }
+        MessageId::ProPlanAcceptedAutoExecution => "计划已接受。正在以自动审批开始 Pro Plan 执行。",
+        MessageId::ProPlanExecutionQueued => "已排队执行接受的计划 (pro-plan)。",
+        MessageId::ProPlanAutoExecutionQueued => "已排队执行接受的计划 (pro-plan auto)。",
+        MessageId::ProPlanExitedToAgent => "已退出 Pro Plan 模式，并切换到 Agent 模式。",
         MessageId::SettingsTitle => "设置：",
         MessageId::SettingsConfigFile => "配置文件：",
         MessageId::ClearConversation => "对话已清空",
@@ -3293,6 +3559,8 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
+        MessageId::HomeProPlanModeTip => "Pro Plan 模式 - 用 Pro 计划、用 Flash 执行、用 Pro 审查",
+        MessageId::HomeProPlanModeAutoSwitchTip => "  模型会根据当前阶段自动切换",
         MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
@@ -3581,7 +3849,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Inspecionar ou gerenciar o arquivo persistente de memória do usuário"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|1|2|3]"
+            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Trocar ou exibir o modelo atual",
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
@@ -3790,6 +4058,50 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbToggleHelpSlash => "Alternar sobreposição de ajuda",
         MessageId::HelpUsageLabel => "Uso:",
         MessageId::HelpAliasesLabel => "Apelidos:",
+        MessageId::PlanPromptTitle => " Confirmação do Plano ",
+        MessageId::PlanPromptActionRequired => "Ação necessária",
+        MessageId::PlanPromptChooseNextStep => "Escolha o que deve acontecer depois deste plano.",
+        MessageId::PlanPromptAcceptPlan => "Aceitar plano",
+        MessageId::PlanPromptAcceptPlanDescription => "Iniciar implementação com aprovações",
+        MessageId::PlanPromptAcceptPlanYolo => "Aceitar plano (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => "Iniciar implementação com autoaprovação",
+        MessageId::PlanPromptRevisePlan => "Revisar plano",
+        MessageId::PlanPromptRevisePlanDescription => "Fazer perguntas ou pedir mudanças no plano",
+        MessageId::PlanPromptExitToAgent => "Sair para Agent",
+        MessageId::PlanPromptExitToAgentDescription => "Voltar ao modo Agent sem implementar",
+        MessageId::PlanPromptShortAccept => "Aceitar",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "Revisar",
+        MessageId::PlanPromptShortExit => "Sair",
+        MessageId::PlanPromptExitConfirmTitle => "Sair sem implementar?",
+        MessageId::PlanPromptExitConfirmBody => {
+            "Você rolou pelo conteúdo do plano. Tem certeza de que quer sair?"
+        }
+        MessageId::PlanPromptExitConfirmYes => "Sim, sair do modo Plan",
+        MessageId::PlanPromptExitConfirmCancel => "Cancelar, voltar ao plano",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "confirmar saída",
+        MessageId::PlanPromptExitConfirmFooterCancel => " cancelar",
+        MessageId::PlanPromptPlanSteps => "Etapas do plano:",
+        MessageId::PlanPromptQuickPick => " escolha rápida",
+        MessageId::PlanPromptMove => " mover",
+        MessageId::PlanPromptConfirm => " confirmar",
+        MessageId::PlanPromptClose => " fechar",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: Plano",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: Execução",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: Revisão",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: Concluído",
+        MessageId::ToolBlockedReadOnly => "Ferramenta bloqueada no modo somente leitura",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plano aceito. Iniciando execução do Pro Plan com o modelo Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plano aceito. Iniciando execução do Pro Plan com autoaprovação."
+        }
+        MessageId::ProPlanExecutionQueued => "Execução do plano aceita enfileirada (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Execução do plano aceita enfileirada (pro-plan auto)."
+        }
+        MessageId::ProPlanExitedToAgent => "Saiu do modo Pro Plan. Alternado para Agent.",
         MessageId::SettingsTitle => "Configurações:",
         MessageId::SettingsConfigFile => "Arquivo de configuração:",
         MessageId::ClearConversation => "Conversa limpa",
@@ -3834,6 +4146,12 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Use /mode plan para criar checklists estruturados"
+        }
+        MessageId::HomeProPlanModeTip => {
+            "Modo Pro Plan - Planeje com Pro, execute com Flash, revise com Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  O modelo troca automaticamente conforme a fase atual"
         }
         MessageId::HomeGoalModeTip => {
             "Rastreamento de Goal - Use /goal <objetivo> para rastrear um objetivo persistente"
@@ -4153,7 +4471,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Inspeccionar o gestionar el archivo persistente de memoria del usuario"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo o abrir selector: /mode [agent|plan|yolo|1|2|3]"
+            "Alternar modo o abrir selector: /mode [agent|plan|yolo|pro-plan|1|2|3]"
         }
         MessageId::CmdModelDescription => "Cambiar o mostrar el modelo actual",
         MessageId::CmdModelsDescription => "Listar los modelos disponibles por la API",
@@ -4372,6 +4690,52 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbToggleHelpSlash => "Alternar superposición de ayuda",
         MessageId::HelpUsageLabel => "Uso:",
         MessageId::HelpAliasesLabel => "Alias:",
+        MessageId::PlanPromptTitle => " Confirmación del Plan ",
+        MessageId::PlanPromptActionRequired => "Acción requerida",
+        MessageId::PlanPromptChooseNextStep => "Elige qué debe pasar después de este plan.",
+        MessageId::PlanPromptAcceptPlan => "Aceptar plan",
+        MessageId::PlanPromptAcceptPlanDescription => "Iniciar implementación con aprobaciones",
+        MessageId::PlanPromptAcceptPlanYolo => "Aceptar plan (YOLO)",
+        MessageId::PlanPromptAcceptPlanYoloDescription => {
+            "Iniciar implementación con autoaprobación"
+        }
+        MessageId::PlanPromptRevisePlan => "Revisar plan",
+        MessageId::PlanPromptRevisePlanDescription => "Hacer preguntas o pedir cambios al plan",
+        MessageId::PlanPromptExitToAgent => "Salir a Agent",
+        MessageId::PlanPromptExitToAgentDescription => "Volver al modo Agent sin implementar",
+        MessageId::PlanPromptShortAccept => "Aceptar",
+        MessageId::PlanPromptShortYolo => "YOLO",
+        MessageId::PlanPromptShortRevise => "Revisar",
+        MessageId::PlanPromptShortExit => "Salir",
+        MessageId::PlanPromptExitConfirmTitle => "¿Salir sin implementar?",
+        MessageId::PlanPromptExitConfirmBody => {
+            "Has desplazado el contenido del plan. ¿Seguro que quieres salir?"
+        }
+        MessageId::PlanPromptExitConfirmYes => "Sí, salir del modo Plan",
+        MessageId::PlanPromptExitConfirmCancel => "Cancelar, volver al plan",
+        MessageId::PlanPromptExitConfirmFooterConfirm => "confirmar salida",
+        MessageId::PlanPromptExitConfirmFooterCancel => " cancelar",
+        MessageId::PlanPromptPlanSteps => "Pasos del plan:",
+        MessageId::PlanPromptQuickPick => " elección rápida",
+        MessageId::PlanPromptMove => " mover",
+        MessageId::PlanPromptConfirm => " confirmar",
+        MessageId::PlanPromptClose => " cerrar",
+        MessageId::ProPlanStatusPlan => "PRO-PLAN: Plan",
+        MessageId::ProPlanStatusExecute => "PRO-PLAN: Ejecutar",
+        MessageId::ProPlanStatusReview => "PRO-PLAN: Revisión",
+        MessageId::ProPlanStatusDone => "PRO-PLAN: Listo",
+        MessageId::ToolBlockedReadOnly => "Herramienta bloqueada en modo solo lectura",
+        MessageId::ProPlanAcceptedExecution => {
+            "Plan aceptado. Iniciando ejecución de Pro Plan con el modelo Flash."
+        }
+        MessageId::ProPlanAcceptedAutoExecution => {
+            "Plan aceptado. Iniciando ejecución de Pro Plan con autoaprobación."
+        }
+        MessageId::ProPlanExecutionQueued => "Ejecución del plan aceptado en cola (pro-plan).",
+        MessageId::ProPlanAutoExecutionQueued => {
+            "Ejecución del plan aceptado en cola (pro-plan auto)."
+        }
+        MessageId::ProPlanExitedToAgent => "Saliste del modo Pro Plan. Cambiado a Agent.",
         MessageId::SettingsTitle => "Configuraciones:",
         MessageId::SettingsConfigFile => "Archivo de configuración:",
         MessageId::ClearConversation => "Conversación limpia",
@@ -4416,6 +4780,12 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planear antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Usa /mode plan para crear checklists estructurados"
+        }
+        MessageId::HomeProPlanModeTip => {
+            "Modo Pro Plan - Planear con Pro, ejecutar con Flash, revisar con Pro"
+        }
+        MessageId::HomeProPlanModeAutoSwitchTip => {
+            "  El modelo cambia automáticamente según la fase actual"
         }
         MessageId::HomeGoalModeTip => {
             "Seguimiento de Goal - Usa /goal <objetivo> para seguir un objetivo persistente"

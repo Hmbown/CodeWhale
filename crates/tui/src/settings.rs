@@ -261,6 +261,9 @@ pub struct Settings {
     pub transcript_spacing: String,
     /// Default mode: "agent", "plan", "yolo"
     pub default_mode: String,
+    /// Enable the explicit Pro Plan routing profile. Default false so the
+    /// normal mode/menu surface stays unchanged unless the user opts in.
+    pub pro_plan_profile: bool,
     /// Sidebar width as percentage of terminal width
     pub sidebar_width_percent: u16,
     /// Sidebar focus mode: auto, work, tasks, agents, context, hidden
@@ -350,6 +353,7 @@ impl Default for Settings {
             composer_vim_mode: "normal".to_string(),
             transcript_spacing: "comfortable".to_string(),
             default_mode: "agent".to_string(),
+            pro_plan_profile: false,
             sidebar_width_percent: 28,
             sidebar_focus: "auto".to_string(),
             context_panel: false,
@@ -692,6 +696,9 @@ impl Settings {
                 }
                 self.default_mode = normalized.to_string();
             }
+            "pro_plan_profile" | "pro_plan" | "proplan" => {
+                self.pro_plan_profile = parse_bool(value)?;
+            }
             "sidebar_width" | "sidebar" => {
                 let width: u16 = value
                     .parse()
@@ -823,6 +830,7 @@ impl Settings {
             self.prefer_external_pdftotext
         ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
+        lines.push(format!("  pro_plan_profile:  {}", self.pro_plan_profile));
         lines.push(format!(
             "  sidebar_width:      {}%",
             self.sidebar_width_percent
@@ -939,6 +947,10 @@ impl Settings {
                 "Route PDF reads through Poppler's pdftotext instead of the bundled pure-Rust extractor: on/off (default off)",
             ),
             ("default_mode", "Default mode: agent, plan, yolo"),
+            (
+                "pro_plan_profile",
+                "Enable the explicit Pro Plan routing profile: on/off (default off)",
+            ),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             (
                 "sidebar_focus",

@@ -241,7 +241,8 @@ impl Engine {
             self.layered_context_checkpoint().await;
 
             // Build the request
-            let force_update_plan_this_step = force_update_plan_first && turn.tool_calls.is_empty();
+            let force_update_plan_this_step =
+                should_force_update_plan_step(force_update_plan_first, &turn.tool_calls);
             let mut active_tools = if tool_catalog.is_empty() {
                 None
             } else {
@@ -1059,6 +1060,22 @@ impl Engine {
                     continue;
                 }
 
+                if force_update_plan_this_step {
+                    let reminder = "Plan confirmation is required before any other response. Call update_plan with the proposed plan now; do not call other tools.";
+                    self.add_session_message(
+                        self.user_text_message_with_turn_metadata(reminder.to_string()),
+                    )
+                    .await;
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(
+                            "Waiting for update_plan before continuing plan flow",
+                        ))
+                        .await;
+                    turn.next_step();
+                    continue;
+                }
+
                 // Sub-agent completion handoff (issue #756). The model finished
                 // streaming with no tool calls — but if it has direct children
                 // still running (or completions queued from children that
@@ -1434,6 +1451,12 @@ impl Engine {
                     blocked_error = Some(ToolError::permission_denied(format!(
                         "Tool '{tool_name}' does not allow caller '{}'",
                         caller_type_for_tool_use(tool_caller.as_ref())
+                    )));
+                }
+
+                if force_update_plan_this_step && tool_name != "update_plan" {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' is unavailable until update_plan records the plan"
                     )));
                 }
 

@@ -8,48 +8,49 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tools::plan::{PlanSnapshot, StepStatus};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 struct PlanOption {
-    label: &'static str,
-    description: &'static str,
+    label_id: MessageId,
+    description_id: MessageId,
     shortcut: char,
-    short_label: &'static str,
+    short_label_id: MessageId,
 }
 
 const PLAN_OPTIONS: [PlanOption; 4] = [
     PlanOption {
-        label: "Accept plan (Agent)",
-        description: "Start implementation in Agent mode with approvals",
+        label_id: MessageId::PlanPromptAcceptPlan,
+        description_id: MessageId::PlanPromptAcceptPlanDescription,
         shortcut: 'a',
-        short_label: "Accept",
+        short_label_id: MessageId::PlanPromptShortAccept,
     },
     PlanOption {
-        label: "Accept plan (YOLO)",
-        description: "Start implementation in YOLO mode (auto-approve)",
+        label_id: MessageId::PlanPromptAcceptPlanYolo,
+        description_id: MessageId::PlanPromptAcceptPlanYoloDescription,
         shortcut: 'y',
-        short_label: "YOLO",
+        short_label_id: MessageId::PlanPromptShortYolo,
     },
     PlanOption {
-        label: "Revise plan",
-        description: "Ask follow-ups or request plan changes",
+        label_id: MessageId::PlanPromptRevisePlan,
+        description_id: MessageId::PlanPromptRevisePlanDescription,
         shortcut: 'r',
-        short_label: "Revise",
+        short_label_id: MessageId::PlanPromptShortRevise,
     },
     PlanOption {
-        label: "Exit Plan mode",
-        description: "Return to Agent mode without implementation",
+        label_id: MessageId::PlanPromptExitToAgent,
+        description_id: MessageId::PlanPromptExitToAgentDescription,
         shortcut: 'q',
-        short_label: "Exit",
+        short_label_id: MessageId::PlanPromptShortExit,
     },
 ];
 
-fn modal_block() -> Block<'static> {
+fn modal_block(locale: Locale) -> Block<'static> {
     Block::default()
         .title(Line::from(vec![Span::styled(
-            " Plan Confirmation ",
+            tr(locale, MessageId::PlanPromptTitle),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         )]))
         .borders(Borders::ALL)
@@ -114,9 +115,10 @@ fn push_option_lines(
     )));
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PlanPromptView {
     selected: usize,
+    locale: Locale,
     /// Vertical scroll position (in lines).
     scroll: usize,
     /// Tracks a previous 'g' press for the 'gg' (jump to top) combo.
@@ -133,9 +135,15 @@ pub struct PlanPromptView {
 }
 
 impl PlanPromptView {
+    #[cfg(test)]
     pub fn new(plan: Option<PlanSnapshot>) -> Self {
+        Self::new_for_locale_with_plan(Locale::En, plan)
+    }
+
+    pub fn new_for_locale_with_plan(locale: Locale, plan: Option<PlanSnapshot>) -> Self {
         Self {
             selected: 0,
+            locale,
             scroll: 0,
             pending_g: false,
             last_max_scroll: Cell::new(0),
@@ -321,37 +329,49 @@ impl ModalView for PlanPromptView {
         if self.confirming_exit {
             let confirm_lines = vec![
                 Line::from(Span::styled(
-                    "Exit without implementing?",
+                    tr(self.locale, MessageId::PlanPromptExitConfirmTitle),
                     Style::default().fg(palette::DEEPSEEK_SKY).bold(),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "You've scrolled through the plan content. Are you sure you want to exit?",
+                    tr(self.locale, MessageId::PlanPromptExitConfirmBody),
                     Style::default().fg(palette::TEXT_PRIMARY),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  y — Yes, exit Plan mode",
+                    format!(
+                        "  y - {}",
+                        tr(self.locale, MessageId::PlanPromptExitConfirmYes)
+                    ),
                     Style::default().fg(palette::DEEPSEEK_SKY),
                 )),
                 Line::from(Span::styled(
-                    "  n / Esc — Cancel, go back to plan",
+                    format!(
+                        "  n / Esc - {}",
+                        tr(self.locale, MessageId::PlanPromptExitConfirmCancel)
+                    ),
                     Style::default().fg(palette::TEXT_MUTED),
                 )),
             ];
             let confirm_footer = Line::from(vec![
                 Span::styled(" y ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-                Span::styled("confirm exit", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(self.locale, MessageId::PlanPromptExitConfirmFooterConfirm),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::raw("  "),
                 Span::styled("n / Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-                Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(self.locale, MessageId::PlanPromptExitConfirmFooterCancel),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
             ]);
             let popup_area = centered_rect(66, 34, area);
             render_modal_chrome(area, popup_area, buf);
             let confirm = Paragraph::new(confirm_lines)
                 .alignment(Alignment::Left)
                 .wrap(Wrap { trim: true })
-                .block(modal_block().title_bottom(confirm_footer));
+                .block(modal_block(self.locale).title_bottom(confirm_footer));
             confirm.render(popup_area, buf);
             return;
         }
@@ -360,11 +380,11 @@ impl ModalView for PlanPromptView {
         let content_width = usize::from(popup_area.width.saturating_sub(4).max(1));
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(vec![Span::styled(
-            "Action required",
+            tr(self.locale, MessageId::PlanPromptActionRequired),
             Style::default().fg(palette::DEEPSEEK_SKY).bold(),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            "Choose what should happen after this plan.",
+            tr(self.locale, MessageId::PlanPromptChooseNextStep),
             Style::default().fg(palette::TEXT_PRIMARY).bold(),
         )]));
         lines.push(Line::from(""));
@@ -380,8 +400,8 @@ impl ModalView for PlanPromptView {
                 &mut lines,
                 self.selected == idx,
                 number,
-                option.label,
-                option.description,
+                tr(self.locale, option.label_id),
+                tr(self.locale, option.description_id),
             );
         }
 
@@ -414,7 +434,7 @@ impl ModalView for PlanPromptView {
         }
         for (idx, option) in PLAN_OPTIONS.iter().enumerate() {
             let shortcut = option.shortcut;
-            let short_label = option.short_label;
+            let short_label = tr(self.locale, option.short_label_id);
             let is_current = self.selected == idx;
             let shortcut_style = if is_current {
                 Style::default()
@@ -431,7 +451,7 @@ impl ModalView for PlanPromptView {
             footer_spans.push(Span::raw("  "));
         }
         // Selected option description, right-aligned by filling space.
-        let desc = PLAN_OPTIONS[self.selected].description;
+        let desc = tr(self.locale, PLAN_OPTIONS[self.selected].description_id);
         let desc_span = Span::styled(
             format!(" \u{2192} {desc}"),
             Style::default().fg(palette::TEXT_MUTED),
@@ -447,7 +467,7 @@ impl ModalView for PlanPromptView {
         let paragraph = Paragraph::new(rendered_lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: false })
-            .block(modal_block().title_bottom(Line::from(footer_spans)));
+            .block(modal_block(self.locale).title_bottom(Line::from(footer_spans)));
 
         paragraph.render(popup_area, buf);
     }
@@ -765,7 +785,7 @@ mod tests {
         let rendered = render_view(&view, 110, 36);
 
         assert!(rendered.contains("> 2) Accept plan (YOLO)"));
-        assert!(rendered.contains("Start implementation in YOLO mode (auto-approve)"));
+        assert!(rendered.contains("Start implementation with auto-approval"));
     }
 
     #[test]
@@ -912,7 +932,7 @@ mod tests {
 
         // The rendered view should still contain the last option.
         assert!(
-            rendered.contains("Exit Plan mode"),
+            rendered.contains("Exit to Agent"),
             "clamped scroll should keep last options visible"
         );
     }

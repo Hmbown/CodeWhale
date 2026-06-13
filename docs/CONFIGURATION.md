@@ -879,6 +879,9 @@ Common settings keys:
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.
 - `default_mode` (agent, plan, yolo; legacy `normal` is accepted and normalized to `agent`)
+- `pro_plan_profile` (on/off, default off): enables the explicit Pro Plan
+  routing profile. When off, `/mode pro-plan` is rejected and the default mode
+  picker/cycle remains Agent, Plan, and YOLO only.
 - `sidebar_focus` (`auto`, `work`, `tasks`, `agents`, `context`, `hidden`; default
   `auto`): selects the right sidebar focus. `auto` prioritizes Work, Tasks,
   Agents, then optional Context, and uses Work as the single quiet empty state.
@@ -890,8 +893,9 @@ Common settings keys:
 - `default_model` (model name override)
 
 Only `agent`, `plan`, and `yolo` are visible modes in the UI. Switch between
-them with `/mode`. For compatibility, older settings files with
-`default_mode = "normal"` still load as `agent`.
+them with `/mode`. Pro Plan remains an explicit routing profile gated by
+`pro_plan_profile`; it is not accepted as `default_mode`. For compatibility,
+older settings files with `default_mode = "normal"` still load as `agent`.
 
 Localization scope is tracked in [LOCALIZATION.md](LOCALIZATION.md). The v0.7.6
 core pack covers high-visibility TUI chrome only; provider/tool schemas,

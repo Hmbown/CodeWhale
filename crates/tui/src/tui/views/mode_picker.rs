@@ -197,6 +197,12 @@ mod tests {
     }
 
     #[test]
+    fn opens_on_current_pro_plan_mode() {
+        let view = ModePickerView::new(AppMode::ProPlan);
+        assert_eq!(view.selected_mode(), AppMode::Agent);
+    }
+
+    #[test]
     fn enter_emits_selected_mode() {
         let mut view = ModePickerView::new(AppMode::Agent);
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -219,5 +225,8 @@ mod tests {
             }
             other => panic!("expected ModeSelected, got {other:?}"),
         }
+
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
     }
 }

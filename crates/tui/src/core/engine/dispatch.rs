@@ -17,6 +17,7 @@
 
 use serde_json::json;
 
+use crate::core::turn::TurnToolCall;
 use crate::models::{Tool, ToolCaller};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tui::app::AppMode;
@@ -363,12 +364,26 @@ pub(super) fn should_force_update_plan_first(mode: AppMode, content: &str) -> bo
         "make a plan",
         "outline a plan",
         "draft a plan",
+        "call update_plan",
+        "call `update_plan`",
+        "use update_plan",
+        "use `update_plan`",
+        "制定计划",
+        "只制定计划",
+        "做个计划",
+        "写个计划",
+        "给我计划",
+        "规划一下",
     ]
     .iter()
     .any(|needle| lower.contains(needle));
 
     if !asks_for_direct_plan {
         return false;
+    }
+
+    if lower.contains("<pro_plan_planning>") {
+        return true;
     }
 
     let asks_for_repo_exploration = [
@@ -384,11 +399,31 @@ pub(super) fn should_force_update_plan_first(mode: AppMode, content: &str) -> bo
         "understand the current",
         "ground it in the codebase",
         "based on the codebase",
+        "先看",
+        "看看代码",
+        "查看代码",
+        "阅读代码",
+        "检查代码",
+        "检查仓库",
+        "调研",
+        "分析代码",
+        "基于代码",
+        "根据代码",
     ]
     .iter()
     .any(|needle| lower.contains(needle));
 
     !asks_for_repo_exploration
+}
+
+pub(super) fn should_force_update_plan_step(
+    force_update_plan_first: bool,
+    tool_calls: &[TurnToolCall],
+) -> bool {
+    force_update_plan_first
+        && !tool_calls
+            .iter()
+            .any(|call| call.name == "update_plan" && call.error.is_none())
 }
 
 pub(super) fn mcp_tool_is_parallel_safe(name: &str) -> bool {

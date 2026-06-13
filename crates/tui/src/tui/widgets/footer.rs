@@ -310,11 +310,13 @@ fn mode_style(app: &App) -> (&'static str, Color) {
         AppMode::Agent => "agent",
         AppMode::Yolo => "yolo",
         AppMode::Plan => "plan",
+        AppMode::ProPlan => "pro-plan",
     };
     let color = match app.mode {
         AppMode::Agent => app.ui_theme.mode_agent,
         AppMode::Yolo => app.ui_theme.mode_yolo,
         AppMode::Plan => app.ui_theme.mode_plan,
+        AppMode::ProPlan => app.ui_theme.mode_plan, // Reuse plan color
     };
     (label, color)
 }
