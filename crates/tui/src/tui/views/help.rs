@@ -733,7 +733,7 @@ mod tests {
 
         assert!(
             found_highlight,
-            "selected row should use a strong blue highlight"
+            "selected row should use a strong primary-accent highlight"
         );
     }
 

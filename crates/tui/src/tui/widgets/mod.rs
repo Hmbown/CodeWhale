@@ -4070,7 +4070,7 @@ mod tests {
                 (area.x..area.x.saturating_add(area.width))
                     .any(|x| buf[(x, y)].bg == palette::WHALE_ACCENT_PRIMARY)
             })
-            .expect("selected approval row should use blue background");
+            .expect("selected approval row should use the primary accent background");
         let highlighted_cells = (area.x..area.x.saturating_add(area.width))
             .filter(|&x| {
                 let cell = &buf[(x, selected_row)];
@@ -4082,7 +4082,7 @@ mod tests {
 
         assert!(
             highlighted_cells >= 4,
-            "selected destructive option should render visible blue/white text"
+            "selected destructive option should render visible primary-accent/selection text"
         );
     }
 
