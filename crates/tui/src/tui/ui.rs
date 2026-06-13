@@ -3386,10 +3386,11 @@ async fn run_event_loop(
             }
 
             // Ctrl+P opens the fuzzy file-picker overlay. Bound only when the
-            // composer is focused (no other modal on top of the stack) and the
+            // composer is focused (no other modal or inline popup on top) and the
             // engine is not actively streaming a turn.
             if key.code == KeyCode::Char('p')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
+                && visible_slash_menu_entries(app, SLASH_MENU_LIMIT).is_empty()
                 && app.view_stack.is_empty()
                 && !app.is_loading
             {
@@ -3901,6 +3902,11 @@ async fn run_event_loop(
                 KeyCode::Up if key.modifiers.is_empty() && slash_menu_open => {
                     select_previous_slash_menu_entry(app, slash_menu_entries.len());
                 }
+                KeyCode::Char('p')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && slash_menu_open =>
+                {
+                    select_previous_slash_menu_entry(app, slash_menu_entries.len());
+                }
                 KeyCode::Up
                     if key.modifiers.is_empty()
                         && app.selected_composer_attachment_index().is_some() =>
@@ -3945,6 +3951,11 @@ async fn run_event_loop(
                         .min(mention_menu_entries.len().saturating_sub(1));
                 }
                 KeyCode::Down if key.modifiers.is_empty() && slash_menu_open => {
+                    select_next_slash_menu_entry(app, slash_menu_entries.len());
+                }
+                KeyCode::Char('n')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && slash_menu_open =>
+                {
                     select_next_slash_menu_entry(app, slash_menu_entries.len());
                 }
                 KeyCode::Down
