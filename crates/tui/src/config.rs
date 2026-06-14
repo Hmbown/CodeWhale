@@ -2530,7 +2530,9 @@ impl Config {
             let api_key = config_api_key.or(env_api_key.as_deref());
             resolve_xiaomi_mimo_base_url(configured_base_url, api_key, mode)
         } else {
-            configured_base_url.unwrap_or_else(|| {
+            configured_base_url
+                .or_else(|| env_base_url_override())
+                .unwrap_or_else(|| {
                 match provider {
                     ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
                     ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
@@ -3454,7 +3456,16 @@ fn default_memory_path() -> Option<PathBuf> {
 
 // === Environment Overrides ===
 
-/// Read a CodeWhale env var, preferring the `CODEWHALE_*` form over the
+/// Read the `DEEPSEEK_BASE_URL` / `CODEWHALE_BASE_URL` env var that the CLI
+/// dispatcher forwards from `--base-url`.  Returns `None` when the var is
+/// absent or empty so that provider-specific defaults still apply.
+fn env_base_url_override() -> Option<String> {
+    codewhale_env_var("CODEWHALE_BASE_URL", "DEEPSEEK_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+}
+
+/// Resolve an env var, preferring the `CODEWHALE_*` form over the
 /// legacy `DEEPSEEK_*` form. Empty values are ignored so a blank shell export
 /// does not erase configured provider settings.
 fn codewhale_env_var(

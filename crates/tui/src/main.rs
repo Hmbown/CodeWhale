@@ -464,7 +464,19 @@ fn resolve_exec_model(config: &Config, explicit_model: Option<&str>) -> String {
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned)
+        .or_else(exec_model_env_override)
         .unwrap_or_else(|| config.default_model())
+}
+
+fn exec_model_env_override() -> Option<String> {
+    ["CODEWHALE_MODEL", "DEEPSEEK_MODEL"]
+        .into_iter()
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty())
+        })
 }
 
 fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
@@ -978,6 +990,16 @@ async fn main() -> Result<()> {
                 });
                 let mut config = config.clone();
                 merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                // Honour DEEPSEEK_BASE_URL forwarded by the CLI dispatcher from --base-url.
+                if let Ok(env_url) = std::env::var("DEEPSEEK_BASE_URL") {
+                    let trimmed = env_url.trim();
+                    eprintln!("DEBUG DEEPSEEK_BASE_URL='{trimmed}'");
+                    if !trimmed.is_empty() {
+                        config.base_url = Some(trimmed.to_string());
+                    }
+                } else {
+                    eprintln!("DEBUG DEEPSEEK_BASE_URL not set");
+                }
                 let model = resolve_exec_model(&config, args.model.as_deref());
                 let prompt = join_prompt_parts(&args.prompt);
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
