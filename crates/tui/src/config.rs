@@ -2533,41 +2533,41 @@ impl Config {
             configured_base_url
                 .or_else(|| env_base_url_override())
                 .unwrap_or_else(|| {
-                match provider {
-                    ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
-                    ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
-                    ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
-                    ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
-                    ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
-                    ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
-                    ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
-                    ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
-                    ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
-                    ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
-                    ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
-                    ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
-                    ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
-                    ApiProvider::Moonshot => {
-                        if self
-                            .provider_config()
-                            .is_some_and(provider_config_uses_kimi_oauth)
-                        {
-                            DEFAULT_KIMI_CODE_BASE_URL
-                        } else {
-                            DEFAULT_MOONSHOT_BASE_URL
+                    match provider {
+                        ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
+                        ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
+                        ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
+                        ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
+                        ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
+                        ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
+                        ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+                        ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
+                        ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
+                        ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+                        ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+                        ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
+                        ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
+                        ApiProvider::Moonshot => {
+                            if self
+                                .provider_config()
+                                .is_some_and(provider_config_uses_kimi_oauth)
+                            {
+                                DEFAULT_KIMI_CODE_BASE_URL
+                            } else {
+                                DEFAULT_MOONSHOT_BASE_URL
+                            }
                         }
+                        ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
+                        ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
+                        ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                        ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
+                        ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
+                        ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
+                        ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+                        ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
                     }
-                    ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
-                    ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
-                    ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
-                    ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
-                    ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
-                    ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
-                    ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
-                    ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
-                }
-                .to_string()
-            })
+                    .to_string()
+                })
         };
         normalize_base_url(&base)
     }
