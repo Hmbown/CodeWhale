@@ -445,6 +445,7 @@ struct AutomationRunsQuery {
 #[derive(Debug, Deserialize)]
 struct ThreadEventsQuery {
     since_seq: Option<u64>,
+    replay_limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2397,10 +2398,15 @@ async fn stream_thread_events(
         .await
         .map_err(map_thread_err)?;
 
-    let backlog = state
+    let mut backlog = state
         .runtime_threads
         .events_since(&id, query.since_seq)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    if let Some(limit) = query.replay_limit
+        && backlog.len() > limit
+    {
+        backlog = backlog.split_off(backlog.len() - limit);
+    }
     let mut last_seq = query.since_seq.unwrap_or(0);
     if let Some(last) = backlog.last() {
         last_seq = last.seq;
@@ -6072,6 +6078,8 @@ mod tests {
         let html = enabled.text().await?;
         assert!(html.contains("CodeWhale Mobile"));
         assert!(html.contains("/v1/approvals/"));
+        assert!(html.contains("MAX_VISIBLE_EVENTS = 100"));
+        assert!(html.contains("replay_limit="));
 
         handle.abort();
         Ok(())

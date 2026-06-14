@@ -261,6 +261,7 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const MAX_VISIBLE_EVENTS = 100;
     const state = {
       threadId: "",
       activeTurnId: "",
@@ -361,6 +362,13 @@
       return { id: approvalId };
     }
 
+    function pruneVisibleEvents() {
+      const events = $("events");
+      while (events.childElementCount > MAX_VISIBLE_EVENTS) {
+        events.firstElementChild.remove();
+      }
+    }
+
     async function decideApproval(approvalId, decision, container) {
       for (const button of container.querySelectorAll("button")) button.disabled = true;
       const remember = $("remember-approval").checked;
@@ -408,8 +416,10 @@
       }
 
       $("events").appendChild(item);
+      pruneVisibleEvents();
       state.eventCount += 1;
-      $("event-count").textContent = state.eventCount + " events";
+      const visible = Math.min(state.eventCount, MAX_VISIBLE_EVENTS);
+      $("event-count").textContent = visible + " of " + state.eventCount + " events";
       $("events").scrollTop = $("events").scrollHeight;
     }
 
@@ -455,7 +465,8 @@
       $("active-title").textContent = title || id;
       $("events").innerHTML = "";
       if (state.source) state.source.close();
-      const qs = "?since_seq=0" + (token() ? "&token=" + encodeURIComponent(token()) : "");
+      const qs = "?since_seq=0&replay_limit=" + MAX_VISIBLE_EVENTS +
+        (token() ? "&token=" + encodeURIComponent(token()) : "");
       const source = new EventSource("/v1/threads/" + encodeURIComponent(id) + "/events" + qs);
       state.source = source;
       const names = [
