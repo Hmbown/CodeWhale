@@ -843,8 +843,10 @@ mod tests {
                 || logs.contains("0123456789abcdef"),
             "logs did not contain expected output: {logs:?}"
         );
-        let bounded = adapter.read_logs("local-1", 6).unwrap();
-        assert!(bounded.ends_with("abcdef"), "{bounded:?}");
+        // Bounded read of the last bytes; on Windows the trailing space + CRLF
+        // push "abcdef" outside the tail window, so use contains instead.
+        let bounded = adapter.read_logs("local-1", 10).unwrap();
+        assert!(bounded.contains("abcdef"), "{bounded:?}");
 
         let status = adapter.stop_worker("local-1").unwrap();
         assert_eq!(status.state, FleetHostWorkerState::Stopped);
