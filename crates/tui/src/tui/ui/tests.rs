@@ -78,6 +78,10 @@ struct SettingsHomeGuard {
     _tmp: TempDir,
     previous_home: Option<OsString>,
     previous_userprofile: Option<OsString>,
+    previous_codewhale_home: Option<OsString>,
+    previous_config_path: Option<OsString>,
+    previous_codewhale_provider: Option<OsString>,
+    previous_deepseek_provider: Option<OsString>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -85,17 +89,30 @@ impl SettingsHomeGuard {
     fn new() -> Self {
         let lock = crate::test_support::lock_test_env();
         let tmp = TempDir::new().expect("settings tempdir");
+        let config_path = tmp.path().join(".deepseek").join("config.toml");
         let previous_home = std::env::var_os("HOME");
         let previous_userprofile = std::env::var_os("USERPROFILE");
+        let previous_codewhale_home = std::env::var_os("CODEWHALE_HOME");
+        let previous_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        let previous_codewhale_provider = std::env::var_os("CODEWHALE_PROVIDER");
+        let previous_deepseek_provider = std::env::var_os("DEEPSEEK_PROVIDER");
         // Safety: test-only environment mutation guarded by a global mutex.
         unsafe {
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("USERPROFILE", tmp.path());
+            std::env::remove_var("CODEWHALE_HOME");
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+            std::env::remove_var("CODEWHALE_PROVIDER");
+            std::env::remove_var("DEEPSEEK_PROVIDER");
         }
         Self {
             _tmp: tmp,
             previous_home,
             previous_userprofile,
+            previous_codewhale_home,
+            previous_config_path,
+            previous_codewhale_provider,
+            previous_deepseek_provider,
             _lock: lock,
         }
     }
@@ -112,6 +129,22 @@ impl Drop for SettingsHomeGuard {
             match self.previous_userprofile.take() {
                 Some(previous) => std::env::set_var("USERPROFILE", previous),
                 None => std::env::remove_var("USERPROFILE"),
+            }
+            match self.previous_codewhale_home.take() {
+                Some(previous) => std::env::set_var("CODEWHALE_HOME", previous),
+                None => std::env::remove_var("CODEWHALE_HOME"),
+            }
+            match self.previous_config_path.take() {
+                Some(previous) => std::env::set_var("DEEPSEEK_CONFIG_PATH", previous),
+                None => std::env::remove_var("DEEPSEEK_CONFIG_PATH"),
+            }
+            match self.previous_codewhale_provider.take() {
+                Some(previous) => std::env::set_var("CODEWHALE_PROVIDER", previous),
+                None => std::env::remove_var("CODEWHALE_PROVIDER"),
+            }
+            match self.previous_deepseek_provider.take() {
+                Some(previous) => std::env::set_var("DEEPSEEK_PROVIDER", previous),
+                None => std::env::remove_var("DEEPSEEK_PROVIDER"),
             }
         }
     }
