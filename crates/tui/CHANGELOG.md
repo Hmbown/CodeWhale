@@ -9,13 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.61] - 2026-06-14
 
+This release lands the **runtime control plane** for multi-agent work: the TUI stays
+responsive while sub-agents run, sub-agents converge toward fleet-style durable workers
+with per-role model routing, and provider/model routes are isolated per session. It also
+folds in several community contributions.
+
 ### Added
 
-- Initial v0.8.61 integration branch. Changes will be listed as they land.
+- **WhaleFlow runtime foundations** — worker runtime profiles (role / permissions / shell /
+  tools / model-route, with non-escalating child derivation), a cross-provider model registry
+  with offline catalog hydration, and provider-readiness / context-budget / provider-adapter /
+  resource-telemetry services. (#3217, #3071, #3072, #3073)
+- **Per-role, heterogeneous-model sub-agent routing** — sub-agents can be assigned a model and
+  provider per role (e.g. scout vs. synthesis; verifiers route to a fast model). (#2027, #1768)
+- **Durable goal mode** — cross-turn goal progress with token/time accounting and a
+  verifier-as-judge gate before a goal may complete. (#3215, #891, #1976, #2058, #2029)
+- Parent-visible worker interaction contract — a recommended action per worker. (#3226)
+- Maintainer GitHub workflow skills; ACP registry submission prepared. (#3192)
 
 ### Changed
 
+- **Sub-agents converge toward fleet-style durable workers** — real worker lifecycle states are
+  projected to the sidebar instead of a hardcoded "running", and a sub-agent returns a structured
+  needs-input checkpoint instead of parking. (#3226, #3096, #3154)
+- The per-turn runtime tag exposes capability posture instead of human-facing mode labels. (#3213)
+- Independent shell and verifier work defaults to background jobs with nonblocking waits and a
+  completion notification; blocking now requires an explicit wait. (#3212)
+- Plan mode is strictly read-only (no shell tools), consistent with its runtime posture.
+- `/swarm` is gated behind the durable worker substrate. (#3218)
+- Legacy `deepseek` install/update path resolves to `codewhale`. (#2960, #2924, #2917)
+
 ### Fixed
+
+- **TUI freeze when multiple sub-agents spawn (launch blocker)** — the terminal input pump runs
+  off the render thread, AgentProgress events are coalesced, and sub-agents no longer park on
+  input with no orchestrator to answer; a six-worker stress test guards input/render/cancel
+  liveness. (#3216, #3096)
+- **Provider/model route isolation** — provider and model state is session-local, and a
+  mismatched provider+model tuple is rejected at the route boundary. (#3227)
+- Route-effective context-window metadata, over-limit preflight, and bounded recovery from
+  `context_length_exceeded` instead of re-looping. (#3204)
+- Synchronous tools (`file_search`, `grep_files`, `list_dir`) are cancellable and no longer hold
+  a turn open against cancellation. (#1791)
+- MCP stdio proxy startup prompts no longer strand YOLO / non-interactive runs. (#2475)
+- Stalled / failed background-shell recovery; configurable sub-agent API timeout. (#1737, #1786, #1806)
+- Composer: reliable queued steering + Ctrl+S send (#3203, #3224); footer busy/idle indicator
+  (#2982); CJK word-wrap (#963); clickable sidebar stop targets (#3028); live token throughput
+  (#3190); auto-expiring terminal sub-agent cards (#3078).
+- Linux glibc preflight in the installer/update path with a clear error. (#3207, #1067)
+
+### Community contributions
+
+- Non-DeepSeek model pricing — thanks @mvanhorn (#3201)
+- Telegram polling transport — thanks @cyq1017 (#3195)
+- Mobile event history — thanks @RobertEmprechtinger (#3220)
+- Runtime-API session save — thanks @gaord (#3199)
+- Whale-accent rename — thanks @nightt5879 (#3197)
+- `DEEPSEEK_BASE_URL` / `MODEL` honored in `exec` — thanks @hongchen1993 (#3221)
+- VS Code read-only API documentation — thanks @cyq1017 (#3013)
 
 ## [0.8.60] - 2026-06-13
 
