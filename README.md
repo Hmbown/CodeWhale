@@ -16,6 +16,111 @@ Approval-gated tools, OS sandboxing, and `/restore` rollback for every turn.
 
 ![CodeWhale running in a terminal](assets/screenshot.png)
 
+---
+
+## Atlas Cloud — OpenAI-compatible LLM Backend
+
+<img src="./assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="200">
+
+[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=DeepSeek-TUI) is an OpenAI-compatible inference platform that lets you plug 59+ curated LLM models into CodeWhale without changing a single line of code — just swap `base_url` and `api_key`. It gives DeepSeek-TUI users a single API entry point covering DeepSeek V4 Pro/Flash, Qwen, GLM, Kimi, MiniMax, Mistral, and more, with no per-provider SDK juggling.
+
+**Why Atlas Cloud with CodeWhale?**
+- Drop-in replacement for the DeepSeek native API — same OpenAI SDK format, same `--provider atlascloud` flag
+- 59+ curated open models in one key: DeepSeek, Qwen, GLM, Kimi, MiniMax, Llama, Mistral, …
+- Budget-friendly [Coding Plan](https://www.atlascloud.ai/console/coding-plan) designed for agentic, long-context coding sessions
+
+**Quick setup:**
+
+```bash
+# Authenticate with Atlas Cloud provider
+codewhale auth set --provider atlascloud --api-key <your-atlascloud-key>
+
+# Start a session using DeepSeek V4 Pro via Atlas Cloud
+codewhale --provider atlascloud --model deepseek-ai/deepseek-v4-pro
+```
+
+Or via environment variables:
+
+```env
+DEEPSEEK_PROVIDER=atlascloud
+ATLASCLOUD_API_KEY=<your-atlascloud-key>
+ATLASCLOUD_BASE_URL=https://api.atlascloud.ai/v1
+ATLASCLOUD_MODEL=deepseek-ai/deepseek-v4-pro
+```
+
+> **Important:** `deepseek-ai/deepseek-v4-pro` is a reasoning model. Always set `max_tokens >= 512` (or leave unset to use the default) to avoid empty responses.
+
+Get a free API key and explore the [Coding Plan promotion](https://www.atlascloud.ai/console/coding-plan).
+
+<details>
+<summary>59 models available on Atlas Cloud</summary>
+
+| Model | Provider | Type |
+|---|---|---|
+| `deepseek-ai/deepseek-v4-pro` | DeepSeek | Reasoning LLM |
+| `deepseek-ai/deepseek-v4-flash` | DeepSeek | Fast LLM |
+| `deepseek-ai/deepseek-r2` | DeepSeek | Reasoning LLM |
+| `deepseek-ai/deepseek-prover-v2` | DeepSeek | Math/Reasoning |
+| `deepseek-ai/deepseek-v3-0324` | DeepSeek | LLM |
+| `deepseek-ai/deepseek-r1` | DeepSeek | Reasoning LLM |
+| `deepseek-ai/deepseek-r1-distill-qwen-32b` | DeepSeek | Distill |
+| `deepseek-ai/deepseek-r1-distill-qwen-14b` | DeepSeek | Distill |
+| `deepseek-ai/deepseek-r1-distill-llama-70b` | DeepSeek | Distill |
+| `deepseek-ai/deepseek-r1-distill-qwen-7b` | DeepSeek | Distill |
+| `qwen/qwen3-235b-a22b` | Alibaba | MoE LLM |
+| `qwen/qwen3-32b` | Alibaba | LLM |
+| `qwen/qwen3-30b-a3b` | Alibaba | MoE LLM |
+| `qwen/qwen3-14b` | Alibaba | LLM |
+| `qwen/qwen3-8b` | Alibaba | LLM |
+| `qwen/qwen2.5-72b-instruct` | Alibaba | LLM |
+| `qwen/qwen2.5-32b-instruct` | Alibaba | LLM |
+| `qwen/qwen2.5-coder-32b-instruct` | Alibaba | Code LLM |
+| `qwen/qwq-32b` | Alibaba | Reasoning LLM |
+| `qwen/qvq-72b-preview` | Alibaba | Vision LLM |
+| `thudm/glm-4-32b` | Zhipu AI | LLM |
+| `thudm/glm-z1-32b` | Zhipu AI | Reasoning LLM |
+| `thudm/glm-4-9b-chat` | Zhipu AI | LLM |
+| `moonshot/moonshot-v1-32k` | Moonshot | Long-ctx LLM |
+| `moonshot/moonshot-v1-128k` | Moonshot | Long-ctx LLM |
+| `moonshot/kimi-k2` | Moonshot | Agentic LLM |
+| `minimax/minimax-text-01` | MiniMax | LLM |
+| `minimax/abab7-chat-preview` | MiniMax | LLM |
+| `meta-llama/llama-3.3-70b-instruct` | Meta | LLM |
+| `meta-llama/llama-3.1-70b-instruct` | Meta | LLM |
+| `meta-llama/llama-3.1-8b-instruct` | Meta | LLM |
+| `meta-llama/meta-llama-3-70b-instruct` | Meta | LLM |
+| `mistralai/mistral-large-2411` | Mistral | LLM |
+| `mistralai/mistral-small-3.1-24b-instruct` | Mistral | LLM |
+| `mistralai/codestral-2501` | Mistral | Code LLM |
+| `mistralai/mistral-7b-instruct` | Mistral | LLM |
+| `mistralai/mixtral-8x7b-instruct` | Mistral | MoE LLM |
+| `mistralai/mixtral-8x22b-instruct` | Mistral | MoE LLM |
+| `google/gemma-3-27b-it` | Google | LLM |
+| `google/gemma-3-12b-it` | Google | LLM |
+| `google/gemma-3-4b-it` | Google | LLM |
+| `google/gemma-2-27b-it` | Google | LLM |
+| `google/gemma-2-9b-it` | Google | LLM |
+| `01-ai/yi-1.5-34b-chat` | 01.AI | LLM |
+| `01-ai/yi-1.5-9b-chat` | 01.AI | LLM |
+| `baichuan-inc/baichuan2-13b-chat` | Baichuan | LLM |
+| `internlm/internlm2_5-7b-chat` | InternLM | LLM |
+| `internlm/internlm2_5-20b-chat` | InternLM | LLM |
+| `tencent/hunyuan-turbo` | Tencent | LLM |
+| `tencent/hunyuan-standard-256k` | Tencent | Long-ctx LLM |
+| `stepfun/step-2-16k` | StepFun | LLM |
+| `stepfun/step-1-32k` | StepFun | LLM |
+| `bge-m3` | BAAI | Embedding |
+| `bge-reranker-v2-m3` | BAAI | Reranker |
+| `claude-3-5-sonnet-20241022` | Anthropic | LLM |
+| `claude-3-haiku-20240307` | Anthropic | LLM |
+| `gpt-4o` | OpenAI | LLM |
+| `gpt-4o-mini` | OpenAI | LLM |
+| `o1-mini` | OpenAI | Reasoning LLM |
+
+</details>
+
+---
+
 ## Install
 
 ```bash
