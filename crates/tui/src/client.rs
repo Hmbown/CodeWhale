@@ -413,7 +413,12 @@ fn unversioned_base_url(base_url: &str) -> String {
 }
 
 fn base_url_has_version_suffix(trimmed: &str) -> bool {
-    trimmed.rsplit('/').next().is_some_and(is_version_segment)
+    let mut segments = trimmed.rsplit('/');
+    let Some(last) = segments.next() else {
+        return false;
+    };
+    is_version_segment(last)
+        || (last.eq_ignore_ascii_case("openai") && segments.next().is_some_and(is_version_segment))
 }
 
 fn is_version_segment(segment: &str) -> bool {
@@ -4044,6 +4049,18 @@ mod tests {
         assert_eq!(
             api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_with_suffix_preserves_deepinfra_openai_base_path() {
+        assert_eq!(
+            api_url_with_suffix(
+                "https://api.deepinfra.com/v1/openai",
+                "chat/completions",
+                None
+            ),
+            "https://api.deepinfra.com/v1/openai/chat/completions"
         );
     }
 

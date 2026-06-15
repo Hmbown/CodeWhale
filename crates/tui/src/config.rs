@@ -3465,6 +3465,7 @@ fn root_deepseek_model_is_foreign_to_direct_provider(provider: ApiProvider, mode
             | ApiProvider::Volcengine
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Deepinfra
     ) {
         return false;
     }
@@ -8597,6 +8598,7 @@ api_key = "old-openrouter-key"
         assert!(validate_route(ApiProvider::Openai, "deepseek-v4-pro").is_ok());
         assert!(validate_route(ApiProvider::Openrouter, "deepseek-v4-pro").is_ok());
         assert!(validate_route(ApiProvider::NvidiaNim, "deepseek-v4-pro").is_ok());
+        assert!(validate_route(ApiProvider::Deepinfra, DEFAULT_DEEPINFRA_MODEL).is_ok());
     }
 
     #[test]
