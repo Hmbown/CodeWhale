@@ -816,7 +816,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut adapter = LocalProcessFleetHostAdapter::new(tmp.path());
         let script = if cfg!(windows) {
-            "echo 0123456789abcdef & ping -n 30 127.0.0.1 >NUL"
+            "echo 0123456789abcdef& ping -n 30 127.0.0.1 >NUL"
         } else {
             "printf 0123456789abcdef; sleep 30"
         };
