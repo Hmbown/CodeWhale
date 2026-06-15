@@ -96,6 +96,10 @@ pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
         if rest.is_empty() {
             return true;
         }
+        if rest.chars().next().is_some_and(|ch| ch.is_whitespace()) {
+            return false;
+        }
+        let rest = rest.trim_end();
         return !rest.chars().any(char::is_whitespace) && !rest.contains('/');
     }
 
@@ -5937,6 +5941,7 @@ mod tests {
         assert!(looks_like_slash_command_input("/help"));
         assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
         assert!(looks_like_slash_command_input("$getting-started"));
+        assert!(looks_like_slash_command_input("$getting-started "));
         assert!(looks_like_slash_command_input("  $getting-started"));
         assert!(looks_like_slash_command_input("$"));
         assert!(!looks_like_slash_command_input("/ hello"));

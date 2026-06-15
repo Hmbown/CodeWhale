@@ -107,12 +107,13 @@ pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
 pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     let trimmed = cmd.trim();
     if let Some(rest) = trimmed.strip_prefix('$') {
-        let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
-        let skill_name = parts.first().copied().unwrap_or_default().trim();
-        let arg = parts
-            .get(1)
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty());
+        let (skill_name, arg) = match rest.split_once(char::is_whitespace) {
+            Some((skill_name, arg)) => (
+                skill_name.trim(),
+                Some(arg.trim()).filter(|value| !value.is_empty()),
+            ),
+            None => (rest.trim(), None),
+        };
 
         if skill_name.is_empty() || arg.is_some() {
             return CommandResult::error("Usage: $<skill-name> or /skill <name>");

@@ -30,8 +30,9 @@ The canonical provider IDs are:
 
 `deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
 `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`,
-`siliconflow-CN`, `arcee`, `moonshot`, `sglang`, `vllm`, `ollama`,
-`huggingface`, `together`, `openai-codex`, and `anthropic`.
+`siliconflow-CN`, `arcee`, `moonshot`, `zai`, `stepfun`, `minimax`,
+`sglang`, `vllm`, `ollama`, `huggingface`, `together`, `openai-codex`, and
+`anthropic`.
 
 Use any of these surfaces to select a provider:
 
@@ -137,6 +138,7 @@ endpoint.
 | `arcee` | `[providers.arcee]` | `ARCEE_API_KEY` | `ARCEE_BASE_URL`; default `https://api.arcee.ai/api/v1` | `trinity-large-thinking`, `trinity-large-preview` | Arcee AI direct OpenAI-compatible route, tracked as 256K-context BF16 serving. `ARCEE_MODEL` is accepted. OpenRouter's `arcee-ai/trinity-large-thinking` remains the OpenRouter namespaced model ID; direct Arcee uses the bare `trinity-large-thinking` ID. |
 | `moonshot` | `[providers.moonshot]` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | `MOONSHOT_BASE_URL`, `KIMI_BASE_URL`; default `https://api.moonshot.ai/v1` | `kimi-k2.7-code`, `kimi-k2.6`; Kimi Code path uses `kimi-for-coding` at `https://api.kimi.com/coding/v1` | Moonshot/Kimi route. `kimi` and `kimi-k2` aliases select `kimi-k2.7-code`; `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, and `KIMI_MODEL` are accepted. Kimi thinking streams through `reasoning_content`; CodeWhale keeps it in Thinking cells and replays it for thinking/tool-call continuity. `[providers.moonshot] auth_mode = "kimi_oauth"` reads Kimi Code OAuth credentials from `KIMI_CODE_HOME`/`~/.kimi-code`, with legacy `KIMI_SHARE_DIR`/`~/.kimi` fallback. |
 | `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.1` default; `GLM-5.2` opt-in preview | Z.AI GLM Coding Plan route. Keep `GLM-5.1` as the default until 5.2 is generally documented; set `model = "GLM-5.2"` or `ZAI_MODEL=GLM-5.2` to try the preview. |
+| `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`, `STEP_BASE_URL`; default `https://api.stepfun.ai/v1` | `step-3.7-flash` | StepFun / StepFlash OpenAI-compatible route. `STEPFUN_MODEL` and `STEP_MODEL` are accepted, and provider-hinted custom model IDs pass through. |
 | `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; Anthropic-compatible routes are `https://api.minimax.io/anthropic` globally and `https://api.minimaxi.com/anthropic` in China | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. CodeWhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text, and direct MiniMax IDs stay distinct from OpenRouter namespaced IDs such as `minimax/minimax-m3`. |
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
@@ -226,6 +228,7 @@ endpoint when the endpoint supports model listing.
 | `arcee` | `trinity-large-thinking`, `trinity-large-preview`; provider-hinted custom model IDs pass through | yes | yes for `trinity-large-thinking`; no for `trinity-large-preview` |
 | `moonshot` | `kimi-k2.7-code`, `kimi-k2.6` | yes | yes |
 | `zai` | `GLM-5.1`, `GLM-5.2`; provider-hinted custom model IDs pass through | yes | yes |
+| `stepfun` | `step-3.7-flash`; provider-hinted custom model IDs pass through | yes | no |
 | `minimax` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | yes | yes |
 | `sglang` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `vllm` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |

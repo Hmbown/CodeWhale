@@ -2466,52 +2466,35 @@ fn dollar_skill_completion_hints(
     }
 
     let skill_prefix = skill_prefix.to_ascii_lowercase();
-    let mut entries: Vec<SlashMenuEntry> = Vec::new();
+    let mut matches: Vec<(u8, &String, &String)> = Vec::new();
 
     for (skill_name, skill_desc) in cached_skills {
         let skill_name_lower = skill_name.to_ascii_lowercase();
-        if skill_name_lower.starts_with(&skill_prefix) {
-            entries.push(SlashMenuEntry {
-                name: format!("${skill_name}"),
-                description: skill_desc.clone(),
-                is_skill: true,
-                alias_hint: None,
-            });
-        }
-    }
-    for (skill_name, skill_desc) in cached_skills {
-        let skill_name_lower = skill_name.to_ascii_lowercase();
-        let entry_name = format!("${skill_name}");
-        if skill_name_lower.contains(&skill_prefix)
-            && !entries.iter().any(|entry| entry.name == entry_name)
-        {
-            entries.push(SlashMenuEntry {
-                name: entry_name,
-                description: skill_desc.clone(),
-                is_skill: true,
-                alias_hint: None,
-            });
-        }
-    }
-    for (skill_name, skill_desc) in cached_skills {
-        let skill_name_lower = skill_name.to_ascii_lowercase();
-        let entry_name = format!("${skill_name}");
-        if !skill_name_lower.starts_with(&skill_prefix)
-            && !skill_name_lower.contains(&skill_prefix)
-            && fuzzy_chars_in_order(&skill_prefix, &skill_name_lower)
-            && !entries.iter().any(|entry| entry.name == entry_name)
-        {
-            entries.push(SlashMenuEntry {
-                name: entry_name,
-                description: skill_desc.clone(),
-                is_skill: true,
-                alias_hint: None,
-            });
-        }
+        let rank = if skill_name_lower.starts_with(&skill_prefix) {
+            0
+        } else if skill_name_lower.contains(&skill_prefix) {
+            1
+        } else if fuzzy_chars_in_order(&skill_prefix, &skill_name_lower) {
+            2
+        } else {
+            continue;
+        };
+        matches.push((rank, skill_name, skill_desc));
     }
 
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    entries.into_iter().take(limit).collect()
+    matches.sort_by(|(rank_a, name_a, _), (rank_b, name_b, _)| {
+        rank_a.cmp(rank_b).then_with(|| name_a.cmp(name_b))
+    });
+    matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, skill_name, skill_desc)| SlashMenuEntry {
+            name: format!("${skill_name}"),
+            description: skill_desc.clone(),
+            is_skill: true,
+            alias_hint: None,
+        })
+        .collect()
 }
 
 fn all_command_names_matching_loaded(
@@ -3432,6 +3415,28 @@ mod tests {
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].name, "$my-review");
         assert!(hints[0].is_skill);
+    }
+
+    #[test]
+    fn slash_completion_hints_rank_dollar_skill_alias_matches() {
+        let cached_skills = vec![
+            ("a-my".to_string(), "Contains match".to_string()),
+            ("my-review".to_string(), "Prefix match".to_string()),
+            ("z-my".to_string(), "Contains match".to_string()),
+        ];
+        let hints = slash_completion_hints(
+            "$my",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
+        let names = hints
+            .iter()
+            .map(|hint| hint.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["$my-review", "$a-my", "$z-my"]);
     }
 
     #[test]
