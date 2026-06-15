@@ -637,6 +637,7 @@ impl Engine {
             ApiProvider::Together => "TOGETHER_API_KEY",
             ApiProvider::OpenaiCodex => "OPENAI_CODEX_ACCESS_TOKEN/CODEX_ACCESS_TOKEN",
             ApiProvider::Minimax => "MINIMAX_API_KEY",
+            ApiProvider::Deepinfra => "DEEPINFRA_API_KEY/DEEPINFRA_TOKEN",
         };
 
         Some(format!(

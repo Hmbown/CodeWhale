@@ -47,6 +47,8 @@ enum ProviderArg {
     Zai,
     Stepfun,
     Minimax,
+    #[value(alias = "deep-infra", alias = "deep_infra")]
+    Deepinfra,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -75,6 +77,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Zai => ProviderKind::Zai,
             ProviderArg::Stepfun => ProviderKind::Stepfun,
             ProviderArg::Minimax => ProviderKind::Minimax,
+            ProviderArg::Deepinfra => ProviderKind::Deepinfra,
         }
     }
 }
@@ -869,11 +872,12 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Zai => "zai",
         ProviderKind::Stepfun => "stepfun",
         ProviderKind::Minimax => "minimax",
+        ProviderKind::Deepinfra => "deepinfra",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 24] = [
+const PROVIDER_LIST: [ProviderKind; 25] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -898,6 +902,7 @@ const PROVIDER_LIST: [ProviderKind; 24] = [
     ProviderKind::Zai,
     ProviderKind::Stepfun,
     ProviderKind::Minimax,
+    ProviderKind::Deepinfra,
 ];
 
 fn provider_is_supported_by_tui(provider: ProviderKind) -> bool {
@@ -926,6 +931,7 @@ fn provider_is_supported_by_tui(provider: ProviderKind) -> bool {
             | ProviderKind::Zai
             | ProviderKind::Stepfun
             | ProviderKind::Minimax
+            | ProviderKind::Deepinfra
     )
     // NOTE: Anthropic is intentionally exec-only in the interactive TUI: it
     // speaks the native Messages API rather than the OpenAI-compatible shape the
@@ -1020,6 +1026,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Zai => &["ZAI_API_KEY", "Z_AI_API_KEY"],
         ProviderKind::Stepfun => &["STEPFUN_API_KEY", "STEP_API_KEY"],
         ProviderKind::Minimax => &["MINIMAX_API_KEY"],
+        ProviderKind::Deepinfra => &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
     }
 }
 
@@ -2767,6 +2774,8 @@ mod tests {
             ("zai", ProviderArg::Zai),
             ("stepfun", ProviderArg::Stepfun),
             ("minimax", ProviderArg::Minimax),
+            ("deepinfra", ProviderArg::Deepinfra),
+            ("deep-infra", ProviderArg::Deepinfra),
         ] {
             let cli = parse_ok(&[
                 "deepseek",
@@ -3903,6 +3912,11 @@ mod tests {
                 ProviderKind::Siliconflow,
                 "siliconflow",
                 &["SILICONFLOW_API_KEY"],
+            ),
+            (
+                ProviderKind::Deepinfra,
+                "deepinfra",
+                &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
             ),
             (ProviderKind::Arcee, "arcee", &["ARCEE_API_KEY"]),
             (ProviderKind::Sglang, "sglang", &["SGLANG_API_KEY"]),

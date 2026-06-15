@@ -1253,6 +1253,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Openrouter
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
+            | ApiProvider::Deepinfra
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
@@ -1313,6 +1314,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
+            | ApiProvider::Deepinfra
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Atlascloud => {
@@ -1395,6 +1397,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
+            | ApiProvider::Deepinfra
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Atlascloud => {

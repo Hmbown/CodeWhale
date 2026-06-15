@@ -95,6 +95,9 @@ const DEFAULT_ARCEE_BASE_URL: &str = "https://api.arcee.ai/api/v1";
 const DEFAULT_HUGGINGFACE_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_HUGGINGFACE_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://router.huggingface.co/v1";
+const DEFAULT_DEEPINFRA_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+const DEFAULT_DEEPINFRA_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
+const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v1/openai";
 const DEFAULT_TOGETHER_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_TOGETHER_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_TOGETHER_BASE_URL: &str = "https://api.together.xyz/v1";
@@ -192,10 +195,12 @@ pub enum ProviderKind {
     Stepfun,
     #[serde(alias = "mini-max", alias = "mini_max", alias = "minimax")]
     Minimax,
+    #[serde(alias = "deep-infra", alias = "deep_infra")]
+    Deepinfra,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -220,6 +225,7 @@ impl ProviderKind {
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
+        Self::Deepinfra,
     ];
 
     #[must_use]
@@ -249,6 +255,7 @@ impl ProviderKind {
             Self::Zai,
             Self::Stepfun,
             Self::Minimax,
+            Self::Deepinfra,
         ]
     }
 
@@ -371,6 +378,8 @@ pub struct ProvidersToml {
     pub stepfun: ProviderConfigToml,
     #[serde(default, alias = "mini-max", alias = "mini_max", alias = "minimax")]
     pub minimax: ProviderConfigToml,
+    #[serde(default, alias = "deep-infra", alias = "deep_infra")]
+    pub deepinfra: ProviderConfigToml,
 }
 
 /// Sibling `permissions.toml` schema.
@@ -425,6 +434,7 @@ impl ProvidersToml {
             ProviderKind::Zai => &self.zai,
             ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Minimax => &self.minimax,
+            ProviderKind::Deepinfra => &self.deepinfra,
         }
     }
 
@@ -454,6 +464,7 @@ impl ProvidersToml {
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Stepfun => &mut self.stepfun,
             ProviderKind::Minimax => &mut self.minimax,
+            ProviderKind::Deepinfra => &mut self.deepinfra,
         }
     }
 }
@@ -1437,6 +1448,7 @@ impl ConfigToml {
             &mut self.providers.huggingface,
             &project.providers.huggingface,
         );
+        merge_project_provider_config(&mut self.providers.deepinfra, &project.providers.deepinfra);
     }
 
     #[must_use]
@@ -1570,6 +1582,12 @@ impl ConfigToml {
             "providers.huggingface.model" => self.providers.huggingface.model.clone(),
             "providers.huggingface.http_headers" => {
                 serialize_http_headers(&self.providers.huggingface.http_headers)
+            }
+            "providers.deepinfra.api_key" => self.providers.deepinfra.api_key.clone(),
+            "providers.deepinfra.base_url" => self.providers.deepinfra.base_url.clone(),
+            "providers.deepinfra.model" => self.providers.deepinfra.model.clone(),
+            "providers.deepinfra.http_headers" => {
+                serialize_http_headers(&self.providers.deepinfra.http_headers)
             }
             "providers.together.api_key" => self.providers.together.api_key.clone(),
             "providers.together.base_url" => self.providers.together.base_url.clone(),
@@ -1845,6 +1863,18 @@ impl ConfigToml {
             "providers.huggingface.http_headers" => {
                 self.providers.huggingface.http_headers = parse_http_headers(value)?;
             }
+            "providers.deepinfra.api_key" => {
+                self.providers.deepinfra.api_key = Some(value.to_string());
+            }
+            "providers.deepinfra.base_url" => {
+                self.providers.deepinfra.base_url = Some(value.to_string());
+            }
+            "providers.deepinfra.model" => {
+                self.providers.deepinfra.model = Some(value.to_string());
+            }
+            "providers.deepinfra.http_headers" => {
+                self.providers.deepinfra.http_headers = parse_http_headers(value)?;
+            }
             "providers.together.api_key" => {
                 self.providers.together.api_key = Some(value.to_string());
             }
@@ -1983,6 +2013,10 @@ impl ConfigToml {
             "providers.huggingface.base_url" => self.providers.huggingface.base_url = None,
             "providers.huggingface.model" => self.providers.huggingface.model = None,
             "providers.huggingface.http_headers" => self.providers.huggingface.http_headers.clear(),
+            "providers.deepinfra.api_key" => self.providers.deepinfra.api_key = None,
+            "providers.deepinfra.base_url" => self.providers.deepinfra.base_url = None,
+            "providers.deepinfra.model" => self.providers.deepinfra.model = None,
+            "providers.deepinfra.http_headers" => self.providers.deepinfra.http_headers.clear(),
             "providers.together.api_key" => self.providers.together.api_key = None,
             "providers.together.base_url" => self.providers.together.base_url = None,
             "providers.together.model" => self.providers.together.model = None,
@@ -2279,6 +2313,18 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.huggingface.http_headers) {
             out.insert("providers.huggingface.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.deepinfra.api_key.as_ref() {
+            out.insert("providers.deepinfra.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.deepinfra.base_url.as_ref() {
+            out.insert("providers.deepinfra.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.deepinfra.model.as_ref() {
+            out.insert("providers.deepinfra.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.deepinfra.http_headers) {
+            out.insert("providers.deepinfra.http_headers".to_string(), v);
+        }
 
         for (k, v) in &self.extras {
             out.insert(k.clone(), v.to_string());
@@ -2408,6 +2454,7 @@ impl ConfigToml {
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
                 ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
+                ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
                 ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
                 ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
                 ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
@@ -2742,6 +2789,14 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
             | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
         ) => DEFAULT_HUGGINGFACE_FLASH_MODEL.to_string(),
+        (ProviderKind::Deepinfra, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_DEEPINFRA_MODEL.to_string()
+        }
+        (
+            ProviderKind::Deepinfra,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
+            | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
+        ) => DEFAULT_DEEPINFRA_FLASH_MODEL.to_string(),
         (ProviderKind::Together, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_TOGETHER_MODEL.to_string()
         }
@@ -2946,6 +3001,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
+        ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
         ProviderKind::Together => DEFAULT_TOGETHER_MODEL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_MODEL,
@@ -2975,6 +3031,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
+        ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
         ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
@@ -3756,6 +3813,8 @@ struct EnvRuntimeOverrides {
     ollama_base_url: Option<String>,
     huggingface_base_url: Option<String>,
     huggingface_model: Option<String>,
+    deepinfra_base_url: Option<String>,
+    deepinfra_model: Option<String>,
     together_base_url: Option<String>,
     together_model: Option<String>,
     openai_codex_base_url: Option<String>,
@@ -3919,6 +3978,12 @@ impl EnvRuntimeOverrides {
                 .or_else(|_| std::env::var("HF_MODEL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            deepinfra_base_url: std::env::var("DEEPINFRA_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            deepinfra_model: std::env::var("DEEPINFRA_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             together_base_url: std::env::var("TOGETHER_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -4001,6 +4066,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
             ProviderKind::Huggingface => self.huggingface_base_url.clone(),
+            ProviderKind::Deepinfra => self.deepinfra_base_url.clone(),
             ProviderKind::Together => self.together_base_url.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_base_url.clone(),
             ProviderKind::Anthropic => self.anthropic_base_url.clone(),
@@ -4024,6 +4090,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Novita => self.novita_model.clone(),
             ProviderKind::Fireworks => self.fireworks_model.clone(),
             ProviderKind::Huggingface => self.huggingface_model.clone(),
+            ProviderKind::Deepinfra => self.deepinfra_model.clone(),
             ProviderKind::Together => self.together_model.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_model.clone(),
             ProviderKind::Anthropic => self.anthropic_model.clone(),
@@ -4450,6 +4517,10 @@ action = "mode.agent"
         hf_base_url: Option<OsString>,
         huggingface_model: Option<OsString>,
         hf_model: Option<OsString>,
+        deepinfra_api_key: Option<OsString>,
+        deepinfra_token: Option<OsString>,
+        deepinfra_base_url: Option<OsString>,
+        deepinfra_model: Option<OsString>,
         codewhale_provider: Option<OsString>,
         codewhale_model: Option<OsString>,
         codewhale_base_url: Option<OsString>,
@@ -4544,6 +4615,10 @@ action = "mode.agent"
                 hf_base_url: env::var_os("HF_BASE_URL"),
                 huggingface_model: env::var_os("HUGGINGFACE_MODEL"),
                 hf_model: env::var_os("HF_MODEL"),
+                deepinfra_api_key: env::var_os("DEEPINFRA_API_KEY"),
+                deepinfra_token: env::var_os("DEEPINFRA_TOKEN"),
+                deepinfra_base_url: env::var_os("DEEPINFRA_BASE_URL"),
+                deepinfra_model: env::var_os("DEEPINFRA_MODEL"),
             };
             // Safety: test-only environment mutation guarded by a module mutex.
             unsafe {
@@ -4633,6 +4708,10 @@ action = "mode.agent"
                 env::remove_var("HF_BASE_URL");
                 env::remove_var("HUGGINGFACE_MODEL");
                 env::remove_var("HF_MODEL");
+                env::remove_var("DEEPINFRA_API_KEY");
+                env::remove_var("DEEPINFRA_TOKEN");
+                env::remove_var("DEEPINFRA_BASE_URL");
+                env::remove_var("DEEPINFRA_MODEL");
             }
             guard
         }
@@ -4748,6 +4827,10 @@ action = "mode.agent"
                 Self::restore_var("HF_BASE_URL", self.hf_base_url.take());
                 Self::restore_var("HUGGINGFACE_MODEL", self.huggingface_model.take());
                 Self::restore_var("HF_MODEL", self.hf_model.take());
+                Self::restore_var("DEEPINFRA_API_KEY", self.deepinfra_api_key.take());
+                Self::restore_var("DEEPINFRA_TOKEN", self.deepinfra_token.take());
+                Self::restore_var("DEEPINFRA_BASE_URL", self.deepinfra_base_url.take());
+                Self::restore_var("DEEPINFRA_MODEL", self.deepinfra_model.take());
             }
         }
     }
@@ -5741,6 +5824,13 @@ unix_socket_path = "/tmp/cw-hooks.sock"
                 toml::from_str(&format!("provider = \"{alias}\"")).expect("huggingface alias");
             assert_eq!(parsed.provider, ProviderKind::Huggingface);
         }
+        for alias in ["deepinfra", "deep-infra", "deep_infra"] {
+            assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepinfra));
+
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("deepinfra alias");
+            assert_eq!(parsed.provider, ProviderKind::Deepinfra);
+        }
 
         let parsed: ConfigToml =
             toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
@@ -6081,6 +6171,22 @@ mode = "token-plan-usa"
         assert_eq!(resolved.provider, ProviderKind::Siliconflow);
         assert_eq!(resolved.base_url, DEFAULT_SILICONFLOW_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_SILICONFLOW_MODEL);
+    }
+
+    #[test]
+    fn deepinfra_provider_defaults_to_canonical_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Deepinfra,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Deepinfra);
+        assert_eq!(resolved.base_url, DEFAULT_DEEPINFRA_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_DEEPINFRA_MODEL);
     }
 
     #[test]
@@ -6857,6 +6963,27 @@ mode = "token-plan-usa"
         assert_eq!(resolved.api_key.as_deref(), Some("hf-token-fallback"));
         assert_eq!(resolved.base_url, "https://hf-short.example/v1");
         assert_eq!(resolved.model, "org/short-model");
+    }
+
+    #[test]
+    fn deepinfra_env_overrides_resolve_token_and_model_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "deep-infra");
+            env::set_var("DEEPINFRA_TOKEN", "deepinfra-token");
+            env::set_var("DEEPINFRA_BASE_URL", DEFAULT_DEEPINFRA_BASE_URL);
+            env::set_var("DEEPINFRA_MODEL", "deepseek-chat");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Deepinfra);
+        assert_eq!(resolved.api_key.as_deref(), Some("deepinfra-token"));
+        assert_eq!(resolved.base_url, DEFAULT_DEEPINFRA_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_DEEPINFRA_FLASH_MODEL);
     }
 
     #[test]

@@ -2049,6 +2049,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Openrouter
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
+            | ApiProvider::Deepinfra
             | ApiProvider::Fireworks
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn

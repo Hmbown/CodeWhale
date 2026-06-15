@@ -255,6 +255,7 @@ fn env_keys_for_provider(provider: ApiProvider) -> &'static [&'static str] {
         ApiProvider::Zai => &["ZAI_API_KEY", "Z_AI_API_KEY"],
         ApiProvider::Stepfun => &["STEPFUN_API_KEY", "STEP_API_KEY"],
         ApiProvider::Minimax => &["MINIMAX_API_KEY"],
+        ApiProvider::Deepinfra => &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
     }
 }
 

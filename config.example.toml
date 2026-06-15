@@ -20,7 +20,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface | together | openai-codex | anthropic
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | sglang | vllm | ollama | huggingface | deepinfra | together | openai-codex | anthropic
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -255,6 +255,7 @@ max_subagents = 10 # optional (1-20)
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
 # `--provider wanjie-ark` / `/provider volcengine` / `/provider fireworks` /
 # `--provider siliconflow` / `/provider arcee` / `/provider moonshot`
+# / `--provider deepinfra`
 # switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
@@ -275,6 +276,7 @@ max_subagents = 10 # optional (1-20)
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
 #   Hugging Face: HUGGINGFACE_API_KEY (or HF_TOKEN), HUGGINGFACE_BASE_URL (or HF_BASE_URL),
 #                 HUGGINGFACE_MODEL (or HF_MODEL)
+#   DeepInfra: DEEPINFRA_API_KEY (or DEEPINFRA_TOKEN), DEEPINFRA_BASE_URL, DEEPINFRA_MODEL
 #
 # Custom DeepSeek-compatible APIs usually do not need a new provider table:
 # set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
@@ -289,6 +291,7 @@ max_subagents = 10 # optional (1-20)
 #   provider = "openrouter"   model = "deepseek/deepseek-v4-pro"
 #   provider = "fireworks"    model = "accounts/fireworks/models/deepseek-v4-pro"
 #   provider = "siliconflow"  model = "deepseek-ai/DeepSeek-V4-Pro"
+#   provider = "deepinfra"    model = "deepseek-ai/DeepSeek-V4-Pro"
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
@@ -382,6 +385,14 @@ max_subagents = 10 # optional (1-20)
 [providers.siliconflow]
 # api_key = "YOUR_SILICONFLOW_API_KEY"
 # base_url = "https://api.siliconflow.com/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# DeepInfra OpenAI-compatible endpoint (https://deepinfra.com)
+# Provider aliases: deepinfra, deep-infra, deep_infra
+# Env var aliases: DEEPINFRA_API_KEY / DEEPINFRA_TOKEN, DEEPINFRA_BASE_URL, DEEPINFRA_MODEL
+[providers.deepinfra]
+# api_key = "YOUR_DEEPINFRA_API_KEY"
+# base_url = "https://api.deepinfra.com/v1/openai"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # SiliconFlow China-hosted DeepSeek V4 (https://siliconflow.cn)

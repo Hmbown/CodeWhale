@@ -124,6 +124,7 @@ impl ProviderPickerView {
             ApiProvider::Zai => "ZAI_API_KEY / Z_AI_API_KEY",
             ApiProvider::Stepfun => "STEPFUN_API_KEY / STEP_API_KEY",
             ApiProvider::Minimax => "MINIMAX_API_KEY",
+            ApiProvider::Deepinfra => "DEEPINFRA_API_KEY / DEEPINFRA_TOKEN",
         }
     }
 
@@ -520,7 +521,8 @@ mod tests {
                 "Anthropic",
                 "Z.ai (GLM Coding)",
                 "StepFun / StepFlash",
-                "MiniMax"
+                "MiniMax",
+                "DeepInfra"
             ]
         );
     }
@@ -555,7 +557,7 @@ mod tests {
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
         picker.handle_key(key(KeyCode::Up));
-        assert_eq!(picker.selected_provider(), ApiProvider::Minimax);
+        assert_eq!(picker.selected_provider(), ApiProvider::Deepinfra);
 
         picker.handle_key(key(KeyCode::Down));
         assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);

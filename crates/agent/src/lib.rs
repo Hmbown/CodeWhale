@@ -619,6 +619,29 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // DeepInfra OpenAI-compatible provider models
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Deepinfra,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "deepinfra-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Deepinfra,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "deepseek-reasoner".to_string(),
+                    "deepinfra-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
             // Together AI provider models
             ModelInfo {
                 id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
@@ -1404,6 +1427,7 @@ mod tests {
             (ProviderKind::Zai, "GLM-5.2"),
             (ProviderKind::Stepfun, "step-3.7-flash"),
             (ProviderKind::Minimax, "MiniMax-M2.1"),
+            (ProviderKind::Deepinfra, "deepseek-ai/DeepSeek-V4-Pro"),
         ] {
             assert!(
                 models
@@ -1438,6 +1462,25 @@ mod tests {
             assert!(resolved.resolved.supports_tools);
             assert!(resolved.resolved.supports_reasoning);
         }
+    }
+
+    #[test]
+    fn deepinfra_models_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+
+        let default = registry.resolve(None, Some(ProviderKind::Deepinfra));
+        assert_eq!(default.resolved.provider, ProviderKind::Deepinfra);
+        assert_eq!(default.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
+
+        let flash = registry.resolve(
+            Some("deepinfra-deepseek-v4-flash"),
+            Some(ProviderKind::Deepinfra),
+        );
+        assert_eq!(flash.resolved.provider, ProviderKind::Deepinfra);
+        assert_eq!(flash.resolved.id, "deepseek-ai/DeepSeek-V4-Flash");
+        assert!(!flash.used_fallback);
+        assert!(flash.resolved.supports_tools);
+        assert!(flash.resolved.supports_reasoning);
     }
 
     #[test]

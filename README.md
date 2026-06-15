@@ -2,7 +2,7 @@
 
 > The terminal coding agent for any model — open models first.
 
-A Rust TUI and CLI, 24 providers. DeepSeek, OpenRouter, Hugging Face, and local
+A Rust TUI and CLI, 25 providers. DeepSeek, OpenRouter, Hugging Face, and local
 vLLM/SGLang/Ollama are first-class routes, and CodeWhale speaks natively to
 Anthropic Claude and OpenAI when that's what you have. Approval-gated tools, OS
 sandboxing, and `/restore` rollback for every turn.
@@ -127,11 +127,11 @@ rails are runtime mechanisms, not advice the model has to remember:
 
 ### Any model, open models first
 
-Twenty-four providers route through the same harness, same constitution, same
+Twenty-five providers route through the same harness, same constitution, same
 tools:
 
 - **Open models, hosted:** `deepseek` (first among equals), `openrouter`,
-  `huggingface` (Inference Providers), `moonshot` (Kimi), `zai` (GLM),
+  `huggingface` (Inference Providers), `deepinfra`, `moonshot` (Kimi), `zai` (GLM),
   `minimax`, `volcengine` (Ark), `nvidia-nim`, `together`, `fireworks`,
   `novita`, `siliconflow` / `siliconflow-CN`, `arcee`, `xiaomi-mimo`,
   `stepfun`, `atlascloud`, `wanjie-ark`, plus a generic `openai`-compatible

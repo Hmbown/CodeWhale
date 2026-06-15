@@ -797,6 +797,7 @@ impl Secrets {
 /// | `sglang` | `SGLANG_API_KEY` |
 /// | `vllm` | `VLLM_API_KEY` |
 /// | `ollama` | `OLLAMA_API_KEY` |
+/// | `deepinfra` / `deep-infra` | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
 /// | `openai` | `OPENAI_API_KEY` |
 /// | `atlascloud` / `atlas` | `ATLASCLOUD_API_KEY` |
 /// | `volcengine` / `ark` | `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, `ARK_API_KEY` |
@@ -827,6 +828,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
+        "deepinfra" | "deep-infra" | "deep_infra" => &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"],
         "openai" => &["OPENAI_API_KEY"],
         "anthropic" | "claude" => &["ANTHROPIC_API_KEY"],
         "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
@@ -882,6 +884,8 @@ mod tests {
             "SGLANG_API_KEY",
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
+            "DEEPINFRA_API_KEY",
+            "DEEPINFRA_TOKEN",
             "OPENAI_API_KEY",
             "ATLASCLOUD_API_KEY",
             "WANJIE_ARK_API_KEY",
@@ -1289,6 +1293,20 @@ mod tests {
         assert_eq!(env_for("kimi-k2").as_deref(), Some("kimi-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("KIMI_API_KEY") };
+    }
+
+    #[test]
+    fn deepinfra_env_aliases_resolve() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("DEEPINFRA_TOKEN", "deepinfra-token") };
+
+        assert_eq!(env_for("deepinfra").as_deref(), Some("deepinfra-token"));
+        assert_eq!(env_for("deep-infra").as_deref(), Some("deepinfra-token"));
+        assert_eq!(env_for("deep_infra").as_deref(), Some("deepinfra-token"));
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::remove_var("DEEPINFRA_TOKEN") };
     }
 
     #[test]

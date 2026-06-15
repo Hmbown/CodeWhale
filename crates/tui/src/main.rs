@@ -2657,6 +2657,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "MINIMAX_API_KEY",
                     "codewhale auth set --provider minimax --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Deepinfra => (
+                    "DEEPINFRA_API_KEY/DEEPINFRA_TOKEN",
+                    "codewhale auth set --provider deepinfra --api-key \"...\"",
+                ),
             };
             println!(
                 "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.codewhale/config.toml; or run `{login_hint}`)",
@@ -2687,6 +2691,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Zai => "zai",
                     crate::config::ApiProvider::Stepfun => "stepfun",
                     crate::config::ApiProvider::Minimax => "minimax",
+                    crate::config::ApiProvider::Deepinfra => "deepinfra",
                 }
             );
         }

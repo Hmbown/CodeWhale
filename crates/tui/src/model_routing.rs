@@ -58,6 +58,7 @@ pub(crate) fn provider_router_candidates(
         ApiProvider::NvidiaNim
         | ApiProvider::Openrouter
         | ApiProvider::Novita
+        | ApiProvider::Deepinfra
         | ApiProvider::Siliconflow
         | ApiProvider::SiliconflowCn
         | ApiProvider::Sglang

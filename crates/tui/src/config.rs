@@ -152,6 +152,9 @@ pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_HUGGINGFACE_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_HUGGINGFACE_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://router.huggingface.co/v1";
+pub const DEFAULT_DEEPINFRA_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+pub const DEFAULT_DEEPINFRA_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
+pub const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v1/openai";
 pub const DEFAULT_TOGETHER_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_TOGETHER_BASE_URL: &str = "https://api.together.xyz/v1";
 pub const DEFAULT_OPENAI_CODEX_MODEL: &str = "gpt-5.5";
@@ -221,6 +224,7 @@ pub enum ApiProvider {
     Zai,
     Stepfun,
     Minimax,
+    Deepinfra,
 }
 
 impl ApiProvider {
@@ -278,7 +282,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 25] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 26] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::NvidiaNim),
@@ -304,10 +308,11 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Zai),
         Some(codewhale_config::ProviderKind::Stepfun),
         Some(codewhale_config::ProviderKind::Minimax),
+        Some(codewhale_config::ProviderKind::Deepinfra),
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 24] = [
+    const FROM_KIND_LOOKUP: [Self; 25] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -332,6 +337,7 @@ impl ApiProvider {
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
+        Self::Deepinfra,
     ];
 
     /// Map to the config-level `ProviderKind`.
@@ -986,7 +992,7 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
     }
     if matches!(
         provider,
-        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn
+        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn | ApiProvider::Deepinfra
     ) {
         let provider_model = model_for_provider(provider, normalized.clone());
         if provider_model != normalized {
@@ -1036,6 +1042,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Huggingface => {
             vec![DEFAULT_HUGGINGFACE_MODEL, DEFAULT_HUGGINGFACE_FLASH_MODEL]
         }
+        ApiProvider::Deepinfra => vec![DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPINFRA_FLASH_MODEL],
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
@@ -2227,6 +2234,8 @@ pub struct ProvidersConfig {
     pub stepfun: ProviderConfig,
     #[serde(default)]
     pub minimax: ProviderConfig,
+    #[serde(default, alias = "deep-infra", alias = "deep_infra")]
+    pub deepinfra: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2397,6 +2406,7 @@ impl Config {
             ApiProvider::Zai => "providers.zai",
             ApiProvider::Stepfun => "providers.stepfun",
             ApiProvider::Minimax => "providers.minimax",
+            ApiProvider::Deepinfra => "providers.deepinfra",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
         tracing::warn!(
@@ -2557,6 +2567,7 @@ impl Config {
             ApiProvider::Zai => &providers.zai,
             ApiProvider::Stepfun => &providers.stepfun,
             ApiProvider::Minimax => &providers.minimax,
+            ApiProvider::Deepinfra => &providers.deepinfra,
         })
     }
 
@@ -2588,6 +2599,7 @@ impl Config {
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
+            ApiProvider::Deepinfra => &mut providers.deepinfra,
         }
     }
 
@@ -2734,6 +2746,7 @@ impl Config {
             ApiProvider::Stepfun => DEFAULT_STEPFUN_MODEL,
             ApiProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
             ApiProvider::Minimax => DEFAULT_MINIMAX_MODEL,
+            ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
         }
         .to_string()
     }
@@ -2776,7 +2789,8 @@ impl Config {
             | ApiProvider::OpenaiCodex
             | ApiProvider::Zai
             | ApiProvider::Stepfun
-            | ApiProvider::Minimax => None,
+            | ApiProvider::Minimax
+            | ApiProvider::Deepinfra => None,
         };
         let configured_base_url = provider_base.or(root_base);
         let base = if provider == ApiProvider::XiaomiMimo {
@@ -2829,6 +2843,7 @@ impl Config {
                         ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
                         ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
                         ApiProvider::Minimax => DEFAULT_MINIMAX_BASE_URL,
+                        ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
                     }
                     .to_string()
                 })
@@ -2882,6 +2897,7 @@ impl Config {
             ApiProvider::Stepfun => "stepfun",
             ApiProvider::Anthropic => "anthropic",
             ApiProvider::Minimax => "minimax",
+            ApiProvider::Deepinfra => "deepinfra",
         };
 
         // 0. DeepSeek compatibility slot. The legacy top-level `api_key`
@@ -3080,6 +3096,10 @@ impl Config {
             ApiProvider::Minimax => anyhow::bail!(
                 "MiniMax API key not found. Run 'codewhale auth set --provider minimax', \
                  set MINIMAX_API_KEY, or add [providers.minimax] api_key in ~/.codewhale/config.toml."
+            ),
+            ApiProvider::Deepinfra => anyhow::bail!(
+                "DeepInfra API key not found. Run 'codewhale auth set --provider deepinfra', \
+                 set DEEPINFRA_API_KEY/DEEPINFRA_TOKEN, or add [providers.deepinfra] api_key in ~/.codewhale/config.toml."
             ),
             ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
         }
@@ -3975,6 +3995,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .minimax
                     .base_url = Some(value);
             }
+            ApiProvider::Deepinfra => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .deepinfra
+                    .base_url = Some(value);
+            }
         }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
@@ -4116,6 +4143,16 @@ fn apply_env_overrides(config: &mut Config) {
             .huggingface
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Deepinfra)
+        && let Ok(value) = std::env::var("DEEPINFRA_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .deepinfra
+            .base_url = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Moonshot)
         && let Ok(value) =
             std::env::var("MOONSHOT_BASE_URL").or_else(|_| std::env::var("KIMI_BASE_URL"))
@@ -4185,6 +4222,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
+            ApiProvider::Deepinfra => &mut providers.deepinfra,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -4333,6 +4371,16 @@ fn apply_env_overrides(config: &mut Config) {
             .huggingface
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Deepinfra)
+        && let Ok(value) = std::env::var("DEEPINFRA_MODEL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .deepinfra
+            .model = Some(value);
+    }
     if let Some(value) = codewhale_env_var("CODEWHALE_MODEL", "DEEPSEEK_MODEL")
         .ok()
         .or_else(|| {
@@ -4383,6 +4431,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Zai => &mut providers.zai,
                 ApiProvider::Stepfun => &mut providers.stepfun,
                 ApiProvider::Minimax => &mut providers.minimax,
+                ApiProvider::Deepinfra => &mut providers.deepinfra,
             };
             entry.model = Some(value);
         }
@@ -4663,6 +4712,12 @@ fn normalize_model_config(config: &mut Config) {
         {
             providers.vllm.model = Some(normalized);
         }
+        if let Some(model) = providers.deepinfra.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Deepinfra, &providers.deepinfra)
+            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Deepinfra, model)
+        {
+            providers.deepinfra.model = Some(normalized);
+        }
     }
 }
 
@@ -4726,6 +4781,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
         ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
         ApiProvider::Minimax => DEFAULT_MINIMAX_BASE_URL,
+        ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
     }
 }
 
@@ -4959,6 +5015,14 @@ fn model_for_provider(provider: ApiProvider, normalized: String) -> String {
         (ApiProvider::Sglang, "deepseek-v4-flash") => DEFAULT_SGLANG_FLASH_MODEL.to_string(),
         (ApiProvider::Vllm, "deepseek-v4-pro") => DEFAULT_VLLM_MODEL.to_string(),
         (ApiProvider::Vllm, "deepseek-v4-flash") => DEFAULT_VLLM_FLASH_MODEL.to_string(),
+        (ApiProvider::Deepinfra, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_DEEPINFRA_MODEL.to_string()
+        }
+        (
+            ApiProvider::Deepinfra,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
+            | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
+        ) => DEFAULT_DEEPINFRA_FLASH_MODEL.to_string(),
         (
             ApiProvider::Moonshot,
             "kimi"
@@ -5175,6 +5239,7 @@ fn merge_providers(
             zai: merge_provider_config(base.zai, override_cfg.zai),
             stepfun: merge_provider_config(base.stepfun, override_cfg.stepfun),
             minimax: merge_provider_config(base.minimax, override_cfg.minimax),
+            deepinfra: merge_provider_config(base.deepinfra, override_cfg.deepinfra),
         }),
     }
 }
@@ -5692,6 +5757,10 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Minimax => {
             std::env::var("MINIMAX_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::Deepinfra => {
+            std::env::var("DEEPINFRA_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("DEEPINFRA_TOKEN").is_ok_and(|k| !k.trim().is_empty())
+        }
     }
 }
 
@@ -5729,6 +5798,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Zai => "ZAI_API_KEY",
         ApiProvider::Stepfun => "STEPFUN_API_KEY",
         ApiProvider::Minimax => "MINIMAX_API_KEY",
+        ApiProvider::Deepinfra => "DEEPINFRA_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -5779,6 +5849,11 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     }
     if matches!(provider, ApiProvider::Huggingface)
         && std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
+    {
+        return true;
+    }
+    if matches!(provider, ApiProvider::Deepinfra)
+        && std::env::var("DEEPINFRA_TOKEN").is_ok_and(|k| !k.trim().is_empty())
     {
         return true;
     }
@@ -5859,6 +5934,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Zai => "providers.zai",
         ApiProvider::Stepfun => "providers.stepfun",
         ApiProvider::Minimax => "providers.minimax",
+        ApiProvider::Deepinfra => "providers.deepinfra",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -5908,6 +5984,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Zai => "zai",
         ApiProvider::Stepfun => "stepfun",
         ApiProvider::Minimax => "minimax",
+        ApiProvider::Deepinfra => "deepinfra",
     };
     let entry = providers
         .entry(key_inside.to_string())
@@ -6009,6 +6086,7 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::Zai => Ok("zai"),
         ApiProvider::Stepfun => Ok("stepfun"),
         ApiProvider::Minimax => Ok("minimax"),
+        ApiProvider::Deepinfra => Ok("deepinfra"),
     }
 }
 
@@ -6839,6 +6917,10 @@ action = "session.compact"
         hf_base_url: Option<OsString>,
         huggingface_model: Option<OsString>,
         hf_model: Option<OsString>,
+        deepinfra_api_key: Option<OsString>,
+        deepinfra_token: Option<OsString>,
+        deepinfra_base_url: Option<OsString>,
+        deepinfra_model: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -6943,6 +7025,10 @@ action = "session.compact"
             let hf_base_url_prev = env::var_os("HF_BASE_URL");
             let huggingface_model_prev = env::var_os("HUGGINGFACE_MODEL");
             let hf_model_prev = env::var_os("HF_MODEL");
+            let deepinfra_api_key_prev = env::var_os("DEEPINFRA_API_KEY");
+            let deepinfra_token_prev = env::var_os("DEEPINFRA_TOKEN");
+            let deepinfra_base_url_prev = env::var_os("DEEPINFRA_BASE_URL");
+            let deepinfra_model_prev = env::var_os("DEEPINFRA_MODEL");
             // Safety: test-only environment mutation guarded by a global mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
@@ -7042,6 +7128,10 @@ action = "session.compact"
                 env::remove_var("HF_BASE_URL");
                 env::remove_var("HUGGINGFACE_MODEL");
                 env::remove_var("HF_MODEL");
+                env::remove_var("DEEPINFRA_API_KEY");
+                env::remove_var("DEEPINFRA_TOKEN");
+                env::remove_var("DEEPINFRA_BASE_URL");
+                env::remove_var("DEEPINFRA_MODEL");
             }
             Self {
                 home: home_prev,
@@ -7141,6 +7231,10 @@ action = "session.compact"
                 hf_base_url: hf_base_url_prev,
                 huggingface_model: huggingface_model_prev,
                 hf_model: hf_model_prev,
+                deepinfra_api_key: deepinfra_api_key_prev,
+                deepinfra_token: deepinfra_token_prev,
+                deepinfra_base_url: deepinfra_base_url_prev,
+                deepinfra_model: deepinfra_model_prev,
             }
         }
     }
@@ -7264,6 +7358,10 @@ action = "session.compact"
                 Self::restore_var("HF_BASE_URL", self.hf_base_url.take());
                 Self::restore_var("HUGGINGFACE_MODEL", self.huggingface_model.take());
                 Self::restore_var("HF_MODEL", self.hf_model.take());
+                Self::restore_var("DEEPINFRA_API_KEY", self.deepinfra_api_key.take());
+                Self::restore_var("DEEPINFRA_TOKEN", self.deepinfra_token.take());
+                Self::restore_var("DEEPINFRA_BASE_URL", self.deepinfra_base_url.take());
+                Self::restore_var("DEEPINFRA_MODEL", self.deepinfra_model.take());
             }
         }
     }
@@ -10002,6 +10100,67 @@ model = "glm-5"
     }
 
     #[test]
+    fn deepinfra_provider_uses_canonical_defaults() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-deepinfra-defaults-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config = Config {
+            provider: Some("deepinfra".to_string()),
+            ..Default::default()
+        };
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::Deepinfra);
+        assert_eq!(config.default_model(), DEFAULT_DEEPINFRA_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_DEEPINFRA_BASE_URL);
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Deepinfra),
+            vec![DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPINFRA_FLASH_MODEL]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deepinfra_env_overrides_base_url_model_and_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-deepinfra-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "deep-infra");
+            env::set_var("DEEPINFRA_TOKEN", "deepinfra-env-key");
+            env::set_var("DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai/");
+            env::set_var("DEEPINFRA_MODEL", "deepseek-chat");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Deepinfra);
+        assert_eq!(config.deepseek_api_key()?, "deepinfra-env-key");
+        assert_eq!(config.deepseek_base_url(), DEFAULT_DEEPINFRA_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_DEEPINFRA_FLASH_MODEL);
+        Ok(())
+    }
+
+    #[test]
     fn sglang_provider_works_without_api_key() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -11704,6 +11863,22 @@ model = "deepseek-ai/deepseek-v4-pro"
     }
 
     #[test]
+    fn provider_capability_deepinfra_v4_pro_has_thinking_no_cache() {
+        let cap = provider_capability(ApiProvider::Deepinfra, DEFAULT_DEEPINFRA_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, 384_000);
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+
+    #[test]
     fn provider_capability_sglang_v4_pro_has_thinking_no_cache() {
         let cap = provider_capability(ApiProvider::Sglang, DEFAULT_SGLANG_MODEL);
         assert_eq!(
@@ -11926,6 +12101,13 @@ model = "deepseek-ai/deepseek-v4-pro"
     fn huggingface_provider_aliases_parse() {
         for alias in ["huggingface", "hugging-face", "hugging_face", "hf"] {
             assert_eq!(ApiProvider::parse(alias), Some(ApiProvider::Huggingface));
+        }
+    }
+
+    #[test]
+    fn deepinfra_provider_aliases_parse() {
+        for alias in ["deepinfra", "deep-infra", "deep_infra"] {
+            assert_eq!(ApiProvider::parse(alias), Some(ApiProvider::Deepinfra));
         }
     }
 
