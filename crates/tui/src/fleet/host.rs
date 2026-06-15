@@ -816,7 +816,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut adapter = LocalProcessFleetHostAdapter::new(tmp.path());
         let script = if cfg!(windows) {
-            "echo 0123456789abcdef & ping -n 30 127.0.0.1 >NUL"
+            "<NUL set /p=0123456789abcdef& ping -n 30 127.0.0.1 >NUL"
         } else {
             "printf 0123456789abcdef; sleep 30"
         };
@@ -830,7 +830,10 @@ mod tests {
         assert_eq!(status.state, FleetHostWorkerState::Running);
 
         let logs = wait_for_log(&adapter, "local-1", "abcdef");
-        assert!(logs.ends_with("0123456789abcdef") || logs.contains("0123456789abcdef"));
+        assert!(
+            logs.ends_with("0123456789abcdef") || logs.contains("0123456789abcdef"),
+            "{logs:?}"
+        );
         let bounded = adapter.read_logs("local-1", 6).unwrap();
         assert!(bounded.ends_with("abcdef"), "{bounded:?}");
 
