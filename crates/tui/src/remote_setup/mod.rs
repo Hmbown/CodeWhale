@@ -115,12 +115,13 @@ pub fn run_remote_setup(args: RemoteSetupArgs) -> Result<()> {
     if args.apply {
         // MVP: the auto-provision path is intentionally not implemented yet.
         println!();
-        println!(
-            "auto-provision not yet implemented; bundle generated, follow RUNBOOK.md"
-        );
+        println!("auto-provision not yet implemented; bundle generated, follow RUNBOOK.md");
     } else {
         println!();
-        println!("Next: open {}/RUNBOOK.md and follow the steps.", out_dir.display());
+        println!(
+            "Next: open {}/RUNBOOK.md and follow the steps.",
+            out_dir.display()
+        );
     }
 
     Ok(())
@@ -145,7 +146,10 @@ fn resolve_cloud(args: &RemoteSetupArgs) -> Result<&'static CloudTarget> {
             .ok_or_else(|| anyhow::anyhow!("unknown cloud '{slug}'. {}", cloud_choices()));
     }
     if args.non_interactive {
-        bail!("--cloud is required in --non-interactive mode. {}", cloud_choices());
+        bail!(
+            "--cloud is required in --non-interactive mode. {}",
+            cloud_choices()
+        );
     }
     let idx = prompt_choice(
         "Cloud target",
@@ -163,7 +167,10 @@ fn resolve_bridge(args: &RemoteSetupArgs) -> Result<&'static BridgeSpec> {
             .ok_or_else(|| anyhow::anyhow!("unknown bridge '{slug}'. {}", bridge_choices()));
     }
     if args.non_interactive {
-        bail!("--bridge is required in --non-interactive mode. {}", bridge_choices());
+        bail!(
+            "--bridge is required in --non-interactive mode. {}",
+            bridge_choices()
+        );
     }
     let idx = prompt_choice(
         "Chat bridge",
@@ -217,7 +224,11 @@ fn cloud_choices() -> String {
 fn bridge_choices() -> String {
     format!(
         "Choices: {}",
-        BRIDGES.iter().map(|b| b.slug).collect::<Vec<_>>().join(", ")
+        BRIDGES
+            .iter()
+            .map(|b| b.slug)
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -305,7 +316,12 @@ mod tests {
             non_interactive: true,
             ..Default::default()
         };
-        assert!(resolve_cloud(&args).unwrap_err().to_string().contains("--cloud is required"));
+        assert!(
+            resolve_cloud(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("--cloud is required")
+        );
     }
 
     #[test]

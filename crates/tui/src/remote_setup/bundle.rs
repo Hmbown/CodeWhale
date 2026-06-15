@@ -41,11 +41,7 @@ impl ProviderInfo {
     pub fn from_slug(slug: &str) -> Option<Self> {
         let kind = codewhale_config::ProviderKind::parse(slug)?;
         let p = codewhale_config::provider::provider_for_kind(kind);
-        let key_var = p
-            .env_vars()
-            .first()
-            .copied()
-            .unwrap_or("CODEWHALE_API_KEY");
+        let key_var = p.env_vars().first().copied().unwrap_or("CODEWHALE_API_KEY");
         Some(Self {
             slug: p.id().to_string(),
             display: p.display_name().to_string(),
@@ -160,7 +156,10 @@ fn render_runtime_env(i: &BundleInputs) -> String {
         "# Provider API key ({}). Replace the placeholder with your real key.\n",
         i.provider.display
     ));
-    out.push_str(&format!("{}={}\n", i.provider.key_var, i.provider_key_value));
+    out.push_str(&format!(
+        "{}={}\n",
+        i.provider.key_var, i.provider_key_value
+    ));
     out.push_str(&format!(
         "CODEWHALE_MODEL={}   # provider default is {}\n",
         i.model, i.provider.default_model
@@ -174,7 +173,9 @@ fn render_runtime_env(i: &BundleInputs) -> String {
     out.push_str("RUST_LOG=info\n\n");
 
     if i.provider.slug == "deepseek" {
-        out.push_str("# Legacy aliases (still honored): DEEPSEEK_RUNTIME_TOKEN, DEEPSEEK_API_KEY,\n");
+        out.push_str(
+            "# Legacy aliases (still honored): DEEPSEEK_RUNTIME_TOKEN, DEEPSEEK_API_KEY,\n",
+        );
         out.push_str("# DEEPSEEK_RUNTIME_PORT, DEEPSEEK_RUNTIME_WORKERS.\n");
     } else {
         out.push_str("# Legacy aliases (still honored): DEEPSEEK_RUNTIME_TOKEN,\n");
@@ -222,13 +223,22 @@ fn render_bridge_env(i: &BundleInputs) -> String {
         bridge_env_prefix(i.bridge),
         i.bridge.slug
     ));
-    out.push_str(&format!("{}_ALLOW_GROUPS=false\n", bridge_env_prefix(i.bridge)));
+    out.push_str(&format!(
+        "{}_ALLOW_GROUPS=false\n",
+        bridge_env_prefix(i.bridge)
+    ));
     out.push_str(&format!(
         "{}_REQUIRE_PREFIX_IN_GROUP=true\n",
         bridge_env_prefix(i.bridge)
     ));
-    out.push_str(&format!("{}_GROUP_PREFIX=/cw\n", bridge_env_prefix(i.bridge)));
-    out.push_str(&format!("{}_MAX_REPLY_CHARS=3500\n", bridge_env_prefix(i.bridge)));
+    out.push_str(&format!(
+        "{}_GROUP_PREFIX=/cw\n",
+        bridge_env_prefix(i.bridge)
+    ));
+    out.push_str(&format!(
+        "{}_MAX_REPLY_CHARS=3500\n",
+        bridge_env_prefix(i.bridge)
+    ));
     if i.bridge.slug == "telegram" {
         out.push_str("TELEGRAM_POLL_TIMEOUT_SECONDS=50\n");
     }
@@ -333,7 +343,9 @@ fn render_runbook(i: &BundleInputs) -> String {
 
     out.push_str("## What was generated\n\n");
     out.push_str("| File | Purpose |\n|---|---|\n");
-    out.push_str("| `runtime.env` | Provider + runtime config (the only place the provider is set). |\n");
+    out.push_str(
+        "| `runtime.env` | Provider + runtime config (the only place the provider is set). |\n",
+    );
     out.push_str(&format!(
         "| `{}.env` | {} bridge transport config (token, allowlist, runtime URL). |\n",
         i.bridge.slug, i.bridge.display
@@ -384,7 +396,10 @@ fn render_runbook(i: &BundleInputs) -> String {
     out.push_str("yourself (commands shown as data — review before running):\n\n");
     for (n, step) in plan.iter().enumerate() {
         out.push_str(&format!("{}. {}\n", n + 1, step.description));
-        out.push_str(&format!("   ```sh\n   {}\n   ```\n", step.display_command()));
+        out.push_str(&format!(
+            "   ```sh\n   {}\n   ```\n",
+            step.display_command()
+        ));
     }
     out.push('\n');
     if i.cloud.secret_store == SecretStore::KeyVault {
@@ -419,14 +434,22 @@ sudo systemctl enable --now codewhale-runtime {unit}\n```\n\n",
     match i.bridge.slug {
         "telegram" => {
             out.push_str("1. With `TELEGRAM_CHAT_ALLOWLIST` empty, temporarily set\n");
-            out.push_str("   `TELEGRAM_ALLOW_UNLISTED=true`, restart the bridge, and DM your bot once.\n");
-            out.push_str("2. Read the chat id the bridge logs, add it to `TELEGRAM_CHAT_ALLOWLIST`,\n");
+            out.push_str(
+                "   `TELEGRAM_ALLOW_UNLISTED=true`, restart the bridge, and DM your bot once.\n",
+            );
+            out.push_str(
+                "2. Read the chat id the bridge logs, add it to `TELEGRAM_CHAT_ALLOWLIST`,\n",
+            );
             out.push_str("   set `TELEGRAM_ALLOW_UNLISTED=false`, and restart the bridge.\n");
         }
         "feishu" => {
             out.push_str("1. With `FEISHU_CHAT_ALLOWLIST` empty, temporarily set\n");
-            out.push_str("   `FEISHU_ALLOW_UNLISTED=true`, restart the bridge, and message the app once.\n");
-            out.push_str("2. Read the open id the bridge logs, add it to `FEISHU_CHAT_ALLOWLIST`,\n");
+            out.push_str(
+                "   `FEISHU_ALLOW_UNLISTED=true`, restart the bridge, and message the app once.\n",
+            );
+            out.push_str(
+                "2. Read the open id the bridge logs, add it to `FEISHU_CHAT_ALLOWLIST`,\n",
+            );
             out.push_str("   set `FEISHU_ALLOW_UNLISTED=false`, and restart the bridge.\n");
         }
         _ => {
@@ -464,7 +487,12 @@ mod tests {
         let bridge_secret_values = bridge
             .secret_keys
             .iter()
-            .map(|k| ((*k).to_string(), format!("replace-{}", k.to_ascii_lowercase())))
+            .map(|k| {
+                (
+                    (*k).to_string(),
+                    format!("replace-{}", k.to_ascii_lowercase()),
+                )
+            })
             .collect();
         BundleInputs {
             cloud,
@@ -490,7 +518,10 @@ mod tests {
         let oai = ProviderInfo::from_slug("openai").unwrap();
         assert_eq!(oai.key_var, "OPENAI_API_KEY");
         // Provider-registry aliases resolve to the canonical slug.
-        assert_eq!(ProviderInfo::from_slug("nvidia").unwrap().slug, "nvidia-nim");
+        assert_eq!(
+            ProviderInfo::from_slug("nvidia").unwrap().slug,
+            "nvidia-nim"
+        );
         assert_eq!(ProviderInfo::from_slug("kimi").unwrap().slug, "moonshot");
         assert!(ProviderInfo::from_slug("not-a-provider").is_none());
     }
@@ -586,8 +617,7 @@ mod tests {
                         .unwrap()
                         .contents;
                     assert!(runtime.contains(&format!("CODEWHALE_PROVIDER={provider_slug}")));
-                    let token_line =
-                        format!("CODEWHALE_RUNTIME_TOKEN={}", inputs.runtime_token);
+                    let token_line = format!("CODEWHALE_RUNTIME_TOKEN={}", inputs.runtime_token);
                     assert!(runtime.contains(&token_line));
 
                     let bridge_env = &files

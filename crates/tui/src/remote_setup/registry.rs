@@ -300,7 +300,14 @@ fn azure_plan(inputs: &DeployInputs) -> Vec<ProvisionStep> {
         ProvisionStep::new(
             "Create the resource group",
             "az",
-            &["group", "create", "--name", &rg, "--location", &inputs.region],
+            &[
+                "group",
+                "create",
+                "--name",
+                &rg,
+                "--location",
+                &inputs.region,
+            ],
         ),
         ProvisionStep::new(
             "Create the Key Vault that holds the provider key + runtime token",
@@ -508,11 +515,7 @@ mod tests {
         let inputs = DeployInputs::default();
         for c in CLOUD_TARGETS {
             let steps = (c.plan)(&inputs);
-            assert!(
-                !steps.is_empty(),
-                "cloud {} produced an empty plan",
-                c.slug
-            );
+            assert!(!steps.is_empty(), "cloud {} produced an empty plan", c.slug);
             // First step's program is the cloud's own tooling or a host script.
             assert!(
                 steps
@@ -539,7 +542,8 @@ mod tests {
 
     #[test]
     fn display_command_redacts_secret_args() {
-        let mut step = ProvisionStep::new("set secret", "az", &["keyvault", "secret", "set", "VALUE"]);
+        let mut step =
+            ProvisionStep::new("set secret", "az", &["keyvault", "secret", "set", "VALUE"]);
         step.secret_args = vec![3];
         let rendered = step.display_command();
         assert!(rendered.contains("<redacted>"));
