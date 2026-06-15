@@ -31,7 +31,7 @@ The canonical provider IDs are:
 `deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
 `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`,
 `siliconflow-CN`, `arcee`, `moonshot`, `sglang`, `vllm`, `ollama`,
-`huggingface`, `together`, `openai-codex`, `anthropic`, and `deepinfra`.
+`huggingface`, `together`, `openai-codex`, `anthropic`, `deepinfra`, `zai`, `stepfun`, and `minimax`.
 
 Use any of these surfaces to select a provider:
 
@@ -139,6 +139,7 @@ endpoint.
 | `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.1` default; `GLM-5.2` opt-in preview | Z.AI GLM Coding Plan route. Keep `GLM-5.1` as the default until 5.2 is generally documented; set `model = "GLM-5.2"` or `ZAI_MODEL=GLM-5.2` to try the preview. |
 | `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; Anthropic-compatible routes are `https://api.minimax.io/anthropic` globally and `https://api.minimaxi.com/anthropic` in China | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. CodeWhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text, and direct MiniMax IDs stay distinct from OpenRouter namespaced IDs such as `minimax/minimax-m3`. |
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
+| `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`; default `https://api.stepfun.ai/v1` | `step-3.7-flash` | StepFun / StepFlash OpenAI-compatible route. Accepts aliases: `step-fun`, `step_fun`, `stepflash`, `step-flash`, `step_flash`. `STEPFUN_MODEL` and `STEP_MODEL` are accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
 | `ollama` | `[providers.ollama]` | Optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Self-hosted Ollama OpenAI-compatible route. Localhost deployments commonly omit auth. `OLLAMA_MODEL` is accepted. |
 | `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`, `HF_BASE_URL`; default `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI-compatible router route. Accepted aliases: `huggingface`, `hugging-face`, `hugging_face`, `hf`. Org-prefixed model IDs pass through. `HUGGINGFACE_MODEL` and `HF_MODEL` are accepted. Hub browsing/export are separate future features. |
@@ -227,6 +228,7 @@ endpoint when the endpoint supports model listing.
 | `arcee` | `trinity-large-thinking`, `trinity-large-preview`; provider-hinted custom model IDs pass through | yes | yes for `trinity-large-thinking`; no for `trinity-large-preview` |
 | `moonshot` | `kimi-k2.7-code`, `kimi-k2.6` | yes | yes |
 | `zai` | `GLM-5.1`, `GLM-5.2`; provider-hinted custom model IDs pass through | yes | yes |
+| `stepfun` | `step-3.7-flash` | yes | no |
 | `minimax` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | yes | yes |
 | `sglang` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `vllm` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
