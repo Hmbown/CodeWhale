@@ -3195,12 +3195,13 @@ fn apply_goal_snapshot_updates_visible_goal_status() {
 #[test]
 fn turn_liveness_watchdog_clears_stale_dispatch() {
     let mut app = create_test_app();
+    let dispatch_started_at = Instant::now();
+    let now = dispatch_started_at + DISPATCH_WATCHDOG_TIMEOUT + Duration::from_millis(1);
     app.is_loading = true;
-    app.dispatch_started_at =
-        Some(Instant::now() - DISPATCH_WATCHDOG_TIMEOUT - Duration::from_millis(1));
-    app.turn_started_at = Some(Instant::now());
+    app.dispatch_started_at = Some(dispatch_started_at);
+    app.turn_started_at = Some(dispatch_started_at);
 
-    let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
+    let recovered = reconcile_turn_liveness(&mut app, now, false);
 
     assert!(recovered);
     assert!(!app.is_loading);
@@ -3305,10 +3306,11 @@ fn turn_liveness_does_not_abort_running_tool() {
 #[test]
 fn turn_liveness_does_not_abort_running_tool_with_recent_heartbeat() {
     let mut app = create_test_app();
-    let now = Instant::now();
+    let started_at = Instant::now();
+    let now = started_at + TOOL_HANG_WATCHDOG_TIMEOUT + Duration::from_secs(30);
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.turn_started_at = Some(now - TOOL_HANG_WATCHDOG_TIMEOUT - Duration::from_secs(30));
+    app.turn_started_at = Some(started_at);
     app.turn_last_activity_at = Some(now - Duration::from_secs(10));
     let mut active = ActiveCell::new();
     active.push_tool(
@@ -3337,11 +3339,12 @@ fn turn_liveness_does_not_abort_running_tool_with_recent_heartbeat() {
 #[test]
 fn turn_liveness_recovers_running_tool_without_heartbeat() {
     let mut app = create_test_app();
-    let now = Instant::now();
+    let started_at = Instant::now();
+    let now = started_at + TOOL_HANG_WATCHDOG_TIMEOUT + Duration::from_secs(1);
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
     app.runtime_turn_id = Some("stale-tool-turn".to_string());
-    app.turn_started_at = Some(now - TOOL_HANG_WATCHDOG_TIMEOUT - Duration::from_secs(1));
+    app.turn_started_at = Some(started_at);
     app.turn_last_activity_at = app.turn_started_at;
     app.user_scrolled_during_stream = true;
     let mut active = ActiveCell::new();
@@ -3376,15 +3379,16 @@ fn turn_liveness_recovers_running_tool_without_heartbeat() {
 #[test]
 fn turn_liveness_recovers_stalled_in_progress_turn() {
     let mut app = create_test_app();
+    let started_at = Instant::now();
+    let now = started_at + TURN_STALL_WATCHDOG_TIMEOUT + Duration::from_millis(1);
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
     app.runtime_turn_id = Some("stale-turn-id".to_string());
-    app.turn_started_at =
-        Some(Instant::now() - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_millis(1));
+    app.turn_started_at = Some(started_at);
     app.streaming_message_index = Some(0);
     app.user_scrolled_during_stream = true;
 
-    let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
+    let recovered = reconcile_turn_liveness(&mut app, now, false);
 
     assert!(recovered);
     assert!(!app.is_loading);
