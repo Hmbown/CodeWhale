@@ -5431,6 +5431,23 @@ fn inline_skill_slash_popup_lists_cached_skills_in_message() {
 }
 
 #[test]
+fn inline_skill_dollar_popup_lists_cached_skills_in_message() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use $".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert!(entries.iter().any(|entry| entry.name == "$search-files"));
+    assert!(entries.iter().any(|entry| entry.name == "$my-review"));
+    assert!(entries.iter().all(|entry| entry.is_skill));
+}
+
+#[test]
 fn inline_skill_slash_popup_filters_partial_without_leaking_to_command_position() {
     let mut app = create_test_app();
     app.cached_skills = vec![
@@ -5453,6 +5470,36 @@ fn inline_skill_slash_popup_filters_partial_without_leaking_to_command_position(
             .iter()
             .any(|entry| entry.name == "/search-files" && entry.is_skill),
         "command-position slash menu should not include inline skill mentions"
+    );
+}
+
+#[test]
+fn inline_skill_dollar_popup_filters_partial_without_leaking_to_command_position() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use $my".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "$my-review");
+
+    app.input = "$se".to_string();
+    app.cursor_position = app.input.chars().count();
+    let command_entries = visible_slash_menu_entries(&app, 128);
+    assert!(
+        command_entries
+            .iter()
+            .all(|entry| entry.name.starts_with('$')),
+        "command-position dollar menu should only include dollar skill aliases: {:?}",
+        command_entries
+            .iter()
+            .map(|entry| &entry.name)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -5499,6 +5546,26 @@ fn apply_slash_menu_selection_splices_inline_skill_mention() {
 }
 
 #[test]
+fn apply_slash_menu_selection_splices_inline_dollar_skill_mention() {
+    let mut app = create_test_app();
+    app.input = "please use $se here".to_string();
+    app.cursor_position = "please use $se".chars().count();
+    let entries = vec![crate::tui::widgets::SlashMenuEntry {
+        name: "$search-files".to_string(),
+        description: "Search files".to_string(),
+        is_skill: true,
+        alias_hint: None,
+    }];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "please use $search-files here");
+    assert_eq!(
+        app.cursor_position,
+        "please use $search-files".chars().count()
+    );
+}
+
+#[test]
 fn try_autocomplete_slash_command_completes_skill_argument() {
     let mut app = create_test_app();
     app.cached_skills = vec![
@@ -5510,6 +5577,20 @@ fn try_autocomplete_slash_command_completes_skill_argument() {
 
     assert!(try_autocomplete_slash_command(&mut app));
     assert_eq!(app.input, "/skill my-review");
+}
+
+#[test]
+fn try_autocomplete_slash_command_completes_dollar_skill_alias() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "$my".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(try_autocomplete_slash_command(&mut app));
+    assert_eq!(app.input, "$my-review");
 }
 
 #[test]

@@ -2279,6 +2279,10 @@ pub(crate) fn slash_completion_hints(
         return Vec::new();
     }
 
+    if let Some(skill_prefix) = input.trim_start().strip_prefix('$') {
+        return dollar_skill_completion_hints(skill_prefix, limit, cached_skills);
+    }
+
     let prefix = input.trim_start_matches('/');
     let completing_skill_arg = prefix.strip_prefix("skill ").map(str::trim_start);
     if input.contains(char::is_whitespace) && completing_skill_arg.is_none() {
@@ -2449,6 +2453,64 @@ pub(crate) fn slash_completion_hints(
     };
     entries.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name)));
     entries.dedup_by(|a, b| a.name == b.name);
+    entries.into_iter().take(limit).collect()
+}
+
+fn dollar_skill_completion_hints(
+    skill_prefix: &str,
+    limit: usize,
+    cached_skills: &[(String, String)],
+) -> Vec<SlashMenuEntry> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let skill_prefix = skill_prefix.to_ascii_lowercase();
+    let mut entries: Vec<SlashMenuEntry> = Vec::new();
+
+    for (skill_name, skill_desc) in cached_skills {
+        let skill_name_lower = skill_name.to_ascii_lowercase();
+        if skill_name_lower.starts_with(&skill_prefix) {
+            entries.push(SlashMenuEntry {
+                name: format!("${skill_name}"),
+                description: skill_desc.clone(),
+                is_skill: true,
+                alias_hint: None,
+            });
+        }
+    }
+    for (skill_name, skill_desc) in cached_skills {
+        let skill_name_lower = skill_name.to_ascii_lowercase();
+        let entry_name = format!("${skill_name}");
+        if skill_name_lower.contains(&skill_prefix)
+            && !entries.iter().any(|entry| entry.name == entry_name)
+        {
+            entries.push(SlashMenuEntry {
+                name: entry_name,
+                description: skill_desc.clone(),
+                is_skill: true,
+                alias_hint: None,
+            });
+        }
+    }
+    for (skill_name, skill_desc) in cached_skills {
+        let skill_name_lower = skill_name.to_ascii_lowercase();
+        let entry_name = format!("${skill_name}");
+        if !skill_name_lower.starts_with(&skill_prefix)
+            && !skill_name_lower.contains(&skill_prefix)
+            && fuzzy_chars_in_order(&skill_prefix, &skill_name_lower)
+            && !entries.iter().any(|entry| entry.name == entry_name)
+        {
+            entries.push(SlashMenuEntry {
+                name: entry_name,
+                description: skill_desc.clone(),
+                is_skill: true,
+                alias_hint: None,
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries.into_iter().take(limit).collect()
 }
 
@@ -3350,6 +3412,25 @@ mod tests {
         );
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].name, "/skill my-review");
+        assert!(hints[0].is_skill);
+    }
+
+    #[test]
+    fn slash_completion_hints_complete_dollar_skill_alias_prefix() {
+        let cached_skills = vec![
+            ("search-files".to_string(), "Search files".to_string()),
+            ("my-review".to_string(), "Review code".to_string()),
+        ];
+        let hints = slash_completion_hints(
+            "$my",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].name, "$my-review");
         assert!(hints[0].is_skill);
     }
 

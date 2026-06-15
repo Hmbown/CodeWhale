@@ -91,7 +91,15 @@ pub(crate) fn resolve_skills_dir(
 }
 
 pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
-    let Some(rest) = input.trim_start().strip_prefix('/') else {
+    let input = input.trim_start();
+    if let Some(rest) = input.strip_prefix('$') {
+        if rest.is_empty() {
+            return true;
+        }
+        return !rest.chars().any(char::is_whitespace) && !rest.contains('/');
+    }
+
+    let Some(rest) = input.strip_prefix('/') else {
         return false;
     };
     if rest.chars().next().is_some_and(|ch| ch.is_whitespace()) {
@@ -5928,8 +5936,13 @@ mod tests {
         assert!(looks_like_slash_command_input("/"));
         assert!(looks_like_slash_command_input("/help"));
         assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
+        assert!(looks_like_slash_command_input("$getting-started"));
+        assert!(looks_like_slash_command_input("  $getting-started"));
+        assert!(looks_like_slash_command_input("$"));
         assert!(!looks_like_slash_command_input("/ hello"));
         assert!(!looks_like_slash_command_input("  / hello"));
+        assert!(!looks_like_slash_command_input("$ getting-started"));
+        assert!(!looks_like_slash_command_input("$getting-started now"));
         assert!(!looks_like_slash_command_input(
             "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
         ));

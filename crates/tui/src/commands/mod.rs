@@ -106,6 +106,33 @@ pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
 /// Execute a slash command
 pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     let trimmed = cmd.trim();
+    if let Some(rest) = trimmed.strip_prefix('$') {
+        let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
+        let skill_name = parts.first().copied().unwrap_or_default().trim();
+        let arg = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+
+        if skill_name.is_empty() || arg.is_some() {
+            return CommandResult::error("Usage: $<skill-name> or /skill <name>");
+        }
+
+        if let Some(result) = groups::skills::run_skill_by_name(app, skill_name, None) {
+            return result;
+        }
+        let normalized_skill_name = skill_name.to_ascii_lowercase();
+        if normalized_skill_name != skill_name
+            && let Some(result) =
+                groups::skills::run_skill_by_name(app, normalized_skill_name.as_str(), None)
+        {
+            return result;
+        }
+        return CommandResult::error(format!(
+            "Unknown skill: ${skill_name}. Run /skills to list available skills."
+        ));
+    }
+
     let parts: Vec<&str> = trimmed.splitn(2, char::is_whitespace).collect();
     let command = parts
         .first()
@@ -942,6 +969,43 @@ mod tests {
         };
         assert!(message.contains(r#"content: "inspect   this   corpus""#));
         assert!(message.contains("sub_rlm_max_depth: 3"));
+    }
+
+    #[test]
+    fn dollar_skill_alias_activates_named_skill() {
+        let (mut app, tmpdir, _guard) = create_isolated_test_app();
+        let skill_dir = tmpdir.path().join("skills").join("dollar-alias");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: dollar-alias\ndescription: Dollar alias\n---\nUse the dollar alias.\n",
+        )
+        .expect("skill file");
+
+        let result = execute("$dollar-alias", &mut app);
+
+        assert!(!result.is_error, "got: {:?}", result.message);
+        assert!(app.active_skill.is_some());
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Skill 'dollar-alias' activated")
+        );
+    }
+
+    #[test]
+    fn dollar_skill_alias_reports_unknown_skill() {
+        let (mut app, _tmpdir, _guard) = create_isolated_test_app();
+
+        let result = execute("$missing-skill", &mut app);
+
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.as_deref(),
+            Some("Error: Unknown skill: $missing-skill. Run /skills to list available skills.")
+        );
     }
 
     #[test]

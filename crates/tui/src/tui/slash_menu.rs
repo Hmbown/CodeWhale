@@ -20,10 +20,10 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<SlashMenuEntry
     if app.slash_menu_hidden {
         return Vec::new();
     }
-    if let Some((_byte_start, partial)) =
+    if let Some((_byte_start, trigger, partial)) =
         partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position)
     {
-        return skill_mention_entries(&partial, limit, &app.cached_skills);
+        return skill_mention_entries(trigger, &partial, limit, &app.cached_skills);
     }
     slash_completion_hints(
         &app.input,
@@ -51,13 +51,13 @@ pub fn apply_slash_menu_selection(
     let selected = &entries[selected_idx];
 
     if selected.is_skill
-        && let Some((byte_start, partial)) =
+        && let Some((byte_start, trigger, partial)) =
             partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position)
         && let Some(skill_name) = skill_name_from_menu_entry(selected)
     {
-        replace_inline_skill_mention(app, byte_start, &partial, &skill_name);
+        replace_inline_skill_mention(app, byte_start, trigger, &partial, &skill_name);
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Skill selected: /{skill_name}"));
+        app.status_message = Some(format!("Skill selected: {trigger}{skill_name}"));
         return true;
     }
 
@@ -86,7 +86,7 @@ pub fn apply_slash_menu_selection(
 pub(crate) fn partial_inline_skill_mention_at_cursor(
     input: &str,
     cursor_chars: usize,
-) -> Option<(usize, String)> {
+) -> Option<(usize, char, String)> {
     if looks_like_slash_command_input(input) {
         return None;
     }
@@ -97,9 +97,11 @@ pub(crate) fn partial_inline_skill_mention_at_cursor(
     }
 
     let mut start_chars = cursor_chars;
+    let mut trigger = None;
     while start_chars > 0 {
         let prev = chars[start_chars - 1];
-        if prev == '/' {
+        if matches!(prev, '/' | '$') {
+            trigger = Some(prev);
             start_chars -= 1;
             break;
         }
@@ -109,7 +111,8 @@ pub(crate) fn partial_inline_skill_mention_at_cursor(
         start_chars -= 1;
     }
 
-    if start_chars == cursor_chars || chars.get(start_chars) != Some(&'/') {
+    let trigger = trigger?;
+    if start_chars == cursor_chars || chars.get(start_chars) != Some(&trigger) {
         return None;
     }
     if !is_inline_skill_mention_start(&chars, start_chars) {
@@ -126,11 +129,11 @@ pub(crate) fn partial_inline_skill_mention_at_cursor(
         end_chars += 1;
     }
     let partial: String = chars[start_chars + 1..end_chars].iter().collect();
-    if partial.contains('/') {
+    if partial.contains('/') || partial.contains('$') {
         return None;
     }
 
-    Some((byte_start, partial))
+    Some((byte_start, trigger, partial))
 }
 
 fn is_inline_skill_mention_start(chars: &[char], idx: usize) -> bool {
@@ -143,6 +146,7 @@ fn is_inline_skill_mention_start(chars: &[char], idx: usize) -> bool {
 }
 
 fn skill_mention_entries(
+    trigger: char,
     partial: &str,
     limit: usize,
     cached_skills: &[(String, String)],
@@ -155,7 +159,7 @@ fn skill_mention_entries(
         .iter()
         .filter(|(skill_name, _)| skill_name.to_ascii_lowercase().starts_with(&partial_lower))
         .map(|(skill_name, skill_desc)| SlashMenuEntry {
-            name: format!("/{skill_name}"),
+            name: format!("{trigger}{skill_name}"),
             description: skill_desc.clone(),
             is_skill: true,
             alias_hint: None,
@@ -173,6 +177,9 @@ fn skill_name_from_menu_entry(entry: &SlashMenuEntry) -> Option<String> {
     if let Some(name) = entry.name.strip_prefix("/skill ") {
         return Some(name.trim().to_string());
     }
+    if let Some(name) = entry.name.strip_prefix('$') {
+        return Some(name.trim().to_string());
+    }
     entry
         .name
         .strip_prefix('/')
@@ -181,13 +188,20 @@ fn skill_name_from_menu_entry(entry: &SlashMenuEntry) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn replace_inline_skill_mention(app: &mut App, byte_start: usize, partial: &str, skill_name: &str) {
-    let original_token_len = '/'.len_utf8() + partial.len();
+fn replace_inline_skill_mention(
+    app: &mut App,
+    byte_start: usize,
+    trigger: char,
+    partial: &str,
+    skill_name: &str,
+) {
+    let original_token_len = trigger.len_utf8() + partial.len();
     let original_token_end = byte_start + original_token_len;
-    let mut new_input =
-        String::with_capacity(app.input.len() - original_token_len + 1 + skill_name.len());
+    let mut new_input = String::with_capacity(
+        app.input.len() - original_token_len + trigger.len_utf8() + skill_name.len(),
+    );
     new_input.push_str(&app.input[..byte_start]);
-    new_input.push('/');
+    new_input.push(trigger);
     new_input.push_str(skill_name);
     if original_token_end < app.input.len() {
         new_input.push_str(&app.input[original_token_end..]);
@@ -222,24 +236,26 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         return false;
     }
 
-    let prefix = app.input.trim_start_matches('/');
+    let trimmed = app.input.trim_start();
+    let trigger = if trimmed.starts_with('$') { '$' } else { '/' };
+    let prefix = trimmed.strip_prefix(trigger).unwrap_or(trimmed);
     let refs: Vec<&str> = candidates
         .iter()
-        .map(|name| name.trim_start_matches('/'))
+        .map(|name| name.trim_start_matches(trigger))
         .collect();
     let shared = crate::tui::file_mention::longest_common_prefix(&refs);
 
     if !shared.is_empty() && shared.len() > prefix.len() {
-        app.input = format!("/{shared}");
+        app.input = format!("{trigger}{shared}");
         app.cursor_position = app.input.chars().count();
         app.slash_menu_hidden = false;
-        app.status_message = Some(format!("Autocomplete: /{shared}"));
+        app.status_message = Some(format!("Autocomplete: {trigger}{shared}"));
         return true;
     }
 
     if candidates.len() == 1 {
         let mut completed = candidates[0].clone();
-        if !completed.ends_with(' ') {
+        if !completed.starts_with('$') && !completed.ends_with(' ') {
             completed.push(' ');
         }
         app.input = completed.clone();
