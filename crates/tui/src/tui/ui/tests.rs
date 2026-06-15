@@ -3305,11 +3305,15 @@ fn turn_liveness_does_not_abort_running_tool() {
 #[test]
 fn turn_liveness_does_not_abort_running_tool_with_recent_heartbeat() {
     let mut app = create_test_app();
-    let now = Instant::now();
+    // Use addition (not subtraction) to avoid Instant underflow on platforms
+    // where Instant::now() returns a small value (e.g. fresh Windows CI runners).
+    let base = Instant::now();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.turn_started_at = Some(now - TOOL_HANG_WATCHDOG_TIMEOUT - Duration::from_secs(30));
-    app.turn_last_activity_at = Some(now - Duration::from_secs(10));
+    app.turn_started_at = Some(base);
+    // Last activity is recent (5s before now), started_at is well past the watchdog.
+    app.turn_last_activity_at = Some(base + TOOL_HANG_WATCHDOG_TIMEOUT - Duration::from_secs(5));
+    let now = base + TOOL_HANG_WATCHDOG_TIMEOUT + Duration::from_secs(30);
     let mut active = ActiveCell::new();
     active.push_tool(
         "tool-1",
@@ -3337,12 +3341,16 @@ fn turn_liveness_does_not_abort_running_tool_with_recent_heartbeat() {
 #[test]
 fn turn_liveness_recovers_running_tool_without_heartbeat() {
     let mut app = create_test_app();
-    let now = Instant::now();
+    // Use addition (not subtraction) to avoid Instant underflow on platforms
+    // where Instant::now() returns a small value (e.g. fresh Windows CI runners).
+    let base = Instant::now();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
     app.runtime_turn_id = Some("stale-tool-turn".to_string());
-    app.turn_started_at = Some(now - TOOL_HANG_WATCHDOG_TIMEOUT - Duration::from_secs(1));
-    app.turn_last_activity_at = app.turn_started_at;
+    app.turn_started_at = Some(base);
+    // No recent activity: last_activity equals started_at, both are well past the watchdog.
+    app.turn_last_activity_at = Some(base);
+    let now = base + TOOL_HANG_WATCHDOG_TIMEOUT + Duration::from_secs(30);
     app.user_scrolled_during_stream = true;
     let mut active = ActiveCell::new();
     active.push_tool(
