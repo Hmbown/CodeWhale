@@ -3749,7 +3749,9 @@ impl App {
     fn auto_expand_oversized_paste(&mut self) {
         if let Some(full) = self.oversized_paste_full_text.take() {
             self.input = full;
-            self.cursor_position = 0;
+            // Clamp cursor to the new length instead of resetting to 0,
+            // so the user's position in the truncated preview is preserved.
+            self.cursor_position = self.cursor_position.min(char_count(&self.input));
         }
     }
 
@@ -4619,6 +4621,10 @@ impl App {
         self.clear_input_history_navigation();
         self.input.clear();
         self.cursor_position = 0;
+        // Prevent stale oversized-paste state from leaking when the user
+        // clears the composer or navigates to a different input (#3263).
+        self.pending_paste_reference = None;
+        self.oversized_paste_full_text = None;
         self.selection_anchor = None;
         self.selected_attachment_index = None;
         self.slash_menu_selected = 0;
@@ -4633,6 +4639,9 @@ impl App {
     }
 
     pub fn stash_current_input_for_recovery(&mut self) {
+        // Before stashing, expand any truncated paste so the saved draft
+        // contains the full text, not the truncated preview (#3263).
+        self.auto_expand_oversized_paste();
         let draft = self.input.clone();
         if draft.trim().is_empty() {
             self.clear_undo_buffer = None;
@@ -4657,6 +4666,9 @@ impl App {
         if self.composer_history_search.is_some() {
             return;
         }
+        // Expand any truncated paste first so the history search seed
+        // contains the full text, not the truncated preview (#3263).
+        self.auto_expand_oversized_paste();
         self.composer_history_search = Some(ComposerHistorySearch::new(
             self.input.clone(),
             self.cursor_position,
@@ -5148,6 +5160,9 @@ impl App {
             return;
         }
         if self.history_index.is_none() {
+            // Expand truncated paste first so the saved draft contains the
+            // full text instead of the truncated preview (#3263).
+            self.auto_expand_oversized_paste();
             self.history_navigation_draft = Some(InputHistoryDraft {
                 input: self.input.clone(),
                 cursor: self.cursor_position,

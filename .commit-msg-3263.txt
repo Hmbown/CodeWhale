@@ -1,0 +1,19 @@
+feat(tui): keep oversized paste inline with truncation and auto-expand (#3263)
+
+Previously, when the composer exceeded MAX_SUBMITTED_INPUT_CHARS (16K), the
+entire content was replaced with an `@.codewhale/pastes/paste-...md` file
+mention. This made it impossible for users to select, copy, or edit the
+original text from the composer.
+
+Changes:
+- Keep the full text in the composer instead of replacing it with an @mention.
+  The paste file is still written silently as a backup.
+- Truncate the composer display to MAX_COMPOSER_DISPLAY_CHARS (4K) with a
+  visual indicator for performance. The full text is stored in
+  `oversized_paste_full_text` and submitted to the model at send time.
+- Append the @mention at submit time so the model can also read the full file.
+- Auto-expand: any keystroke (insert, delete, backspace, vim x) on truncated
+  content restores the full text for viewing and editing.
+- Updated all three paste consolidation tests to reflect the new behavior.
+
+Closes #3263.
