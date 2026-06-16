@@ -12,18 +12,13 @@
 //!   `part_of` `PR #2933`).
 //! - **Facts**: Standalone factual statements, optionally bound to an entity.
 //!   Stored with an importance score (0.0–1.0) for active forgetting.
-//!
-//! ## Usage
-//!
-//! ```rust,ignore
-//! use codewhale_memory::MemoryStore;
-//!
-//! let store = MemoryStore::open(&path)?;
-//! store.insert_fact(None, "user prefers 4-space indentation", "user", 0.9, None)?;
-//! let facts = store.search_facts("indentation", 10)?;
-//! ```
+//! - **Namespaces**: Workspace/project-level isolation for multi-repo setups.
+//! - **Glossary**: Keyword/tags for cross-referencing facts and entities.
+//! - **Fact Versions**: Version history enabling rollback to previous states.
 
 pub mod schema;
 pub mod store;
 
-pub use store::{Entity, Fact, MemoryStore, Relation};
+pub use store::{
+    Entity, Fact, FactVersion, GlossaryTerm, MemoryStats, MemoryStore, Namespace, Relation,
+};

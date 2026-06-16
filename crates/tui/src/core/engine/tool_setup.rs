@@ -101,10 +101,10 @@ impl Engine {
             builder = builder.with_remember_tool();
         }
 
-        // Register hippocampal memory tools (`memorize`/`recall`) whenever
-        // the memory store is configured. These are always available if the
-        // database path is set, independent of the user-memory.md feature.
-        builder = builder.with_memorize_tool().with_recall_tool();
+        // Register hippocampal memory tools (`memorize`/`recall`/`consolidate`)
+        // whenever the memory store is configured. These are always available
+        // if the database path is set, independent of the user-memory.md feature.
+        builder = builder.with_memorize_tool().with_recall_tool().with_consolidate_tool();
 
         // Register image_analyze tool when vision_model is configured and feature enabled.
         if self.config.features.enabled(Feature::VisionModel)

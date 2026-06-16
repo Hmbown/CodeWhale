@@ -1,9 +1,8 @@
 //! `recall` tool — query the hippocampal memory store.
 //!
-//! Performs full-text search over stored facts and optionally returns
-//! related entities and relations. This is the retrieval side of the
-//! hippocampal memory system — the agent uses it when it needs to
-//! remember something from a previous session or earlier in the current one.
+//! Performs full-text search over stored facts, optionally scoped to a
+//! namespace, and returns related entities, relations, and glossary tags.
+//! This is the retrieval side of the hippocampal memory system.
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -26,7 +25,8 @@ impl ToolSpec for RecallTool {
         "Search long-term memory for facts and entities learned in previous sessions. \
          Use this when you need to remember project context, user preferences, \
          architecture decisions, or anything stored with `memorize`. \
-         Results include facts, related entities, and their relationships. \
+         Results include facts, related entities, relationships, and glossary tags. \
+         Optionally scope the search to a namespace for workspace isolation. \
          The more specific your query, the better the results."
     }
 
@@ -45,6 +45,14 @@ impl ToolSpec for RecallTool {
                 "include_graph": {
                     "type": "boolean",
                     "description": "Also return related entities and relationships (default true)"
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Optional namespace to scope the search (e.g. 'workspace:/path/to/project'). Only facts within this namespace are returned."
+                },
+                "glossary_tag": {
+                    "type": "string",
+                    "description": "Optional glossary tag to filter facts by (e.g. 'rate-limit'). Only facts tagged with this term are returned."
                 }
             },
             "required": ["query"]
@@ -65,38 +73,86 @@ impl ToolSpec for RecallTool {
             .and_then(|v| v.as_str())
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                ToolError::missing_field("query")
-            })?;
+            .ok_or_else(|| ToolError::missing_field("query"))?;
 
         let limit = optional_u64(&input, "limit", 5).min(20) as usize;
         let include_graph = input
             .get("include_graph")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        let namespace = input
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let glossary_tag = input
+            .get("glossary_tag")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
 
         let store = context.memory_store.as_ref().ok_or_else(|| {
-            ToolError::execution_failed(
-                "hippocampal memory is not available",
-            )
+            ToolError::execution_failed("hippocampal memory is not available")
         })?;
 
-        // Search facts
-        let facts = store.search_facts(query, limit).map_err(|e| {
-            ToolError::execution_failed(format!("memory search failed: {e}"))
-        })?;
+        // Resolve namespace to ID if provided
+        let namespace_id = if let Some(ns_name) = namespace {
+            // Search by name to find existing namespace
+            let nss = store.list_namespaces().map_err(|e| {
+                ToolError::execution_failed(format!("failed to list namespaces: {e}"))
+            })?;
+            nss.into_iter().find(|ns| ns.name == ns_name)
+        } else {
+            None
+        };
+
+        // Search facts — scoped by namespace if provided
+        let facts = if let Some(ref ns) = namespace_id {
+            store.search_facts_in_namespace(query, &ns.id, limit)
+        } else {
+            store.search_facts(query, limit)
+        }
+        .map_err(|e| ToolError::execution_failed(format!("memory search failed: {e}")))?;
+
+        // If glossary_tag filter is provided, further filter
+        let facts = if let Some(tag) = glossary_tag {
+            // Find the glossary term
+            let terms = store.search_glossary(tag, 5).map_err(|e| {
+                ToolError::execution_failed(format!("glossary search failed: {e}"))
+            })?;
+            if let Some(term) = terms.into_iter().find(|t| t.term == tag) {
+                let tagged = store.search_facts_by_glossary(&term.id, limit).map_err(|e| {
+                    ToolError::execution_failed(format!("tagged search failed: {e}"))
+                })?;
+                // Intersection with current facts
+                let tagged_ids: std::collections::HashSet<String> =
+                    tagged.into_iter().map(|f| f.id).collect();
+                facts.into_iter().filter(|f| tagged_ids.contains(&f.id)).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            facts
+        };
 
         // Search entities
-        let entities = store.search_entities(query, limit).map_err(|e| {
-            ToolError::execution_failed(format!("entity search failed: {e}"))
-        })?;
+        let entities = if let Some(ref ns) = namespace_id {
+            store.search_entities_in_namespace(query, &ns.id, limit)
+        } else {
+            store.search_entities(query, limit)
+        }
+        .map_err(|e| ToolError::execution_failed(format!("entity search failed: {e}")))?;
 
         if facts.is_empty() && entities.is_empty() {
             // Fallback: return top important facts as a hint
-            let top = store.important_facts(3).map_err(|_| ());
-            if let Ok(top_facts) = top
-                && !top_facts.is_empty()
-            {
+            let top = if let Some(ref ns) = namespace_id {
+                store.important_facts_in_namespace(&ns.id, 3)
+            } else {
+                store.important_facts(3)
+            }
+            .map_err(|_| ());
+
+            if let Ok(top_facts) = top && !top_facts.is_empty() {
                 let mut result = format!("No results for '{query}'.\n\nTop stored facts:\n");
                 for (i, f) in top_facts.iter().enumerate() {
                     result.push_str(&format!("{}. [imp={:.1}] {}\n", i + 1, f.importance, f.content));
@@ -110,14 +166,24 @@ impl ToolSpec for RecallTool {
 
         let mut output = String::new();
 
-        // Facts
+        // Facts with glossary tags
         if !facts.is_empty() {
             output.push_str(&format!("Facts ({}):\n", facts.len()));
             for (i, f) in facts.iter().enumerate() {
                 output.push_str(&format!("{}. [imp={:.1}] {}\n", i + 1, f.importance, f.content));
+
+                // Show linked entity
                 if let Some(ref eid) = f.entity_id {
                     if let Ok(Some(e)) = store.get_entity(eid) {
                         output.push_str(&format!("   → linked to {} '{}'\n", e.kind, e.name));
+                    }
+                }
+
+                // Show glossary tags
+                if let Ok(tags) = store.get_fact_glossary_terms(&f.id) {
+                    if !tags.is_empty() {
+                        let tag_names: Vec<&str> = tags.iter().map(|t| t.term.as_str()).collect();
+                        output.push_str(&format!("   → tags: [{}]\n", tag_names.join(", ")));
                     }
                 }
             }
@@ -134,7 +200,7 @@ impl ToolSpec for RecallTool {
             }
         }
 
-        // Graph walk: if include_graph and we have entities, show relations
+        // Graph walk
         if include_graph {
             for e in &entities {
                 if let Ok(rels) = store.relations_for_entity(&e.id, 5)
@@ -154,7 +220,10 @@ impl ToolSpec for RecallTool {
                             .flatten()
                             .map(|e| e.name)
                             .unwrap_or_default();
-                        output.push_str(&format!("  {} ──{}({:.1})──▶ {}\n", source_name, r.kind, r.strength, target_name));
+                        output.push_str(&format!(
+                            "  {} ──{}({:.1})──▶ {}\n",
+                            source_name, r.kind, r.strength, target_name
+                        ));
                     }
                 }
             }

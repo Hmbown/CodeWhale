@@ -1,0 +1,32 @@
+feat(hippocampal): v2 memory system — glossary, namespaces, rollback, auto-inject, daemon
+
+Complete v2 overhaul of the hippocampal memory system:
+
+Storage layer (crates/memory/):
+- Schema migration system (schema_version table) for safe upgrades
+- Namespaces table for workspace/project-level isolation
+- Glossary table + fact_glossary/entity_glossary for keyword tagging
+- fact_versions table for rollback support (every update saves history)
+- New store methods: namespace CRUD, glossary CRUD, fact versioning,
+  rollback, get_memory_stats, namespace-scoped queries
+- 5 new unit tests (namespace, glossary, versioning, rollback, stats)
+
+Agent tools (crates/tui/src/tools/):
+- memorize: new glossary_tags[] and namespace input parameters
+- recall: new namespace and glossary_tag filtering, glossary tag display
+- consolidate: NEW tool — stats/rollback/prune/merge actions
+
+System integration (crates/tui/src/core/engine.rs):
+- memory_context_block(): injects top-8 important facts + usage guidance
+  into the system prompt on every refresh (cross-session awareness)
+- memory_daemon_loop(): background tokio task, prunes low-importance
+  facts every 6 hours, logs memory statistics
+
+Prompt guidance (crates/tui/src/prompts/):
+- hippocampal_guidance.md: tells the model to auto-call memorize when
+  it discovers architecture decisions, user preferences, etc.
+
+Design doc: MEMORY_DESIGN.md covers architecture decisions, comparison
+with Mem0 / Nocturne Memory / Awareness-Local, and future roadmap.
+
+Refs: #2933, #3234

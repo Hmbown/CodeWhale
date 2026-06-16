@@ -2470,6 +2470,17 @@ impl Engine {
             prompt_text.push_str(block);
         }
 
+        // Hippocampal memory context: inject top important facts from the
+        // memory store so the model can recall cross-session knowledge
+        // without an explicit `recall` call.
+        let memory_block = self.memory_context_block();
+        if let Some(ref block) = memory_block
+            && let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt
+        {
+            prompt_text.push_str("\n\n");
+            prompt_text.push_str(block);
+        }
+
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
             return;
@@ -2503,6 +2514,42 @@ impl Engine {
             });
         self.slop_ledger_gate_cache = Some((modified, loaded.clone()));
         loaded
+    }
+
+    /// Build a `<memory_context>` block from the hippocampal memory store.
+    ///
+    /// Injects the top-N most important facts, available glossary terms,
+    /// and usage guidance so the model has cross-session awareness and
+    /// knows how to use `memorize`/`recall`/`consolidate` proactively.
+    fn memory_context_block(&self) -> Option<String> {
+        let store = self.memory_store.as_ref()?;
+
+        let mut block = String::from("<memory_context>\n");
+
+        // Top important facts
+        if let Ok(facts) = store.important_facts(8) {
+            for (i, fact) in facts.iter().enumerate() {
+                block.push_str(&format!("{}. [imp={:.1}] {}\n", i + 1, fact.importance, fact.content));
+                if let Ok(tags) = store.get_fact_glossary_terms(&fact.id) {
+                    if !tags.is_empty() {
+                        let tag_names: Vec<&str> = tags.iter().map(|t| t.term.as_str()).collect();
+                        block.push_str(&format!("   tags: [{}]\n", tag_names.join(", ")));
+                    }
+                }
+            }
+        }
+
+        // Usage guidance (always included when memory is available)
+        block.push_str(
+            "\nAutomatically call `memorize` when you discover architecture decisions, \
+             user preferences, project conventions, or important relationships. \
+             Use `recall` for full-text search over past sessions. \
+             Use `consolidate action=prune` to clean low-importance facts. \
+             High-importance facts (0.8+) are retained indefinitely."
+        );
+
+        block.push_str("\n</memory_context>");
+        Some(block)
     }
 
     /// Merge a compaction summary into the system prompt.
@@ -2688,16 +2735,34 @@ pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
     let (mut engine, handle) = Engine::new(config, api_config);
 
     // Initialize hippocampal memory store if configured.
-    if let Some(db_path) = engine.config.memory_db_path.as_ref() {
-        match codewhale_memory::MemoryStore::open(db_path) {
-            Ok(store) => {
-                tracing::info!("Hippocampal memory store opened at {}", db_path.display());
-                engine.memory_store = Some(std::sync::Arc::new(store));
+    let memory_store: Option<std::sync::Arc<codewhale_memory::MemoryStore>> =
+        if let Some(db_path) = engine.config.memory_db_path.as_ref() {
+            match codewhale_memory::MemoryStore::open(db_path) {
+                Ok(store) => {
+                    tracing::info!("Hippocampal memory store opened at {}", db_path.display());
+                    let arc = std::sync::Arc::new(store);
+                    engine.memory_store = Some(arc.clone());
+                    Some(arc)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to open hippocampal memory store at {}: {e}",
+                        db_path.display()
+                    );
+                    None
+                }
             }
-            Err(e) => {
-                tracing::warn!("Failed to open hippocampal memory store at {}: {e}", db_path.display());
-            }
-        }
+        } else {
+            None
+        };
+
+    // Spawn the memory daemon — background tasks for periodic pruning,
+    // consolidation, and statistics logging. Runs only when a memory
+    // store is configured.
+    if let Some(store) = memory_store {
+        tokio::spawn(async move {
+            memory_daemon_loop(store).await;
+        });
     }
 
     spawn_supervised(
@@ -2842,6 +2907,46 @@ use self::tool_catalog::{
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::sandbox_policy_for_mode;
 use crate::tools::js_execution::execute_js_execution_tool;
+
+/// Background daemon loop for hippocampal memory maintenance.
+///
+/// Runs indefinitely, performing periodic tasks:
+/// - Every 6 hours: prune low-importance facts (importance < 0.3, older than 30 days)
+/// - Every 6 hours: log memory usage statistics
+async fn memory_daemon_loop(store: std::sync::Arc<codewhale_memory::MemoryStore>) {
+    const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60); // 6h
+    let mut interval = tokio::time::interval(PRUNE_INTERVAL);
+    // Tick once immediately on start
+    interval.tick().await;
+
+    loop {
+        interval.tick().await;
+
+        // Prune low-importance facts older than 30 days
+        match store.prune_low_importance_facts(0.3, 30) {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::info!("Memory daemon: pruned {count} low-importance facts");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Memory daemon: prune failed: {e}");
+            }
+        }
+
+        // Log memory statistics
+        if let Ok(stats) = store.get_memory_stats() {
+            tracing::info!(
+                "Memory daemon: {} facts, {} entities, {} relations, {} glossary terms, {} namespaces",
+                stats.total_facts,
+                stats.total_entities,
+                stats.total_relations,
+                stats.total_glossary_terms,
+                stats.total_namespaces,
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;

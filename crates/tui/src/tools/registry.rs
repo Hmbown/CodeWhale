@@ -861,6 +861,14 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RecallTool))
     }
 
+    /// Include the hippocampal `consolidate` tool (stats, rollback, prune, merge).
+    /// Requires `MemoryStore` in `ToolContext`.
+    #[must_use]
+    pub fn with_consolidate_tool(self) -> Self {
+        use super::consolidate::ConsolidateTool;
+        self.with_tool(Arc::new(ConsolidateTool))
+    }
+
     /// Include the slop ledger tools (#2127) — durable tracking of
     /// unresolved architectural residue: append, query, update, export.
     /// Registered unconditionally; the ledger JSON file is auto-created

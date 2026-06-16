@@ -36,6 +36,7 @@ pub mod plan;
 pub mod plugin;
 pub mod project;
 pub mod registry;
+pub mod consolidate;
 pub mod recall;
 pub mod remember;
 pub mod memorize;
