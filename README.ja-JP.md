@@ -27,6 +27,10 @@ cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
+> **Linux ユーザーへ:** ビルド依存パッケージを先にインストールしてください:
+> `sudo apt-get install -y build-essential pkg-config libdbus-1-dev`。
+> 詳細は [INSTALL.md](docs/INSTALL.md#4-install-via-cargo-any-tier-1-rust-target) を参照。
+
 その他の経路:
 
 ```bash

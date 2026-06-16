@@ -32,6 +32,10 @@ cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
+> **Linux 用户注意：** 请先安装系统构建依赖：
+> `sudo apt-get install -y build-essential pkg-config libdbus-1-dev`。
+> 详见 [INSTALL.md](docs/INSTALL.md#4-install-via-cargo-any-tier-1-rust-target)。
+
 如果访问 GitHub 不稳定，推荐直接走下面的 CNB 镜像。其他安装路径：
 
 ```bash

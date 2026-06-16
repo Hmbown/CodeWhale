@@ -169,6 +169,9 @@ behind GitHub-blocking networks should use one of these paths:
   ```
   (Both binaries are required — the dispatcher and the TUI ship
   separately; see `AGENTS.md` for the two-binary install rationale.)
+  Linux build-time dependencies (`build-essential`, `pkg-config`,
+  `libdbus-1-dev` on Debian/Ubuntu) are required — see
+  [INSTALL.md](INSTALL.md#4-install-via-cargo-any-tier-1-rust-target).
 
 - **CNB release assets** for Linux x64, when the matching CNB tag pipeline has
   completed successfully. Download `codewhale-linux-x64`,

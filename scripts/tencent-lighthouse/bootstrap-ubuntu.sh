@@ -25,6 +25,7 @@ apt-get install -y \
   openssh-client \
   build-essential \
   pkg-config \
+  libdbus-1-dev \
   libssl-dev \
   nodejs \
   npm \

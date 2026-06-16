@@ -32,6 +32,10 @@ cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
+> **Linux users:** install system build dependencies first:
+> `sudo apt-get install -y build-essential pkg-config libdbus-1-dev`.
+> See [INSTALL.md](docs/INSTALL.md#4-install-via-cargo-any-tier-1-rust-target).
+
 Every other path:
 
 ```bash

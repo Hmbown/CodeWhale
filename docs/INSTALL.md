@@ -158,6 +158,24 @@ cargo install codewhale-tui     --locked   # provides `codewhale-tui`
 codewhale --version
 ```
 
+> **Linux: install build-time dependencies first.** `cargo install` compiles
+> from source, and on Linux the `codewhale-tui` crate links against
+> `libdbus-1` (used by the D-Bus secret-service backend for credential
+> storage). Install the required system packages before running `cargo install`:
+>
+> ```bash
+> # Debian / Ubuntu
+> sudo apt-get install -y build-essential pkg-config libdbus-1-dev
+>
+> # Fedora / RHEL
+> sudo dnf install -y gcc make pkgconf-pkg-config dbus-devel
+> ```
+>
+> If you use the npm wrapper or download GitHub Release binaries, these
+> build-time packages are **not** required — the prebuilt binary only
+> needs the runtime library (`libdbus-1`), which is already present on
+> most desktop Linux installs.
+
 ### China / mirror-friendly install
 
 When installing from mainland China, configure mirrors for both **rustup**

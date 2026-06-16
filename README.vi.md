@@ -33,6 +33,10 @@ cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
+> **Người dùng Linux:** cài đặt các gói build trước:
+> `sudo apt-get install -y build-essential pkg-config libdbus-1-dev`.
+> Xem [INSTALL.md](docs/INSTALL.md#4-install-via-cargo-any-tier-1-rust-target).
+
 Mọi đường cài đặt khác:
 
 ```bash
