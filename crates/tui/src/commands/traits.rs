@@ -20,6 +20,19 @@ impl CommandInfo {
         self.usage.contains('<') || self.usage.contains('[')
     }
 
+    pub fn requires_required_argument(&self) -> bool {
+        let mut optional_depth = 0usize;
+        for ch in self.usage.chars() {
+            match ch {
+                '[' => optional_depth += 1,
+                ']' => optional_depth = optional_depth.saturating_sub(1),
+                '<' if optional_depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     pub fn palette_command(&self) -> String {
         if self.requires_argument() {
             format!("/{} ", self.name)

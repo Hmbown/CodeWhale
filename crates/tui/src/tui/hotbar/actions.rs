@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
+use crate::commands::{self, CommandInfo, CommandResult};
 use crate::tui::app::{App, AppAction, AppMode, SidebarFocus};
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
@@ -52,6 +53,7 @@ impl HotbarActionRegistry {
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         registry.register_builtins();
+        registry.register_slash_commands();
         registry
     }
 
@@ -113,6 +115,12 @@ impl HotbarActionRegistry {
         ));
     }
 
+    pub(crate) fn register_slash_commands(&mut self) {
+        for info in commands::command_infos() {
+            self.register(SlashHotbarAction::new(info));
+        }
+    }
+
     #[allow(dead_code)]
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<dyn HotbarAction>> {
@@ -135,6 +143,13 @@ impl HotbarActionRegistry {
     pub fn iter(&self) -> impl Iterator<Item = &dyn HotbarAction> {
         self.actions.values().map(Arc::as_ref)
     }
+}
+
+fn dispatch_command_result(app: &mut App, result: CommandResult) -> HotbarDispatch {
+    app.status_message = result.message;
+    result
+        .action
+        .map_or(HotbarDispatch::Handled, HotbarDispatch::AppAction)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,11 +213,7 @@ impl HotbarAction for AppHotbarAction {
         match self.kind {
             AppHotbarKind::VoiceToggle => {
                 let result = crate::commands::voice::voice(app);
-                app.status_message = result.message;
-                match result.action {
-                    Some(action) => Ok(HotbarDispatch::AppAction(action)),
-                    None => Ok(HotbarDispatch::Handled),
-                }
+                Ok(dispatch_command_result(app, result))
             }
             AppHotbarKind::SessionCompact => {
                 if app.is_compacting {
@@ -283,6 +294,64 @@ impl HotbarAction for AppHotbarAction {
     }
 }
 
+#[allow(dead_code)]
+struct SlashHotbarAction {
+    info: &'static CommandInfo,
+    id: String,
+    short_label: String,
+}
+
+impl SlashHotbarAction {
+    fn new(info: &'static CommandInfo) -> Self {
+        Self {
+            info,
+            id: format!("slash.{}", info.name),
+            short_label: info.name.chars().take(7).collect(),
+        }
+    }
+
+    fn prefill_composer(&self, app: &mut App) {
+        app.clear_input_recoverable();
+        app.input = format!("/{} ", self.info.name);
+        app.cursor_position = app.input.chars().count();
+        app.slash_menu_hidden = false;
+        app.needs_redraw = true;
+        app.status_message = Some(format!(
+            "Command needs arguments; complete {}",
+            app.input.trim_end()
+        ));
+    }
+}
+
+impl HotbarAction for SlashHotbarAction {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn short_label(&self) -> &str {
+        &self.short_label
+    }
+
+    fn category(&self) -> &str {
+        "slash"
+    }
+
+    fn is_active(&self, _app: &App) -> bool {
+        false
+    }
+
+    fn dispatch(&self, app: &mut App) -> Result<HotbarDispatch> {
+        if self.info.requires_required_argument() {
+            self.prefill_composer(app);
+            return Ok(HotbarDispatch::Handled);
+        }
+
+        let input = format!("/{}", self.info.name);
+        let result = commands::execute(&input, app);
+        Ok(dispatch_command_result(app, result))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -322,7 +391,8 @@ mod tests {
 
     #[test]
     fn builtins_register_expected_actions() {
-        let registry = HotbarActionRegistry::with_builtins();
+        let mut registry = HotbarActionRegistry::new();
+        registry.register_builtins();
         let ids = registry.iter().map(HotbarAction::id).collect::<Vec<_>>();
 
         assert_eq!(
@@ -359,6 +429,73 @@ mod tests {
             HotbarActionRegistry::with_builtins().len()
         );
         assert!(app.hotbar_actions.get("mode.agent").is_some());
+        assert!(app.hotbar_actions.get("slash.help").is_some());
+        assert!(app.hotbar_actions.get("slash.mode").is_some());
+    }
+
+    #[test]
+    fn slash_commands_register_as_hotbar_actions() {
+        let registry = HotbarActionRegistry::with_builtins();
+
+        for info in commands::command_infos() {
+            let action_id = format!("slash.{}", info.name);
+            let action = registry
+                .get(&action_id)
+                .unwrap_or_else(|| panic!("missing slash hotbar action for /{}", info.name));
+            assert_eq!(action.category(), "slash");
+            assert!(!action.is_active(&test_app()));
+            assert!(
+                action.short_label().chars().count() <= 7,
+                "{action_id} has an overlong short label"
+            );
+        }
+    }
+
+    #[test]
+    fn slash_hotbar_action_dispatches_argless_command() {
+        let registry = HotbarActionRegistry::with_builtins();
+        let mode = registry.get("slash.mode").expect("mode slash action");
+        let mut app = test_app();
+
+        assert_eq!(
+            mode.dispatch(&mut app).expect("dispatch /mode"),
+            HotbarDispatch::AppAction(AppAction::OpenModePicker)
+        );
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn slash_hotbar_action_dispatches_optional_argument_command_with_no_args() {
+        let registry = HotbarActionRegistry::with_builtins();
+        let task = registry.get("slash.task").expect("task slash action");
+        let mut app = test_app();
+
+        assert_eq!(
+            task.dispatch(&mut app).expect("dispatch /task"),
+            HotbarDispatch::AppAction(AppAction::TaskList)
+        );
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn slash_hotbar_action_prefills_required_argument_command() {
+        let registry = HotbarActionRegistry::with_builtins();
+        let rename = registry.get("slash.rename").expect("rename slash action");
+        let mut app = test_app();
+        app.input = "draft".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        assert_eq!(
+            rename.dispatch(&mut app).expect("dispatch /rename"),
+            HotbarDispatch::Handled
+        );
+        assert_eq!(app.input, "/rename ");
+        assert_eq!(app.cursor_position, app.input.chars().count());
+        assert_eq!(app.clear_undo_buffer.as_deref(), Some("draft"));
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Command needs arguments; complete /rename")
+        );
     }
 
     #[test]

@@ -3623,6 +3623,26 @@ fn hotbar_dispatches_bound_slot_and_ignores_empty_slot() {
 }
 
 #[test]
+fn hotbar_dispatches_slash_command_slot() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    let config = Config {
+        hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+            slot: 1,
+            label: Some("mode".to_string()),
+            action: "slash.mode".to_string(),
+        }]),
+        ..Config::default()
+    };
+
+    assert_eq!(
+        dispatch_hotbar_slot(&mut app, &config, 1).expect("slash slot dispatch"),
+        Some(HotbarDispatch::AppAction(AppAction::OpenModePicker))
+    );
+    assert!(app.input.is_empty());
+}
+
+#[test]
 fn alt_0_restores_auto_sidebar_focus() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Hidden;

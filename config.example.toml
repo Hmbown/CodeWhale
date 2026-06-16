@@ -103,6 +103,8 @@ check_for_updates = true
 #
 # Invalid slots are skipped with a warning, duplicate slots use the last entry,
 # and unknown actions are preserved so the UI can show a disabled placeholder.
+# Slash commands can be bound as slash.<name>, for example slash.mode. Commands
+# that require arguments pre-fill the composer instead of running incomplete.
 #
 # [[hotbar]]
 # slot = 1
@@ -112,6 +114,11 @@ check_for_updates = true
 # [[hotbar]]
 # slot = 2
 # action = "session.compact"
+#
+# [[hotbar]]
+# slot = 3
+# label = "mode"
+# action = "slash.mode"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Paths
