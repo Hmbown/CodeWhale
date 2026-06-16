@@ -13,6 +13,12 @@ Each repo can carry two distinct, complementary files:
   canonical file for "how should an agent work in this repo." Run `/init` to
   scaffold one. `CLAUDE.md` and `.claude/instructions.md` are read as
   compatibility fallbacks.
+
+  For a pre-built personality that enforces lazy, minimal-code discipline,
+  copy [Ponytail's `AGENTS.md`](https://github.com/DietrichGebert/ponytail/blob/main/AGENTS.md)
+  as your project instructions. It cuts 80–94% of generated code in benchmarks
+  by forcing the agent to try stdlib, native features, and one-liners before
+  writing anything. No install, no plugin — just the instruction file.
 - **`.codewhale/constitution.json`** — CodeWhale-specific **repo authority /
   prioritization policy**: when local sources conflict, which should CodeWhale
   trust first, and what to verify before claiming a task is done. `.codewhale/`
