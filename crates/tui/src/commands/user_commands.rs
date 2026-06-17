@@ -212,6 +212,20 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
             app.pausable = false;
             app.paused = false;
             app.paused_quarry = None;
+            // Clear todos and plan state from the previous command so they
+            // don't bleed into the next one. Both are behind the same locks
+            // the sidebar reads; a contended/poisoned lock is logged and
+            // skipped rather than blocking dispatch.
+            if let Ok(mut todos) = app.todos.try_lock() {
+                todos.clear();
+            } else {
+                tracing::warn!(target: "commands", "todos lock contended or poisoned — previous todos not cleared");
+            }
+            if let Ok(mut plan) = app.plan_state.try_lock() {
+                *plan = crate::tools::plan::PlanState::default();
+            } else {
+                tracing::warn!(target: "commands", "plan_state lock contended or poisoned — previous plan not cleared");
+            }
             for (key, value) in &metadata {
                 match key.as_str() {
                     "description" => {
@@ -607,6 +621,61 @@ mod tests {
         assert!(!app.pausable);
         assert!(!app.paused);
         assert!(app.paused_quarry.is_none());
+    }
+
+    #[test]
+    fn new_user_command_clears_previous_todos_and_plan() {
+        use crate::config::Config;
+        use crate::tools::plan::UpdatePlanArgs;
+        use crate::tools::todo::TodoStatus;
+
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().to_path_buf();
+        let commands_dir = ws.join(".codewhale").join("commands");
+        write_command(&commands_dir, "first", "first command body");
+        write_command(&commands_dir, "second", "second command body");
+
+        let mut app = App::new(test_options(ws), &Config::default());
+
+        // Seed the state a previous command would leave behind: a non-empty
+        // todo list and a non-empty plan. These should NOT bleed into the
+        // next command. The shared lists are tokio async mutexes, so seed and
+        // observe through `try_lock` (the same sync path dispatch uses).
+        {
+            let mut todos = app.todos.try_lock().expect("todos lock");
+            todos.add(
+                "leftover task from first command".to_string(),
+                TodoStatus::Pending,
+            );
+        }
+        {
+            let mut plan = app.plan_state.try_lock().expect("plan_state lock");
+            plan.update(UpdatePlanArgs {
+                title: Some("leftover plan".to_string()),
+                objective: Some("old goal".to_string()),
+                ..Default::default()
+            });
+        }
+
+        // Dispatch a fresh command — dispatch must reset both.
+        let _ = try_dispatch_user_command(&mut app, "/second").unwrap();
+
+        assert!(
+            app.todos
+                .try_lock()
+                .expect("todos lock")
+                .snapshot()
+                .items
+                .is_empty(),
+            "previous command's todos must be cleared on new command dispatch"
+        );
+        assert!(
+            app.plan_state
+                .try_lock()
+                .expect("plan_state lock")
+                .is_empty(),
+            "previous command's plan must be cleared on new command dispatch"
+        );
     }
 
     #[test]
