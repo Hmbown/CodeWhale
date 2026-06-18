@@ -51,6 +51,18 @@ pub const PYTHON_CANDIDATES: &[&str] = &["python3", "python", "py -3"];
 /// once per process.
 #[must_use]
 pub fn probe_executable(spec: &str) -> bool {
+    probe_executable_with_flag(spec, "--version")
+}
+
+/// Probe a single executable using an explicit version/help flag.
+///
+/// Most tools report their presence via `--version`, but some do not:
+/// Poppler's `pdftotext` treats `--version` as an input *filename* and
+/// exits non-zero ("I/O Error: Couldn't open file '--version'"), so the
+/// default probe reports it missing even when it is installed (#1667).
+/// Such tools pass their own flag (e.g. `-v`) here.
+#[must_use]
+pub fn probe_executable_with_flag(spec: &str, version_flag: &str) -> bool {
     let mut parts = spec.split_whitespace();
     let Some(program) = parts.next() else {
         return false;
@@ -59,9 +71,9 @@ pub fn probe_executable(spec: &str) -> bool {
     for arg in parts {
         cmd.arg(arg);
     }
-    cmd.arg("--version");
+    cmd.arg(version_flag);
 
-    // Silence the subprocess's stdout/stderr — `--version` would
+    // Silence the subprocess's stdout/stderr — the version banner would
     // otherwise print to our terminal during startup, which is
     // confusing on the TUI's first frame.
     cmd.stdout(std::process::Stdio::null());
@@ -110,7 +122,10 @@ pub fn resolve_pdftotext() -> Option<String> {
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
     CACHE
         .get_or_init(|| {
-            if probe_executable("pdftotext") {
+            // Poppler's `pdftotext` rejects `--version` (it is parsed as an
+            // input filename and exits non-zero), so probe with `-v`, which
+            // prints the version banner and exits 0 (#1667).
+            if probe_executable_with_flag("pdftotext", "-v") {
                 Some("pdftotext".to_string())
             } else {
                 None
@@ -456,6 +471,40 @@ mod tests {
         // most non-Windows machines (no `py` launcher), which is
         // fine — we're checking that the *split* doesn't crash.
         let _ = probe_executable("py -3");
+    }
+
+    #[test]
+    fn probe_executable_with_flag_returns_false_for_unknown_binary() {
+        assert!(!probe_executable_with_flag(
+            "codewhale-tui-imaginary-binary-xyz123",
+            "-v"
+        ));
+    }
+
+    #[test]
+    fn probe_executable_delegates_to_double_dash_version() {
+        // `probe_executable` must remain exactly
+        // `probe_executable_with_flag(.., "--version")`.
+        let spec = "codewhale-tui-imaginary-binary-xyz123";
+        assert_eq!(
+            probe_executable(spec),
+            probe_executable_with_flag(spec, "--version")
+        );
+    }
+
+    #[test]
+    fn pdftotext_resolver_detects_installed_poppler_via_dash_v() {
+        // Regression for #1667: Poppler's `pdftotext` rejects `--version`
+        // (it is parsed as an input filename and exits non-zero), so the
+        // generic `--version` probe reports it missing even when installed.
+        // The resolver must probe with `-v`. Gated on pdftotext actually
+        // being installed so CI without Poppler stays green.
+        if probe_executable_with_flag("pdftotext", "-v") {
+            assert!(
+                resolve_pdftotext().is_some(),
+                "an installed pdftotext must be detected via -v (#1667)"
+            );
+        }
     }
 
     #[test]
