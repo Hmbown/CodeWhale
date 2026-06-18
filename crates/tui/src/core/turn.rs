@@ -184,6 +184,18 @@ pub fn pre_tool_snapshot(workspace: &Path, call_id: &str, cap_bytes: u64) -> Opt
     snapshot_with_label(workspace, &format!("tool:{call_id}"), cap_bytes)
 }
 
+/// Whether a pre-tool snapshot (#384) should be captured before `tool_name`
+/// executes. Only file-modifying tools warrant a snapshot, and only when
+/// workspace snapshots are enabled.
+///
+/// The `snapshots_enabled` gate mirrors the pre/post-turn snapshot call sites;
+/// without it, `snapshots.enabled = false` was silently ignored on the
+/// per-tool path and snapshots kept accumulating (#3292).
+#[must_use]
+pub fn should_pre_tool_snapshot(snapshots_enabled: bool, tool_name: &str) -> bool {
+    snapshots_enabled && matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
+}
+
 /// Take a `post-turn:<seq>` workspace snapshot. Same failure model as
 /// [`pre_turn_snapshot`].
 pub fn post_turn_snapshot(
@@ -218,6 +230,38 @@ fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<
         Err(e) => {
             tracing::warn!(target: "snapshot", "snapshot repo init failed: {e}");
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_pre_tool_snapshot;
+
+    #[test]
+    fn pre_tool_snapshot_suppressed_when_snapshots_disabled() {
+        // #3292: `snapshots.enabled = false` must suppress per-tool snapshots.
+        for tool in ["write_file", "edit_file", "apply_patch"] {
+            assert!(
+                !should_pre_tool_snapshot(false, tool),
+                "{tool} must not snapshot when snapshots are disabled"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_tool_snapshot_only_for_file_modifying_tools_when_enabled() {
+        for tool in ["write_file", "edit_file", "apply_patch"] {
+            assert!(
+                should_pre_tool_snapshot(true, tool),
+                "{tool} should snapshot when snapshots are enabled"
+            );
+        }
+        for tool in ["read_file", "exec_shell", "grep", ""] {
+            assert!(
+                !should_pre_tool_snapshot(true, tool),
+                "{tool} must not trigger a pre-tool snapshot"
+            );
         }
     }
 }

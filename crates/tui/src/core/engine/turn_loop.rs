@@ -2079,10 +2079,12 @@ impl Engine {
                         // Per-tool snapshot for surgical undo (#384): capture workspace
                         // state before file-modifying tools execute so `/undo` can
                         // revert the most recent write_file/edit_file/apply_patch.
+                        // Gated by snapshots_enabled like the pre/post-turn sites so
+                        // `snapshots.enabled = false` suppresses these too (#3292).
                         if result_override.is_none()
-                            && matches!(
+                            && crate::core::turn::should_pre_tool_snapshot(
+                                self.config.snapshots_enabled,
                                 tool_name.as_str(),
-                                "write_file" | "edit_file" | "apply_patch"
                             )
                         {
                             let ws = self.session.workspace.clone();
