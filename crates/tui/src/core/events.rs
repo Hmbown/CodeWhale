@@ -207,6 +207,9 @@ pub enum Event {
         /// Displayed in the approval view so users understand *why* the change
         /// is being made before reviewing *what* will change.
         intent_summary: Option<String>,
+        /// When true, the UI must show the prompt instead of consuming
+        /// session/auto approval shortcuts.
+        approval_force_prompt: bool,
     },
 
     /// Request user input for a tool call

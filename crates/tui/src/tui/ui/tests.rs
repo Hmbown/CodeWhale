@@ -1645,6 +1645,55 @@ fn session_approved_cache_keeps_tool_name_session_grants() {
     );
 }
 
+#[test]
+fn forced_approval_prompt_bypasses_auto_mode_shortcut() {
+    let mut app = create_test_app();
+    app.approval_mode = ApprovalMode::Auto;
+
+    assert!(!should_auto_approve_approval_request(
+        &app,
+        "exec_shell",
+        "shell:exec_shell:cargo test",
+        true,
+    ));
+}
+
+#[test]
+fn forced_approval_prompt_bypasses_session_approval_shortcut() {
+    let mut app = create_test_app();
+    app.approval_session_approved
+        .insert("shell:exec_shell:cargo test".to_string());
+
+    assert!(!should_auto_approve_approval_request(
+        &app,
+        "exec_shell",
+        "shell:exec_shell:cargo test",
+        true,
+    ));
+}
+
+#[test]
+fn non_forced_approval_request_keeps_existing_auto_shortcuts() {
+    let mut app = create_test_app();
+    app.approval_mode = ApprovalMode::Auto;
+    assert!(should_auto_approve_approval_request(
+        &app,
+        "exec_shell",
+        "shell:exec_shell:cargo test",
+        false,
+    ));
+
+    app.approval_mode = ApprovalMode::Suggest;
+    app.approval_session_approved
+        .insert("shell:exec_shell:cargo test".to_string());
+    assert!(should_auto_approve_approval_request(
+        &app,
+        "exec_shell",
+        "shell:exec_shell:cargo test",
+        false,
+    ));
+}
+
 fn create_test_options() -> TuiOptions {
     TuiOptions {
         model: "deepseek-v4-pro".to_string(),

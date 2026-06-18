@@ -1372,6 +1372,7 @@ impl Engine {
 
                 let mut approval_required = false;
                 let mut approval_description = "Tool execution requires approval".to_string();
+                let mut approval_force_prompt = false;
                 let mut supports_parallel = false;
                 let mut read_only = false;
                 let mut detached_start = false;
@@ -1540,6 +1541,29 @@ impl Engine {
                     approval_required = true;
                 }
 
+                if blocked_error.is_none()
+                    && let Some(decision) = exec_shell_ask_rule_decision(
+                        &self.config,
+                        &tool_name,
+                        &tool_input,
+                        &self.session.workspace,
+                        self.session.approval_mode,
+                    )
+                {
+                    match decision {
+                        ExecShellAskRuleDecision::Prompt(reason) => {
+                            approval_required = true;
+                            approval_description = reason;
+                            approval_force_prompt = true;
+                        }
+                        ExecShellAskRuleDecision::Block(reason) => {
+                            approval_required = false;
+                            approval_force_prompt = false;
+                            blocked_error = Some(ToolError::permission_denied(reason));
+                        }
+                    }
+                }
+
                 let should_emit_hydration_status =
                     !deferred_tools_hydrated_this_batch.contains(&tool_name);
                 if blocked_error.is_none()
@@ -1582,6 +1606,7 @@ impl Engine {
                     interactive,
                     approval_required,
                     approval_description,
+                    approval_force_prompt,
                     supports_parallel,
                     read_only,
                     detached_start,
@@ -2027,6 +2052,7 @@ impl Engine {
                                     } else {
                                         intent_summary.clone()
                                     },
+                                    approval_force_prompt: plan.approval_force_prompt,
                                 })
                                 .await;
 

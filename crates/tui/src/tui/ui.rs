@@ -213,6 +213,17 @@ fn is_session_denied_for_key(app: &App, approval_key: &str) -> bool {
     app.approval_session_denied.contains(approval_key)
 }
 
+fn should_auto_approve_approval_request(
+    app: &App,
+    tool_name: &str,
+    grouping_key: &str,
+    approval_force_prompt: bool,
+) -> bool {
+    !approval_force_prompt
+        && (is_session_approved_for_tool(app, tool_name, grouping_key)
+            || app.approval_mode == ApprovalMode::Auto)
+}
+
 fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
     if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
         return None;
@@ -1036,6 +1047,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         search_base_url: config.search.as_ref().and_then(|s| s.base_url.clone()),
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
+        exec_policy_engine: config.exec_policy_engine.clone(),
     }
 }
 
@@ -2565,9 +2577,8 @@ async fn run_event_loop(
                         approval_key,
                         approval_grouping_key,
                         intent_summary,
+                        approval_force_prompt,
                     } => {
-                        let session_approved =
-                            is_session_approved_for_tool(app, &tool_name, &approval_grouping_key);
                         let session_denied = is_session_denied_for_key(app, &approval_key);
                         if session_denied {
                             // The user already said no to this exact tool /
@@ -2583,7 +2594,12 @@ async fn run_event_loop(
                                 }),
                             );
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
-                        } else if session_approved || app.approval_mode == ApprovalMode::Auto {
+                        } else if should_auto_approve_approval_request(
+                            app,
+                            &tool_name,
+                            &approval_grouping_key,
+                            approval_force_prompt,
+                        ) {
                             log_sensitive_event(
                                 "tool.approval.auto_approve",
                                 serde_json::json!({

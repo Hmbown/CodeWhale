@@ -2157,6 +2157,7 @@ impl RuntimeThreadManager {
             tools_always_load: self.config.tools_always_load(),
             tools: self.config.tools.clone(),
             verbosity: self.config.verbosity.clone(),
+            exec_policy_engine: self.config.exec_policy_engine.clone(),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);
@@ -4448,6 +4449,7 @@ mod tests {
                 description: "stale approval".to_string(),
                 input: serde_json::json!({}),
                 intent_summary: None,
+                approval_force_prompt: false,
             })
             .await?;
 
@@ -4527,6 +4529,7 @@ mod tests {
                 description: "external allow".to_string(),
                 input: serde_json::json!({}),
                 intent_summary: Some("I will update the config file.".to_string()),
+                approval_force_prompt: false,
             })
             .await?;
 
@@ -4624,6 +4627,7 @@ mod tests {
                 description: "external deny".to_string(),
                 input: serde_json::json!({}),
                 intent_summary: None,
+                approval_force_prompt: false,
             })
             .await?;
 
@@ -4820,6 +4824,7 @@ mod tests {
                 description: "remember=true".to_string(),
                 input: serde_json::json!({}),
                 intent_summary: None,
+                approval_force_prompt: false,
             })
             .await?;
 

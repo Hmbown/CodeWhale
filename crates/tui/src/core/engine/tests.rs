@@ -10,7 +10,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -231,12 +231,84 @@ fn make_plan_at(
         interactive,
         approval_required,
         approval_description: "desc".to_string(),
+        approval_force_prompt: false,
         supports_parallel,
         read_only,
         detached_start: false,
         blocked_error: None,
         guard_result: None,
     }
+}
+
+fn ask_rule_engine(command: &str) -> codewhale_execpolicy::ExecPolicyEngine {
+    codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+        codewhale_execpolicy::Ruleset::user(vec![], vec![])
+            .with_ask_rules(vec![codewhale_execpolicy::ToolAskRule::exec_shell(command)]),
+    ])
+}
+
+#[test]
+fn exec_shell_ask_rule_decision_prompts_for_matching_auto_command() {
+    let config = EngineConfig {
+        exec_policy_engine: ask_rule_engine("cargo test"),
+        ..EngineConfig::default()
+    };
+
+    let decision = exec_shell_ask_rule_decision(
+        &config,
+        "exec_shell",
+        &json!({"command": "cargo test --workspace"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+
+    assert_eq!(
+        decision,
+        Some(ExecShellAskRuleDecision::Prompt(
+            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval.".to_string()
+        ))
+    );
+}
+
+#[test]
+fn exec_shell_ask_rule_decision_blocks_matching_never_command() {
+    let config = EngineConfig {
+        exec_policy_engine: ask_rule_engine("cargo test"),
+        ..EngineConfig::default()
+    };
+
+    let decision = exec_shell_ask_rule_decision(
+        &config,
+        "exec_shell",
+        &json!({"command": "cargo test --workspace"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Never,
+    );
+
+    assert_eq!(
+        decision,
+        Some(ExecShellAskRuleDecision::Block(
+            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval, but approval policy is never.".to_string()
+        ))
+    );
+}
+
+#[test]
+fn exec_shell_ask_rule_decision_ignores_unmatched_command() {
+    let config = EngineConfig {
+        exec_policy_engine: ask_rule_engine("cargo test"),
+        ..EngineConfig::default()
+    };
+
+    let decision = exec_shell_ask_rule_decision(
+        &config,
+        "exec_shell",
+        &json!({"command": "git status"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+
+    assert_eq!(decision, None);
 }
 
 fn api_tool(name: &str) -> Tool {

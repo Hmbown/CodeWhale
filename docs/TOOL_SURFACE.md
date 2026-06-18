@@ -73,7 +73,9 @@ checked before trusted prefixes and block matching commands regardless of layer.
 Trusted prefixes only skip approval in modes that permit trust shortcuts. Typed
 ask records are currently a narrow foundation: when one matches under
 `AskForApproval::Never`, the command is rejected because the runtime cannot ask
-the user; existing allow/deny behavior is otherwise unchanged.
+the user; existing allow/deny behavior is otherwise unchanged. The TUI runtime
+loads ask-only records from the sibling `permissions.toml` file and applies
+matching `exec_shell` command ask-rules before Auto/session approval shortcuts.
 
 ### MCP manager and palette discovery
 

@@ -6556,6 +6556,7 @@ async fn run_exec_agent(
         tools_always_load: execution_config.tools_always_load(),
         tools: execution_config.tools.clone(),
         verbosity: execution_config.verbosity.clone(),
+        exec_policy_engine: execution_config.exec_policy_engine.clone(),
     };
 
     let engine_handle = spawn_engine(engine_config, &execution_config);

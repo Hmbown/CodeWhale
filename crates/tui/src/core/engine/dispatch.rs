@@ -45,6 +45,7 @@ pub(super) struct ToolExecutionPlan {
     pub(super) interactive: bool,
     pub(super) approval_required: bool,
     pub(super) approval_description: String,
+    pub(super) approval_force_prompt: bool,
     pub(super) supports_parallel: bool,
     pub(super) read_only: bool,
     pub(super) detached_start: bool,
