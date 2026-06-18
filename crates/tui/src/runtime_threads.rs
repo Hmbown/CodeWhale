@@ -151,6 +151,11 @@ pub struct ThreadRecord {
     /// additive metadata — older readers ignore it without misinterpretation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The session ID associated with this thread. When set, `ensure_engine_loaded`
+    /// loads the full message history (including thinking/tool blocks) from the
+    /// session file instead of reconstructing from turns (which loses process info).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -794,6 +799,31 @@ pub struct RuntimeThreadManager {
     pending_dynamic_tools: Arc<StdMutex<HashMap<String, oneshot::Sender<DynamicToolCallResult>>>>,
 }
 
+/// Helper types for `seed_thread_from_messages` — intermediate representation
+/// of a turn being built from session messages before persisting as items.
+///
+/// A single content block extracted from an assistant message.
+enum SeedItem {
+    Text(String),
+    Thinking(String),
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+/// A turn being assembled from session messages.
+struct TurnSeed {
+    user_text: String,
+    items: Vec<SeedItem>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeApprovalDecision {
     ApproveTool,
@@ -1078,6 +1108,7 @@ impl RuntimeThreadManager {
             system_prompt: req.system_prompt,
             task_id: req.task_id,
             title: None,
+            session_id: None,
         };
         self.store.save_thread(&thread)?;
         self.emit_event(
@@ -1324,6 +1355,28 @@ impl RuntimeThreadManager {
         Ok(thread)
     }
 
+    /// Link a session to a thread so that `ensure_engine_loaded` can restore
+    /// the full message history (including thinking/tool blocks) from the
+    /// session file instead of reconstructing from turns.
+    pub async fn set_thread_session_id(&self, thread_id: &str, session_id: &str) -> Result<()> {
+        let mut thread = self.get_thread(thread_id).await?;
+        if thread.session_id.as_deref() == Some(session_id) {
+            return Ok(());
+        }
+        thread.session_id = Some(session_id.to_string());
+        thread.updated_at = Utc::now();
+        self.store.save_thread(&thread)?;
+        self.emit_event(
+            thread_id,
+            None,
+            None,
+            "thread.updated",
+            json!({ "thread": thread, "changes": { "session_id": session_id } }),
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn ensure_thread_has_no_active_turn(&self, thread_id: &str) -> Result<()> {
         let active = self.active.lock().await;
         if active
@@ -1559,6 +1612,11 @@ impl RuntimeThreadManager {
 
     /// Seed a thread with messages from a saved session so subsequent turns
     /// continue with the prior conversation context.
+    ///
+    /// Unlike the old text-only implementation, this preserves all content
+    /// block types (thinking, tool_use, tool_result, etc.) as separate turn
+    /// items so that `loadHistory` in the GUI can reconstruct the full
+    /// conversation including process information.
     pub async fn seed_thread_from_messages(
         &self,
         thread_id: &str,
@@ -1567,44 +1625,110 @@ impl RuntimeThreadManager {
         let mut thread = self.get_thread(thread_id).await?;
         let now = Utc::now();
 
-        let mut user_buf: Vec<String> = Vec::new();
-        let mut pending_pairs: Vec<(String, Option<String>)> = Vec::new();
+        // Group messages into turns. A turn starts with a user message and
+        // includes all subsequent assistant messages (which may contain
+        // thinking, tool_use, tool_result blocks) until the next user message.
+        let mut turns: Vec<TurnSeed> = Vec::new();
+        let mut current_turn: Option<TurnSeed> = None;
 
         for msg in messages {
-            let text = msg
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if text.trim().is_empty() {
-                continue;
-            }
-            if msg.role == "user" {
-                user_buf.push(text);
-            } else if msg.role == "assistant" {
-                let user_text = if user_buf.is_empty() {
-                    String::new()
-                } else {
-                    std::mem::take(&mut user_buf).join("\n")
-                };
-                pending_pairs.push((user_text, Some(text)));
+            match msg.role.as_str() {
+                "user" => {
+                    // Flush any pending turn before starting a new one.
+                    if let Some(t) = current_turn.take() {
+                        turns.push(t);
+                    }
+                    let mut turn = TurnSeed {
+                        user_text: String::new(),
+                        items: Vec::new(),
+                    };
+                    // Extract text from user message content blocks.
+                    // Tool result blocks in user messages are part of the
+                    // tool loop and should be stored as tool_call items.
+                    for block in &msg.content {
+                        match block {
+                            ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                                if !turn.user_text.is_empty() {
+                                    turn.user_text.push('\n');
+                                }
+                                turn.user_text.push_str(text);
+                            }
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                                ..
+                            } => {
+                                turn.items.push(SeedItem::ToolResult {
+                                    tool_use_id: tool_use_id.clone(),
+                                    content: content.clone(),
+                                    is_error: is_error.unwrap_or(false),
+                                });
+                            }
+                            // Other block types in user messages are rare;
+                            // skip them gracefully.
+                            _ => {}
+                        }
+                    }
+                    current_turn = Some(turn);
+                }
+                "assistant" => {
+                    // If no current turn exists (e.g. session starts with
+                    // an assistant message), create a placeholder turn.
+                    let turn = current_turn.get_or_insert_with(|| TurnSeed {
+                        user_text: String::new(),
+                        items: Vec::new(),
+                    });
+                    for block in &msg.content {
+                        match block {
+                            ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                                turn.items.push(SeedItem::Text(text.clone()));
+                            }
+                            ContentBlock::Thinking { thinking, .. }
+                                if !thinking.trim().is_empty() =>
+                            {
+                                turn.items.push(SeedItem::Thinking(thinking.clone()));
+                            }
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
+                                turn.items.push(SeedItem::ToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                });
+                            }
+                            ContentBlock::ServerToolUse {
+                                id, name, input, ..
+                            } => {
+                                turn.items.push(SeedItem::ToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                });
+                            }
+                            // Skip other block types (image_url, etc.)
+                            _ => {}
+                        }
+                    }
+                }
+                // System messages and other roles are ignored for turn seeding.
+                _ => {}
             }
         }
-        if !user_buf.is_empty() {
-            let user_text = std::mem::take(&mut user_buf).join("\n");
-            pending_pairs.push((user_text, None));
+        // Flush the last turn.
+        if let Some(t) = current_turn.take() {
+            turns.push(t);
         }
 
-        for (user_text, assistant_text) in pending_pairs {
+        for turn_seed in turns {
             let turn_id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
-            let summary = crate::utils::truncate_with_ellipsis(&user_text, SUMMARY_LIMIT, "...");
+            let summary =
+                crate::utils::truncate_with_ellipsis(&turn_seed.user_text, SUMMARY_LIMIT, "...");
             let mut item_ids = Vec::new();
 
-            if !user_text.is_empty() {
+            // Save user message item.
+            if !turn_seed.user_text.is_empty() {
                 let item_id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
                 self.store.save_item(&TurnItemRecord {
                     schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -1613,7 +1737,7 @@ impl RuntimeThreadManager {
                     kind: TurnItemKind::UserMessage,
                     status: TurnItemLifecycleStatus::Completed,
                     summary: summary.clone(),
-                    detail: Some(user_text),
+                    detail: Some(turn_seed.user_text.clone()),
                     metadata: None,
                     artifact_refs: Vec::new(),
                     started_at: Some(now),
@@ -1622,47 +1746,148 @@ impl RuntimeThreadManager {
                 item_ids.push(item_id);
             }
 
-            if let Some(assistant_text) = assistant_text {
-                let asst_summary = if assistant_text.len() > SUMMARY_LIMIT {
-                    crate::utils::truncate_with_ellipsis(&assistant_text, SUMMARY_LIMIT, "...")
-                } else {
-                    assistant_text.clone()
-                };
+            // Save assistant content items in order.
+            for seed_item in &turn_seed.items {
                 let item_id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
-                self.store.save_item(&TurnItemRecord {
-                    schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
-                    id: item_id.clone(),
-                    turn_id: turn_id.clone(),
-                    kind: TurnItemKind::AgentMessage,
-                    status: TurnItemLifecycleStatus::Completed,
-                    summary: asst_summary,
-                    detail: Some(assistant_text),
-                    metadata: None,
-                    artifact_refs: Vec::new(),
-                    started_at: Some(now),
-                    ended_at: Some(now),
-                })?;
+                match seed_item {
+                    SeedItem::Text(text) => {
+                        let asst_summary = if text.len() > SUMMARY_LIMIT {
+                            crate::utils::truncate_with_ellipsis(text, SUMMARY_LIMIT, "...")
+                        } else {
+                            text.clone()
+                        };
+                        self.store.save_item(&TurnItemRecord {
+                            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                            id: item_id.clone(),
+                            turn_id: turn_id.clone(),
+                            kind: TurnItemKind::AgentMessage,
+                            status: TurnItemLifecycleStatus::Completed,
+                            summary: asst_summary,
+                            detail: Some(text.clone()),
+                            metadata: None,
+                            artifact_refs: Vec::new(),
+                            started_at: Some(now),
+                            ended_at: Some(now),
+                        })?;
+                    }
+                    SeedItem::Thinking(thinking) => {
+                        let thinking_summary = if thinking.len() > SUMMARY_LIMIT {
+                            crate::utils::truncate_with_ellipsis(thinking, SUMMARY_LIMIT, "...")
+                        } else {
+                            thinking.clone()
+                        };
+                        self.store.save_item(&TurnItemRecord {
+                            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                            id: item_id.clone(),
+                            turn_id: turn_id.clone(),
+                            kind: TurnItemKind::AgentReasoning,
+                            status: TurnItemLifecycleStatus::Completed,
+                            summary: thinking_summary,
+                            detail: Some(thinking.clone()),
+                            metadata: None,
+                            artifact_refs: Vec::new(),
+                            started_at: Some(now),
+                            ended_at: Some(now),
+                        })?;
+                    }
+                    SeedItem::ToolUse {
+                        id: tool_id,
+                        name,
+                        input,
+                    } => {
+                        let input_str =
+                            serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+                        let tool_summary = format!("{name}({})", {
+                            let s = &input_str;
+                            if s.len() > 80 {
+                                crate::utils::truncate_with_ellipsis(s, 80, "...")
+                            } else {
+                                s.clone()
+                            }
+                        });
+                        self.store.save_item(&TurnItemRecord {
+                            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                            id: item_id.clone(),
+                            turn_id: turn_id.clone(),
+                            kind: TurnItemKind::ToolCall,
+                            status: TurnItemLifecycleStatus::Completed,
+                            summary: tool_summary,
+                            detail: Some(input_str),
+                            metadata: Some(serde_json::Value::Object(
+                                serde_json::json!({
+                                    "tool_use_id": tool_id,
+                                    "tool_name": name,
+                                })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                            )),
+                            artifact_refs: Vec::new(),
+                            started_at: Some(now),
+                            ended_at: Some(now),
+                        })?;
+                    }
+                    SeedItem::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } => {
+                        let result_summary = if content.len() > SUMMARY_LIMIT {
+                            crate::utils::truncate_with_ellipsis(content, SUMMARY_LIMIT, "...")
+                        } else {
+                            content.clone()
+                        };
+                        self.store.save_item(&TurnItemRecord {
+                            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                            id: item_id.clone(),
+                            turn_id: turn_id.clone(),
+                            kind: TurnItemKind::ToolCall,
+                            status: if *is_error {
+                                TurnItemLifecycleStatus::Failed
+                            } else {
+                                TurnItemLifecycleStatus::Completed
+                            },
+                            summary: result_summary,
+                            detail: Some(content.clone()),
+                            metadata: Some(serde_json::Value::Object(
+                                serde_json::json!({
+                                    "tool_result_for": tool_use_id,
+                                    "is_error": is_error,
+                                })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                            )),
+                            artifact_refs: Vec::new(),
+                            started_at: Some(now),
+                            ended_at: Some(now),
+                        })?;
+                    }
+                }
                 item_ids.push(item_id);
             }
 
-            self.store.save_turn(&TurnRecord {
-                schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
-                id: turn_id.clone(),
-                thread_id: thread_id.to_string(),
-                status: RuntimeTurnStatus::Completed,
-                input_summary: summary,
-                created_at: now,
-                started_at: Some(now),
-                ended_at: Some(now),
-                duration_ms: Some(0),
-                usage: None,
-                error: None,
-                item_ids,
-                steer_count: 0,
-            })?;
+            // Only create a turn if there's content.
+            if !item_ids.is_empty() {
+                self.store.save_turn(&TurnRecord {
+                    schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                    id: turn_id.clone(),
+                    thread_id: thread_id.to_string(),
+                    status: RuntimeTurnStatus::Completed,
+                    input_summary: summary,
+                    created_at: now,
+                    started_at: Some(now),
+                    ended_at: Some(now),
+                    duration_ms: Some(0),
+                    usage: None,
+                    error: None,
+                    item_ids,
+                    steer_count: 0,
+                })?;
 
-            thread.latest_turn_id = Some(turn_id);
-            thread.updated_at = now;
+                thread.latest_turn_id = Some(turn_id);
+                thread.updated_at = now;
+            }
         }
 
         self.store.save_thread(&thread)?;
@@ -2226,8 +2451,46 @@ impl RuntimeThreadManager {
 
         let engine = spawn_engine(engine_cfg, &self.config);
 
-        let turns = self.store.list_turns_for_thread(&thread.id)?;
-        let session_messages = self.reconstruct_messages_from_turns(&turns)?;
+        // When the thread has an associated session, load the full message history
+        // (including thinking/tool blocks) from the session file. This preserves
+        // process information that `reconstruct_messages_from_turns` would lose.
+        let session_messages = if let Some(ref sid) = thread.session_id {
+            match crate::session_manager::default_sessions_dir() {
+                Ok(sessions_dir) => {
+                    match crate::session_manager::SessionManager::new(sessions_dir) {
+                        Ok(manager) => match manager.load_session(sid) {
+                            Ok(session) => session.messages,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load session {} for thread {}: {e}; falling back to turn reconstruction",
+                                    sid,
+                                    thread.id
+                                );
+                                let turns = self.store.list_turns_for_thread(&thread.id)?;
+                                self.reconstruct_messages_from_turns(&turns)?
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to open sessions dir: {e}; falling back to turn reconstruction"
+                            );
+                            let turns = self.store.list_turns_for_thread(&thread.id)?;
+                            self.reconstruct_messages_from_turns(&turns)?
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to resolve sessions dir: {e}; falling back to turn reconstruction"
+                    );
+                    let turns = self.store.list_turns_for_thread(&thread.id)?;
+                    self.reconstruct_messages_from_turns(&turns)?
+                }
+            }
+        } else {
+            let turns = self.store.list_turns_for_thread(&thread.id)?;
+            self.reconstruct_messages_from_turns(&turns)?
+        };
         let sys_prompt = thread
             .system_prompt
             .as_ref()
@@ -2235,7 +2498,7 @@ impl RuntimeThreadManager {
         if !session_messages.is_empty() || sys_prompt.is_some() {
             engine
                 .send(Op::SyncSession {
-                    session_id: None,
+                    session_id: thread.session_id.clone(),
                     messages: session_messages,
                     system_prompt: sys_prompt,
                     system_prompt_override: thread.system_prompt.is_some(),
@@ -2274,31 +2537,99 @@ impl RuntimeThreadManager {
         let mut messages = Vec::new();
         for turn in turns {
             let items = self.store.list_items_for_turn(&turn.id)?;
+            // Collect content blocks for the current assistant message.
+            let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+            let flush_assistant = |blocks: &mut Vec<ContentBlock>, msgs: &mut Vec<Message>| {
+                if !blocks.is_empty() {
+                    msgs.push(Message {
+                        role: "assistant".to_string(),
+                        content: std::mem::take(blocks),
+                    });
+                }
+            };
             for item in items {
                 match item.kind {
                     TurnItemKind::UserMessage => {
+                        flush_assistant(&mut assistant_blocks, &mut messages);
                         let text = item.detail.unwrap_or(item.summary);
-                        messages.push(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::Text {
-                                text,
-                                cache_control: None,
-                            }],
-                        });
+                        if !text.trim().is_empty() {
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: vec![ContentBlock::Text {
+                                    text,
+                                    cache_control: None,
+                                }],
+                            });
+                        }
                     }
                     TurnItemKind::AgentMessage => {
                         let text = item.detail.unwrap_or(item.summary);
-                        messages.push(Message {
-                            role: "assistant".to_string(),
-                            content: vec![ContentBlock::Text {
+                        if !text.trim().is_empty() {
+                            assistant_blocks.push(ContentBlock::Text {
                                 text,
                                 cache_control: None,
-                            }],
-                        });
+                            });
+                        }
+                    }
+                    TurnItemKind::AgentReasoning => {
+                        let thinking = item.detail.unwrap_or(item.summary);
+                        if !thinking.trim().is_empty() {
+                            assistant_blocks.push(ContentBlock::Thinking {
+                                thinking,
+                                signature: None,
+                            });
+                        }
+                    }
+                    TurnItemKind::ToolCall => {
+                        let meta = item.metadata.as_ref();
+                        let is_tool_result = meta.and_then(|m| m.get("tool_result_for")).is_some();
+                        if is_tool_result {
+                            flush_assistant(&mut assistant_blocks, &mut messages);
+                            let tool_use_id = meta
+                                .and_then(|m| m.get("tool_result_for"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let content = item.detail.unwrap_or_default();
+                            let is_error = meta
+                                .and_then(|m| m.get("is_error"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: vec![ContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error: if is_error { Some(true) } else { None },
+                                    content_blocks: None,
+                                }],
+                            });
+                        } else {
+                            let tool_use_id = meta
+                                .and_then(|m| m.get("tool_use_id"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let tool_name = meta
+                                .and_then(|m| m.get("tool_name"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let input_str = item.detail.unwrap_or_default();
+                            let input: serde_json::Value =
+                                serde_json::from_str(&input_str).unwrap_or(serde_json::Value::Null);
+                            assistant_blocks.push(ContentBlock::ToolUse {
+                                id: tool_use_id,
+                                name: tool_name,
+                                input,
+                                caller: None,
+                            });
+                        }
                     }
                     _ => {}
                 }
             }
+            flush_assistant(&mut assistant_blocks, &mut messages);
         }
         Ok(messages)
     }
@@ -3503,6 +3834,7 @@ mod tests {
             system_prompt: None,
             task_id: None,
             title: None,
+            session_id: None,
         }
     }
 
@@ -5559,6 +5891,7 @@ mod tests {
             system_prompt: None,
             task_id: None,
             title: None,
+            session_id: None,
         };
         manager.store.save_thread(&thread)?;
 
