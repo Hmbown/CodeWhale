@@ -130,7 +130,7 @@ pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
 }
 
 pub fn default_marker_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| marker_path_with_home(&home))
+    crate::config::effective_home_dir().map(|home| marker_path_with_home(&home))
 }
 
 fn marker_path_with_home(home: &Path) -> PathBuf {
@@ -150,7 +150,7 @@ pub fn is_onboarded() -> bool {
 }
 
 pub fn mark_onboarded() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::config::effective_home_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
     })?;
     mark_onboarded_at_home(&home)
