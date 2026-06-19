@@ -799,9 +799,13 @@ mod tests {
             .await
             .unwrap();
 
-        while let Some(event) = stream.next().await {
-            event.unwrap();
-        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+        })
+        .await
+        .expect("Responses retry stream should finish after [DONE]");
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
