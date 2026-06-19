@@ -1612,6 +1612,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         fork_context: false,
         started_at: Instant::now(),
         max_steps: 3,
+        max_tokens: None,
         input_rx: task_input_rx,
         launch_gate: None,
     };
@@ -3405,6 +3406,7 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
         fork_context: false,
         started_at: Instant::now(),
         max_steps: 0,
+        max_tokens: None,
         input_rx: task_input_rx,
         launch_gate: None,
     };
@@ -3862,6 +3864,7 @@ async fn launch_gate_queues_extra_direct_children() {
             fork_context: false,
             started_at: Instant::now(),
             max_steps: 1,
+            max_tokens: None,
             input_rx,
             launch_gate: gate,
         };

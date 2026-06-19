@@ -2433,6 +2433,7 @@ impl SubAgentManager {
             fork_context: options.fork_context,
             started_at,
             max_steps,
+            max_tokens: None,
             input_rx,
             launch_gate,
         };
@@ -3367,6 +3368,11 @@ struct SubAgentTask {
     fork_context: bool,
     started_at: Instant,
     max_steps: u32,
+    /// Optional token budget. When set, the sub-agent tracks cumulative token
+    /// usage (input + output) across all model turns and stops when the cap is
+    /// reached. This is the runtime enforcement counterpart to
+    /// `BudgetSpec.max_tokens` in the WhaleFlow IR.
+    max_tokens: Option<u64>,
     input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
     /// Interactive launch gate (#3095). `Some` only for direct (depth-1)
     /// children: the task acquires a permit before its first model step and
@@ -3408,6 +3414,7 @@ async fn run_subagent_task(task: SubAgentTask) {
         task.fork_context,
         task.started_at,
         task.max_steps,
+        task.max_tokens,
         task.input_rx,
     )
     .await;
@@ -3801,6 +3808,7 @@ async fn run_subagent(
     fork_context: bool,
     started_at: Instant,
     max_steps: u32,
+    max_tokens: Option<u64>,
     mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
 ) -> Result<SubAgentResult> {
     let system_prompt = build_subagent_system_prompt(&agent_type, &assignment);
@@ -3852,6 +3860,7 @@ async fn run_subagent(
     let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
     let mut consecutive_truncated_responses = 0;
     let mut latest_checkpoint: Option<SubAgentCheckpoint> = None;
+    let mut total_tokens_used: u64 = 0;
 
     for _step in 0..max_steps {
         // Cooperative cancellation: bail if this session's token was cancelled
@@ -4117,6 +4126,83 @@ async fn run_subagent(
                 response.model.clone(),
                 response.usage.clone(),
             ));
+        }
+
+        // Track cumulative token usage and enforce the budget cap.
+        let step_tokens = (response.usage.input_tokens as u64)
+            .saturating_add(response.usage.output_tokens as u64);
+        total_tokens_used = total_tokens_used.saturating_add(step_tokens);
+        if let Some(token_cap) = max_tokens {
+            if total_tokens_used > token_cap {
+                record_agent_progress(
+                    runtime,
+                    &agent_id,
+                    format!(
+                        "{}: token budget exceeded ({} > {}); stopping",
+                        format_step_counter(steps, max_steps),
+                        total_tokens_used,
+                        token_cap
+                    ),
+                );
+                if let Some(mb) = runtime.mailbox.as_ref() {
+                    let _ = mb.send(MailboxMessage::Failed {
+                        agent_id: agent_id.clone(),
+                        error: format!(
+                            "Token budget exceeded: {} tokens used, {} budget",
+                            total_tokens_used, token_cap
+                        ),
+                    });
+                }
+                let status = SubAgentStatus::Failed;
+                let duration_ms =
+                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                insert_subagent_full_transcript_handle(
+                    runtime,
+                    &agent_id,
+                    &agent_type,
+                    &assignment,
+                    &status,
+                    Some(&format!(
+                        "Token budget exceeded: {} tokens used, {} budget",
+                        total_tokens_used, token_cap
+                    )),
+                    latest_checkpoint.as_ref(),
+                    &messages,
+                    steps,
+                    duration_ms,
+                    fork_context_enabled,
+                )
+                .await;
+                return Ok(SubAgentResult {
+                    name: agent_id.clone(),
+                    agent_id: agent_id.clone(),
+                    context_mode: if fork_context_enabled {
+                        "forked"
+                    } else {
+                        "fresh"
+                    }
+                    .to_string(),
+                    fork_context: fork_context_enabled,
+                    workspace: Some(runtime.context.workspace.clone()),
+                    git_branch: current_git_branch(&runtime.context.workspace),
+                    agent_type: agent_type.clone(),
+                    assignment: assignment.clone(),
+                    model: runtime.model.clone(),
+                    nickname: None,
+                    status,
+                    worker_status: None,
+                    parent_run_id: runtime.parent_agent_id.clone(),
+                    spawn_depth: runtime.spawn_depth,
+                    result: Some(format!(
+                        "Token budget exceeded after {steps} steps: {total_tokens_used} tokens used, {token_cap} budget"
+                    )),
+                    steps_taken: steps,
+                    checkpoint: latest_checkpoint.clone(),
+                    needs_input: None,
+                    duration_ms,
+                    from_prior_session: false,
+                });
+            }
         }
 
         for block in &response.content {
