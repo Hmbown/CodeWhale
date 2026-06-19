@@ -251,7 +251,7 @@ jobs:
             exit 1
           fi
           cp "${BIN_PATH}" "${{ matrix.artifact_name }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
@@ -351,7 +351,7 @@ jobs:
           cat "$MANIFEST"
 
       - name: Upload bundle artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codewhale-bundles
           path: bundles/*
@@ -393,7 +393,7 @@ jobs:
             throw "CodeWhaleSetup.exe was not produced"
           }
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CodeWhaleSetup.exe
           path: scripts/installer/CodeWhaleSetup.exe
