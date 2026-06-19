@@ -87,6 +87,7 @@ impl DeepSeekClient {
         // so it must not be set again here or it would be duplicated. The
         // ChatGPT backend additionally requires the account id and the
         // experimental Responses beta opt-in.
+        let account_id = crate::oauth::codex_account_id();
         let response = self
             .send_with_retry(|| {
                 let mut builder = self
@@ -96,7 +97,7 @@ impl DeepSeekClient {
                     .header("Accept", "text/event-stream")
                     .header("OpenAI-Beta", "responses=experimental")
                     .header("originator", "codex_cli_rs");
-                if let Some(account_id) = crate::oauth::codex_account_id() {
+                if let Some(account_id) = &account_id {
                     builder = builder.header("chatgpt-account-id", account_id);
                 }
                 builder.json(&body)
