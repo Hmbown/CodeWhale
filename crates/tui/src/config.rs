@@ -16,7 +16,7 @@ use serde_json::json;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use crate::audit::log_sensitive_event;
-use crate::features::{Features, FeaturesToml, is_known_feature_key};
+use crate::features::{is_known_feature_key, Features, FeaturesToml};
 use crate::hooks::HooksConfig;
 
 pub const DEFAULT_MAX_SUBAGENTS: usize = 20;
@@ -5526,7 +5526,7 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
         return crate::oauth::auth_file_path().exists();
     }
     if matches!(provider, ApiProvider::Huggingface)
-        && std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
+        && provider_env_api_key(ApiProvider::Huggingface).is_some()
     {
         return true;
     }
@@ -5736,6 +5736,19 @@ fn provider_config_table_name(provider: ApiProvider) -> Result<String> {
 }
 
 fn provider_env_api_key(provider: ApiProvider) -> Option<String> {
+    // Keep the Hugging Face env precedence explicit here so runtime behavior
+    // stays aligned with the shipped provider-registry contract.
+    if matches!(provider, ApiProvider::Huggingface) {
+        return std::env::var("HUGGINGFACE_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("HF_TOKEN")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            });
+    }
+
     provider.env_vars().iter().find_map(|var| {
         std::env::var(var)
             .ok()
@@ -6044,7 +6057,7 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{EnvVarGuard, lock_test_env};
+    use crate::test_support::{lock_test_env, EnvVarGuard};
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
