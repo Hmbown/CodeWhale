@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Check version drift
@@ -122,7 +122,7 @@ jobs:
         if: runner.os != 'Linux'
       - uses: dtolnay/rust-toolchain@stable
         if: runner.os != 'Linux'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: runner.os != 'Linux'
         with:
           node-version: 20
