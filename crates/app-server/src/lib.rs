@@ -401,6 +401,10 @@ fn resolve_auth_token(options: &AppServerOptions) -> Result<Option<String>> {
         return Ok(None);
     }
 
+    if configured.is_none() && !options.listen.ip().is_loopback() {
+        bail!("refusing app-server bind on non-loopback address without explicit auth token");
+    }
+
     let token = configured
         .map(str::to_string)
         .unwrap_or_else(|| format!("cwapp_{}", Uuid::new_v4().simple()));
@@ -1398,6 +1402,23 @@ mod tests {
         let token = resolve_auth_token(&options).unwrap();
         assert!(token.is_some());
         assert!(token.unwrap().starts_with("cwapp_"));
+    }
+
+    #[test]
+    fn non_loopback_bind_without_explicit_auth_token_fails_fast() {
+        let options = AppServerOptions {
+            listen: "0.0.0.0:8787".parse().expect("addr"),
+            config_path: None,
+            auth_token: None,
+            insecure_no_auth: false,
+            cors_origins: Vec::new(),
+        };
+
+        let err = resolve_auth_token(&options).expect_err("non-loopback bind must require auth");
+        assert!(
+            err.to_string().contains("explicit auth token"),
+            "error should explain that non-loopback binds need explicit auth; got {err}"
+        );
     }
 
     #[test]
