@@ -5,6 +5,7 @@
 
 use crate::compaction::CompactionConfig;
 use crate::config::ApiProvider;
+use crate::features::Features;
 use crate::models::{Message, SystemPrompt};
 use crate::tools::goal::GoalStatus;
 use crate::tui::app::AppMode;
@@ -117,6 +118,9 @@ pub enum Op {
 
     /// Update auto-compaction settings
     SetCompaction { config: CompactionConfig },
+
+    /// Update feature flags used for subsequent turns.
+    SetFeatures { features: Features },
 
     /// Update the SSE idle timeout used for subsequent streamed turns.
     SetStreamChunkTimeout { timeout_secs: u64 },
