@@ -52,6 +52,49 @@ pub(crate) fn shell_policy_for_mode(mode: AppMode, allow_shell: bool) -> ShellPo
 }
 
 impl Engine {
+    pub(super) fn build_parent_subagent_runtime(
+        &self,
+        tool_context: ToolContext,
+        mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
+        fork_context: Option<SubAgentForkContext>,
+        mailbox_for_runtime: Option<&(Mailbox, CancellationToken)>,
+    ) -> Option<SubAgentRuntime> {
+        if !self.config.features.enabled(Feature::Subagents) {
+            return None;
+        }
+        let client = self.deepseek_client.clone()?;
+        let mut runtime = SubAgentRuntime::new(
+            client,
+            self.session.model.clone(),
+            tool_context,
+            self.session.allow_shell,
+            Some(self.tx_event.clone()),
+            Arc::clone(&self.subagent_manager),
+        )
+        .with_role_models(self.config.subagent_model_overrides.clone())
+        .with_auto_model(self.session.auto_model)
+        .with_reasoning_effort(
+            self.session.reasoning_effort.clone(),
+            self.session.reasoning_effort_auto,
+        )
+        .with_max_spawn_depth(self.config.max_spawn_depth)
+        .with_step_api_timeout(self.config.subagent_api_timeout)
+        .with_speech_output_dir(self.config.speech_output_dir.clone())
+        .with_mcp_pool(mcp_pool)
+        .with_todos(self.config.todos.clone())
+        .with_parent_completion_tx(self.tx_subagent_completion.clone());
+
+        if let Some(context) = fork_context {
+            runtime = runtime.with_fork_context(context);
+        }
+        if let Some((mailbox, cancel_token)) = mailbox_for_runtime {
+            runtime = runtime
+                .with_mailbox(mailbox.clone())
+                .with_cancel_token(cancel_token.clone());
+        }
+        Some(runtime)
+    }
+
     pub(super) fn build_turn_tool_registry_builder(
         &self,
         mode: AppMode,

@@ -179,6 +179,26 @@ All matching is case-insensitive. Unknown values produce a typed
 error listing the accepted set, so the model can self-correct on
 the next turn.
 
+## Global opt-out
+
+The canonical on/off switch is the `subagents` feature flag. Disable it for one
+launch with `codewhale-tui --disable subagents`, for the current TUI session
+with `/config subagents off`, or persist it with `/config subagents off --save`
+or:
+
+```toml
+[features]
+subagents = false
+```
+
+When this feature flag is disabled, new Agent and YOLO turns do not expose the
+model-facing `agent` tool.
+
+`[subagents] max_depth = 0` is a depth limit, not the global feature switch. It
+leaves the feature state enabled and blocks spawning at the depth check instead.
+Concurrency controls such as `[subagents] max_concurrent` and
+`[subagents] launch_concurrency` only matter while the feature flag is enabled.
+
 ## Concurrency cap
 
 Up to **20** sub-agents run concurrently by default (configurable via

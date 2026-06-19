@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 
 use crate::config::{ApiProvider, Config};
-use crate::features::{FEATURES, Stage};
+use crate::features::{FEATURES, Feature, Stage};
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
@@ -1186,7 +1186,7 @@ fn experimental_config_rows(config: &Config) -> Vec<ConfigRow> {
                 spec.default_enabled,
                 configured_value.is_some(),
             ),
-            editable: false,
+            editable: spec.id == Feature::Subagents,
             scope: ConfigScope::Saved,
         });
     }
@@ -1259,6 +1259,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "fleet.exec.max_spawn_depth" => {
             "0 blocks child agents; 3 default (same axis as sub-agents); capped at 3"
         }
+        "features.subagents" => "on/off, true/false; controls the model-facing agent tool",
         _ => "",
     }
 }
@@ -2484,13 +2485,14 @@ mod tests {
         assert!(
             view.rows
                 .iter()
-                .filter(|row| {
-                    matches!(
-                        row.section,
-                        super::ConfigSection::Experimental | super::ConfigSection::Fleet
-                    )
-                })
+                .filter(|row| { matches!(row.section, super::ConfigSection::Fleet) })
                 .all(|row| !row.editable)
+        );
+        assert!(
+            view.rows
+                .iter()
+                .filter(|row| matches!(row.section, super::ConfigSection::Experimental))
+                .all(|row| row.editable == (row.key == "features.subagents"))
         );
     }
 
@@ -2538,6 +2540,35 @@ vision_model = true
             .find(|row| row.key == "features.subagents")
             .expect("subagents feature row");
         assert_eq!(subagents.value, "enabled (default enabled)");
+        assert!(subagents.editable);
+    }
+
+    #[test]
+    fn config_view_makes_only_subagents_experimental_feature_editable() {
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+
+        let subagents = view
+            .rows
+            .iter()
+            .find(|row| row.key == "features.subagents")
+            .expect("subagents feature row");
+        assert!(subagents.editable);
+        assert_eq!(subagents.scope, super::ConfigScope::Saved);
+
+        let read_only_experimental = view
+            .rows
+            .iter()
+            .filter(|row| {
+                matches!(row.section, super::ConfigSection::Experimental)
+                    && row.key != "features.subagents"
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !read_only_experimental.is_empty(),
+            "test should cover non-subagent experimental rows"
+        );
+        assert!(read_only_experimental.iter().all(|row| !row.editable));
     }
 
     #[test]

@@ -8,10 +8,11 @@ use crate::config::{
     normalize_model_name_for_provider,
 };
 use crate::config_persistence::{
-    persist_provider_base_url_key, persist_root_bool_key, persist_root_string_key,
-    persist_tui_integer_key,
+    persist_feature_bool_key, persist_provider_base_url_key, persist_root_bool_key,
+    persist_root_string_key, persist_tui_integer_key,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
+use crate::features::Feature;
 use crate::localization::resolve_locale;
 use crate::settings::Settings;
 use crate::tui::app::{
@@ -125,6 +126,11 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             } else {
                 Some(app.model.clone())
             }
+        }
+        key if is_subagents_config_key(key) => {
+            return CommandResult::message(subagents_status_message(
+                app.features.enabled(Feature::Subagents),
+            ));
         }
         "provider" => Some(app.api_provider.as_str().to_string()),
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
@@ -427,11 +433,66 @@ fn stream_chunk_timeout_value_label(raw: u64, resolved: u64) -> String {
     }
 }
 
+fn is_subagents_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "subagents" | "sub-agents" | "features.subagents" | "feature.subagents"
+    )
+}
+
+fn subagents_status_message(enabled: bool) -> String {
+    let state = if enabled { "enabled" } else { "disabled" };
+    format!("subagents = {enabled} ({state}; controls the model-facing agent tool)")
+}
+
+fn set_subagents_feature(app: &mut App, enabled: bool, persist: bool) -> CommandResult {
+    if enabled {
+        app.features.enable(Feature::Subagents);
+    } else {
+        app.features.disable(Feature::Subagents);
+    }
+
+    let suffix = if persist {
+        match persist_feature_bool_key(app.config_path.as_deref(), "subagents", enabled) {
+            Ok(path) => format!(" (saved to {})", path.display()),
+            Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+        }
+    } else {
+        " (session only, add --save to persist)".to_string()
+    };
+    let tool_hint = if enabled {
+        " The agent tool will be available on the next turn."
+    } else {
+        " The agent tool will be hidden on the next turn."
+    };
+
+    CommandResult::with_message_and_action(
+        format!("subagents = {enabled}{suffix}.{tool_hint}"),
+        AppAction::UpdateFeatures(app.features.clone()),
+    )
+}
+
 /// Modify a setting at runtime
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
     let key = key.to_lowercase();
 
     match key.as_str() {
+        key if is_subagents_config_key(key) => {
+            let value = value.trim();
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "" | "status" | "show" | "get"
+            ) {
+                return CommandResult::message(subagents_status_message(
+                    app.features.enabled(Feature::Subagents),
+                ));
+            }
+            let enabled = match parse_config_bool(value) {
+                Ok(enabled) => enabled,
+                Err(err) => return CommandResult::error(err),
+            };
+            return set_subagents_feature(app, enabled, persist);
+        }
         "model" => {
             // Support "/model auto" — auto-select model based on request complexity
             if value.trim().eq_ignore_ascii_case("auto") {
@@ -1173,6 +1234,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::tempdir;
 
     struct EnvGuard {
         home: Option<OsString>,
@@ -1649,6 +1711,73 @@ mod tests {
         assert!(!app.allow_shell);
         let msg = result.message.unwrap();
         assert!(msg.contains("Failed to parse boolean 'maybe'"));
+    }
+
+    #[test]
+    fn config_command_subagents_off_updates_session_features() {
+        let mut app = create_test_app();
+        assert!(app.features.enabled(Feature::Subagents));
+
+        let result = config_command(&mut app, Some("subagents off"));
+
+        assert!(!result.is_error);
+        assert!(!app.features.enabled(Feature::Subagents));
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateFeatures(ref features))
+                if !features.enabled(Feature::Subagents)
+        ));
+        let msg = result.message.unwrap();
+        assert!(msg.contains("subagents = false"));
+        assert!(msg.contains("session only"));
+        assert!(msg.contains("agent tool"));
+        assert!(msg.contains("next turn"));
+    }
+
+    #[test]
+    fn config_command_subagents_status_reports_effective_state() {
+        let mut app = create_test_app();
+        app.features.disable(Feature::Subagents);
+
+        let result = config_command(&mut app, Some("subagents status"));
+
+        assert!(!result.is_error);
+        assert!(result.action.is_none());
+        let msg = result.message.unwrap();
+        assert!(msg.contains("subagents = false"));
+        assert!(msg.contains("disabled"));
+    }
+
+    #[test]
+    fn config_command_subagents_save_persists_features_table() {
+        let temp_root = tempdir().expect("tempdir");
+        let config_path = temp_root.path().join("custom-config.toml");
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+
+        let disabled = config_command(&mut app, Some("subagents off --save"));
+        assert!(!disabled.is_error);
+        assert!(!app.features.enabled(Feature::Subagents));
+        let saved = fs::read_to_string(&config_path).unwrap();
+        assert!(saved.contains("[features]"));
+        assert!(saved.contains("subagents = false"));
+        let reloaded = Config::load(Some(config_path.clone()), None).unwrap();
+        assert!(!reloaded.features().enabled(Feature::Subagents));
+
+        let enabled = config_command(&mut app, Some("subagents on --save"));
+        assert!(!enabled.is_error);
+        assert!(app.features.enabled(Feature::Subagents));
+        let saved = fs::read_to_string(&config_path).unwrap();
+        assert!(saved.contains("subagents = true"));
+        let reloaded = Config::load(Some(config_path.clone()), None).unwrap();
+        assert!(reloaded.features().enabled(Feature::Subagents));
+
+        let direct_key = config_command(&mut app, Some("features.subagents false --save"));
+        assert!(!direct_key.is_error);
+        assert!(!app.features.enabled(Feature::Subagents));
+        let reloaded = Config::load(Some(config_path), None).unwrap();
+        assert!(!reloaded.features().enabled(Feature::Subagents));
     }
 
     #[test]

@@ -1088,7 +1088,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         max_steps: u32::MAX,
         max_subagents: app.max_subagents,
         launch_concurrency: config.launch_concurrency(),
-        features: config.features(),
+        features: app.features.clone(),
         compaction: app.compaction_config(),
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
@@ -7122,6 +7122,9 @@ async fn apply_command_result(
             AppAction::UpdateCompaction(compaction) => {
                 apply_model_and_compaction_update(engine_handle, compaction, app.mode).await;
             }
+            AppAction::UpdateFeatures(features) => {
+                let _ = engine_handle.send(Op::SetFeatures { features }).await;
+            }
             AppAction::UpdateStreamChunkTimeout(timeout_secs) => {
                 let _ = engine_handle
                     .send(Op::SetStreamChunkTimeout { timeout_secs })
@@ -8828,6 +8831,9 @@ async fn handle_view_events(
                         AppAction::UpdateCompaction(compaction) => {
                             apply_model_and_compaction_update(engine_handle, compaction, app.mode)
                                 .await;
+                        }
+                        AppAction::UpdateFeatures(features) => {
+                            let _ = engine_handle.send(Op::SetFeatures { features }).await;
                         }
                         AppAction::UpdateStreamChunkTimeout(timeout_secs) => {
                             let _ = engine_handle

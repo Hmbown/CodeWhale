@@ -1780,12 +1780,12 @@ pub struct SubagentsConfig {
     #[serde(default)]
     pub max_concurrent: Option<usize>,
     /// How many levels of nested sub-agents the interactive `agent` tool may
-    /// spawn. `0` disables sub-agents entirely — the `agent` tool refuses to
-    /// spawn, a full opt-out; `1` allows one level, `2` two, and so on. When
-    /// unset, defaults to [`codewhale_config::DEFAULT_SPAWN_DEPTH`]; any value
-    /// is clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`]. Fleet
-    /// workers are governed separately by `[fleet.exec] max_spawn_depth`; both
-    /// share the same default and ceiling so the limit cannot drift.
+    /// spawn. `0` blocks spawning at the depth check while leaving the global
+    /// `features.subagents` flag untouched; `1` allows one level, `2` two, and
+    /// so on. When unset, defaults to [`codewhale_config::DEFAULT_SPAWN_DEPTH`];
+    /// any value is clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`].
+    /// Fleet workers are governed separately by `[fleet.exec] max_spawn_depth`;
+    /// both share the same default and ceiling so the limit cannot drift.
     #[serde(default)]
     pub max_depth: Option<u32>,
     /// Number of direct (depth-1) sub-agents that may execute concurrently
@@ -3175,9 +3175,10 @@ impl Config {
     /// How many levels of nested sub-agents the interactive `agent` tool may
     /// spawn. Reads `[subagents] max_depth`; when unset it defaults to
     /// [`codewhale_config::DEFAULT_SPAWN_DEPTH`]. `0` is a valid value that
-    /// disables sub-agent spawning entirely (full opt-out). Any value is
-    /// clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`] so the
-    /// operator's choice can never exceed the hard recursion ceiling.
+    /// blocks spawning at the depth check while leaving the global
+    /// `features.subagents` flag untouched. Any value is clamped to
+    /// [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`] so the operator's choice
+    /// can never exceed the hard recursion ceiling.
     #[must_use]
     pub fn subagent_max_spawn_depth(&self) -> u32 {
         self.subagents
@@ -7387,6 +7388,11 @@ action = "session.compact"
             ..Config::default()
         };
         assert_eq!(disabled.subagent_max_spawn_depth(), 0);
+        assert!(
+            disabled
+                .features()
+                .enabled(crate::features::Feature::Subagents)
+        );
 
         let high = Config {
             subagents: Some(SubagentsConfig {

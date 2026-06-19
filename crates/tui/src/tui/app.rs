@@ -18,6 +18,7 @@ use crate::config::{
     ApiProvider, Config, DEFAULT_TEXT_MODEL, SavedCredential, has_api_key, save_api_key,
 };
 use crate::config_ui::ConfigUiMode;
+use crate::features::Features;
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::localization::{Locale, MessageId, resolve_locale, tr};
 use crate::models::{
@@ -1598,6 +1599,9 @@ pub struct App {
     pub allow_shell: bool,
     pub verbosity: Option<String>,
     pub max_subagents: usize,
+    /// Effective feature flags for this session. Starts from config and can be
+    /// changed live by `/config` for subsequent engine turns.
+    pub features: Features,
     /// Per-SSE-chunk idle timeout for streamed turns, in seconds.
     pub stream_chunk_timeout_secs: u64,
     /// Cached sub-agent snapshots for UI views.
@@ -2425,6 +2429,7 @@ impl App {
             allow_shell,
             verbosity: config.verbosity.clone(),
             max_subagents,
+            features: config.features(),
             stream_chunk_timeout_secs: config.stream_chunk_timeout_secs(),
             subagent_cache: Vec::new(),
             subagent_terminal_seen_at: HashMap::new(),
@@ -5569,6 +5574,7 @@ pub enum AppAction {
         model: Option<String>,
     },
     UpdateCompaction(CompactionConfig),
+    UpdateFeatures(Features),
     UpdateStreamChunkTimeout(u64),
     OpenContextInspector,
     CompactContext,

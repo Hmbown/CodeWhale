@@ -1748,6 +1748,61 @@ fn parent_turn_registry_includes_goal_tools_for_all_modes() {
     }
 }
 
+fn parent_agent_registry_contains_agent_tool(engine: &Engine, mode: AppMode) -> bool {
+    let tool_context = engine.build_tool_context(mode, false);
+    let mut builder = engine.build_turn_tool_registry_builder(
+        mode,
+        engine.config.todos.clone(),
+        engine.config.plan_state.clone(),
+    );
+    if let Some(runtime) =
+        engine.build_parent_subagent_runtime(tool_context.clone(), None, None, None)
+    {
+        builder = builder.with_subagent_tools(engine.subagent_manager.clone(), runtime);
+    }
+    builder.build(tool_context).contains("agent")
+}
+
+#[test]
+fn parent_agent_tool_registry_obeys_subagent_feature_gate() {
+    let tmp = tempdir().expect("tempdir");
+    let api_config = Config {
+        api_key: Some("test-key".to_string()),
+        ..Config::default()
+    };
+
+    let enabled_config = EngineConfig {
+        workspace: tmp.path().join("enabled"),
+        ..EngineConfig::default()
+    };
+    let (enabled_engine, _handle) = Engine::new(enabled_config, &api_config);
+    assert!(parent_agent_registry_contains_agent_tool(
+        &enabled_engine,
+        AppMode::Agent
+    ));
+    assert!(parent_agent_registry_contains_agent_tool(
+        &enabled_engine,
+        AppMode::Yolo
+    ));
+
+    let mut features = Features::with_defaults();
+    features.disable(Feature::Subagents);
+    let disabled_config = EngineConfig {
+        workspace: tmp.path().join("disabled"),
+        features,
+        ..EngineConfig::default()
+    };
+    let (disabled_engine, _handle) = Engine::new(disabled_config, &api_config);
+    assert!(!parent_agent_registry_contains_agent_tool(
+        &disabled_engine,
+        AppMode::Agent
+    ));
+    assert!(!parent_agent_registry_contains_agent_tool(
+        &disabled_engine,
+        AppMode::Yolo
+    ));
+}
+
 #[test]
 fn agent_mode_can_build_auto_approved_tool_context() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
@@ -2123,6 +2178,37 @@ async fn change_mode_op_updates_current_mode_and_emits_status() {
         matches!(status, Event::Status { .. }),
         "should emit Status after mode change, got: {status:?}"
     );
+
+    run.abort();
+}
+
+#[tokio::test]
+async fn set_features_op_emits_runtime_update_status() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+    let mut features = Features::with_defaults();
+    features.disable(Feature::Subagents);
+
+    let run = tokio::spawn(engine.run());
+    handle
+        .send(Op::SetFeatures { features })
+        .await
+        .expect("send feature update");
+
+    let mut rx = handle.rx_event.write().await;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("status after feature update")
+        .expect("event");
+    let Event::Status { message } = event else {
+        panic!("expected Status after feature update, got: {event:?}");
+    };
+    assert_eq!(message, "Feature flags updated");
 
     run.abort();
 }
