@@ -435,8 +435,13 @@ fn stream_chunk_timeout_value_label(raw: u64, resolved: u64) -> String {
 
 fn is_subagents_config_key(key: &str) -> bool {
     matches!(
-        key,
-        "subagents" | "sub-agents" | "features.subagents" | "feature.subagents"
+        key.to_ascii_lowercase().as_str(),
+        "subagents"
+            | "sub-agents"
+            | "features.subagents"
+            | "features.sub-agents"
+            | "feature.subagents"
+            | "feature.sub-agents"
     )
 }
 
