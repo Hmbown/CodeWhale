@@ -699,6 +699,13 @@ pub struct AgentWorkerSpec {
     pub max_steps: u32,
     pub spawn_depth: u32,
     pub max_spawn_depth: u32,
+    /// Optional token budget for this worker. When set, the sub-agent runtime
+    /// tracks cumulative token usage (input + output) and stops the worker with
+    /// a budget-exceeded status once the cap is reached. This is the runtime
+    /// enforcement counterpart to `BudgetSpec.max_tokens` in the WhaleFlow IR
+    /// and `FleetTaskBudget.max_tokens` in the fleet protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

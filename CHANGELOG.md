@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WhaleFlow `BudgetSpec` gains `max_tokens` field for token budget regulation.**
+  Workflow IR nodes (workflow, branch, leaf) can now specify `max_tokens: Option<u64>`
+  to cap cumulative token consumption at the IR level. The mock executor enforces
+  both global and per-leaf token budgets, returning `BudgetExceeded` when caps are
+  reached. This complements the existing `max_steps`, `timeout_secs`, and
+  `max_parallel` fields.
+
+- **`AgentWorkerSpec` gains `max_tokens` field for runtime token budget enforcement.**
+  Fleet workers and sub-agents can now receive a token budget via
+  `FleetTaskBudget.max_tokens` or `BudgetSpec.max_tokens`. The field is wired through
+  `fleet_task_to_worker_spec` so fleet tasks with token budgets actually enforce them
+  at runtime, not just in the protocol layer.
+
+### Fixed
+
+- **Token budget regulator for high fan-out workflow runs.** Previously,
+  `FleetTaskBudget.max_tokens` was defined in the protocol but never consumed by the
+  runtime execution path. Fleet workers ignored token budgets entirely, allowing
+  high fan-out orchestrations (many parallel branches) to consume unbounded tokens
+  even when explicit budgets were specified. The budget is now mapped from
+  `FleetTaskBudget` → `AgentWorkerSpec.max_tokens`, closing the enforcement gap
+  between the IR/protocol layers and the actual sub-agent runtime.
+
 ## [0.8.62] - 2026-06-17
 
 ### Changed

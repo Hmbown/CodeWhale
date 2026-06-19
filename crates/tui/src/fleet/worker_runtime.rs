@@ -85,6 +85,7 @@ pub fn fleet_task_to_worker_spec(
             .unwrap_or(u32::MAX),
         spawn_depth: 0,
         max_spawn_depth,
+        max_tokens: task_spec.budget.as_ref().and_then(|b| b.max_tokens),
     }
 }
 
