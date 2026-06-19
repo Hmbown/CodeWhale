@@ -76,6 +76,7 @@ impl Drop for ConfigPathEnvGuard {
 
 struct SettingsHomeGuard {
     _tmp: TempDir,
+    previous_config_path: Option<OsString>,
     previous_home: Option<OsString>,
     previous_userprofile: Option<OsString>,
     _lock: MutexGuard<'static, ()>,
@@ -85,15 +86,19 @@ impl SettingsHomeGuard {
     fn new() -> Self {
         let lock = crate::test_support::lock_test_env();
         let tmp = TempDir::new().expect("settings tempdir");
+        let config_path = tmp.path().join(".codewhale").join("config.toml");
+        let previous_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
         let previous_home = std::env::var_os("HOME");
         let previous_userprofile = std::env::var_os("USERPROFILE");
         // Safety: test-only environment mutation guarded by a global mutex.
         unsafe {
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("USERPROFILE", tmp.path());
         }
         Self {
             _tmp: tmp,
+            previous_config_path,
             previous_home,
             previous_userprofile,
             _lock: lock,
@@ -105,6 +110,10 @@ impl Drop for SettingsHomeGuard {
     fn drop(&mut self) {
         // Safety: test-only environment mutation guarded by a global mutex.
         unsafe {
+            match self.previous_config_path.take() {
+                Some(previous) => std::env::set_var("DEEPSEEK_CONFIG_PATH", previous),
+                None => std::env::remove_var("DEEPSEEK_CONFIG_PATH"),
+            }
             match self.previous_home.take() {
                 Some(previous) => std::env::set_var("HOME", previous),
                 None => std::env::remove_var("HOME"),

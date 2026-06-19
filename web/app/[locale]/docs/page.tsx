@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Seal } from "@/components/seal";
-import { getFacts } from "@/lib/facts";
+import { getFacts, type ProviderFact } from "@/lib/facts";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
@@ -300,7 +300,7 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                   ，目前共 {facts.providers.length} 个。
                 </p>
                 <div className="hairline-t hairline-b mt-5">
-                  {facts.providers.map((p) => (
+                  {facts.providers.map((p: ProviderFact) => (
                     <div key={p.id} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep min-w-0">
                       <div className="md:col-span-3 font-display font-semibold">{p.label}</div>
                       <div className="md:col-span-3 font-mono text-[0.78rem] text-ink-soft break-words min-w-0">{p.id}</div>
@@ -591,7 +591,7 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                   in <code className="inline">crates/tui/src/config.rs</code> — currently {facts.providers.length} providers.
                 </p>
                 <div className="hairline-t hairline-b mt-5">
-                  {facts.providers.map((p) => (
+                  {facts.providers.map((p: ProviderFact) => (
                     <div key={p.id} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep min-w-0">
                       <div className="md:col-span-3 font-display font-semibold">{p.label}</div>
                       <div className="md:col-span-3 font-mono text-[0.78rem] text-ink-soft break-words min-w-0">{p.id}</div>

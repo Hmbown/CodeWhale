@@ -5525,10 +5525,12 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
         // active_provider_has_env_api_key.
         return crate::oauth::auth_file_path().exists();
     }
-    if matches!(provider, ApiProvider::Huggingface)
-        && std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-    {
-        return true;
+    if matches!(provider, ApiProvider::Huggingface) {
+        if std::env::var("HUGGINGFACE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+            || std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
+        {
+            return true;
+        }
     }
 
     if config

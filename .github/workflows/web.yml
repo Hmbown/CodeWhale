@@ -32,6 +32,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Derive repo facts
+        run: npm run prebuild
       - name: Run ESLint
         run: npm run lint
       - name: TypeScript type check

@@ -143,8 +143,9 @@ export function wikiHref(locale: string, page: WikiPage): string {
   return `/${locale}/wiki/${page.slug}`;
 }
 
-export function getWikiPage(slug: string): WikiPage | undefined {
-  return WIKI_PAGES.find((page) => page.slug === slug || page.file === `${slug}.md`);
+export function getWikiPage(slugOrFile: string): WikiPage | undefined {
+  const clean = slugOrFile.replace(/\.md$/, "");
+  return WIKI_PAGES.find((page) => page.slug === clean || page.file === slugOrFile);
 }
 
 export function wikiStatusLabel(status: WikiStatus, isZh: boolean): string {

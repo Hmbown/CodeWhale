@@ -52,8 +52,8 @@ function normalizeWikiHref(href: string, locale: string): string | null {
   }
 
   const [rawPath, hash] = href.split("#", 2);
-  const filename = rawPath.split("/").pop()?.replace(/^\.\//, "");
-  const page = filename ? WIKI_PAGES.find((candidate) => candidate.file === filename) : undefined;
+  const filename = rawPath.split("/").filter(Boolean).pop();
+  const page = filename ? getWikiPage(filename) : undefined;
   if (!page) return null;
 
   return `${wikiHref(locale, page)}${hash ? `#${hash}` : ""}`;
@@ -163,7 +163,7 @@ function parseTableRow(line: string): string[] {
 }
 
 function isTableSeparator(line: string): boolean {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+  return /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line);
 }
 
 function isBlockStart(line: string, nextLine = ""): boolean {
@@ -276,8 +276,13 @@ function renderMarkdown(markdown: string, locale: string): ReactNode[] {
     if (/^[-*]\s+/.test(trimmed)) {
       const items: string[] = [];
       while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
+        let item = lines[i].trim().replace(/^[-*]\s+/, "");
         i += 1;
+        while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i], lines[i + 1] ?? "")) {
+          item += ` ${lines[i].trim()}`;
+          i += 1;
+        }
+        items.push(item);
       }
       blocks.push(
         <ul key={blocks.length} className="my-4 list-disc space-y-2 pl-6 text-ink-soft">
@@ -294,8 +299,13 @@ function renderMarkdown(markdown: string, locale: string): ReactNode[] {
     if (/^\d+\.\s+/.test(trimmed)) {
       const items: string[] = [];
       while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
+        let item = lines[i].trim().replace(/^\d+\.\s+/, "");
         i += 1;
+        while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i], lines[i + 1] ?? "")) {
+          item += ` ${lines[i].trim()}`;
+          i += 1;
+        }
+        items.push(item);
       }
       blocks.push(
         <ol key={blocks.length} className="my-4 list-decimal space-y-2 pl-6 text-ink-soft">
