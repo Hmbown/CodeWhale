@@ -16,7 +16,7 @@ use serde_json::json;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use crate::audit::log_sensitive_event;
-use crate::features::{is_known_feature_key, Features, FeaturesToml};
+use crate::features::{Features, FeaturesToml, is_known_feature_key};
 use crate::hooks::HooksConfig;
 
 pub const DEFAULT_MAX_SUBAGENTS: usize = 20;
@@ -5736,8 +5736,6 @@ fn provider_config_table_name(provider: ApiProvider) -> Result<String> {
 }
 
 fn provider_env_api_key(provider: ApiProvider) -> Option<String> {
-    // Keep the Hugging Face env precedence explicit here so runtime behavior
-    // stays aligned with the shipped provider-registry contract.
     if matches!(provider, ApiProvider::Huggingface) {
         return std::env::var("HUGGINGFACE_API_KEY")
             .ok()
@@ -6057,7 +6055,7 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{lock_test_env, EnvVarGuard};
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
