@@ -44,7 +44,7 @@ regex = "1.11"
 reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls-no-provider", "http2", "gzip", "brotli"] }
 rustls.workspace = true
 qrcode = { version = "0.14", default-features = false }
-similar = "2"
+similar = "3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 schemars = { version = "1.2.1", features = ["derive", "preserve_order"] }
