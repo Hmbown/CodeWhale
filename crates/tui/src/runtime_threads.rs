@@ -607,6 +607,12 @@ impl RuntimeThreadManagerConfig {
             max_active_threads: MAX_ACTIVE_THREADS_DEFAULT,
         }
     }
+
+    #[must_use]
+    pub fn with_sessions_dir(mut self, sessions_dir: PathBuf) -> Self {
+        self.sessions_dir = Some(sessions_dir);
+        self
+    }
 }
 
 /// Visibility filter for `list_threads`. Default is `ActiveOnly`. The runtime

@@ -470,10 +470,18 @@ pub async fn run_http_server(
         config.default_text_model.clone(),
         Some(options.workers),
     );
+    let sessions_dir = default_sessions_dir().unwrap_or_else(|_| {
+        task_cfg
+            .data_dir
+            .parent()
+            .unwrap_or(&task_cfg.data_dir)
+            .join("sessions")
+    });
     let runtime_threads = Arc::new(RuntimeThreadManager::open(
         config.clone(),
         workspace.clone(),
-        RuntimeThreadManagerConfig::from_task_data_dir(task_cfg.data_dir.clone()),
+        RuntimeThreadManagerConfig::from_task_data_dir(task_cfg.data_dir.clone())
+            .with_sessions_dir(sessions_dir.clone()),
     )?);
     let task_manager =
         TaskManager::start_with_runtime_manager(task_cfg, config.clone(), runtime_threads.clone())
@@ -3718,7 +3726,8 @@ mod tests {
         let runtime_threads: SharedRuntimeThreadManager = Arc::new(RuntimeThreadManager::open(
             Config::default(),
             workspace.clone(),
-            RuntimeThreadManagerConfig::from_task_data_dir(root.join("runtime")),
+            RuntimeThreadManagerConfig::from_task_data_dir(root.join("runtime"))
+                .with_sessions_dir(sessions_dir.clone()),
         )?);
         runtime_threads.attach_task_manager(manager.clone());
         let automations = Arc::new(Mutex::new(AutomationManager::open(
@@ -5405,6 +5414,77 @@ mod tests {
         assert_eq!(detail["thread"]["id"], thread_id);
         assert_eq!(detail["turns"].as_array().map_or(0, Vec::len), 1);
         assert_eq!(detail["items"].as_array().map_or(0, Vec::len), 2);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_resume_thread_engine_load_preserves_thinking_from_custom_sessions_dir()
+    -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-session-resume-thinking-{}",
+            Uuid::new_v4()
+        ));
+        let sessions_dir = root.join("sessions");
+        fs::create_dir_all(&sessions_dir)?;
+        let session = json!({
+            "schema_version": 1,
+            "metadata": {
+                "id": "sess_test_resume_thinking",
+                "title": "Test resume session with thinking",
+                "created_at": "2025-01-01T00:00:00Z",
+                "updated_at": "2025-01-01T00:10:00Z",
+                "message_count": 2,
+                "total_tokens": 100,
+                "model": "deepseek-v4-pro",
+                "workspace": "/tmp/test",
+                "mode": "agent"
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hello, world!" }]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{ "type": "thinking", "thinking": "internal chain" }]
+                }
+            ],
+            "system_prompt": null
+        });
+        fs::write(
+            sessions_dir.join("sess_test_resume_thinking.json"),
+            serde_json::to_string_pretty(&session)?,
+        )?;
+
+        let Some((addr, runtime_threads, handle)) =
+            spawn_test_server_with_root(root.clone(), sessions_dir.clone()).await?
+        else {
+            return Ok(());
+        };
+        let client = crate::tls::reqwest_client();
+
+        let resp = client
+            .post(format!(
+                "http://{addr}/v1/sessions/sess_test_resume_thinking/resume-thread"
+            ))
+            .json(&json!({ "model": "deepseek-v4-pro" }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let resumed: serde_json::Value = resp.json().await?;
+        let thread_id = resumed["thread_id"]
+            .as_str()
+            .context("missing resumed thread id")?;
+
+        let engine = runtime_threads.get_engine(thread_id).await?;
+        let snapshot = engine.get_session_snapshot().await?;
+        assert_eq!(snapshot.messages.len(), 2);
+        assert!(matches!(
+            &snapshot.messages[1].content[0],
+            ContentBlock::Thinking { thinking, .. } if thinking == "internal chain"
+        ));
 
         handle.abort();
         Ok(())
