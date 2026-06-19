@@ -87,20 +87,20 @@ impl DeepSeekClient {
         // so it must not be set again here or it would be duplicated. The
         // ChatGPT backend additionally requires the account id and the
         // experimental Responses beta opt-in.
-        let mut builder = self
-            .http_client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .header("OpenAI-Beta", "responses=experimental")
-            .header("originator", "codex_cli_rs");
-        if let Some(account_id) = crate::oauth::codex_account_id() {
-            builder = builder.header("chatgpt-account-id", account_id);
-        }
-
-        let response = builder
-            .json(&body)
-            .send()
+        let response = self
+            .send_with_retry(|| {
+                let mut builder = self
+                    .http_client
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .header("OpenAI-Beta", "responses=experimental")
+                    .header("originator", "codex_cli_rs");
+                if let Some(account_id) = crate::oauth::codex_account_id() {
+                    builder = builder.header("chatgpt-account-id", account_id);
+                }
+                builder.json(&body)
+            })
             .await
             .context("Responses API request failed")?;
 
@@ -700,7 +700,110 @@ fn parse_responses_usage(val: &Value) -> Usage {
 mod tests {
     use super::*;
 
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures_util::StreamExt;
+
+    use crate::config::{Config, ProviderConfig, ProvidersConfig, RetryConfig};
     use crate::models::Message;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    #[derive(Clone)]
+    struct RetryThenSuccess {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl Respond for RetryThenSuccess {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "0")
+                    .set_body_string("rate limited");
+            }
+
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "text/event-stream")
+                .set_body_string("data: [DONE]\n\n")
+        }
+    }
+
+    fn minimal_responses_request() -> MessageRequest {
+        MessageRequest {
+            model: "gpt-5.5".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            max_tokens: 128,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        }
+    }
+
+    fn test_codex_config(server: &MockServer) -> Config {
+        Config {
+            provider: Some("openai-codex".to_string()),
+            retry: Some(RetryConfig {
+                enabled: Some(true),
+                max_retries: Some(1),
+                initial_delay: Some(0.0),
+                max_delay: Some(0.0),
+                exponential_base: Some(1.0),
+            }),
+            providers: Some(ProvidersConfig {
+                openai_codex: ProviderConfig {
+                    base_url: Some(server.uri()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_stream_retries_rate_limited_request() {
+        let server = MockServer::start().await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path(CODEX_RESPONSES_PATH))
+            .respond_with(RetryThenSuccess {
+                attempts: Arc::clone(&attempts),
+            })
+            .mount(&server)
+            .await;
+
+        let client = {
+            let _env_lock = crate::test_support::lock_test_env();
+            let _codex_token =
+                crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
+            let _legacy_codex_token =
+                crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+        };
+        let mut stream = client
+            .handle_responses_stream(minimal_responses_request())
+            .await
+            .unwrap();
+
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn codex_reasoning_effort_uses_responses_labels() {
