@@ -126,6 +126,49 @@ pub(crate) fn persist_root_bool_key(
     Ok(path)
 }
 
+pub(crate) fn persist_feature_bool_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: bool,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let (mut doc, original_raw) = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        let doc: toml::Value = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        (doc, Some(raw))
+    } else {
+        (toml::Value::Table(toml::value::Table::new()), None)
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let features_entry = table
+        .entry("features".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let features = features_entry
+        .as_table_mut()
+        .context("`features` section in config.toml must be a table")?;
+    features.insert(key.to_string(), toml::Value::Boolean(value));
+    if let Some(raw) = original_raw {
+        save_toml_preserving_comments(&path, &doc, &raw)?;
+    } else {
+        let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+        fs::write(&path, body)
+            .with_context(|| format!("failed to write config at {}", path.display()))?;
+    }
+    Ok(path)
+}
+
 pub(crate) fn persist_tui_integer_key(
     config_path: Option<&Path>,
     key: &str,
@@ -535,6 +578,38 @@ mod tests {
         assert!(
             body.contains("allow_shell = true"),
             "new key not written: {body}"
+        );
+    }
+
+    #[test]
+    fn persist_feature_bool_key_writes_features_table_and_preserves_comments() {
+        let temp_root = temp_root("codewhale-persist-feature-comments");
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "# my note\nmodel = \"deepseek-v4-flash\"\n[features]\n# keep this nearby\nweb_search = true\n",
+        )
+        .unwrap();
+
+        let written = persist_feature_bool_key(Some(&path), "subagents", false)
+            .expect("persist should succeed");
+        let body = fs::read_to_string(&written).expect("written file should be readable");
+        assert!(body.contains("# my note"), "prefix comment lost: {body}");
+        assert!(
+            body.contains("# keep this nearby"),
+            "features comment lost: {body}"
+        );
+        assert!(
+            body.contains("web_search = true"),
+            "existing feature lost: {body}"
+        );
+        assert!(
+            body.contains("subagents = false"),
+            "subagent feature not written: {body}"
         );
     }
 }

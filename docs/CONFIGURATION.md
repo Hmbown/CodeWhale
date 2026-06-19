@@ -1211,13 +1211,19 @@ You can also override features for a single run:
 - `codewhale-tui --disable subagents`
 
 Use `codewhale-tui features list` to inspect known flags and their effective state.
-The native `/config` view also includes a read-only **Experimental** section
-for experimental feature flags. It shows each flag's effective enabled/disabled
-state and whether that state comes from the default or a configured override.
-Change feature flags in `[features]` or with `--enable` / `--disable`; the
-`/config` section is an audit surface, not a stability promise. Goal and
-WhaleFlow preview rows may appear there as placeholders until those workflows
-graduate behind real gated flags.
+`subagents` also has first-class TUI controls:
+
+- `/config subagents status` reports the current effective state.
+- `/config subagents off` or `/config subagents on` changes the current session.
+- Add `--save` to persist the state under `[features]`, for example
+  `/config subagents off --save`.
+- `/config features.subagents false --save` writes the same canonical key.
+
+The native `/config` view includes an **Experimental** section for feature flags.
+It makes `features.subagents` editable and keeps unrelated experimental flags
+read-only unless they have their own editing contract. Goal and WhaleFlow preview
+rows may appear there as placeholders until those workflows graduate behind real
+gated flags.
 
 ## Web Search Provider
 

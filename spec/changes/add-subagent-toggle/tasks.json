@@ -1,0 +1,102 @@
+[
+  {
+    "number": 1,
+    "category": "Phase 1: Config command tests",
+    "task": "Add failing tests for sub-agent toggle config commands",
+    "steps": [
+      {
+        "step": "Add a test that `/config subagents off` disables `Feature::Subagents` in the live app config and reports a session-only message.",
+        "completed": true
+      },
+      {
+        "step": "Add a test that `/config subagents on --save` persists `[features] subagents = true` to the active config file.",
+        "completed": true
+      },
+      {
+        "step": "Add a test that `/config subagents status` reports the effective enabled/disabled state without mutating config.",
+        "completed": true
+      }
+    ],
+    "passes": true
+  },
+  {
+    "number": 2,
+    "category": "Phase 2: Config command implementation",
+    "task": "Implement first-class `/config subagents` aliases",
+    "steps": [
+      {
+        "step": "Parse `subagents`, `sub-agents`, and `features.subagents` as paths for the `features.subagents` feature flag.",
+        "completed": true
+      },
+      {
+        "step": "Accept `on/off`, `true/false`, `enabled/disabled`, and status queries using the existing boolean parser where possible.",
+        "completed": true
+      },
+      {
+        "step": "Persist saved changes to the `[features]` table in the active CodeWhale config file.",
+        "completed": true
+      }
+    ],
+    "passes": true
+  },
+  {
+    "number": 3,
+    "category": "Phase 3: Native config view",
+    "task": "Expose `features.subagents` as the editable config-view row",
+    "steps": [
+      {
+        "step": "Add a failing test that only the `features.subagents` experimental row is editable.",
+        "completed": true
+      },
+      {
+        "step": "Wire config-view edits for `features.subagents` through the same command path as `/config subagents`.",
+        "completed": true
+      },
+      {
+        "step": "Keep all other experimental feature rows read-only unless they already had an editable contract.",
+        "completed": true
+      }
+    ],
+    "passes": true
+  },
+  {
+    "number": 4,
+    "category": "Phase 4: Runtime behavior tests",
+    "task": "Verify disabled sub-agents are not exposed to the model runtime",
+    "steps": [
+      {
+        "step": "Add or update an engine/tool-registry test proving disabled sub-agents omit the model-facing `agent` tool.",
+        "completed": true
+      },
+      {
+        "step": "Add or update a config test documenting that `max_depth = 0` is distinct from the global `features.subagents` toggle.",
+        "completed": true
+      },
+      {
+        "step": "Run the targeted TUI tests that cover config commands, config view rows, and tool registry behavior.",
+        "completed": true
+      }
+    ],
+    "passes": true
+  },
+  {
+    "number": 5,
+    "category": "Phase 5: Documentation and validation",
+    "task": "Document the sub-agent control surface and verify the PR",
+    "steps": [
+      {
+        "step": "Update `docs/CONFIGURATION.md` with `/config subagents on|off|status`, `--disable subagents`, and `[features] subagents` examples.",
+        "completed": true
+      },
+      {
+        "step": "Update sub-agent docs if needed to clarify that `max_depth = 0` controls recursive spawning rather than the canonical global toggle.",
+        "completed": true
+      },
+      {
+        "step": "Run `cargo fmt` and the targeted cargo test commands before reporting the change as complete.",
+        "completed": true
+      }
+    ],
+    "passes": true
+  }
+]
