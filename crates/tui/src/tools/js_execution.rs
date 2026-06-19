@@ -35,39 +35,49 @@ const NODE_USE_ENV_PROXY: &str = "NODE_USE_ENV_PROXY";
 const NODE_PROXY_PAIRS: &[(&str, &str)] =
     &[("HTTP_PROXY", "http_proxy"), ("HTTPS_PROXY", "https_proxy")];
 
-fn first_non_empty_env(keys: &[&str]) -> Option<OsString> {
+fn first_non_empty_env_from(
+    keys: &[&str],
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Option<OsString> {
     keys.iter()
-        .filter_map(std::env::var_os)
+        .filter_map(|key| env(key))
         .find(|value| !value.is_empty())
 }
 
-fn node_proxy_env_overrides() -> Vec<(&'static str, OsString)> {
-    let all_proxy = first_non_empty_env(&["ALL_PROXY", "all_proxy"]);
+fn node_proxy_env_overrides_from(
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Vec<(&'static str, OsString)> {
+    let all_proxy = first_non_empty_env_from(&["ALL_PROXY", "all_proxy"], &env);
     let proxy_configured = all_proxy.is_some()
         || NODE_PROXY_PAIRS
             .iter()
-            .any(|(upper, lower)| first_non_empty_env(&[upper, lower]).is_some());
+            .any(|(upper, lower)| first_non_empty_env_from(&[upper, lower], &env).is_some());
 
     let mut overrides = Vec::new();
-    if proxy_configured && first_non_empty_env(&[NODE_USE_ENV_PROXY]).is_none() {
+    if proxy_configured && first_non_empty_env_from(&[NODE_USE_ENV_PROXY], &env).is_none() {
         overrides.push((NODE_USE_ENV_PROXY, OsString::from("1")));
     }
 
     for (upper, lower) in NODE_PROXY_PAIRS {
-        if first_non_empty_env(&[upper]).is_none()
-            && let Some(value) = first_non_empty_env(&[lower]).or_else(|| all_proxy.clone())
+        if first_non_empty_env_from(&[upper], &env).is_none()
+            && let Some(value) =
+                first_non_empty_env_from(&[lower], &env).or_else(|| all_proxy.clone())
         {
             overrides.push((*upper, value));
         }
     }
 
-    if first_non_empty_env(&["NO_PROXY"]).is_none()
-        && let Some(value) = first_non_empty_env(&["no_proxy"])
+    if first_non_empty_env_from(&["NO_PROXY"], &env).is_none()
+        && let Some(value) = first_non_empty_env_from(&["no_proxy"], &env)
     {
         overrides.push(("NO_PROXY", value));
     }
 
     overrides
+}
+
+fn node_proxy_env_overrides() -> Vec<(&'static str, OsString)> {
+    node_proxy_env_overrides_from(|key| std::env::var_os(key))
 }
 
 fn apply_node_proxy_env(cmd: &mut tokio::process::Command) {
@@ -165,7 +175,6 @@ pub async fn execute_js_execution_tool(
 mod tests {
     use super::*;
     use std::ffi::OsString;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
 
     /// Skip helper — `js_execution` is a no-op on hosts without Node.
@@ -175,40 +184,11 @@ mod tests {
         crate::dependencies::resolve_node().is_some()
     }
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
+    fn proxy_env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find_map(|(name, value)| (*name == key).then(|| OsString::from(value)))
         }
     }
 
@@ -274,39 +254,32 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn execute_js_enables_node_env_proxy_when_proxy_env_is_present() {
-        if !node_present() {
-            return;
-        }
-        let _guard = env_lock().lock().expect("env lock");
-        let _proxy_guard = EnvGuard::set("HTTPS_PROXY", "http://127.0.0.1:20499");
-        let _node_flag_guard = EnvGuard::remove("NODE_USE_ENV_PROXY");
+    #[test]
+    fn node_proxy_overrides_enable_env_proxy_when_proxy_env_is_present() {
+        let overrides =
+            node_proxy_env_overrides_from(proxy_env(&[("HTTPS_PROXY", "http://127.0.0.1:20499")]));
 
-        let tmp = tempdir().expect("tempdir");
-        let result = execute_js_execution_tool(
-            &json!({
-                "code": "process.stdout.write(JSON.stringify({ nodeUseEnvProxy: process.env.NODE_USE_ENV_PROXY || null, httpsProxy: process.env.HTTPS_PROXY || null }))"
-            }),
-            tmp.path(),
-        )
-        .await
-        .expect("execute");
-
-        assert!(result.success, "env probe should run successfully");
-        let stdout = result
-            .metadata
-            .as_ref()
-            .and_then(|payload| payload.get("stdout"))
-            .and_then(|stdout| stdout.as_str())
-            .expect("stdout payload");
-        assert!(
-            stdout.contains("\"nodeUseEnvProxy\":\"1\""),
-            "js_execution should enable Node's env-proxy mode when proxy env vars are present; stdout={stdout:?}"
+        assert_eq!(
+            overrides,
+            vec![(NODE_USE_ENV_PROXY, OsString::from("1"))],
+            "uppercase proxy vars are inherited by the child; only Node's env-proxy flag is needed"
         );
-        assert!(
-            stdout.contains("\"httpsProxy\":\"http://127.0.0.1:20499\""),
-            "js_execution should preserve the inherited HTTPS proxy env; stdout={stdout:?}"
+    }
+
+    #[test]
+    fn node_proxy_overrides_mirror_lowercase_proxy_vars() {
+        let overrides = node_proxy_env_overrides_from(proxy_env(&[
+            ("https_proxy", "http://127.0.0.1:20499"),
+            ("no_proxy", "localhost"),
+        ]));
+
+        assert_eq!(
+            overrides,
+            vec![
+                (NODE_USE_ENV_PROXY, OsString::from("1")),
+                ("HTTPS_PROXY", OsString::from("http://127.0.0.1:20499")),
+                ("NO_PROXY", OsString::from("localhost")),
+            ]
         );
     }
 
