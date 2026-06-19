@@ -584,6 +584,7 @@ impl RuntimeThreadStore {
 pub struct RuntimeThreadManagerConfig {
     pub data_dir: PathBuf,
     pub task_data_dir: PathBuf,
+    pub sessions_dir: Option<PathBuf>,
     pub max_active_threads: usize,
 }
 
@@ -602,6 +603,7 @@ impl RuntimeThreadManagerConfig {
         Self {
             data_dir,
             task_data_dir,
+            sessions_dir: crate::session_manager::default_sessions_dir().ok(),
             max_active_threads: MAX_ACTIVE_THREADS_DEFAULT,
         }
     }
@@ -822,6 +824,14 @@ enum SeedItem {
 struct TurnSeed {
     user_text: String,
     items: Vec<SeedItem>,
+}
+
+impl TurnSeed {
+    fn has_assistant_content(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| !matches!(item, SeedItem::ToolResult { .. }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1628,20 +1638,28 @@ impl RuntimeThreadManager {
         // Group messages into turns. A turn starts with a user message and
         // includes all subsequent assistant messages (which may contain
         // thinking, tool_use, tool_result blocks) until the next user message.
+        //
+        // Consecutive user messages (e.g. parallel tool call results) are
+        // merged into the same turn to avoid violating LLM provider contracts
+        // that forbid back-to-back user messages.
         let mut turns: Vec<TurnSeed> = Vec::new();
         let mut current_turn: Option<TurnSeed> = None;
 
         for msg in messages {
             match msg.role.as_str() {
                 "user" => {
-                    // Flush any pending turn before starting a new one.
-                    if let Some(t) = current_turn.take() {
-                        turns.push(t);
+                    // Only flush when the current turn has assistant content;
+                    // otherwise merge consecutive user messages into one turn.
+                    if current_turn
+                        .as_ref()
+                        .is_some_and(TurnSeed::has_assistant_content)
+                    {
+                        turns.push(current_turn.take().unwrap());
                     }
-                    let mut turn = TurnSeed {
+                    let turn = current_turn.get_or_insert_with(|| TurnSeed {
                         user_text: String::new(),
                         items: Vec::new(),
-                    };
+                    });
                     // Extract text from user message content blocks.
                     // Tool result blocks in user messages are part of the
                     // tool loop and should be stored as tool_call items.
@@ -1670,7 +1688,6 @@ impl RuntimeThreadManager {
                             _ => {}
                         }
                     }
-                    current_turn = Some(turn);
                 }
                 "assistant" => {
                     // If no current turn exists (e.g. session starts with
@@ -1721,14 +1738,23 @@ impl RuntimeThreadManager {
             turns.push(t);
         }
 
-        for turn_seed in turns {
+        for (offset, turn_seed) in turns.into_iter().enumerate() {
+            let created_at = now + chrono::Duration::seconds(offset as i64);
             let turn_id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
             let summary =
                 crate::utils::truncate_with_ellipsis(&turn_seed.user_text, SUMMARY_LIMIT, "...");
             let mut item_ids = Vec::new();
+            let mut item_offset_ms = 0_i64;
+
+            let mut next_item_time = || {
+                let ts = created_at + chrono::Duration::milliseconds(item_offset_ms);
+                item_offset_ms += 1;
+                ts
+            };
 
             // Save user message item.
             if !turn_seed.user_text.is_empty() {
+                let item_time = next_item_time();
                 let item_id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
                 self.store.save_item(&TurnItemRecord {
                     schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -1740,14 +1766,15 @@ impl RuntimeThreadManager {
                     detail: Some(turn_seed.user_text.clone()),
                     metadata: None,
                     artifact_refs: Vec::new(),
-                    started_at: Some(now),
-                    ended_at: Some(now),
+                    started_at: Some(item_time),
+                    ended_at: Some(item_time),
                 })?;
                 item_ids.push(item_id);
             }
 
             // Save assistant content items in order.
             for seed_item in &turn_seed.items {
+                let item_time = next_item_time();
                 let item_id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
                 match seed_item {
                     SeedItem::Text(text) => {
@@ -1766,8 +1793,8 @@ impl RuntimeThreadManager {
                             detail: Some(text.clone()),
                             metadata: None,
                             artifact_refs: Vec::new(),
-                            started_at: Some(now),
-                            ended_at: Some(now),
+                            started_at: Some(item_time),
+                            ended_at: Some(item_time),
                         })?;
                     }
                     SeedItem::Thinking(thinking) => {
@@ -1786,8 +1813,8 @@ impl RuntimeThreadManager {
                             detail: Some(thinking.clone()),
                             metadata: None,
                             artifact_refs: Vec::new(),
-                            started_at: Some(now),
-                            ended_at: Some(now),
+                            started_at: Some(item_time),
+                            ended_at: Some(item_time),
                         })?;
                     }
                     SeedItem::ToolUse {
@@ -1823,8 +1850,8 @@ impl RuntimeThreadManager {
                                 .clone(),
                             )),
                             artifact_refs: Vec::new(),
-                            started_at: Some(now),
-                            ended_at: Some(now),
+                            started_at: Some(item_time),
+                            ended_at: Some(item_time),
                         })?;
                     }
                     SeedItem::ToolResult {
@@ -1859,8 +1886,8 @@ impl RuntimeThreadManager {
                                 .clone(),
                             )),
                             artifact_refs: Vec::new(),
-                            started_at: Some(now),
-                            ended_at: Some(now),
+                            started_at: Some(item_time),
+                            ended_at: Some(item_time),
                         })?;
                     }
                 }
@@ -1875,9 +1902,9 @@ impl RuntimeThreadManager {
                     thread_id: thread_id.to_string(),
                     status: RuntimeTurnStatus::Completed,
                     input_summary: summary,
-                    created_at: now,
-                    started_at: Some(now),
-                    ended_at: Some(now),
+                    created_at,
+                    started_at: Some(created_at),
+                    ended_at: Some(created_at),
                     duration_ms: Some(0),
                     usage: None,
                     error: None,
@@ -2455,38 +2482,31 @@ impl RuntimeThreadManager {
         // (including thinking/tool blocks) from the session file. This preserves
         // process information that `reconstruct_messages_from_turns` would lose.
         let session_messages = if let Some(ref sid) = thread.session_id {
-            match crate::session_manager::default_sessions_dir() {
-                Ok(sessions_dir) => {
-                    match crate::session_manager::SessionManager::new(sessions_dir) {
-                        Ok(manager) => match manager.load_session(sid) {
-                            Ok(session) => session.messages,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to load session {} for thread {}: {e}; falling back to turn reconstruction",
-                                    sid,
-                                    thread.id
-                                );
-                                let turns = self.store.list_turns_for_thread(&thread.id)?;
-                                self.reconstruct_messages_from_turns(&turns)?
-                            }
-                        },
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to open sessions dir: {e}; falling back to turn reconstruction"
-                            );
-                            let turns = self.store.list_turns_for_thread(&thread.id)?;
-                            self.reconstruct_messages_from_turns(&turns)?
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to resolve sessions dir: {e}; falling back to turn reconstruction"
-                    );
-                    let turns = self.store.list_turns_for_thread(&thread.id)?;
-                    self.reconstruct_messages_from_turns(&turns)?
-                }
-            }
+            let fallback = || -> Result<Vec<Message>> {
+                let turns = self.store.list_turns_for_thread(&thread.id)?;
+                self.reconstruct_messages_from_turns(&turns)
+            };
+
+            self.manager_cfg
+                .sessions_dir
+                .clone()
+                .ok_or_else(|| anyhow!("No sessions dir configured"))
+                .and_then(|dir| {
+                    crate::session_manager::SessionManager::new(dir).map_err(anyhow::Error::from)
+                })
+                .and_then(|manager| manager.load_session(sid).map_err(anyhow::Error::from))
+                .map(|session| session.messages)
+                .map_or_else(
+                    |e| {
+                        tracing::warn!(
+                            "Failed to load session {sid} for thread {}: {e}; \
+                             falling back to turn reconstruction",
+                            thread.id,
+                        );
+                        fallback()
+                    },
+                    Ok,
+                )?
         } else {
             let turns = self.store.list_turns_for_thread(&thread.id)?;
             self.reconstruct_messages_from_turns(&turns)?
@@ -2537,8 +2557,17 @@ impl RuntimeThreadManager {
         let mut messages = Vec::new();
         for turn in turns {
             let items = self.store.list_items_for_turn(&turn.id)?;
+            let mut user_blocks: Vec<ContentBlock> = Vec::new();
             // Collect content blocks for the current assistant message.
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+            let flush_user = |blocks: &mut Vec<ContentBlock>, msgs: &mut Vec<Message>| {
+                if !blocks.is_empty() {
+                    msgs.push(Message {
+                        role: "user".to_string(),
+                        content: std::mem::take(blocks),
+                    });
+                }
+            };
             let flush_assistant = |blocks: &mut Vec<ContentBlock>, msgs: &mut Vec<Message>| {
                 if !blocks.is_empty() {
                     msgs.push(Message {
@@ -2553,16 +2582,14 @@ impl RuntimeThreadManager {
                         flush_assistant(&mut assistant_blocks, &mut messages);
                         let text = item.detail.unwrap_or(item.summary);
                         if !text.trim().is_empty() {
-                            messages.push(Message {
-                                role: "user".to_string(),
-                                content: vec![ContentBlock::Text {
-                                    text,
-                                    cache_control: None,
-                                }],
+                            user_blocks.push(ContentBlock::Text {
+                                text,
+                                cache_control: None,
                             });
                         }
                     }
                     TurnItemKind::AgentMessage => {
+                        flush_user(&mut user_blocks, &mut messages);
                         let text = item.detail.unwrap_or(item.summary);
                         if !text.trim().is_empty() {
                             assistant_blocks.push(ContentBlock::Text {
@@ -2572,6 +2599,7 @@ impl RuntimeThreadManager {
                         }
                     }
                     TurnItemKind::AgentReasoning => {
+                        flush_user(&mut user_blocks, &mut messages);
                         let thinking = item.detail.unwrap_or(item.summary);
                         if !thinking.trim().is_empty() {
                             assistant_blocks.push(ContentBlock::Thinking {
@@ -2595,16 +2623,14 @@ impl RuntimeThreadManager {
                                 .and_then(|m| m.get("is_error"))
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false);
-                            messages.push(Message {
-                                role: "user".to_string(),
-                                content: vec![ContentBlock::ToolResult {
-                                    tool_use_id,
-                                    content,
-                                    is_error: if is_error { Some(true) } else { None },
-                                    content_blocks: None,
-                                }],
+                            user_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error: if is_error { Some(true) } else { None },
+                                content_blocks: None,
                             });
                         } else {
+                            flush_user(&mut user_blocks, &mut messages);
                             let tool_use_id = meta
                                 .and_then(|m| m.get("tool_use_id"))
                                 .and_then(|v| v.as_str())
@@ -2630,6 +2656,7 @@ impl RuntimeThreadManager {
                 }
             }
             flush_assistant(&mut assistant_blocks, &mut messages);
+            flush_user(&mut user_blocks, &mut messages);
         }
         Ok(messages)
     }
@@ -3790,6 +3817,8 @@ mod tests {
     use super::*;
     use crate::core::engine::{MockApprovalEvent, mock_engine_handle};
     use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
+    use crate::session_manager::{SessionManager, create_saved_session_with_id_and_mode};
+    use std::fs;
     use std::time::{Duration, Instant};
     use tokio::sync::oneshot;
     use tokio::time::sleep;
@@ -3803,6 +3832,19 @@ mod tests {
         RuntimeThreadManagerConfig {
             task_data_dir: data_dir.clone(),
             data_dir,
+            sessions_dir: None,
+            max_active_threads: 4,
+        }
+    }
+
+    fn test_manager_config_with_sessions_dir(
+        data_dir: PathBuf,
+        sessions_dir: PathBuf,
+    ) -> RuntimeThreadManagerConfig {
+        RuntimeThreadManagerConfig {
+            task_data_dir: data_dir.clone(),
+            data_dir,
+            sessions_dir: Some(sessions_dir),
             max_active_threads: 4,
         }
     }
@@ -3812,6 +3854,17 @@ mod tests {
             Config::default(),
             PathBuf::from("."),
             test_manager_config(data_dir),
+        )
+    }
+
+    fn test_manager_with_sessions_dir(
+        data_dir: PathBuf,
+        sessions_dir: PathBuf,
+    ) -> Result<RuntimeThreadManager> {
+        RuntimeThreadManager::open(
+            Config::default(),
+            PathBuf::from("."),
+            test_manager_config_with_sessions_dir(data_dir, sessions_dir),
         )
     }
 
@@ -4905,6 +4958,253 @@ mod tests {
                 "item_detail_second"
             ]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seed_thread_from_messages_keeps_parallel_tool_results_in_one_turn() -> Result<()> {
+        let manager = test_manager(test_runtime_dir())?;
+        let thread = manager
+            .create_thread(CreateThreadRequest {
+                model: None,
+                workspace: None,
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+                archived: false,
+                system_prompt: None,
+                task_id: None,
+                ..Default::default()
+            })
+            .await?;
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Calculate both files".to_string(),
+                    cache_control: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "tool_a".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path":"a.txt"}),
+                        caller: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tool_b".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path":"b.txt"}),
+                        caller: None,
+                    },
+                ],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool_a".to_string(),
+                    content: "A".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool_b".to_string(),
+                    content: "B".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Done".to_string(),
+                    cache_control: None,
+                }],
+            },
+        ];
+
+        manager
+            .seed_thread_from_messages(&thread.id, &messages)
+            .await?;
+
+        let detail = manager.get_thread_detail(&thread.id).await?;
+        assert_eq!(detail.turns.len(), 2);
+        let merged_tool_result_turn_found =
+            detail.turns.iter().try_fold(false, |found, turn| {
+                let items = manager.store.list_items_for_turn(&turn.id)?;
+                let tool_result_count = items
+                    .iter()
+                    .filter(|item| {
+                        item.metadata
+                            .as_ref()
+                            .and_then(|meta| meta.get("tool_result_for"))
+                            .is_some()
+                    })
+                    .count();
+                let has_done = items.iter().any(|item| {
+                    item.kind == TurnItemKind::AgentMessage
+                        && item.detail.as_deref() == Some("Done")
+                });
+                Ok::<bool, anyhow::Error>(found || (tool_result_count == 2 && has_done))
+            })?;
+        assert!(merged_tool_result_turn_found);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconstruct_messages_from_turns_batches_parallel_tool_results() -> Result<()> {
+        let manager = test_manager(test_runtime_dir())?;
+        let thread = manager
+            .create_thread(CreateThreadRequest {
+                model: None,
+                workspace: None,
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+                archived: false,
+                system_prompt: None,
+                task_id: None,
+                ..Default::default()
+            })
+            .await?;
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Calculate both files".to_string(),
+                    cache_control: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "tool_a".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path":"a.txt"}),
+                        caller: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tool_b".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path":"b.txt"}),
+                        caller: None,
+                    },
+                ],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool_a".to_string(),
+                    content: "A".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool_b".to_string(),
+                    content: "B".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Done".to_string(),
+                    cache_control: None,
+                }],
+            },
+        ];
+
+        manager
+            .seed_thread_from_messages(&thread.id, &messages)
+            .await?;
+
+        let turns = manager.store.list_turns_for_thread(&thread.id)?;
+        let reconstructed = manager.reconstruct_messages_from_turns(&turns)?;
+        let roles: Vec<&str> = reconstructed.iter().map(|msg| msg.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user", "assistant"]);
+        assert_eq!(reconstructed[2].content.len(), 2);
+        assert!(
+            reconstructed[2]
+                .content
+                .iter()
+                .all(|block| matches!(block, ContentBlock::ToolResult { .. }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ensure_engine_loaded_uses_configured_sessions_dir() -> Result<()> {
+        let data_dir = test_runtime_dir();
+        let sessions_dir = data_dir.join("sessions-custom");
+        fs::create_dir_all(&sessions_dir)?;
+        let manager = test_manager_with_sessions_dir(data_dir, sessions_dir.clone())?;
+        let thread = manager
+            .create_thread(CreateThreadRequest {
+                model: None,
+                workspace: None,
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+                archived: false,
+                system_prompt: None,
+                task_id: None,
+                ..Default::default()
+            })
+            .await?;
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "restore me".to_string(),
+                    cache_control: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Thinking {
+                    thinking: "hidden chain".to_string(),
+                    signature: None,
+                }],
+            },
+        ];
+        let session = create_saved_session_with_id_and_mode(
+            "sess_custom".to_string(),
+            &messages,
+            DEFAULT_TEXT_MODEL,
+            Path::new("."),
+            42,
+            None,
+            Some("agent"),
+        );
+        SessionManager::new(sessions_dir)?.save_session(&session)?;
+        manager
+            .set_thread_session_id(&thread.id, &session.metadata.id)
+            .await?;
+
+        let engine = manager.get_engine(&thread.id).await?;
+        let snapshot = engine.get_session_snapshot().await?;
+        assert_eq!(snapshot.messages.len(), 2);
+        assert!(matches!(
+            &snapshot.messages[1].content[0],
+            ContentBlock::Thinking { thinking, .. } if thinking == "hidden chain"
+        ));
         Ok(())
     }
 
