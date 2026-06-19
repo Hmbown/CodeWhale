@@ -22,10 +22,10 @@ use tokio::sync::Mutex as TokioMutex;
 
 mod headers;
 
+use self::headers::{apply_safe_custom_headers, with_default_mcp_http_headers};
 use crate::child_env;
 use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
 use crate::utils::write_atomic;
-use headers::{apply_safe_custom_headers, with_default_mcp_http_headers};
 
 // === Error diagnostics helpers (#71) ===
 
@@ -3071,8 +3071,8 @@ pub fn format_tool_result(result: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::headers::{MCP_HTTP_ACCEPT, is_safe_custom_header};
     use super::*;
-    use headers::{MCP_HTTP_ACCEPT, is_safe_custom_header};
     use reqwest::header::{ACCEPT, CONTENT_TYPE};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
