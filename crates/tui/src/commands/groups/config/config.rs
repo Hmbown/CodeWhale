@@ -446,12 +446,6 @@ fn subagents_status_message(enabled: bool) -> String {
 }
 
 fn set_subagents_feature(app: &mut App, enabled: bool, persist: bool) -> CommandResult {
-    if enabled {
-        app.features.enable(Feature::Subagents);
-    } else {
-        app.features.disable(Feature::Subagents);
-    }
-
     let suffix = if persist {
         match persist_feature_bool_key(app.config_path.as_deref(), "subagents", enabled) {
             Ok(path) => format!(" (saved to {})", path.display()),
@@ -460,6 +454,13 @@ fn set_subagents_feature(app: &mut App, enabled: bool, persist: bool) -> Command
     } else {
         " (session only, add --save to persist)".to_string()
     };
+
+    if enabled {
+        app.features.enable(Feature::Subagents);
+    } else {
+        app.features.disable(Feature::Subagents);
+    }
+
     let tool_hint = if enabled {
         " The agent tool will be available on the next turn."
     } else {
@@ -479,10 +480,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     match key.as_str() {
         key if is_subagents_config_key(key) => {
             let value = value.trim();
-            if matches!(
-                value.to_ascii_lowercase().as_str(),
-                "" | "status" | "show" | "get"
-            ) {
+            if value.is_empty()
+                || value.eq_ignore_ascii_case("status")
+                || value.eq_ignore_ascii_case("show")
+                || value.eq_ignore_ascii_case("get")
+            {
                 return CommandResult::message(subagents_status_message(
                     app.features.enabled(Feature::Subagents),
                 ));
