@@ -6,7 +6,7 @@
     "npm/runtime-sdk"
   ],
   "devDependencies": {
-    "wrangler": "^4.94.0"
+    "wrangler": "^4.103.0"
   },
   "overrides": {
     "esbuild": "0.28.1",
