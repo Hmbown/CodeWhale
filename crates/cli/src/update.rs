@@ -82,8 +82,7 @@ pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Re
     if let UpdateReleaseSource::Mirror { base_url } = &fetched.source {
         if channel == ReleaseChannel::Beta {
             println!(
-                "Using release mirror {}; --beta does not select GitHub beta releases in mirror mode.",
-                base_url
+                "Using release mirror {base_url}; --beta does not select GitHub beta releases in mirror mode."
             );
         }
     } else if !update_is_needed(channel, current_version, latest_tag)? {

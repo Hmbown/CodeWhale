@@ -625,8 +625,8 @@ mod tests {
 
         // Create max tabs
         for i in 0..MAX_TABS {
-            let result = manager.create_tab(format!("Tab {}", i), TabType::Chat);
-            assert!(result.is_some(), "Tab {} should be created", i);
+            let result = manager.create_tab(format!("Tab {i}"), TabType::Chat);
+            assert!(result.is_some(), "Tab {i} should be created");
         }
 
         // Try to create one more

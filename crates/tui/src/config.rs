@@ -5991,7 +5991,7 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 
     let existing = fs::read_to_string(&config_path)?;
     let mut result = String::new();
-    let target_section = format!("[providers.{}]", provider);
+    let target_section = format!("[providers.{provider}]");
     let mut in_target_section = false;
 
     for line in existing.lines() {

@@ -237,7 +237,7 @@ impl TabGroupManager {
     fn generate_group_id(&mut self) -> String {
         let id = self.next_id;
         self.next_id += 1;
-        format!("group_{}", id)
+        format!("group_{id}")
     }
 
     pub(crate) fn advance_next_id_past_existing_groups(&mut self) {

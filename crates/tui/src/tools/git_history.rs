@@ -513,7 +513,7 @@ mod tests {
 
     fn run_git(root: &Path, args: &[&str]) {
         let status = crate::dependencies::Git::status(args, root).expect("git should spawn");
-        assert!(status.success(), "git {:?} failed", args);
+        assert!(status.success(), "git {args:?} failed");
     }
 
     fn init_git_repo(root: &Path) {

@@ -613,8 +613,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 && !(MIN_STREAM_CHUNK_TIMEOUT_SECS..=MAX_STREAM_CHUNK_TIMEOUT_SECS).contains(&raw)
             {
                 return CommandResult::error(format!(
-                    "stream_chunk_timeout_secs must be 0 or {}..={}",
-                    MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS
+                    "stream_chunk_timeout_secs must be 0 or {MIN_STREAM_CHUNK_TIMEOUT_SECS}..={MAX_STREAM_CHUNK_TIMEOUT_SECS}"
                 ));
             }
             let resolved = if raw == 0 {
@@ -1878,7 +1877,7 @@ mod tests {
             )
         );
         assert!(saved.contains("[providers.xiaomi_mimo]"));
-        assert!(saved.contains(&format!("base_url = \"{}\"", DEFAULT_XIAOMI_MIMO_BASE_URL)));
+        assert!(saved.contains(&format!("base_url = \"{DEFAULT_XIAOMI_MIMO_BASE_URL}\"")));
     }
 
     #[test]

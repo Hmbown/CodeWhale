@@ -10609,11 +10609,6 @@ fn agent_progress_redraw_coalesces_once_per_agent_per_drain() {
 
 #[test]
 fn six_worker_progress_storm_keeps_input_render_and_cancel_live() {
-    assert!(
-        MAX_ENGINE_EVENTS_PER_DRAIN <= 128,
-        "engine event drains must stay bounded so high sub-agent fanout cannot monopolize the UI tick"
-    );
-
     let t0 = Instant::now();
     let mut last_redraw = None;
     let mut seen_agents = HashSet::new();

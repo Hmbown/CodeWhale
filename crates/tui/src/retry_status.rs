@@ -99,7 +99,7 @@ pub fn snapshot() -> RetryState {
 pub fn note_rate_limit(delay: Duration) {
     let deadline = Instant::now() + delay;
     if let Ok(mut current) = rate_limit_cell().lock()
-        && current.map_or(true, |existing| existing < deadline)
+        && current.is_none_or(|existing| existing < deadline)
     {
         *current = Some(deadline);
     }

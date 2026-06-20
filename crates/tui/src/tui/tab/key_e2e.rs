@@ -93,7 +93,7 @@ mod tests {
         let mut manager = TabManager::new();
         for i in 1..=5 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .expect("create");
         }
 
@@ -112,7 +112,7 @@ mod tests {
         let mut manager = TabManager::new();
         for i in 1..=3 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .unwrap();
         }
 
@@ -126,7 +126,7 @@ mod tests {
         let mut manager = TabManager::new();
         for i in 1..=3 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .unwrap();
         }
         // Initially at last (2)
@@ -326,7 +326,7 @@ mod tests {
         let mut manager = TabManager::new();
         for i in 0..9 {
             manager
-                .create_tab(format!("T{}", i), TabType::Chat)
+                .create_tab(format!("T{i}"), TabType::Chat)
                 .expect("create");
         }
         // Close all

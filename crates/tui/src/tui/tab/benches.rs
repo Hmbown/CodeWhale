@@ -32,10 +32,7 @@ mod benches {
         } else {
             0
         };
-        eprintln!(
-            "[bench] {:50} total={:>8.2?}  ops={:>6}  per_op={:>7} ns",
-            label, dur, ops, per_op_ns
-        );
+        eprintln!("[bench] {label:50} total={dur:>8.2?}  ops={ops:>6}  per_op={per_op_ns:>7} ns");
     }
 
     #[test]
@@ -44,7 +41,7 @@ mod benches {
         let mut manager = TabManager::new();
         for i in 0..9 {
             manager
-                .create_tab(format!("Bench Tab {}", i), TabType::Chat)
+                .create_tab(format!("Bench Tab {i}"), TabType::Chat)
                 .expect("create_tab should succeed");
         }
         report("create 9 tabs", start.elapsed(), 9);
@@ -55,7 +52,7 @@ mod benches {
         let mut manager = TabManager::new();
         for i in 0..9 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .expect("create_tab");
         }
         let start = Instant::now();
@@ -77,7 +74,7 @@ mod benches {
 
         let start = Instant::now();
         for i in 0..1000 {
-            manager.delegate_task(from, to, format!("Task {}", i), Priority::Normal);
+            manager.delegate_task(from, to, format!("Task {i}"), Priority::Normal);
         }
         report("1000 delegations", start.elapsed(), 1000);
     }
@@ -96,7 +93,7 @@ mod benches {
             Priority::Urgent,
         ];
         for i in 0..100 {
-            manager.delegate_task(from, to, format!("Task {}", i), priorities[i % 4]);
+            manager.delegate_task(from, to, format!("Task {i}"), priorities[i % 4]);
         }
 
         let start = Instant::now();
@@ -105,7 +102,7 @@ mod benches {
             count += 1;
         }
         report(
-            &format!("drain {} priority-sorted tasks", count),
+            &format!("drain {count} priority-sorted tasks"),
             start.elapsed(),
             count,
         );
@@ -116,7 +113,7 @@ mod benches {
         let mut manager = TabManager::new();
         for i in 0..9 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .expect("create");
         }
 
@@ -124,7 +121,7 @@ mod benches {
         let from = manager.active_id().unwrap();
         let to = manager.all_tabs()[1].id;
         for i in 0..20 {
-            manager.delegate_task(from, to, format!("Task {}", i), Priority::Normal);
+            manager.delegate_task(from, to, format!("Task {i}"), Priority::Normal);
         }
 
         let start = Instant::now();
@@ -153,7 +150,7 @@ mod benches {
         let mut manager = TabManager::new();
         for i in 0..9 {
             manager
-                .create_tab(format!("Tab {}", i), TabType::Chat)
+                .create_tab(format!("Tab {i}"), TabType::Chat)
                 .expect("create");
         }
         let tabs: Vec<TabId> = manager.all_tabs().iter().map(|t| t.id).collect();
@@ -194,7 +191,7 @@ mod benches {
             let mut manager = TabManager::new();
             for i in 0..9 {
                 manager
-                    .create_tab(format!("Tab {}", i), TabType::Chat)
+                    .create_tab(format!("Tab {i}"), TabType::Chat)
                     .expect("create");
             }
 
@@ -209,7 +206,7 @@ mod benches {
                 count += 1;
             }
             report(
-                &format!("iterate {} tabs at width {}", count, width),
+                &format!("iterate {count} tabs at width {width}"),
                 start.elapsed(),
                 count,
             );

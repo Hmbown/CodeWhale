@@ -332,7 +332,7 @@ impl MeetingManager {
     fn generate_meeting_id(&mut self) -> String {
         let id = self.next_meeting_id;
         self.next_meeting_id += 1;
-        format!("meeting_{}", id)
+        format!("meeting_{id}")
     }
 }
 

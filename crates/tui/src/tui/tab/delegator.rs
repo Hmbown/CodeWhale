@@ -362,7 +362,7 @@ impl TaskDelegator {
     fn generate_task_id(&mut self) -> String {
         let id = self.next_id;
         self.next_id += 1;
-        format!("delegation_{}", id)
+        format!("delegation_{id}")
     }
 
     pub(crate) fn advance_next_id_past_existing_tasks(&mut self) {
@@ -508,9 +508,9 @@ mod tests {
         // Create and complete 1000 tasks (more than MAX_COMPLETED_RESULTS=256)
         for i in 0..1000 {
             let task_id = delegator
-                .create_delegation(from, to, format!("Task {}", i), Priority::Normal)
+                .create_delegation(from, to, format!("Task {i}"), Priority::Normal)
                 .unwrap();
-            delegator.complete(&task_id, format!("Result {}", i));
+            delegator.complete(&task_id, format!("Result {i}"));
         }
 
         // Should be bounded at MAX_COMPLETED_RESULTS
@@ -531,9 +531,9 @@ mod tests {
         // Complete many tasks
         for i in 0..100 {
             let task_id = delegator
-                .create_delegation(from, to, format!("Task {}", i), Priority::Normal)
+                .create_delegation(from, to, format!("Task {i}"), Priority::Normal)
                 .unwrap();
-            delegator.complete(&task_id, format!("Result {}", i));
+            delegator.complete(&task_id, format!("Result {i}"));
         }
 
         assert_eq!(delegator.results_for_tab(to).len(), 100);

@@ -439,11 +439,11 @@ impl FleetLedger {
 }
 
 fn task_key(run_id: &str, task_id: &str) -> String {
-    format!("{}:{}", run_id, task_id)
+    format!("{run_id}:{task_id}")
 }
 
 fn event_key(worker_id: &str, run_id: &str, task_id: &str) -> String {
-    format!("{}:{}:{}", worker_id, run_id, task_id)
+    format!("{worker_id}:{run_id}:{task_id}")
 }
 
 fn compact_event_key(event: &FleetWorkerEvent) -> String {

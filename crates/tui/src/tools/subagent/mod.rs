@@ -5426,12 +5426,10 @@ fn stamp_subagent_summary(raw: &str) -> (String, bool) {
         .saturating_sub(SUBAGENT_SUMMARY_HEAD_CHARS)
         .saturating_sub(SUBAGENT_SUMMARY_TAIL_CHARS);
     let stamped = format!(
-        "{head}\n\n[Sub-agent summary truncated: {head_chars} + {tail_chars} of {total} \
+        "{head}\n\n[Sub-agent summary truncated: {SUBAGENT_SUMMARY_HEAD_CHARS} + {SUBAGENT_SUMMARY_TAIL_CHARS} of {total} \
 chars shown. This is the child's self-report; the elided middle ({omitted} chars) is not in \
 the spillover store and cannot be retrieved via retrieve_tool_result. Re-open the child or \
 read changed files directly to verify material claims.]\n\n{tail}",
-        head_chars = SUBAGENT_SUMMARY_HEAD_CHARS,
-        tail_chars = SUBAGENT_SUMMARY_TAIL_CHARS,
     );
     (stamped, true)
 }

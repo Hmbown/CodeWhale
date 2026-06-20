@@ -330,7 +330,7 @@ mod tests {
     fn jwt_expiry_parses_valid_token() {
         // A minimal JWT with {"exp": 9999999999} as payload.
         let payload = URL_SAFE_NO_PAD.encode(b"{\"exp\":9999999999}");
-        let token = format!("header.{}.signature", payload);
+        let token = format!("header.{payload}.signature");
         assert_eq!(jwt_expiry_seconds(&token), Some(9999999999));
     }
 
@@ -345,7 +345,7 @@ mod tests {
     fn token_is_expired_detects_future() {
         // Far future — should not be expired.
         let payload = URL_SAFE_NO_PAD.encode(b"{\"exp\":9999999999}");
-        let token = format!("header.{}.sig", payload);
+        let token = format!("header.{payload}.sig");
         assert!(!token_is_expired(&token));
     }
 
@@ -353,7 +353,7 @@ mod tests {
     fn token_is_expired_detects_past() {
         // Way in the past.
         let payload = URL_SAFE_NO_PAD.encode(b"{\"exp\":1000000000}");
-        let token = format!("header.{}.sig", payload);
+        let token = format!("header.{payload}.sig");
         assert!(token_is_expired(&token));
     }
 
