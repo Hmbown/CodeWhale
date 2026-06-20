@@ -279,7 +279,6 @@ const TERMINAL_INPUT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const TERMINAL_INPUT_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 const TERMINAL_INPUT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINAL_INPUT_RECOVERY_COOLDOWN: Duration = Duration::from_secs(10);
-// must less than or equal 128 because engine event drains must stay bounded so high sub-agent fanout cannot monopolize the UI tick
 const MAX_ENGINE_EVENTS_PER_DRAIN: usize = 128;
 
 enum TerminalInputMessage {
