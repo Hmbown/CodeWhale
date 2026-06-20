@@ -4144,16 +4144,17 @@ async fn run_subagent(
                         token_cap
                     ),
                 );
+                let budget_msg = format!(
+                    "Token budget exceeded: {} tokens used, {} budget",
+                    total_tokens_used, token_cap
+                );
                 if let Some(mb) = runtime.mailbox.as_ref() {
                     let _ = mb.send(MailboxMessage::Failed {
                         agent_id: agent_id.clone(),
-                        error: format!(
-                            "Token budget exceeded: {} tokens used, {} budget",
-                            total_tokens_used, token_cap
-                        ),
+                        error: budget_msg.clone(),
                     });
                 }
-                let status = SubAgentStatus::Failed;
+                let status = SubAgentStatus::Failed(budget_msg.clone());
                 let duration_ms =
                     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
                 insert_subagent_full_transcript_handle(
@@ -4162,10 +4163,7 @@ async fn run_subagent(
                     &agent_type,
                     &assignment,
                     &status,
-                    Some(&format!(
-                        "Token budget exceeded: {} tokens used, {} budget",
-                        total_tokens_used, token_cap
-                    )),
+                    Some(&budget_msg),
                     latest_checkpoint.as_ref(),
                     &messages,
                     steps,
