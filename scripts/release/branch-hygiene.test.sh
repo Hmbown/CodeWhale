@@ -151,13 +151,23 @@ check "maintainer-only scratch survives prune" "maintainer-scratch" <<<"${remain
 refute "merged scratch branch is gone after prune" "merged-scratch" <<<"${remaining}"
 
 # --- Custom remote name ------------------------------------------------------
+git switch -q main
+git switch -q -c remote-main-tip
+commit remote-main-only "remote" "${H_NAME}" "${H_EMAIL}"
+git branch "upstream/main" main^1
+git update-ref "refs/remotes/upstream/main" "$(git rev-parse remote-main-tip)"
 git update-ref "refs/remotes/upstream/codex/v0.8.61" "$(git rev-parse codex/v0.8.61)"
 git update-ref "refs/remotes/upstream/merged-remote" "$(git rev-parse main)"
-upstream_report="$(bash "${hygiene}" --remote upstream --release-branch codex/v0.8.61 --main-ref main 2>&1)"
+git update-ref "refs/remotes/upstream/remote-main-only" "$(git rev-parse remote-main-tip)"
+upstream_report="$(bash "${hygiene}" --remote upstream --release-branch codex/v0.8.61 2>&1)"
 check "custom remote release tip is reported" \
   "upstream" <<<"${upstream_report}"
+check "custom remote default main ref is fully qualified" \
+  "Main ref         : refs/remotes/upstream/main" <<<"${upstream_report}"
 check "custom remote safe-delete command uses the selected remote" \
   "remote: upstream/merged-remote" <<<"${upstream_report}"
+check "custom remote main ref is not confused with a same-named local branch" \
+  "remote: upstream/remote-main-only" <<<"${upstream_report}"
 refute "custom remote report does not hard-code origin in safe deletes" \
   "remote: origin/merged-remote" <<<"${upstream_report}"
 

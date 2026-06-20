@@ -58,7 +58,8 @@ Options:
   --remote REMOTE           Remote whose release/scratch branches are checked
                             and pruned (default: origin).
   --main-ref REF            The "everything merged here" ref
-                            (default: REMOTE/main, falling back to main).
+                            (default: refs/remotes/REMOTE/main, falling back
+                            to main).
   --maintainer "N <e>"      Treat this author as the maintainer (Hunter).
                             May be repeated. Defaults are derived from
                             .mailmap plus a built-in list.
@@ -184,8 +185,9 @@ looks_like_release_branch() {
 current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
 
 if [[ -z "${main_ref}" ]]; then
-  if git rev-parse -q --verify "${remote_name}/main" >/dev/null 2>&1; then
-    main_ref="${remote_name}/main"
+  remote_main_ref="refs/remotes/${remote_name}/main"
+  if git rev-parse -q --verify "${remote_main_ref}" >/dev/null 2>&1; then
+    main_ref="${remote_main_ref}"
   else
     main_ref="main"
   fi
