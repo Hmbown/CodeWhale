@@ -4271,6 +4271,7 @@ mod tests {
                 max_steps: 4,
                 spawn_depth: 1,
                 max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+                max_tokens: None,
             },
             actor_kind: "subagent".to_string(),
             parent_run_id: Some("parent_run".to_string()),

@@ -510,6 +510,7 @@ mod tests {
             max_steps: 1000,
             spawn_depth: 0,
             max_spawn_depth: 0,
+            max_tokens: None,
         };
         let exec = codewhale_config::FleetExecConfig {
             max_turns: 50,
@@ -539,6 +540,7 @@ mod tests {
             max_steps: 1000,
             spawn_depth: 0,
             max_spawn_depth: 0,
+            max_tokens: None,
         };
 
         let exec = codewhale_config::FleetExecConfig {
@@ -658,6 +660,7 @@ mod tests {
             max_steps: 100,
             spawn_depth: 0,
             max_spawn_depth: 0,
+            max_tokens: None,
         };
         let exec = codewhale_config::FleetExecConfig {
             append_system_prompt: "never push to main".to_string(),

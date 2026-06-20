@@ -60,6 +60,7 @@ fn make_worker_spec(worker_id: &str, workspace: PathBuf) -> AgentWorkerSpec {
         max_steps: 8,
         spawn_depth: 1,
         max_spawn_depth: DEFAULT_MAX_SPAWN_DEPTH,
+        max_tokens: None,
     }
 }
 
