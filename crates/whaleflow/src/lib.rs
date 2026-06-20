@@ -973,7 +973,7 @@ impl MockWorkflowExecutor {
             };
         }
         self.leaf_steps_executed = self.leaf_steps_executed.saturating_add(1);
-        let mut outcome = self
+        let outcome = self
             .leaf_outcomes
             .remove(&spec.id)
             .unwrap_or_else(|| MockLeafOutcome::succeeded(format!("mock leaf {}", spec.id)));
