@@ -443,7 +443,7 @@ enum AuthCommand {
     Set {
         #[arg(long, value_enum)]
         provider: ProviderArg,
-        /// Inline value (discouraged â€?appears in shell history).
+        /// Inline value (discouraged â€” appears in shell history).
         #[arg(long)]
         api_key: Option<String>,
         /// Read the key from stdin instead of prompting.
@@ -639,7 +639,7 @@ pub fn run_cli() -> std::process::ExitCode {
             // Use the full anyhow chain so callers see the underlying
             // cause (e.g. the actual TOML parse error with line/column)
             // instead of just the top-level context message. The bare
-            // `{err}` Display impl drops the chain â€?see #767, where
+            // `{err}` Display impl drops the chain â€” see #767, where
             // users hit "failed to parse config at <path>" with no
             // hint that the real error was a stray BOM or unbalanced
             // quote a few lines down.
@@ -1071,7 +1071,7 @@ fn auth_status_all_providers(store: &ConfigStore, secrets: &Secrets) -> Vec<Stri
 
         let source = if provider == ProviderKind::OpenaiCodex {
             // Keep the summary consistent with `auth status`: Codex auth is
-            // OAuth-file (or env token) based â€?config/keyring keys are not
+            // OAuth-file (or env token) based â€” config/keyring keys are not
             // consulted for it.
             if env_key.is_some() {
                 "env"
@@ -1525,18 +1525,14 @@ fn run_model_command(
             Ok(())
         }
         ModelCommand::Set { model } => {
-            let canonical = match model.trim().to_ascii_lowercase().as_str() {
+            let trimmed = model.trim();
+            if trimmed.is_empty() {
+                bail!("Model name cannot be empty");
+            }
+            let canonical = match trimmed.to_ascii_lowercase().as_str() {
                 "pro" | "deepseek-v4-pro" | "deepseek-v4pro" => "deepseek-v4-pro",
                 "flash" | "deepseek-v4-flash" | "deepseek-v4flash" => "deepseek-v4-flash",
-                other => {
-                    if other.starts_with("deepseek") {
-                        other
-                    } else {
-                        bail!(
-                            "Invalid model '{model}'. Use 'pro', 'flash', 'deepseek-v4-pro', or 'deepseek-v4-flash'."
-                        );
-                    }
-                }
+                _ => trimmed,
             };
             store.config.default_text_model = Some(canonical.to_string());
             store.save()?;
@@ -1672,7 +1668,7 @@ fn run_app_server_command(
 
 /// Build the `serve` argv forwarded to the TUI binary for
 /// `codewhale app-server --http`/`--mobile`. Maps app-server flags onto the
-/// matching `serve` flags (note `--insecure-no-auth` â†?`--insecure`). The
+/// matching `serve` flags (note `--insecure-no-auth` â†’ `--insecure`). The
 /// subcommand-level `--config` is bridged through the global `--config` in the
 /// dispatcher, so it is intentionally not part of this passthrough. An auth
 /// token from the environment is deliberately *not* forwarded into child argv;
@@ -1968,8 +1964,8 @@ binary.",
 
 /// Resolve the sibling `codewhale-tui` executable next to the running
 /// dispatcher. Honours platform executable suffix (`.exe` on Windows) so
-/// the npm-distributed Windows package â€?which ships
-/// `bin/downloads/codewhale-tui.exe` â€?is found by `Path::exists` (#247).
+/// the npm-distributed Windows package â€” which ships
+/// `bin/downloads/codewhale-tui.exe` â€” is found by `Path::exists` (#247).
 ///
 /// `DEEPSEEK_TUI_BIN` is consulted first as an explicit override for
 /// custom installs and CI test layouts. On Windows we additionally try
@@ -2000,9 +1996,9 @@ fn locate_sibling_tui_binary() -> Result<PathBuf> {
 \n\
 The `codewhale` dispatcher delegates interactive sessions to a sibling \
 `codewhale-tui` binary. To fix this, install one of:\n\
-  â€?npm:    npm install -g codewhale                (downloads both binaries)\n\
-  â€?cargo:  cargo install codewhale-cli codewhale-tui --locked\n\
-  â€?GitHub Releases: download BOTH `codewhale-<platform>` AND \
+  â€¢ npm:    npm install -g codewhale                (downloads both binaries)\n\
+  â€¢ cargo:  cargo install codewhale-cli codewhale-tui --locked\n\
+  â€¢ GitHub Releases: download BOTH `codewhale-<platform>` AND \
 `codewhale-tui-<platform>` from https://github.com/Hmbown/CodeWhale/releases/latest \
 and place them in the same directory.\n\
 \n\
@@ -2165,7 +2161,7 @@ mod tests {
     // Regression for #767: `run_cli` prints the full anyhow chain so users
     // see the underlying TOML parser error (line/column, expected token)
     // instead of just the top-level "failed to parse config at <path>"
-    // wrapper. anyhow's bare `Display` impl drops the chain â€?pin both
+    // wrapper. anyhow's bare `Display` impl drops the chain â€” pin both
     // pieces here so a future refactor of the printing path doesn't
     // silently regress.
     #[test]
@@ -2567,7 +2563,7 @@ mod tests {
         };
         let argv = app_server_serve_passthrough(&args);
         let as_str: Vec<&str> = argv.iter().map(String::as_str).collect();
-        // No host/port forwarded â†?serve applies its own --mobile 0.0.0.0 default.
+        // No host/port forwarded â†’ serve applies its own --mobile 0.0.0.0 default.
         // No auth token is injected from the environment into child argv.
         assert_eq!(as_str, vec!["serve", "--mobile", "--qr"]);
     }
@@ -4233,7 +4229,7 @@ mod tests {
         // Touch the dispatcher so its parent dir is the lookup root.
         std::fs::write(&dispatcher, b"").unwrap();
 
-        // No sibling yet â€?resolver returns None.
+        // No sibling yet â€” resolver returns None.
         assert!(sibling_tui_candidate(&dispatcher).is_none());
 
         let target =
@@ -4266,7 +4262,7 @@ mod tests {
         let dispatcher = dir.path().join("codewhale.exe");
         std::fs::write(&dispatcher, b"").unwrap();
 
-        // Only the suffixless name exists â€?emulates the manual rename.
+        // Only the suffixless name exists â€” emulates the manual rename.
         let suffixless = dispatcher.with_file_name("codewhale-tui");
         std::fs::write(&suffixless, b"").unwrap();
 
