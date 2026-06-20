@@ -103,3 +103,5 @@ docs/*_PLAN.md
 # direnv
 .envrc
 .direnv
+
+!Deepseek-GUI/scripts/**

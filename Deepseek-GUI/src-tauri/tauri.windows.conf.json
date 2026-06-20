@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "bin/deepseek-tui.exe": "./"
+    }
+  }
+}

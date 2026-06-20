@@ -1,0 +1,125 @@
+# DeepSeek GUI（Tauri）桌面安装包：Windows NSIS + macOS DMG
+# 无需实体 Mac；macOS 作业在 GitHub-hosted runner 上执行。
+name: DeepSeek GUI Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Deepseek-GUI/**'
+      - 'crates/tui/**'
+      - 'crates/tui-core/**'
+      - '.github/workflows/gui-build.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-gui:
+    name: GUI (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos-arm64
+            sidecar: deepseek-tui
+            artifact: deepseek-gui-macos-arm64
+          - os: windows-latest
+            label: windows-x64
+            sidecar: deepseek-tui.exe
+            artifact: deepseek-gui-windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Deepseek-GUI/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build deepseek-tui sidecar
+        run: cargo build --release -p deepseek-tui
+
+      - name: Install frontend dependencies
+        working-directory: Deepseek-GUI
+        run: npm ci
+
+      - name: Build frontend dist
+        working-directory: Deepseek-GUI
+        run: npm run build
+
+      - name: Stage sidecar for Tauri bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Deepseek-GUI/src-tauri/bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp -f target/release/deepseek-tui.exe Deepseek-GUI/src-tauri/bin/deepseek-tui.exe
+          else
+            cp -f target/release/deepseek-tui Deepseek-GUI/src-tauri/bin/deepseek-tui
+            chmod +x Deepseek-GUI/src-tauri/bin/deepseek-tui
+          fi
+
+      - name: Tauri bundle
+        working-directory: Deepseek-GUI
+        run: npm run tauri:build
+
+      - name: Collect installer artifacts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "Deepseek-GUI/artifacts/${{ matrix.artifact }}"
+          shopt -s nullglob
+          for f in Deepseek-GUI/src-tauri/target/release/bundle/dmg/*.dmg; do
+            cp -f "$f" "Deepseek-GUI/artifacts/${{ matrix.artifact }}/"
+          done
+          for f in Deepseek-GUI/src-tauri/target/release/bundle/macos/*.app; do
+            ditto -c -k --sequesterRsrc --keepParent "$f" \
+              "Deepseek-GUI/artifacts/${{ matrix.artifact }}/$(basename "$f").zip"
+          done
+          ls -la "Deepseek-GUI/artifacts/${{ matrix.artifact }}/"
+
+      - name: Collect installer artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = "Deepseek-GUI/artifacts/${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $nsis = Get-ChildItem "Deepseek-GUI/src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue
+          $msi  = Get-ChildItem "Deepseek-GUI/src-tauri/target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
+          if (-not $nsis) { throw "NSIS installer not found" }
+          Copy-Item $nsis.FullName $dest
+          if ($msi) { Copy-Item $msi.FullName $dest }
+          Get-ChildItem $dest
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: Deepseek-GUI/artifacts/${{ matrix.artifact }}/
+          if-no-files-found: error

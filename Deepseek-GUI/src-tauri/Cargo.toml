@@ -1,0 +1,29 @@
+[package]
+name = "deepseek-gui"
+version = "0.1.0"
+description = "DeepSeek 桌面 GUI 壳（Tauri）"
+edition = "2021"
+rust-version = "1.77"
+
+# 声明为独立 workspace，避免被仓库根 workspace 纳管
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+# 原生文件夹选择对话框
+rfd = "0.15"
+# 轻量 HTTP 客户端，用于「测试连接」直连 DeepSeek API（自带 rustls TLS）
+ureq = "2"
+# LSP stdio 桥异步 IO
+tokio = { version = "1", features = ["sync", "process", "io-util", "rt-multi-thread", "macros", "time"] }
+portable-pty = "0.8"
+
+[features]
+# 生产构建时由 Tauri 注入的自定义协议特性
+custom-protocol = ["tauri/custom-protocol"]
