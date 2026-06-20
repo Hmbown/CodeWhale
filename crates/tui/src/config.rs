@@ -326,7 +326,7 @@ impl ApiProvider {
         &Self::FROM_KIND_LOOKUP
     }
 
-    /// `ApiProvider` discriminant â†’ `ProviderKind` lookup.
+    /// `ApiProvider` discriminant â†?`ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
     const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 26] = [
         Some(codewhale_config::ProviderKind::Deepseek),
@@ -357,7 +357,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Deepinfra),
     ];
 
-    /// `ProviderKind` discriminant â†’ `ApiProvider` lookup.
+    /// `ProviderKind` discriminant â†?`ApiProvider` lookup.
     const FROM_KIND_LOOKUP: [Self; 25] = [
         Self::Deepseek,
         Self::NvidiaNim,
@@ -616,8 +616,8 @@ fn deepseek_alias_deprecation(model_lower: &str) -> Option<ModelAliasDeprecation
 #[must_use]
 pub fn canonical_model_name(model: &str) -> Option<&'static str> {
     match model.trim().to_ascii_lowercase().as_str() {
-        "deepseek-v4pro" => Some("deepseek-v4-pro"),
-        "deepseek-v4flash" => Some("deepseek-v4-flash"),
+        "pro" | "deepseek-v4-pro" | "deepseek-v4pro" => Some("deepseek-v4-pro"),
+        "flash" | "deepseek-v4-flash" | "deepseek-v4flash" => Some("deepseek-v4-flash"),
         _ => None,
     }
 }
@@ -667,7 +667,7 @@ pub(crate) fn normalize_custom_model_id(model: &str) -> Option<String> {
 ///
 /// DeepSeek providers use the strict `normalize_model_name` gate (official
 /// API only accepts DeepSeek IDs).  All other providers pass any non-empty,
-/// non-control-character string through â€” the provider API is the authority.
+/// non-control-character string through â€?the provider API is the authority.
 #[must_use]
 pub fn requested_model_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     match provider {
@@ -689,11 +689,11 @@ pub fn requested_model_for_provider(provider: ApiProvider, model: &str) -> Optio
 /// DeepSeek weights, etc.) keeps working:
 ///
 /// 1. A DeepSeek-native provider (`deepseek` / `deepseek-cn`) accepts only
-///    DeepSeek model IDs or `auto` â€” same gate as [`normalize_model_name`].
+///    DeepSeek model IDs or `auto` â€?same gate as [`normalize_model_name`].
 /// 2. A non-DeepSeek *native* provider (e.g. Z.ai, which serves GLM) must not
 ///    be handed a DeepSeek-only model ID. This reuses the same
 ///    "foreign to a direct provider" classification the model resolver uses,
-///    so DeepSeek aggregators (NVIDIA NIM, OpenRouter, Fireworks, â€¦) stay
+///    so DeepSeek aggregators (NVIDIA NIM, OpenRouter, Fireworks, â€? stay
 ///    permissive.
 ///
 /// Returns `Ok(())` for any tuple we cannot confidently reject (the provider
@@ -711,7 +711,7 @@ pub fn validate_route(provider: ApiProvider, model: &str) -> Result<(), String> 
     }
 
     // Providers whose model id is passed through verbatim (OpenAI-compatible,
-    // Ollama tags, custom base URLs, â€¦) are validated by the upstream service.
+    // Ollama tags, custom base URLs, â€? are validated by the upstream service.
     if provider_passes_model_through(provider) {
         return Ok(());
     }
@@ -983,7 +983,7 @@ fn canonical_minimax_model_id(model: &str) -> Option<&'static str> {
 ///
 /// Preserves the caller's casing when the model is already a recognised
 /// DeepSeek id (e.g. `DeepSeek-V4-Flash` stays as-is). Only rewrites compact
-/// aliases like `deepseek-v4pro` â†’ `deepseek-v4-pro`.
+/// aliases like `deepseek-v4pro` â†?`deepseek-v4-pro`.
 #[must_use]
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     if matches!(provider, ApiProvider::Openrouter)
@@ -1032,7 +1032,7 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
     {
         // When the user's input already matches a known model id
         // case-insensitively, keep their original casing; only rewrite
-        // compact aliases (e.g. v4pro â†’ v4-pro).
+        // compact aliases (e.g. v4pro â†?v4-pro).
         if canonical.eq_ignore_ascii_case(&normalized)
             || normalized.to_ascii_lowercase() == canonical
         {
@@ -1193,11 +1193,11 @@ pub struct TuiConfig {
     /// `[notifications].threshold_secs` gate from the lower-level
     /// `[notifications]` block:
     ///
-    /// - `Always` â€” fire a turn-completion notification on every successful
+    /// - `Always` â€?fire a turn-completion notification on every successful
     ///   turn regardless of duration. The configured `[notifications].method`
     ///   and `include_summary` flag are still respected.
-    /// - `Never` â€” suppress all turn-completion notifications.
-    /// - Unset (default) â€” fall back to the `[notifications]` defaults.
+    /// - `Never` â€?suppress all turn-completion notifications.
+    /// - Unset (default) â€?fall back to the `[notifications]` defaults.
     pub notification_condition: Option<NotificationCondition>,
     /// When `true`, plain Up/Down on an empty composer scroll the
     /// transcript instead of recalling input history. Useful for
@@ -1278,7 +1278,7 @@ pub struct NotificationsConfig {
     pub include_summary: bool,
 
     /// Completion sound: `"off"` | `"beep"` | `"bell"` | `"file"`. Default: `"beep"`.
-    /// Plays a sound when every turn finishes (alongside the âœ… marker).
+    /// Plays a sound when every turn finishes (alongside the âœ?marker).
     #[serde(default)]
     pub completion_sound: CompletionSound,
 
@@ -1358,7 +1358,7 @@ impl SnapshotsConfig {
     }
 }
 
-/// Search provider enumeration â€” selects which backend `web_search` uses.
+/// Search provider enumeration â€?selects which backend `web_search` uses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
@@ -1508,8 +1508,8 @@ pub struct ToolsConfig {
 /// cluster (`Mode`, `Model`, `Cost`, `Status`) render in the order given;
 /// right-cluster chips (`Agents`, `ReasoningReplay`, `PrefixStability`,
 /// `Cache`, `ContextPercent`, `GitBranch`, `LastToolElapsed`, `RateLimit`)
-/// likewise honour ordering inside their cluster. The split between left and right is deliberate â€” left holds steady
-/// identity (mode/model/cost), right holds transient signals â€” so we route
+/// likewise honour ordering inside their cluster. The split between left and right is deliberate â€?left holds steady
+/// identity (mode/model/cost), right holds transient signals â€?so we route
 /// each variant to the correct side rather than letting users reorder across
 /// the spacer.
 ///
@@ -1658,7 +1658,7 @@ impl StatusItem {
         }
     }
 
-    /// Every variant in display order â€” used by the picker to enumerate rows.
+    /// Every variant in display order â€?used by the picker to enumerate rows.
     #[must_use]
     pub fn all() -> &'static [StatusItem] {
         &[
@@ -1780,7 +1780,7 @@ pub struct SubagentsConfig {
     #[serde(default)]
     pub max_concurrent: Option<usize>,
     /// How many levels of nested sub-agents the interactive `agent` tool may
-    /// spawn. `0` disables sub-agents entirely â€” the `agent` tool refuses to
+    /// spawn. `0` disables sub-agents entirely â€?the `agent` tool refuses to
     /// spawn, a full opt-out; `1` allows one level, `2` two, and so on. When
     /// unset, defaults to [`codewhale_config::DEFAULT_SPAWN_DEPTH`]; any value
     /// is clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`]. Fleet
@@ -1814,12 +1814,12 @@ pub struct SubagentsConfig {
     pub heartbeat_timeout_secs: Option<u64>,
 }
 
-/// `[auto]` table â€” knobs for the `--model auto` / `/model auto` router.
+/// `[auto]` table â€?knobs for the `--model auto` / `/model auto` router.
 ///
 /// `cost_saving` (#1207): when `true`, the auto-mode router prefers
 /// `deepseek-v4-flash` for ambiguous requests, only escalating to
 /// `deepseek-v4-pro` when the task clearly benefits from deeper reasoning.
-/// Default is `false` (balanced â€” match the existing routing voice).
+/// Default is `false` (balanced â€?match the existing routing voice).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AutoConfig {
     #[serde(default)]
@@ -1894,7 +1894,7 @@ pub struct Config {
     /// Additional system-prompt sources concatenated in declared order
     /// (#454). Paths are expanded via `expand_path` so `~` and env
     /// vars work. Project config overrides user config (replace, not
-    /// merge) â€” that's the typical "this repo needs X plus everything
+    /// merge) â€?that's the typical "this repo needs X plus everything
     /// I already have" pattern, where users put `~/global.md` in the
     /// project's array if they want both. Each file is loaded, capped
     /// at 100 KiB, and skipped (with a warning) on read errors so a
@@ -1902,7 +1902,7 @@ pub struct Config {
     pub instructions: Option<Vec<String>>,
     pub allow_shell: Option<bool>,
     /// Opt-in ghost-text follow-up prompt suggestion after each completed turn.
-    /// Default: false â€” the user must explicitly set this to true to enable.
+    /// Default: false â€?the user must explicitly set this to true to enable.
     pub prompt_suggestion: Option<bool>,
     #[serde(alias = "approvalPolicy")]
     pub approval_policy: Option<String>,
@@ -1926,7 +1926,7 @@ pub struct Config {
     /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
     /// through bubblewrap instead of relying solely on Landlock (#2184).
     /// Defaults to false. Requires the `bubblewrap` package to be installed
-    /// separately â€” we do NOT vendor bwrap.
+    /// separately â€?we do NOT vendor bwrap.
     #[serde(alias = "preferBwrap")]
     pub prefer_bwrap: Option<bool>,
     #[serde(alias = "managedConfigPath")]
@@ -2083,7 +2083,7 @@ pub struct VisionModelConfig {
     pub base_url: Option<String>,
 }
 
-/// `[runtime_api]` table â€” knobs for the local HTTP/SSE daemon.
+/// `[runtime_api]` table â€?knobs for the local HTTP/SSE daemon.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct RuntimeApiConfig {
     /// Additional CORS origins to allow on top of the built-in defaults
@@ -2097,7 +2097,7 @@ pub struct RuntimeApiConfig {
     pub cors_origins: Option<Vec<String>>,
 }
 
-/// `[skills]` table â€” knobs for the community-skill installer.
+/// `[skills]` table â€?knobs for the community-skill installer.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SkillsConfig {
     /// Curated registry index. `/skill install <name>` looks up the spec here.
@@ -2139,7 +2139,7 @@ impl SkillsConfig {
     }
 }
 
-/// `[network]` table â€” mirrors `codewhale_config::NetworkPolicyToml` so the live
+/// `[network]` table â€?mirrors `codewhale_config::NetworkPolicyToml` so the live
 /// TUI runtime can construct a [`crate::network_policy::NetworkPolicy`]
 /// without reaching into the workspace config crate. See `config.example.toml`
 /// for documentation.
@@ -2200,7 +2200,7 @@ impl NetworkPolicyToml {
     }
 }
 
-/// `[lsp]` table â€” mirrors [`crate::lsp::LspConfig`]. Documented in
+/// `[lsp]` table â€?mirrors [`crate::lsp::LspConfig`]. Documented in
 /// `config.example.toml`. When omitted, defaults from `LspConfig::default()`
 /// apply (enabled, 5 s poll, 20 diagnostics/file, errors only, no overrides).
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2472,7 +2472,7 @@ impl Config {
         }
         // Only warn if the per-provider table doesn't have an explicit
         // `base_url`, because if it does, the per-provider one wins and the
-        // root field is just dead config â€” no behavior surprise.
+        // root field is just dead config â€?no behavior surprise.
         let has_provider_base = self
             .provider_config_for(provider)
             .and_then(|p| p.base_url.as_deref().map(str::trim))
@@ -2718,7 +2718,7 @@ impl Config {
         }
         // The Codex Responses backend only serves its own model family, and a
         // global `default_text_model` is constrained to DeepSeek IDs or "auto"
-        // by validation â€” so it can never name a Codex-compatible model. Fall
+        // by validation â€?so it can never name a Codex-compatible model. Fall
         // back to the Codex default here instead of letting a DeepSeek default
         // leak through and be rejected by the backend. An explicit
         // `[providers.openai_codex] model` is honored by the block above.
@@ -2908,8 +2908,8 @@ impl Config {
 
     /// Read the API key.
     ///
-    /// Precedence: **explicit in-memory override â†’ provider/root config
-    /// â†’ environment**.
+    /// Precedence: **explicit in-memory override â†?provider/root config
+    /// â†?environment**.
     ///
     /// The in-memory `self.api_key` override is only honored when the user
     /// explicitly set the field (not the legacy `API_KEYRING_SENTINEL`
@@ -2998,10 +2998,10 @@ impl Config {
                         codewhale auth set --provider deepseek\n\
                  \n\
                  Alternatives:\n\
-                   â€¢ export DEEPSEEK_API_KEY=<your-key>      (current shell only;\n\
-                     also note: zsh users â€” exports in ~/.zshrc only reach interactive\n\
+                   â€?export DEEPSEEK_API_KEY=<your-key>      (current shell only;\n\
+                     also note: zsh users â€?exports in ~/.zshrc only reach interactive\n\
                      shells, prefer ~/.zshenv for everything)\n\
-                   â€¢ api_key = \"<your-key>\"  in ~/.codewhale/config.toml"
+                   â€?api_key = \"<your-key>\"  in ~/.codewhale/config.toml"
             ),
             ApiProvider::SiliconflowCn => anyhow::bail!(
                 "SiliconFlow China API key not found. Run 'codewhale auth set --provider siliconflow-CN', \
@@ -3989,7 +3989,7 @@ fn apply_env_overrides(config: &mut Config) {
             .base_url = Some(value);
     }
     // OpenAI-compatible and non-DeepSeek hosted providers are scoped only on
-    // their own provider entry â€” the legacy root `base_url` keeps DeepSeek-only
+    // their own provider entry â€?the legacy root `base_url` keeps DeepSeek-only
     // semantics.
     if matches!(config.api_provider(), ApiProvider::Openai)
         && let Ok(value) = std::env::var("OPENAI_BASE_URL")
@@ -4930,7 +4930,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         vision_model: override_cfg.vision_model.or(base.vision_model),
         // #454: project's instructions array replaces user's array
         // wholesale. The typical "merge" pattern is for users who want
-        // both â€” they list `~/global.md` inside the project array.
+        // both â€?they list `~/global.md` inside the project array.
         instructions: override_cfg.instructions.or(base.instructions),
         allow_shell: override_cfg.allow_shell.or(base.allow_shell),
         prompt_suggestion: override_cfg.prompt_suggestion.or(base.prompt_suggestion),
@@ -5115,7 +5115,7 @@ fn load_single_config_file(path: &Path) -> Result<Config> {
 /// Build a one-line warning when top-level-only keys are nested under a section
 /// CodeWhale does not define (`[general]` / `[sandbox]`). TOML silently drops
 /// those keys, so e.g. `[general]\nallow_shell = true` never takes effect and
-/// the shell tools (`exec_shell`, `task_shell_start`, â€¦) are absent from the
+/// the shell tools (`exec_shell`, `task_shell_start`, â€? are absent from the
 /// catalog with no explanation. Returns `None` when nothing is misplaced.
 ///
 /// This is the exact confusion behind #2589: `allow_shell` and `sandbox_mode`
@@ -5147,7 +5147,7 @@ fn warn_on_misplaced_top_level_keys(raw: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Ignoring {} â€” CodeWhale has no `[general]` or `[sandbox]` section, so these \
+        "Ignoring {} â€?CodeWhale has no `[general]` or `[sandbox]` section, so these \
          keys are silently dropped. Move them to the TOP of the config file (above any \
          `[section]` header), e.g. `allow_shell = true`. Until then, shell tools stay \
          disabled. (#2589)",
@@ -5249,8 +5249,7 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
             // Tighten group/other bits on the parent dir as a hardening pass.
             // The dir lives under the user's home, so the chmod is best-effort:
             // filesystems that don't accept Unix permission bits (Docker
-            // bind-mounts of NTFS, network shares, FAT, certain CI volumes â€”
-            // see #897) return EPERM/ENOTSUP. The dir already exists by the
+            // bind-mounts of NTFS, network shares, FAT, certain CI volumes â€?            // see #897) return EPERM/ENOTSUP. The dir already exists by the
             // time we get here, so failing the whole save just because we
             // couldn't tighten perms strands the user mid-onboarding. Warn
             // loudly so a security-sensitive operator can still notice via
@@ -5268,7 +5267,7 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
                             "could not tighten parent dir permissions; \
                              filesystem may not support Unix chmod \
                              (Docker bind-mount, NTFS, network share). \
-                             Continuing â€” the file will still be written."
+                             Continuing â€?the file will still be written."
                         );
                     }
                 }
@@ -5294,7 +5293,7 @@ fn write_config_file_secure(path: &Path, content: &str) -> Result<()> {
         // set_permissions re-asserts that on filesystems where mode-at-open
         // didn't take effect (or where the file already existed with broader
         // bits). Filesystems that don't accept Unix chmod at all (Docker
-        // bind-mounts of NTFS, network shares â€” #897) return EPERM. Treat
+        // bind-mounts of NTFS, network shares â€?#897) return EPERM. Treat
         // that as a warning rather than failing the whole save: the file
         // contents are written, and on Windows/macOS hosts the parent file
         // system's native ACL model is doing the access control.
@@ -5323,7 +5322,7 @@ pub enum SavedCredential {
     /// Stored in **both** the OS keyring and the codewhale config file.
     /// This is the default outcome on platforms with a working keyring
     /// backend: writing both layers defeats the
-    /// `keyring â†’ env â†’ config-file` resolution-order shadow that
+    /// `keyring â†?env â†?config-file` resolution-order shadow that
     /// would otherwise let a stale OS-keyring entry from a previous
     /// install hide the freshly-entered key (#593). The `backend`
     /// label is the value of [`codewhale_secrets::Secrets::backend_name`]
@@ -5360,8 +5359,8 @@ impl SavedCredential {
 /// **Dual-write strategy (#593):** writes to `~/.codewhale/config.toml`
 /// (always) and to the OS keyring via [`codewhale_secrets::Secrets`]
 /// (when a backend is reachable). The runtime resolves credentials in
-/// `keyring â†’ env â†’ config-file` order; writing to the config file
-/// alone â€” as v0.8.8 through v0.8.10 did â€” let a stale keyring entry
+/// `keyring â†?env â†?config-file` order; writing to the config file
+/// alone â€?as v0.8.8 through v0.8.10 did â€?let a stale keyring entry
 /// from a prior install silently shadow the fresh value the user just
 /// typed during in-TUI onboarding, producing the "no response" symptom
 /// reported in #593.
@@ -5371,8 +5370,7 @@ impl SavedCredential {
 /// keyring acts as the layered override that defeats stale-shadow on
 /// the resolution path. When the keyring write fails (no backend, OS
 /// permission denied, etc.) the config-file write still stands and
-/// the function reports a [`SavedCredential::ConfigFile`] outcome â€”
-/// callers should not treat that as a failure.
+/// the function reports a [`SavedCredential::ConfigFile`] outcome â€?/// callers should not treat that as a failure.
 ///
 /// Skipped under `cfg(test)` so the suite never touches the host
 /// keyring. The `secrets` crate has its own test coverage for
@@ -5384,13 +5382,13 @@ pub fn save_api_key(api_key: &str) -> Result<SavedCredential> {
     }
 
     // Always write the inspectable copy first. The config file is the
-    // durable record everyone â€” including macOS Keychain-prompted
-    // first-run, headless CI, and IDE terminals â€” can rely on.
+    // durable record everyone â€?including macOS Keychain-prompted
+    // first-run, headless CI, and IDE terminals â€?can rely on.
     let path = save_api_key_to_config_file(trimmed)?;
 
     // Then mirror to the OS keyring when one is reachable. This
     // overwrites any stale entry from a prior install so
-    // `Secrets::resolve` (keyring â†’ env â†’ config-file) no longer
+    // `Secrets::resolve` (keyring â†?env â†?config-file) no longer
     // shadows the fresh key. Skipped under `cfg(test)` so unit tests
     // can't pollute the host keyring (macOS Always-Allow prompts,
     // cross-test contamination).
@@ -5501,7 +5499,7 @@ reasoning_effort = "max"
 /// `~/.codewhale/config.toml`.
 ///
 /// Used by [`crate::tui::app::App::new`] to decide whether to gate
-/// the user behind the in-TUI api-key onboarding screen â€” getting
+/// the user behind the in-TUI api-key onboarding screen â€?getting
 /// this wrong made users get prompted for credentials in situations
 /// where normal env/config auth was already available.
 pub fn has_api_key(config: &Config) -> bool {
@@ -5555,7 +5553,7 @@ pub fn active_provider_uses_env_only_api_key(config: &Config) -> bool {
     active_provider_has_env_api_key(config) && !active_provider_has_config_api_key(config)
 }
 
-/// Check whether the given provider has any usable API key â€” via env var,
+/// Check whether the given provider has any usable API key â€?via env var,
 /// provider/root config. Used by the `/provider` picker to decide whether to
 /// prompt for a key inline.
 #[must_use]
@@ -5932,7 +5930,7 @@ pub fn kimi_cli_credentials_present() -> bool {
 /// `[providers.<name>]` table.
 ///
 /// Environment variables (`DEEPSEEK_API_KEY`, etc.) are intentionally
-/// **not** unset â€” they are managed by the user's shell and outside the
+/// **not** unset â€?they are managed by the user's shell and outside the
 /// CLI's purview. `Config::deepseek_api_key`'s explicit-override path
 /// (Path 0) ensures a freshly-entered key still wins over a stale env
 /// var that lingers from a previous session.
@@ -5951,7 +5949,7 @@ pub fn clear_api_key() -> Result<()> {
     let mut result = String::new();
 
     for line in existing.lines() {
-        // Match `api_key`, `api_key =`, `  api_key=`, etc. â€” anywhere it
+        // Match `api_key`, `api_key =`, `  api_key=`, etc. â€?anywhere it
         // appears as the leading non-whitespace token.
         let trimmed = line.trim_start();
         if trimmed.strip_prefix("api_key").is_some_and(|rest| {
@@ -6150,7 +6148,7 @@ mod tests {
         Ok(())
     }
 
-    // GHSA-72w5-pf8h-xfp4 â€” regression: `allow_shell` must be opt-in.
+    // GHSA-72w5-pf8h-xfp4 â€?regression: `allow_shell` must be opt-in.
     #[test]
     fn allow_shell_defaults_to_false_when_unset() {
         let config = Config::default();
@@ -7722,8 +7720,7 @@ action = "session.compact"
 
     /// #593: the dual-write outcome describes both targets so the
     /// onboarding toast (`API key saved to {describe}`) tells the user
-    /// the key landed in *both* the keyring and the config file â€”
-    /// which is the whole point of the fix (defeats stale-keyring
+    /// the key landed in *both* the keyring and the config file â€?    /// which is the whole point of the fix (defeats stale-keyring
     /// shadow while keeping the config file inspectable).
     #[test]
     fn saved_credential_describe_lists_both_targets_for_keyring_and_config() {
@@ -8069,7 +8066,7 @@ api_key = "old-openrouter-key"
             api_key: Some(API_KEYRING_SENTINEL.to_string()),
             ..Config::default()
         };
-        // Sentinel must not be treated as a real key â€” the resolver should
+        // Sentinel must not be treated as a real key â€?the resolver should
         // fall through to env / config-provider and ultimately bail out
         // with a "key not found" error.
         let _err = config
@@ -8449,7 +8446,7 @@ scan_codewhale_only = true
             normalize_model_name("deepseek-v5-pro-20270101").as_deref(),
             Some("deepseek-v5-pro-20270101")
         );
-        // legacy names pass through unchanged â€” server decides
+        // legacy names pass through unchanged â€?server decides
         assert_eq!(
             normalize_model_name("deepseek-chat").as_deref(),
             Some("deepseek-chat")
@@ -8544,8 +8541,8 @@ scan_codewhale_only = true
 
     #[test]
     fn validate_route_rejects_mismatched_provider_model_tuple() {
-        // #3227: the exact contamination â€” Z.ai provider paired with a
-        // DeepSeek model â€” is rejected locally with a diagnostic that names
+        // #3227: the exact contamination â€?Z.ai provider paired with a
+        // DeepSeek model â€?is rejected locally with a diagnostic that names
         // the incompatible pair, before any network call.
         let err = validate_route(ApiProvider::Zai, "deepseek-v4-pro")
             .expect_err("zai + deepseek model must be rejected");
@@ -8562,7 +8559,7 @@ scan_codewhale_only = true
         assert!(validate_route(ApiProvider::Deepseek, "deepseek-v4-pro").is_ok());
         // `auto` is always acceptable; the per-turn router resolves it.
         assert!(validate_route(ApiProvider::Zai, "auto").is_ok());
-        // Pass-through / aggregator providers stay permissive â€” the upstream
+        // Pass-through / aggregator providers stay permissive â€?the upstream
         // API remains the authority for them.
         assert!(validate_route(ApiProvider::Openai, "deepseek-v4-pro").is_ok());
         assert!(validate_route(ApiProvider::Openrouter, "deepseek-v4-pro").is_ok());
@@ -9080,7 +9077,7 @@ scan_codewhale_only = true
         }
 
         let config = Config::load(None, None)?;
-        // v-series snapshots pass through unchanged â€” no alias folding
+        // v-series snapshots pass through unchanged â€?no alias folding
         assert_eq!(
             config.default_text_model.as_deref(),
             Some("deepseek-v4-flash-20260423")
@@ -9857,7 +9854,7 @@ model = "glm-5"
         }
 
         // (b) a non-passthrough provider (novita) with an unknown custom model
-        // and the DEFAULT base_url must also be preserved verbatim â€” never
+        // and the DEFAULT base_url must also be preserved verbatim â€?never
         // rewritten to DEFAULT_NOVITA_MODEL.
         {
             let _guard = EnvGuard::new(&temp_root);
@@ -11958,7 +11955,7 @@ model = "deepseek-ai/deepseek-v4-pro"
     #[test]
     fn provider_capability_ollama_deepseek_tag_uses_deepseek_heuristic() {
         // #3023: known model families resolve through models.rs lookups even
-        // on Ollama â€” a legacy DeepSeek tag gets the 128K heuristic window.
+        // on Ollama â€?a legacy DeepSeek tag gets the 128K heuristic window.
         let cap = provider_capability(ApiProvider::Ollama, "deepseek-v3.1:671b");
         assert_eq!(
             cap.context_window,
