@@ -2700,8 +2700,14 @@ mod tests {
 
         assert_eq!(execution.status, WorkflowRunStatus::BudgetExceeded);
         assert_eq!(execution.leaf_results.len(), 2);
-        assert_eq!(execution.leaf_results[0].status, WorkflowRunStatus::Succeeded);
-        assert_eq!(execution.leaf_results[1].status, WorkflowRunStatus::Succeeded);
+        assert_eq!(
+            execution.leaf_results[0].status,
+            WorkflowRunStatus::Succeeded
+        );
+        assert_eq!(
+            execution.leaf_results[1].status,
+            WorkflowRunStatus::Succeeded
+        );
         assert_eq!(execution.usage.total_tokens(), 1100);
     }
 
@@ -2809,7 +2815,8 @@ mod tests {
         assert!(json.contains("\"max_tokens\":50000"));
 
         // Default (all None) round-trips without the field present.
-        let default_json = serde_json::to_string(&BudgetSpec::default()).expect("serialize default");
+        let default_json =
+            serde_json::to_string(&BudgetSpec::default()).expect("serialize default");
         let parsed_default: BudgetSpec =
             serde_json::from_str(&default_json).expect("parse default budget");
         assert_eq!(parsed_default, BudgetSpec::default());
