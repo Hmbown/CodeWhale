@@ -6,6 +6,10 @@ crates/tui/src/prompts/*.md text eol=lf
 # Rustfmt writes LF; keep Rust sources stable across Windows/Linux/macOS.
 *.rs text eol=lf
 
+# Branch hygiene release scripts are invoked directly by bash on Windows
+# checkouts; CRLF turns `set -euo pipefail` into an invalid option.
+scripts/release/branch-hygiene*.sh text eol=lf
+
 # Keep repository attributes themselves stable on every platform.
 .gitattributes text eol=lf
 

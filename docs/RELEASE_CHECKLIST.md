@@ -102,12 +102,14 @@ release anxiety: contributors cannot tell whether their work merged.
       ```
 
       It prints: the current checkout branch, the local + remote release tips,
-      and `origin/main`; the branches that are **safe to delete** (tip already
-      contained in `origin/main` or the release branch); and a **keep / needs
-      review** list naming each branch, its unique commit count, the author(s),
-      and the keep reason. The summary line reports how many are safe-deletes,
-      how many were kept for contributor work, and how many need a human
-      decision. A diverged local/remote release tip exits non-zero.
+      and the main ref; the branches that are **safe to delete** (tip already
+      contained in the configured main ref or the release branch); and a
+      **keep / needs review** list naming each branch, its unique commit count,
+      the author(s), and the keep reason. The summary line reports how many are
+      safe-deletes, how many were kept for contributor work, and how many need a
+      human decision. A diverged local/remote release tip exits non-zero. Use
+      `--remote upstream` when the canonical release refs live on `upstream`
+      instead of `origin`.
 - [ ] If the working checkout is parked on a stale branch, switch to the
       release branch and fast-forward it:
 

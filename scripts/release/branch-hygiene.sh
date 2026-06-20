@@ -14,10 +14,10 @@
 #
 # What it reports:
 #   1. State check: current checkout branch, local + remote release branch
-#      tips, and origin/main, and whether they agree after an integration
+#      tips, and the configured main ref, and whether they agree after an integration
 #      merge.
 #   2. Safe deletes: local and remote branches whose tip is already contained
-#      in origin/main or the release branch.
+#      in the main ref or the release branch.
 #   3. Keep/review: branches with unique commits, naming the branch, the
 #      unique commit count, the contributor author(s), and the keep reason.
 #      Non-Hunter contributor work is always a keep/review, never a safe
@@ -26,6 +26,7 @@
 #
 # Usage:
 #   scripts/release/branch-hygiene.sh [--release-branch BRANCH]
+#                                     [--remote REMOTE]
 #                                     [--main-ref REF]
 #                                     [--maintainer "Name <email>"]...
 #                                     [--prune] [--prune-remote] [--yes]
@@ -54,8 +55,10 @@ Options:
   --release-branch BRANCH   Release branch to verify and prune against
                             (default: current branch if it matches
                             codex/* or work/*, else the highest codex/v* ref).
+  --remote REMOTE           Remote whose release/scratch branches are checked
+                            and pruned (default: origin).
   --main-ref REF            The "everything merged here" ref
-                            (default: origin/main, falling back to main).
+                            (default: REMOTE/main, falling back to main).
   --maintainer "N <e>"      Treat this author as the maintainer (Hunter).
                             May be repeated. Defaults are derived from
                             .mailmap plus a built-in list.
@@ -72,6 +75,7 @@ EOF
 }
 
 release_branch=""
+remote_name="origin"
 main_ref=""
 prune=0
 prune_remote=0
@@ -83,6 +87,11 @@ while (($# > 0)); do
     --release-branch)
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       release_branch="$2"
+      shift
+      ;;
+    --remote)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      remote_name="$2"
       shift
       ;;
     --main-ref)
@@ -175,8 +184,8 @@ looks_like_release_branch() {
 current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
 
 if [[ -z "${main_ref}" ]]; then
-  if git rev-parse -q --verify origin/main >/dev/null 2>&1; then
-    main_ref="origin/main"
+  if git rev-parse -q --verify "${remote_name}/main" >/dev/null 2>&1; then
+    main_ref="${remote_name}/main"
   else
     main_ref="main"
   fi
@@ -209,7 +218,7 @@ if [[ -z "${release_branch}" ]]; then
   echo "Release branch   : <none found> (pass --release-branch to enable the state check)"
 else
   local_rel="refs/heads/${release_branch}"
-  remote_rel="refs/remotes/origin/${release_branch}"
+  remote_rel="refs/remotes/${remote_name}/${release_branch}"
 
   if git rev-parse -q --verify "${local_rel}" >/dev/null 2>&1; then
     local_rel_sha="$(git rev-parse --short "${local_rel}")"
@@ -224,7 +233,7 @@ else
 
   echo "Release branch   : ${release_branch}"
   echo "  local          : ${local_rel_sha}"
-  echo "  origin         : ${remote_rel_sha}"
+  echo "  ${remote_name}         : ${remote_rel_sha}"
 
   # State verification: after an integration merge into the release branch,
   # local and remote release tips should agree, and the working checkout
@@ -232,11 +241,11 @@ else
   if [[ "${local_rel_sha}" != "<missing>" && "${remote_rel_sha}" != "<missing>" \
         && "${local_rel_sha}" != "${remote_rel_sha}" ]]; then
     if git merge-base --is-ancestor "${local_rel}" "${remote_rel}" 2>/dev/null; then
-      echo "  ::warning:: local ${release_branch} is BEHIND origin — fast-forward with:" \
-           "git fetch origin && git branch -f ${release_branch} ${remote_rel}" >&2
+      echo "  ::warning:: local ${release_branch} is BEHIND ${remote_name} - fast-forward with:" \
+           "git fetch ${remote_name} && git branch -f ${release_branch} ${remote_rel}" >&2
     elif git merge-base --is-ancestor "${remote_rel}" "${local_rel}" 2>/dev/null; then
-      echo "  ::warning:: local ${release_branch} is AHEAD of origin — push with:" \
-           "git push origin ${release_branch}" >&2
+      echo "  ::warning:: local ${release_branch} is AHEAD of ${remote_name} - push with:" \
+           "git push ${remote_name} ${release_branch}" >&2
     else
       echo "  ::error:: local and remote ${release_branch} have DIVERGED." >&2
       inconsistent=1
@@ -260,8 +269,8 @@ fi
 # release branch (prefer the remote release tip, then local, then just main).
 declare -a contain_refs=("${main_ref}")
 if [[ -n "${release_branch}" ]]; then
-  if git rev-parse -q --verify "refs/remotes/origin/${release_branch}" >/dev/null 2>&1; then
-    contain_refs+=("refs/remotes/origin/${release_branch}")
+  if git rev-parse -q --verify "refs/remotes/${remote_name}/${release_branch}" >/dev/null 2>&1; then
+    contain_refs+=("refs/remotes/${remote_name}/${release_branch}")
   fi
   if git rev-parse -q --verify "refs/heads/${release_branch}" >/dev/null 2>&1; then
     contain_refs+=("refs/heads/${release_branch}")
@@ -269,7 +278,7 @@ if [[ -n "${release_branch}" ]]; then
 fi
 
 is_contained() {
-  # arg: <commit-ish> — contained in any containment ref?
+  # arg: <commit-ish> - contained in any containment ref?
   local tip="$1" ref
   for ref in "${contain_refs[@]}"; do
     if git merge-base --is-ancestor "${tip}" "${ref}" 2>/dev/null; then
@@ -318,7 +327,7 @@ classify_branch() {
     return 0
   fi
 
-  # Has unique commits → inspect authors for the contributor-preservation
+  # Has unique commits; inspect authors for the contributor-preservation
   # policy. Never auto-delete; always keep/review.
   local unique authors non_maint=0
   unique="$(git rev-list --count "${ref}" "${not_args[@]}" 2>/dev/null || echo 0)"
@@ -343,10 +352,10 @@ classify_branch() {
 
   local reason
   if [[ "${non_maint}" -eq 1 ]]; then
-    reason="KEEP — unique contributor work (not yet merged). Review/merge/credit before deleting."
+    reason="KEEP - unique contributor work (not yet merged). Review/merge/credit before deleting."
     kept_contributor=$((kept_contributor + 1))
   else
-    reason="REVIEW — ${unique} unmerged maintainer commit(s); confirm intentionally abandoned before deleting."
+    reason="REVIEW - ${unique} unmerged maintainer commit(s); confirm intentionally abandoned before deleting."
     needs_human=$((needs_human + 1))
   fi
   keep_report+=("[${scope}] ${name}: ${unique} unique commit(s); authors: ${display_authors:-unknown}; ${reason}")
@@ -359,11 +368,11 @@ done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
 
 while IFS= read -r name; do
   [[ -z "${name}" ]] && continue
-  # name comes through as origin/<branch>; strip the remote prefix.
-  short="${name#origin/}"
+  # name comes through as <remote>/<branch>; strip the remote prefix.
+  short="${name#${remote_name}/}"
   [[ "${short}" == "HEAD" ]] && continue
-  classify_branch remote "${short}" "refs/remotes/origin/${short}"
-done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin/)
+  classify_branch remote "${short}" "refs/remotes/${remote_name}/${short}"
+done < <(git for-each-ref --format='%(refname:short)' "refs/remotes/${remote_name}/")
 
 # --- Report ------------------------------------------------------------------
 echo
@@ -375,7 +384,7 @@ else
     echo "  local : ${b}    (git branch -D ${b})"
   done
   for b in "${safe_remote[@]+"${safe_remote[@]}"}"; do
-    echo "  remote: origin/${b}    (git push origin --delete ${b})"
+    echo "  remote: ${remote_name}/${b}    (git push ${remote_name} --delete ${b})"
   done
 fi
 
@@ -419,11 +428,11 @@ if ((prune == 1)); then
     done
     if ((prune_remote == 1)); then
       for b in "${safe_remote[@]+"${safe_remote[@]}"}"; do
-        if git push origin --delete "${b}" >/dev/null 2>&1; then
-          echo "deleted remote origin/${b}"
+        if git push "${remote_name}" --delete "${b}" >/dev/null 2>&1; then
+          echo "deleted remote ${remote_name}/${b}"
           deleted=$((deleted + 1))
         else
-          echo "::error::failed to delete remote origin/${b}" >&2
+          echo "::error::failed to delete remote ${remote_name}/${b}" >&2
           inconsistent=1
         fi
       done
@@ -445,7 +454,7 @@ echo "  needs human decision      : ${needs_human}"
 
 if ((inconsistent == 1)); then
   echo
-  echo "::error::branch state is INCONSISTENT — resolve the items above before releasing." >&2
+  echo "::error::branch state is INCONSISTENT - resolve the items above before releasing." >&2
   exit 1
 fi
 

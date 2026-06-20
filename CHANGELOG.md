@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release branch hygiene stays runnable from Windows checkouts (#3214).**
+  The branch-hygiene helper and its hermetic test are pinned to LF line endings,
+  so `bash scripts/release/branch-hygiene.test.sh` can verify the dry-run
+  cleanup report instead of failing before it reaches the branch checks. The
+  helper also accepts `--remote upstream` for fork checkouts whose canonical
+  release refs do not live on `origin`.
+
 ## [0.8.62] - 2026-06-17
 
 ### Changed

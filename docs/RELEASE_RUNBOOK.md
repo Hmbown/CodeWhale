@@ -106,6 +106,33 @@ on npm and every `codewhale-*` crate at `X.Y.Z` on crates.io. For a rare
 npm packaging-only release, run with `--allow-npm-binary-mismatch` and keep the
 release notes explicit that no new Rust binary version shipped.
 
+## Post-Merge Branch Hygiene
+
+After a release or scratch integration branch lands, run the branch hygiene
+helper before pruning anything:
+
+```bash
+./scripts/release/branch-hygiene.sh --release-branch codex/vX.Y.Z
+```
+
+The default mode is a dry run. It reports the current checkout branch, main ref,
+local and remote release tips, safe local or remote branch deletes, branches
+kept for contributor work, and branches that still need a human decision. Review
+that report before running `--prune --yes`, and add `--prune-remote` only when
+you have confirmed the remote branches are safe to delete.
+
+Use `--remote upstream` when you are working from a fork and the canonical
+release refs live on the upstream remote instead of `origin`.
+
+Verify the helper itself after changing it:
+
+```bash
+bash scripts/release/branch-hygiene.test.sh
+```
+
+Those scripts are pinned to LF line endings so the same command works from a
+Windows checkout under Bash.
+
 ## Rust Crates Release
 
 Crate publishing to crates.io is **manual** — there is no automated

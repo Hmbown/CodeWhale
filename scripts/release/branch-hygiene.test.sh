@@ -9,6 +9,7 @@
 #     contributor work (never a safe delete),
 #   * flags a branch with only unmerged maintainer commits as needs-review,
 #   * detects a working checkout parked on an already-merged scratch branch,
+#   * honors --remote when the canonical release refs live outside origin,
 #   * actually deletes only safe branches under --prune --yes and never the
 #     contributor branch.
 #
@@ -61,6 +62,8 @@ hygiene="${work}/scripts/release/branch-hygiene.sh"
 cd "${work}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 git init -q -b main .
+git config user.name "Hunter Bown"
+git config user.email "hmbown@gmail.com"
 # Mirror the real repo's .mailmap canonicalization for Hunter.
 cat >.mailmap <<'EOF'
 Hunter Bown <hmbown@gmail.com> Claude <noreply@anthropic.com>
@@ -70,9 +73,8 @@ commit() {
   # commit <file> <content> <author-name> <author-email>
   echo "$2" >"$1"
   git add -A
-  GIT_AUTHOR_NAME="$3" GIT_AUTHOR_EMAIL="$4" \
-  GIT_COMMITTER_NAME="$3" GIT_COMMITTER_EMAIL="$4" \
-    git commit -q -m "touch $1"
+  git -c user.name="$3" -c user.email="$4" \
+    commit -q --author="$3 <$4>" -m "touch $1"
 }
 
 H_NAME="Hunter Bown"; H_EMAIL="hmbown@gmail.com"
@@ -119,11 +121,11 @@ check "contributor branch is kept as contributor work" \
 check "contributor branch names the contributor author" \
   "Jane Contributor" <<<"${report}"
 check "contributor branch reason is KEEP" \
-  "KEEP — unique contributor work" <<<"${report}"
+  "KEEP - unique contributor work" <<<"${report}"
 check "maintainer-only scratch is flagged for review" \
   "[local] maintainer-scratch:" <<<"${report}"
 check "maintainer-only scratch reason is REVIEW" \
-  "REVIEW —" <<<"${report}"
+  "REVIEW -" <<<"${report}"
 check "mailmap-folded bot commit is treated as maintainer (review, not keep)" \
   "[local] bot-folded:" <<<"${report}"
 check "parked working checkout warning fires" \
@@ -147,6 +149,17 @@ remaining="$(git for-each-ref --format='%(refname:short)' refs/heads/)"
 check "contributor branch survives prune" "contributor-branch" <<<"${remaining}"
 check "maintainer-only scratch survives prune" "maintainer-scratch" <<<"${remaining}"
 refute "merged scratch branch is gone after prune" "merged-scratch" <<<"${remaining}"
+
+# --- Custom remote name ------------------------------------------------------
+git update-ref "refs/remotes/upstream/codex/v0.8.61" "$(git rev-parse codex/v0.8.61)"
+git update-ref "refs/remotes/upstream/merged-remote" "$(git rev-parse main)"
+upstream_report="$(bash "${hygiene}" --remote upstream --release-branch codex/v0.8.61 --main-ref main 2>&1)"
+check "custom remote release tip is reported" \
+  "upstream" <<<"${upstream_report}"
+check "custom remote safe-delete command uses the selected remote" \
+  "remote: upstream/merged-remote" <<<"${upstream_report}"
+refute "custom remote report does not hard-code origin in safe deletes" \
+  "remote: origin/merged-remote" <<<"${upstream_report}"
 
 # --- State inconsistency: diverged local vs remote release branch ------------
 git switch -q main
