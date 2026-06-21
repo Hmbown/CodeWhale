@@ -60,7 +60,7 @@ use crate::worker_profile::ModelRoute;
 use crate::working_set::WorkingSet;
 
 use super::events::{Event, TurnOutcomeStatus};
-use super::ops::{Op, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX};
+use super::ops::{Op, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance};
 use super::session::Session;
 use super::tool_parser;
 use super::turn::{TurnContext, post_turn_snapshot, pre_turn_snapshot};
@@ -276,10 +276,15 @@ pub struct EngineConfig {
     pub max_steps: u32,
     /// Maximum number of concurrently active subagents.
     pub max_subagents: usize,
+    /// Maximum queued + running sub-agents admitted for this engine session.
+    pub max_admitted_subagents: usize,
     /// Number of direct (depth-1) sub-agents that may execute concurrently
     /// before further launches queue for a launch slot (#3095).
     /// Resolved from `[subagents] launch_concurrency`.
     pub launch_concurrency: usize,
+    /// Whether the model-facing `agent` tool is available after applying
+    /// feature flags and `[subagents]` opt-out controls.
+    pub subagents_enabled: bool,
     /// Feature flags controlling tool availability.
     pub features: Features,
     /// Auto-compaction settings for long conversations.
@@ -292,8 +297,12 @@ pub struct EngineConfig {
     pub goal_state: SharedGoalState,
     /// Maximum sub-agent recursion depth (default 3). See
     /// `SubAgentRuntime::max_spawn_depth`. Override via
-    /// `[runtime] max_spawn_depth = N` in `~/.deepseek/config.toml`.
+    /// `[subagents] max_depth = N` in `~/.codewhale/config.toml`.
     pub max_spawn_depth: u32,
+    /// Optional aggregate token budget for each root sub-agent run.
+    /// Descendant agents inherit the root pool unless a child starts a new
+    /// budget scope with an explicit per-call override.
+    pub subagent_token_budget: Option<u64>,
     /// Per-domain network policy decider (#135). Shared across the session so
     /// session-scoped approvals (`/network allow <host>`) persist for the
     /// remainder of the run.
@@ -402,13 +411,16 @@ impl Default for EngineConfig {
             show_thinking: true,
             max_steps: 100,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
+            max_admitted_subagents: DEFAULT_MAX_SUBAGENTS,
             launch_concurrency: DEFAULT_MAX_SUBAGENTS,
+            subagents_enabled: true,
             features: Features::with_defaults(),
             compaction: CompactionConfig::default(),
             todos: new_shared_todo_list(),
             plan_state: new_shared_plan_state(),
             goal_state: new_shared_goal_state(),
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+            subagent_token_budget: None,
             network_policy: None,
             snapshots_enabled: true,
             snapshots_max_workspace_bytes:
@@ -541,6 +553,11 @@ pub struct Engine {
     /// turn-loop's empty-tool_uses branch to surface `<codewhale:subagent.done>`
     /// sentinels into the parent's transcript before deciding to end the turn.
     pub(super) rx_subagent_completion: mpsc::UnboundedReceiver<SubAgentCompletion>,
+    /// Sub-agent completions already injected into the parent transcript.
+    /// Channel delivery and watchdog reconciliation both mark this set so a
+    /// dropped event can be synthesized once without duplicating a later
+    /// delivery.
+    delivered_subagent_completion_ids: HashSet<String>,
     cancel_token: CancellationToken,
     shared_cancel_token: Arc<StdMutex<CancellationToken>>,
     /// Latched reason for the current cancellation, mirrored to
@@ -823,8 +840,10 @@ impl Engine {
         let subagent_manager = new_shared_subagent_manager_with_timeout(
             config.workspace.clone(),
             config.max_subagents,
+            config.max_admitted_subagents,
             config.subagent_heartbeat_timeout,
             config.launch_concurrency,
+            config.subagent_token_budget,
         );
         let shell_manager = config
             .runtime_services
@@ -911,6 +930,7 @@ impl Engine {
             tx_event,
             tx_subagent_completion,
             rx_subagent_completion,
+            delivered_subagent_completion_ids: HashSet::new(),
             cancel_token: cancel_token.clone(),
             shared_cancel_token: shared_cancel_token.clone(),
             cancel_reason: cancel_reason.clone(),
@@ -1244,6 +1264,7 @@ impl Engine {
                         dynamic_tools,
                         hook_executor,
                         verbosity,
+                        provenance,
                     } => {
                         self.handle_send_message(
                             content,
@@ -1266,6 +1287,7 @@ impl Engine {
                             dynamic_tools,
                             hook_executor,
                             verbosity,
+                            provenance,
                         )
                         .await;
                     }
@@ -1446,6 +1468,50 @@ impl Engine {
                             )))
                             .await;
                     }
+                    Op::SetSubagentRuntimeConfig {
+                        enabled,
+                        max_subagents,
+                        launch_concurrency,
+                        max_spawn_depth,
+                        api_timeout_secs,
+                        heartbeat_timeout_secs,
+                    } => {
+                        self.config.subagents_enabled = enabled;
+                        self.config.max_subagents =
+                            max_subagents.clamp(1, crate::config::MAX_SUBAGENTS);
+                        self.config.launch_concurrency =
+                            launch_concurrency.clamp(1, self.config.max_subagents);
+                        self.config.max_spawn_depth =
+                            max_spawn_depth.min(codewhale_config::MAX_SPAWN_DEPTH_CEILING);
+                        self.config.subagent_api_timeout = Duration::from_secs(api_timeout_secs);
+                        self.config.subagent_heartbeat_timeout =
+                            Duration::from_secs(heartbeat_timeout_secs);
+                        let launch_gate_applied = {
+                            let mut manager = self.subagent_manager.write().await;
+                            manager.update_runtime_limits(
+                                self.config.max_subagents,
+                                self.config.max_admitted_subagents,
+                                self.config.subagent_heartbeat_timeout,
+                                self.config.launch_concurrency,
+                                self.config.subagent_token_budget,
+                            )
+                        };
+                        let launch_note = if launch_gate_applied {
+                            ""
+                        } else {
+                            "; launch_concurrency takes full effect after active sub-agents finish or the session restarts"
+                        };
+                        let _ = self
+                            .tx_event
+                            .send(Event::status(format!(
+                                "Sub-agent runtime updated: enabled={enabled}, max_subagents={}, launch_concurrency={}, max_depth={}{}",
+                                self.config.max_subagents,
+                                self.config.launch_concurrency,
+                                self.config.max_spawn_depth,
+                                launch_note
+                            )))
+                            .await;
+                    }
                     Op::SyncSession {
                         session_id,
                         messages,
@@ -1550,6 +1616,7 @@ impl Engine {
                             Vec::new(),
                             self.config.hook_executor.clone(),
                             self.config.verbosity.clone(),
+                            UserInputProvenance::ExternalUser,
                         )
                         .await;
                     }
@@ -1634,6 +1701,7 @@ impl Engine {
         auto_model: bool,
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
+        provenance: UserInputProvenance,
     ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
@@ -1650,6 +1718,15 @@ impl Engine {
             // `render_environment_block` for the prefix-cache rationale).
             format!("Current workspace: {}", self.config.workspace.display()),
             format!("Current model: {routed_model}"),
+            format!("Input provenance: {}", provenance.as_str()),
+            format!(
+                "Input authority: {}",
+                if provenance.can_authorize_work() {
+                    "external_current_turn"
+                } else {
+                    "non_authoritative"
+                }
+            ),
         ];
         if auto_model {
             lines.push(format!("Auto model route: {routed_model}"));
@@ -1686,6 +1763,40 @@ impl Engine {
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
     ) -> Message {
+        self.user_text_message_with_turn_metadata_for_route_and_provenance(
+            text,
+            routed_model,
+            auto_model,
+            reasoning_effort,
+            reasoning_effort_auto,
+            UserInputProvenance::ExternalUser,
+        )
+    }
+
+    fn runtime_text_message_with_turn_metadata(
+        &self,
+        text: String,
+        provenance: UserInputProvenance,
+    ) -> Message {
+        self.user_text_message_with_turn_metadata_for_route_and_provenance(
+            text,
+            &self.session.model,
+            self.session.auto_model,
+            self.session.reasoning_effort.as_deref(),
+            self.session.reasoning_effort_auto,
+            provenance,
+        )
+    }
+
+    fn user_text_message_with_turn_metadata_for_route_and_provenance(
+        &self,
+        text: String,
+        routed_model: &str,
+        auto_model: bool,
+        reasoning_effort: Option<&str>,
+        reasoning_effort_auto: bool,
+        provenance: UserInputProvenance,
+    ) -> Message {
         // Place the user text first and turn_meta last so that the leading
         // bytes of each user message stay stable across date / model-route /
         // working-set changes. DeepSeek's KV prefix cache matches byte
@@ -1706,6 +1817,7 @@ impl Engine {
                     auto_model,
                     reasoning_effort,
                     reasoning_effort_auto,
+                    provenance,
                 ),
             ],
         }
@@ -1752,6 +1864,7 @@ impl Engine {
             Vec::new(),
             self.config.hook_executor.clone(),
             self.config.verbosity.clone(),
+            UserInputProvenance::SubAgentHandoff,
         )
         .await;
     }
@@ -1849,6 +1962,7 @@ impl Engine {
         self.emit_goal_updated().await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_send_message(
         &mut self,
         content: String,
@@ -1871,12 +1985,25 @@ impl Engine {
         dynamic_tools: Vec<DynamicToolSpec>,
         hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
         verbosity: Option<String>,
+        provenance: UserInputProvenance,
     ) {
+        let input_policy = effective_input_policy(
+            provenance,
+            mode,
+            &content,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        );
+        if let Some(status) = input_policy.status.clone() {
+            let _ = self.tx_event.send(Event::status(status)).await;
+        }
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
 
         // Track current mode so mid-turn messages include the right mode in turn metadata.
-        self.current_mode = mode;
+        self.current_mode = input_policy.mode;
 
         // Drain stale steer messages from previous turns.
         while self.rx_steer.try_recv().is_ok() {}
@@ -1972,23 +2099,25 @@ impl Engine {
         self.session
             .working_set
             .observe_user_message(&content, &self.session.workspace);
-        let force_update_plan_first = should_force_update_plan_first(mode, &content);
+        let force_update_plan_first = should_force_update_plan_first(input_policy.mode, &content);
 
-        let agent_approval_mode = agent_approval_mode_for_turn(auto_approve, approval_mode);
-        self.session.auto_approve = auto_approve;
+        let agent_approval_mode =
+            agent_approval_mode_for_turn(input_policy.auto_approve, input_policy.approval_mode);
+        self.session.auto_approve = input_policy.auto_approve;
         // Only track the Agent-mode approval — Yolo/Plan have fixed
         // approval policies that are derived from the mode itself.
-        if mode == AppMode::Agent {
+        if input_policy.mode == AppMode::Agent {
             self.session.approval_mode = agent_approval_mode;
         }
 
         // Add user message to session
-        let user_msg = self.user_text_message_with_turn_metadata_for_route(
+        let user_msg = self.user_text_message_with_turn_metadata_for_route_and_provenance(
             content,
             &model,
             auto_model,
             reasoning_effort.as_deref(),
             reasoning_effort_auto,
+            provenance,
         );
         self.session.add_message(user_msg);
 
@@ -2018,10 +2147,10 @@ impl Engine {
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;
         self.session.auto_model = auto_model;
-        self.session.allow_shell = allow_shell;
-        self.config.allow_shell = allow_shell;
-        self.session.trust_mode = trust_mode;
-        self.config.trust_mode = trust_mode;
+        self.session.allow_shell = input_policy.allow_shell;
+        self.config.allow_shell = input_policy.allow_shell;
+        self.session.trust_mode = input_policy.trust_mode;
+        self.config.trust_mode = input_policy.trust_mode;
         self.config.translation_enabled = translation_enabled;
         self.config.show_thinking = show_thinking;
         self.config.verbosity = verbosity;
@@ -2034,14 +2163,17 @@ impl Engine {
         let todo_list = self.config.todos.clone();
         let plan_state = self.config.plan_state.clone();
 
-        let tool_context = self.build_tool_context(mode, auto_approve);
+        let tool_context = self.build_tool_context(input_policy.mode, input_policy.auto_approve);
         let builder = self
-            .build_turn_tool_registry_builder(mode, todo_list, plan_state)
+            .build_turn_tool_registry_builder(input_policy.mode, todo_list, plan_state)
             .with_dynamic_tools(&dynamic_tools);
 
-        let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
+        let subagents_available =
+            self.config.subagents_enabled && self.config.features.enabled(Feature::Subagents);
+
+        let fork_context_for_runtime = if subagents_available {
             let state = StructuredState::capture(
-                mode.label(),
+                input_policy.mode.label(),
                 self.config.workspace.clone(),
                 std::env::current_dir().ok(),
                 &self.session.working_set,
@@ -2064,7 +2196,7 @@ impl Engine {
         // envelopes into `Event::SubAgentMailbox` so the UI can route them
         // to the matching in-transcript card. The drainer exits naturally
         // when every cloned sender is dropped at turn-end.
-        let mailbox_for_runtime = if self.config.features.enabled(Feature::Subagents) {
+        let mailbox_for_runtime = if subagents_available {
             let cancel_token = self.cancel_token.child_token();
             let (mailbox, mut receiver) = Mailbox::new(cancel_token.clone());
             let tx_event_clone = self.tx_event.clone();
@@ -2103,9 +2235,9 @@ impl Engine {
             None
         };
 
-        let mut tool_registry = match mode {
+        let mut tool_registry = match input_policy.mode {
             AppMode::Agent | AppMode::Yolo => {
-                if self.config.features.enabled(Feature::Subagents) {
+                if subagents_available {
                     let runtime = if let Some(client) = self.deepseek_client.clone() {
                         let mut rt = SubAgentRuntime::new(
                             client,
@@ -2179,7 +2311,7 @@ impl Engine {
             let mut catalog = build_model_tool_catalog(
                 registry.to_api_tools_with_cache(true),
                 mcp_tools,
-                mode,
+                input_policy.mode,
                 &self.config.tools_always_load,
             );
             for tool in &mut catalog {
@@ -2209,7 +2341,7 @@ impl Engine {
             &mut turn,
             tool_registry.as_ref(),
             tools,
-            mode,
+            input_policy.mode,
             force_update_plan_first,
         ))
         .catch_unwind()
@@ -2305,6 +2437,7 @@ impl Engine {
                         dynamic_tools: dynamic_tools.clone(),
                         hook_executor: self.config.hook_executor.clone(),
                         verbosity: self.config.verbosity.clone(),
+                        provenance: UserInputProvenance::Runtime,
                     })
                     .await;
             }
@@ -3064,6 +3197,112 @@ fn goal_objective_for_prompt(
 // byte-stable, and strict chat-template providers never see a system message
 // outside messages[0].
 
+#[derive(Debug, Clone)]
+struct EffectiveInputPolicy {
+    mode: AppMode,
+    allow_shell: bool,
+    trust_mode: bool,
+    auto_approve: bool,
+    approval_mode: crate::tui::approval::ApprovalMode,
+    status: Option<String>,
+}
+
+fn effective_input_policy(
+    provenance: UserInputProvenance,
+    requested_mode: AppMode,
+    content: &str,
+    allow_shell: bool,
+    trust_mode: bool,
+    auto_approve: bool,
+    approval_mode: crate::tui::approval::ApprovalMode,
+) -> EffectiveInputPolicy {
+    let mut mode = requested_mode;
+    let mut trust_mode = trust_mode;
+    let mut auto_approve = auto_approve;
+    let mut approval_mode = approval_mode;
+    let mut status = None;
+
+    if !provenance.can_authorize_work() {
+        let had_auto_authority = matches!(mode, AppMode::Yolo)
+            || trust_mode
+            || auto_approve
+            || matches!(approval_mode, crate::tui::approval::ApprovalMode::Auto);
+        if matches!(mode, AppMode::Yolo) {
+            mode = AppMode::Agent;
+        }
+        trust_mode = false;
+        auto_approve = false;
+        if matches!(approval_mode, crate::tui::approval::ApprovalMode::Auto) {
+            approval_mode = crate::tui::approval::ApprovalMode::Suggest;
+        }
+        if had_auto_authority {
+            status = Some(format!(
+                "Input provenance '{}' is not external user input; continuing with approvals required.",
+                provenance.as_str()
+            ));
+        }
+    } else if is_review_only_user_intent(content) {
+        // Advisory only: never silently override an explicitly chosen mode
+        // (Yolo/Agent) or strip its tools. Surface the signal so the user can
+        // opt into read-only Plan mode themselves with `/mode plan`.
+        status = Some(
+            "This looks like a review or inspection request. Keeping your current mode and tools — run `/mode plan` for strict read-only tools.".to_string(),
+        );
+    }
+
+    EffectiveInputPolicy {
+        mode,
+        allow_shell,
+        trust_mode,
+        auto_approve,
+        approval_mode,
+        status,
+    }
+}
+
+fn is_review_only_user_intent(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    let asks_to_inspect = [
+        "look",
+        "check",
+        "review",
+        "inspect",
+        "scan",
+        "audit",
+        "看看",
+        "看一下",
+        "检查",
+        "审查",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !asks_to_inspect {
+        return false;
+    }
+
+    let explicit_write = [
+        "fix",
+        "change",
+        "update",
+        "implement",
+        "apply",
+        "patch",
+        "modify",
+        "edit",
+        "write",
+        "commit",
+        "修",
+        "改",
+        "补",
+        "提交",
+        "写",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+
+    !explicit_write
+}
+
 fn agent_approval_mode_for_turn(
     auto_approve: bool,
     approval_mode: crate::tui::approval::ApprovalMode,
@@ -3275,7 +3514,7 @@ use self::tool_catalog::{
     REQUEST_USER_INPUT_NAME, active_tools_for_step, build_model_tool_catalog,
     ensure_advanced_tooling, execute_code_execution_tool, execute_tool_search,
     initial_active_tools, is_tool_search_tool, maybe_hydrate_requested_deferred_tool,
-    missing_tool_error_message,
+    missing_tool_error_message, tool_catalog_consistency_issues,
 };
 #[cfg(test)]
 use self::tool_catalog::{

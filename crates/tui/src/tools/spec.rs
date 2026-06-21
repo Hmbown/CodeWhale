@@ -117,6 +117,11 @@ pub struct ToolContext {
     pub workspace: PathBuf,
     /// Shared shell manager for background tasks and streaming IO.
     pub shell_manager: SharedShellManager,
+    /// Sub-agent that owns tool work started through this context. Root user
+    /// turns leave this unset; child contexts stamp it so long-running shell
+    /// jobs can be attributed in UI surfaces.
+    pub owner_agent_id: Option<String>,
+    pub owner_agent_name: Option<String>,
     /// Whether to allow paths outside workspace
     pub trust_mode: bool,
     /// Current sandbox policy
@@ -222,6 +227,8 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            owner_agent_id: None,
+            owner_agent_name: None,
             trust_mode: false,
             sandbox_policy: SandboxPolicy::None,
             notes_path,
@@ -264,6 +271,8 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            owner_agent_id: None,
+            owner_agent_name: None,
             trust_mode,
             sandbox_policy: SandboxPolicy::None,
             notes_path: notes_path.into(),
@@ -306,6 +315,8 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            owner_agent_id: None,
+            owner_agent_name: None,
             trust_mode,
             sandbox_policy: SandboxPolicy::None,
             notes_path: notes_path.into(),
@@ -346,6 +357,20 @@ impl ToolContext {
     #[must_use]
     pub fn with_runtime_services(mut self, runtime: RuntimeToolServices) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Stamp tool work with the sub-agent that owns it.
+    #[must_use]
+    pub fn with_owner_agent(
+        mut self,
+        agent_id: impl Into<String>,
+        agent_name: impl Into<String>,
+    ) -> Self {
+        let agent_id = agent_id.into();
+        let agent_name = agent_name.into();
+        self.owner_agent_id = (!agent_id.trim().is_empty()).then_some(agent_id);
+        self.owner_agent_name = (!agent_name.trim().is_empty()).then_some(agent_name);
         self
     }
 

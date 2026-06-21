@@ -230,10 +230,8 @@ fn write_trophy_card(app: &App, verdict: HuntVerdict) -> Result<std::path::PathB
     let date = now.format("%Y-%m-%d");
     let date_str = date.to_string();
     let now_str = now.to_string();
-    let dir = codewhale_config::resolve_state_dir("trophies")
+    let dir = codewhale_config::ensure_state_dir("trophies")
         .map_err(|err| format!("Could not resolve trophy directory: {err}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|err| format!("Could not create trophy directory {}: {err}", dir.display()))?;
     // Include time in filename to avoid collisions on same-date hunts.
     let filename = format!("{date}-{time}-{slug}.md");
     let path = dir.join(&filename);

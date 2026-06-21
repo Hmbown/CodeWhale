@@ -38,7 +38,7 @@ jobs:
   close:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # We need at least the commits that this push introduced.
           # fetch-depth: 0 is the simplest correct option; the

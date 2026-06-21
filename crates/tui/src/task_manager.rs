@@ -334,7 +334,9 @@ impl TaskManagerConfig {
             default_mode: "agent".to_string(),
             allow_shell: config.allow_shell(),
             trust_mode: false,
-            max_subagents: config.max_subagents().clamp(1, MAX_SUBAGENTS),
+            max_subagents: config
+                .max_subagents_for_provider(config.api_provider())
+                .clamp(1, MAX_SUBAGENTS),
         }
     }
 }

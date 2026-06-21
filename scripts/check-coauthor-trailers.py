@@ -54,10 +54,14 @@ class Identity:
 @dataclass(frozen=True)
 class Commit:
     sha: str
+    parents: str
     author_name: str
     author_email: str
     subject: str
     body: str
+
+    def is_merge_commit(self) -> bool:
+        return len(self.parents.split()) > 1
 
 
 def norm_key(value: str) -> str:
@@ -110,7 +114,7 @@ def git_log(commit_range: str) -> list[Commit]:
             [
                 "git",
                 "log",
-                "--format=%H%x00%an%x00%ae%x00%s%x00%B%x1e",
+                "--format=%H%x00%P%x00%an%x00%ae%x00%s%x00%B%x1e",
                 commit_range,
             ],
             cwd=ROOT,
@@ -123,8 +127,8 @@ def git_log(commit_range: str) -> list[Commit]:
     for record in raw.split("\x1e"):
         if not record.strip():
             continue
-        parts = record.split("\x00", 4)
-        if len(parts) != 5:
+        parts = record.split("\x00", 5)
+        if len(parts) != 6:
             raise RuntimeError("failed to parse git log output")
         commits.append(Commit(*parts))
     return commits
@@ -179,7 +183,7 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
             if CANONICAL_NOREPLY_RE.match(coauthor.email):
                 continue
             if is_bot_identity(coauthor.name, coauthor.email):
-                if is_harvested_commit:
+                if is_harvested_commit and not commit.is_merge_commit():
                     errors.append(
                         f"{prefix}: remove bot/tool co-author trailer "
                         f"{coauthor.name} <{coauthor.email}>; contributor trailers are for humans."

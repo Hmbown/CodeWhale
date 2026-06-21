@@ -515,10 +515,10 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
     q: "什么是 Goal 模式？现在可用吗？",
     a: (
       <>
-        Goal 模式是未来的工作流/标签页方向，用于长时间运行的多步目标——不是当前的 <code className="inline">/goal</code> 命令。
-        当前的 <code className="inline">/goal</code> 是当前 TUI 会话的目标设置器；app-server 客户端也可以通过 <code className="inline">thread/goal/*</code> 方法持久化线程目标。
-        完整的 Goal 工作区（自主多回合任务执行，带更完整的检查点/恢复 UI）仍在规划中。
-        关注 <a href="https://github.com/Hmbown/CodeWhale/issues/891" className="body-link">#891</a> 的进展。
+        <code className="inline">/goal</code> 为当前 TUI 会话设置目标，支持 <code className="inline">pause</code>、<code className="inline">resume</code>、<code className="inline">complete</code>、<code className="inline">blocked</code> 和 <code className="inline">clear</code> 控制。
+        App-server 客户端也可以通过 <code className="inline">thread/goal/*</code> 方法持久化线程范围的目标，支持 <code className="inline">set</code>、<code className="inline">get</code> 和 <code className="inline">clear</code>。
+        它不会新增一个应用模式；模式切换器仍然是 Plan、Agent 和 YOLO。
+        跟踪进展：<a href="https://github.com/Hmbown/CodeWhale/issues/891" className="body-link">#891</a>。
       </>
     ),
     sources: ["#891"],

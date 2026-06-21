@@ -98,13 +98,11 @@ function glibcCompatibilityMessage(required, host) {
   return [
     `Prebuilt CodeWhale Linux binaries require GLIBC_${formatVersion(required)}, but ${hostLine}`,
     "",
-    "Official Linux release binaries are GNU libc builds. Ubuntu 22.04 ships glibc 2.35,",
-    "so it cannot run a binary built against Ubuntu 24.04/glibc 2.39.",
+    "The Linux x64 release asset is a static (musl) build that runs on any glibc,",
+    "but the Linux arm64 and riscv64 assets are GNU libc builds linked against",
+    "Ubuntu 24.04/glibc 2.39, which Ubuntu 22.04 (glibc 2.35) cannot run.",
     "",
     buildFromSourceHint(),
-    "",
-    "Release engineering follow-up: build Linux GNU assets against an older glibc",
-    "baseline, or add a musl/static Linux asset.",
     "",
     "Set CODEWHALE_SKIP_GLIBC_CHECK=1 to bypass this check at your own risk.",
   ].join("\n");

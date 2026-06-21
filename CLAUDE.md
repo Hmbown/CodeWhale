@@ -34,14 +34,18 @@ for Claude-based agents working in this repository.
   inspect diffs, comments, check results, and release-branch conflicts before
   landing.
 
-## v0.8.62 Release Work
+## Current Release Work
 
-- The active branch is `hunter/0.8.62-glm-subagents`. This repo lives on
-  multiple devices, so do not hard-code a checkout path — work in whichever
-  local checkout you have and confirm with `git branch --show-current` before
-  editing. 0.8.61 has shipped; do all new work here, never on `main`.
-- Base release triage on the GitHub `v0.8.62` milestone
-  (`gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.62" --state open`)
+- The active branch for this release lane is `codex/v0.8.63-integration`
+  (also at `origin/codex/v0.8.63-integration`). This repo lives on multiple
+  devices, so do not hard-code a checkout path; work in whichever local
+  checkout you have and confirm with `git branch --show-current` before
+  editing. Never commit directly to `main`.
+- The workspace version is `0.8.63`. Do not tag, publish, create a GitHub
+  Release, push release artifacts, or merge to `main` without Hunter's
+  explicit approval.
+- Base release triage on the GitHub `v0.8.63` milestone
+  (`gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.63" --state open`)
   unless Hunter gives a newer branch/milestone.
 - Work the queue in this order: release blockers, recently approved PRs, clean
   PRs with small scope, blocked PRs with obvious fixes, dirty PRs that can be

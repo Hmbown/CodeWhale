@@ -24,43 +24,49 @@ v0.8.8 onward; Linux RISC-V starts with the first release after v0.8.47.
 | macOS        | x64          |     ✅      |       ✅        | `codewhale-macos-x64`, `codewhale-tui-macos-x64`        |
 | macOS        | arm64 (M-series) | ✅      |       ✅        | `codewhale-macos-arm64`, `codewhale-tui-macos-arm64`    |
 | Windows      | x64          |     ✅      |       ✅        | `codewhale-windows-x64.exe`, `codewhale-tui-windows-x64.exe` |
-| Other Linux (musl, other architectures) | — |   ❌¹    |       ✅²       | build from source                                     |
+| Linux x64 on musl (Alpine) | ✅ (static) |    ✅      |       ✅        | static `codewhale-tui-linux-x64` (musl) asset           |
+| Other Linux (musl non-x64, other arches) | — | ❌¹ | ✅² | build from source                                     |
 | FreeBSD / OpenBSD              | — |   ❌      |       ✅²       | build from source                                     |
 
 ¹ The npm package will exit with a clear error and point you here.
 ² Provided your toolchain can compile a recent Rust workspace; see
   [Build from source](#7-build-from-source) below.
 
-The Linux release assets are glibc builds, not musl builds. They dynamically
-link normal Linux runtime libraries such as `libdbus-1` and `libc`; SQLite is
-currently bundled into the binary through `rusqlite` so users do not need a
-separate `libsqlite3` runtime package for official release assets. Musl-based
-systems such as Alpine should use [Build from source](#7-build-from-source).
+The Linux **x64** release assets are **static (musl) builds** as of v0.8.63.
+They have no glibc dependency and run on any x86_64 Linux, including Ubuntu
+22.04, Debian stable, RHEL/CentOS, and Alpine/musl. SQLite is bundled into the
+binary through `rusqlite`, so no separate `libsqlite3` runtime package is needed.
 
-### Linux glibc floor
+The Linux **arm64** and **riscv64** release assets are still GNU libc (glibc)
+builds. They dynamically link normal Linux runtime libraries such as
+`libdbus-1` and `libc`, and are built on Ubuntu 24.04, so they can require
+`GLIBC_2.39`.
 
-The official Linux GNU release assets require the glibc version used by the
-release builder. In the current v0.8.62 release lane, native Linux GNU assets
-are built on Ubuntu 24.04 and can require `GLIBC_2.39`. Ubuntu 22.04 ships
-glibc 2.35, so those binaries fail with errors such as:
+### Linux glibc floor (arm64 / riscv64)
+
+This floor applies only to the **GNU libc** assets (arm64, riscv64). The static
+x64 (musl) asset has no `GLIBC_*` symbols, so it passes the install preflight
+and runs on older systems without error. In the current v0.8.63 release lane,
+the GNU assets are built on Ubuntu 24.04 and can require `GLIBC_2.39`. Ubuntu
+22.04 ships glibc 2.35, so those arm64/riscv64 binaries fail with errors such as:
 
 ```text
 version `GLIBC_2.39' not found
 ```
 
 The npm wrapper, `codewhale update`, and the Unix archive installer preflight
-Linux binaries before installing them and point older systems to Cargo/source
-builds. If you are on Ubuntu 22.04, Debian stable, RHEL/CentOS, Alpine/musl, or
-another older Linux base, use:
+Linux GNU binaries before installing them and point older systems to Cargo/source
+builds. If you are on Ubuntu 22.04 arm64, Debian stable, RHEL/CentOS, or another
+older GNU base for a non-x64 asset, use:
 
 ```bash
 cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
-Release engineering follow-up: build Linux GNU assets against an older glibc
-baseline, or add a musl/static Linux asset. This install guide documents the
-floor and preflight behavior; it does not change CI runner selection.
+Future release engineering may add static (musl) arm64/riscv64 assets so the
+glibc floor goes away entirely; until then, x64 is static and arm64/riscv64
+build from source on older distros.
 
 > **Linux ARM64 note (v0.8.7 and earlier).** v0.8.7 and earlier do **not**
 > publish a Linux ARM64 prebuilt; users on HarmonyOS thin-and-light, Asahi
@@ -111,11 +117,11 @@ a download sourced from an impersonating repository or mirror.
 ## 3. Install via npm
 
 npm is the recommended install path. The `codewhale` wrapper is published at
-v0.8.62 (Node 18+; wrapper available for v0.8.56 and later).
+v0.8.63 (Node 18+; wrapper available for v0.8.56 and later).
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.62
+codewhale --version   # 0.8.63
 ```
 
 `postinstall` downloads the right pair of binaries from the matching GitHub

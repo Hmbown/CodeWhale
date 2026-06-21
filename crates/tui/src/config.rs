@@ -16,11 +16,15 @@ use serde_json::json;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use crate::audit::log_sensitive_event;
-use crate::features::{Features, FeaturesToml, is_known_feature_key};
+use crate::features::{Feature, Features, FeaturesToml, is_known_feature_key};
 use crate::hooks::HooksConfig;
 
 pub const DEFAULT_MAX_SUBAGENTS: usize = 20;
 pub const MAX_SUBAGENTS: usize = 20;
+/// Upper bound for queued + running sub-agent admissions. This is deliberately
+/// higher than the instantaneous concurrency cap so Workflow-style fanout can
+/// opt into large bounded populations without unbounded queue growth.
+pub const MAX_SUBAGENT_ADMISSION: usize = 200;
 /// Default per-step DeepSeek API timeout for sub-agent requests, in seconds.
 /// Matches the legacy hardcoded value so existing configs keep their old
 /// behavior when `[subagents] api_timeout_secs` is unset (#1806, #1808).
@@ -47,6 +51,32 @@ pub const MIN_STREAM_CHUNK_TIMEOUT_SECS: u64 = 1;
 /// Maximum accepted stream chunk timeout.
 pub const MAX_STREAM_CHUNK_TIMEOUT_SECS: u64 = 3600;
 pub(crate) const STREAM_CHUNK_TIMEOUT_ENV: &str = "DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS";
+
+fn resolve_subagent_api_timeout_secs(raw: Option<u64>) -> u64 {
+    let raw = raw.unwrap_or(DEFAULT_SUBAGENT_API_TIMEOUT_SECS);
+    if raw == 0 {
+        return DEFAULT_SUBAGENT_API_TIMEOUT_SECS;
+    }
+    raw.clamp(MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS)
+}
+
+fn resolve_subagent_heartbeat_timeout_secs(raw: Option<u64>, api_timeout_secs: u64) -> u64 {
+    let raw = raw.unwrap_or(DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS);
+    let configured = if raw == 0 {
+        DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS
+    } else {
+        raw.clamp(
+            MIN_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+            MAX_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+        )
+    };
+    let min_for_api = api_timeout_secs.saturating_add(30).clamp(
+        MIN_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+        MAX_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
+    );
+    configured.max(min_for_api)
+}
+
 pub const DEFAULT_TEXT_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 pub const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
@@ -397,6 +427,56 @@ impl ApiProvider {
     #[must_use]
     pub fn from_kind(kind: codewhale_config::ProviderKind) -> Self {
         Self::FROM_KIND_LOOKUP[kind as usize]
+    }
+}
+
+fn normalize_subagent_provider_key(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| match ch {
+            '-' | '_' | '.' | ' ' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
+    if ApiProvider::parse(key).is_some_and(|candidate| candidate == provider) {
+        return true;
+    }
+
+    let normalized = normalize_subagent_provider_key(key);
+    if normalized == normalize_subagent_provider_key(provider.as_str()) {
+        return true;
+    }
+
+    match provider {
+        ApiProvider::Deepseek => matches!(
+            normalized.as_str(),
+            "deepseek" | "deepseek_api" | "deepseek_official"
+        ),
+        ApiProvider::DeepseekCN => matches!(
+            normalized.as_str(),
+            "deepseek_cn" | "deepseek_china" | "deepseekcn"
+        ),
+        ApiProvider::Openrouter => matches!(normalized.as_str(), "openrouter" | "open_router"),
+        ApiProvider::OpenaiCodex => matches!(
+            normalized.as_str(),
+            "openai_codex" | "codex" | "chatgpt" | "openai_chatgpt"
+        ),
+        ApiProvider::Anthropic => {
+            matches!(
+                normalized.as_str(),
+                "anthropic" | "claude" | "anthropic_api"
+            )
+        }
+        ApiProvider::Zai => matches!(
+            normalized.as_str(),
+            "zai" | "z_ai" | "glm" | "zai_glm" | "z_glm"
+        ),
+        _ => false,
     }
 }
 
@@ -1761,6 +1841,11 @@ pub struct ContextConfig {
 /// `review`, `custom`). Per-call explicit model choices still win.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SubagentsConfig {
+    /// Top-level switch for the model-facing `agent` tool. `None` preserves
+    /// the feature-flag default; `false` hides/refuses sub-agent spawning
+    /// without changing the numeric queue/depth knobs.
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub default_model: Option<String>,
     #[serde(default)]
@@ -1780,12 +1865,13 @@ pub struct SubagentsConfig {
     #[serde(default)]
     pub max_concurrent: Option<usize>,
     /// How many levels of nested sub-agents the interactive `agent` tool may
-    /// spawn. `0` disables sub-agents entirely — the `agent` tool refuses to
-    /// spawn, a full opt-out; `1` allows one level, `2` two, and so on. When
-    /// unset, defaults to [`codewhale_config::DEFAULT_SPAWN_DEPTH`]; any value
-    /// is clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`]. Fleet
-    /// workers are governed separately by `[fleet.exec] max_spawn_depth`; both
-    /// share the same default and ceiling so the limit cannot drift.
+    /// spawn. `0` blocks the model-facing `agent` tool at this runtime depth;
+    /// use `[subagents] enabled = false` for the clearer durable off switch.
+    /// `1` allows one level, `2` two, and so on. When unset, defaults to
+    /// [`codewhale_config::DEFAULT_SPAWN_DEPTH`]; any value is clamped to
+    /// [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`]. Fleet workers are
+    /// governed separately by `[fleet.exec] max_spawn_depth`; both share the
+    /// same default and ceiling so the limit cannot drift.
     #[serde(default)]
     pub max_depth: Option<u32>,
     /// Number of direct (depth-1) sub-agents that may execute concurrently
@@ -1794,6 +1880,16 @@ pub struct SubagentsConfig {
     /// throttle); explicit values are clamped to [1, max_subagents].
     #[serde(default)]
     pub launch_concurrency: Option<usize>,
+    /// Maximum queued + running sub-agents admitted for one session. Defaults
+    /// to a large bounded queue while `launch_concurrency` keeps instantaneous
+    /// execution bounded.
+    #[serde(default, alias = "max_total", alias = "admission_limit")]
+    pub max_admitted: Option<usize>,
+    /// Optional aggregate token budget shared by a root `agent` run and its
+    /// descendants. When unset or 0, sub-agents keep legacy unlimited spend
+    /// behavior unless an individual `agent` call supplies a per-run override.
+    #[serde(default)]
+    pub token_budget: Option<u64>,
     /// Deprecated pre-v0.8.61 alias for `launch_concurrency`. Honored only
     /// when `launch_concurrency` is unset, so the new key always wins.
     #[serde(default, rename = "interactive_max_launch")]
@@ -1810,6 +1906,34 @@ pub struct SubagentsConfig {
     /// manager-visible progress. Defaults to 5 minutes and is kept above the
     /// per-step API timeout so slow but legitimate model calls are not
     /// cancelled before their request timeout can fire (#2614).
+    #[serde(default)]
+    pub heartbeat_timeout_secs: Option<u64>,
+    /// Per-provider overrides for sub-agent fanout and budget knobs. Keys are
+    /// provider names such as `deepseek`, `zai`, `openrouter`, or `anthropic`.
+    #[serde(default)]
+    pub providers: Option<HashMap<String, SubagentProviderConfig>>,
+}
+
+/// Provider-specific sub-agent limit overrides.
+///
+/// Every field inherits from `[subagents]` when unset, so a provider profile
+/// can tighten only the knobs that matter for that API's rate limits.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SubagentProviderConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+    #[serde(default)]
+    pub launch_concurrency: Option<usize>,
+    #[serde(default, alias = "max_total", alias = "admission_limit")]
+    pub max_admitted: Option<usize>,
+    #[serde(default)]
+    pub token_budget: Option<u64>,
+    #[serde(default)]
+    pub api_timeout_secs: Option<u64>,
     #[serde(default)]
     pub heartbeat_timeout_secs: Option<u64>,
 }
@@ -2615,6 +2739,16 @@ impl Config {
         })
     }
 
+    pub(crate) fn subagent_provider_config(
+        &self,
+        provider: ApiProvider,
+    ) -> Option<&SubagentProviderConfig> {
+        let providers = self.subagents.as_ref()?.providers.as_ref()?;
+        providers.iter().find_map(|(key, config)| {
+            subagent_provider_key_matches(key, provider).then_some(config)
+        })
+    }
+
     pub(crate) fn provider_config_for_mut(&mut self, provider: ApiProvider) -> &mut ProviderConfig {
         let providers = self.providers.get_or_insert_with(ProvidersConfig::default);
         match provider {
@@ -3172,18 +3306,80 @@ impl Config {
             .clamp(1, MAX_SUBAGENTS)
     }
 
+    /// Return the provider-specific maximum number of concurrent sub-agents.
+    /// `[subagents.providers.<provider>] max_concurrent` inherits from the
+    /// global `[subagents]` value when unset.
+    #[must_use]
+    pub fn max_subagents_for_provider(&self, provider: ApiProvider) -> usize {
+        self.subagent_provider_config(provider)
+            .and_then(|cfg| cfg.max_concurrent)
+            .map(|max| max.clamp(1, MAX_SUBAGENTS))
+            .unwrap_or_else(|| self.max_subagents())
+    }
+
+    /// Whether the model-facing `agent` tool is available after applying the
+    /// feature flag, explicit `[subagents] enabled` switch, and legacy
+    /// zero-valued opt-outs.
+    #[must_use]
+    pub fn subagents_enabled(&self) -> bool {
+        self.subagents_disabled_reason().is_none()
+    }
+
+    /// Whether the model-facing `agent` tool is available for this provider
+    /// after applying global and provider-specific sub-agent controls.
+    #[must_use]
+    pub fn subagents_enabled_for_provider(&self, provider: ApiProvider) -> bool {
+        if !self.subagents_enabled() {
+            return false;
+        }
+        let Some(provider_cfg) = self.subagent_provider_config(provider) else {
+            return true;
+        };
+        provider_cfg.enabled != Some(false)
+            && provider_cfg.max_concurrent != Some(0)
+            && provider_cfg.max_depth != Some(0)
+    }
+
+    /// Machine-readable reason sub-agents are disabled, in precedence order.
+    #[must_use]
+    pub fn subagents_disabled_reason(&self) -> Option<&'static str> {
+        if !self.features().enabled(Feature::Subagents) {
+            return Some("features.subagents=false");
+        }
+        let subagents_cfg = self.subagents.as_ref()?;
+        if subagents_cfg.enabled == Some(false) {
+            return Some("subagents.enabled=false");
+        }
+        if subagents_cfg.max_concurrent == Some(0) {
+            return Some("subagents.max_concurrent=0");
+        }
+        if subagents_cfg.max_depth == Some(0) {
+            return Some("subagents.max_depth=0");
+        }
+        None
+    }
+
     /// How many levels of nested sub-agents the interactive `agent` tool may
     /// spawn. Reads `[subagents] max_depth`; when unset it defaults to
     /// [`codewhale_config::DEFAULT_SPAWN_DEPTH`]. `0` is a valid value that
-    /// disables sub-agent spawning entirely (full opt-out). Any value is
-    /// clamped to [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`] so the
-    /// operator's choice can never exceed the hard recursion ceiling.
+    /// blocks the `agent` tool at this runtime depth. Any value is clamped to
+    /// [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`] so the operator's choice
+    /// can never exceed the hard recursion ceiling.
     #[must_use]
     pub fn subagent_max_spawn_depth(&self) -> u32 {
         self.subagents
             .as_ref()
             .and_then(|cfg| cfg.max_depth)
             .unwrap_or(codewhale_config::DEFAULT_SPAWN_DEPTH)
+            .min(codewhale_config::MAX_SPAWN_DEPTH_CEILING)
+    }
+
+    /// Return the provider-specific maximum sub-agent recursion depth.
+    #[must_use]
+    pub fn subagent_max_spawn_depth_for_provider(&self, provider: ApiProvider) -> u32 {
+        self.subagent_provider_config(provider)
+            .and_then(|cfg| cfg.max_depth)
+            .unwrap_or_else(|| self.subagent_max_spawn_depth())
             .min(codewhale_config::MAX_SPAWN_DEPTH_CEILING)
     }
 
@@ -3203,6 +3399,71 @@ impl Config {
             .clamp(1, max)
     }
 
+    /// Return the provider-specific direct launch throttle. Children above
+    /// this limit queue for a launch slot instead of starting immediately.
+    #[must_use]
+    pub fn launch_concurrency_for_provider(&self, provider: ApiProvider) -> usize {
+        let max = self.max_subagents_for_provider(provider);
+        self.subagent_provider_config(provider)
+            .and_then(|cfg| cfg.launch_concurrency)
+            .or_else(|| {
+                self.subagents
+                    .as_ref()
+                    .and_then(|cfg| cfg.launch_concurrency.or(cfg.interactive_max_launch_legacy))
+            })
+            .unwrap_or(max)
+            .clamp(1, max)
+    }
+
+    /// Maximum queued + running sub-agents admitted for the session.
+    ///
+    /// Defaults to [`MAX_SUBAGENT_ADMISSION`] so distinct `agent` calls can
+    /// queue and drain through `launch_concurrency` instead of being rejected
+    /// at the instantaneous concurrency cap. Explicit values are clamped to
+    /// `[max_subagents, MAX_SUBAGENT_ADMISSION]`.
+    #[must_use]
+    pub fn max_admitted_subagents(&self) -> usize {
+        let max_concurrent = self.max_subagents();
+        self.subagents
+            .as_ref()
+            .and_then(|cfg| cfg.max_admitted)
+            .unwrap_or(MAX_SUBAGENT_ADMISSION)
+            .clamp(max_concurrent, MAX_SUBAGENT_ADMISSION)
+    }
+
+    /// Return the provider-specific queued + running admission cap.
+    #[must_use]
+    pub fn max_admitted_subagents_for_provider(&self, provider: ApiProvider) -> usize {
+        let max_concurrent = self.max_subagents_for_provider(provider);
+        self.subagent_provider_config(provider)
+            .and_then(|cfg| cfg.max_admitted)
+            .or_else(|| self.subagents.as_ref().and_then(|cfg| cfg.max_admitted))
+            .unwrap_or(MAX_SUBAGENT_ADMISSION)
+            .clamp(max_concurrent, MAX_SUBAGENT_ADMISSION)
+    }
+
+    /// Optional aggregate token budget for each root `agent` run.
+    ///
+    /// Reads `[subagents] token_budget`. `None` and `0` both mean unlimited,
+    /// preserving legacy behavior until a budget is explicitly configured.
+    #[must_use]
+    pub fn subagent_token_budget(&self) -> Option<u64> {
+        self.subagents
+            .as_ref()
+            .and_then(|cfg| cfg.token_budget)
+            .filter(|budget| *budget > 0)
+    }
+
+    /// Return the provider-specific aggregate token budget for each root
+    /// `agent` run.
+    #[must_use]
+    pub fn subagent_token_budget_for_provider(&self, provider: ApiProvider) -> Option<u64> {
+        self.subagent_provider_config(provider)
+            .and_then(|cfg| cfg.token_budget)
+            .or_else(|| self.subagents.as_ref().and_then(|cfg| cfg.token_budget))
+            .filter(|budget| *budget > 0)
+    }
+
     /// Resolved per-step DeepSeek API timeout for sub-agents, in seconds.
     ///
     /// Reads `[subagents] api_timeout_secs` and clamps to
@@ -3213,15 +3474,19 @@ impl Config {
     /// fail-fast tests, not production (#1806, #1808).
     #[must_use]
     pub fn subagent_api_timeout_secs(&self) -> u64 {
-        let raw = self
-            .subagents
-            .as_ref()
-            .and_then(|cfg| cfg.api_timeout_secs)
-            .unwrap_or(DEFAULT_SUBAGENT_API_TIMEOUT_SECS);
-        if raw == 0 {
-            return DEFAULT_SUBAGENT_API_TIMEOUT_SECS;
-        }
-        raw.clamp(MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS)
+        resolve_subagent_api_timeout_secs(
+            self.subagents.as_ref().and_then(|cfg| cfg.api_timeout_secs),
+        )
+    }
+
+    /// Return the provider-specific per-step API timeout for sub-agents.
+    #[must_use]
+    pub fn subagent_api_timeout_secs_for_provider(&self, provider: ApiProvider) -> u64 {
+        resolve_subagent_api_timeout_secs(
+            self.subagent_provider_config(provider)
+                .and_then(|cfg| cfg.api_timeout_secs)
+                .or_else(|| self.subagents.as_ref().and_then(|cfg| cfg.api_timeout_secs)),
+        )
     }
 
     /// Resolved no-progress heartbeat timeout for running sub-agents.
@@ -3233,24 +3498,28 @@ impl Config {
     /// configured long model request is not pre-empted by heartbeat cleanup.
     #[must_use]
     pub fn subagent_heartbeat_timeout_secs(&self) -> u64 {
-        let raw = self
-            .subagents
-            .as_ref()
-            .and_then(|cfg| cfg.heartbeat_timeout_secs)
-            .unwrap_or(DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS);
-        let configured = if raw == 0 {
-            DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS
-        } else {
-            raw.clamp(
-                MIN_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
-                MAX_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
-            )
-        };
-        let min_for_api = self.subagent_api_timeout_secs().saturating_add(30).clamp(
-            MIN_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
-            MAX_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
-        );
-        configured.max(min_for_api)
+        resolve_subagent_heartbeat_timeout_secs(
+            self.subagents
+                .as_ref()
+                .and_then(|cfg| cfg.heartbeat_timeout_secs),
+            self.subagent_api_timeout_secs(),
+        )
+    }
+
+    /// Return the provider-specific no-progress heartbeat timeout.
+    #[must_use]
+    pub fn subagent_heartbeat_timeout_secs_for_provider(&self, provider: ApiProvider) -> u64 {
+        let api_timeout = self.subagent_api_timeout_secs_for_provider(provider);
+        resolve_subagent_heartbeat_timeout_secs(
+            self.subagent_provider_config(provider)
+                .and_then(|cfg| cfg.heartbeat_timeout_secs)
+                .or_else(|| {
+                    self.subagents
+                        .as_ref()
+                        .and_then(|cfg| cfg.heartbeat_timeout_secs)
+                }),
+            api_timeout,
+        )
     }
 
     /// Resolved per-SSE-chunk idle timeout in seconds.
@@ -5526,7 +5795,9 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
         return crate::oauth::auth_file_path().exists();
     }
     if matches!(provider, ApiProvider::Huggingface)
-        && std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
+        && std::env::var("HUGGINGFACE_API_KEY")
+            .or_else(|_| std::env::var("HF_TOKEN"))
+            .is_ok_and(|k| !k.trim().is_empty())
     {
         return true;
     }
@@ -5736,6 +6007,17 @@ fn provider_config_table_name(provider: ApiProvider) -> Result<String> {
 }
 
 fn provider_env_api_key(provider: ApiProvider) -> Option<String> {
+    if provider == ApiProvider::Huggingface {
+        return std::env::var("HUGGINGFACE_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("HF_TOKEN")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            });
+    }
+
     provider.env_vars().iter().find_map(|var| {
         std::env::var(var)
             .ok()
@@ -7338,6 +7620,169 @@ action = "session.compact"
     }
 
     #[test]
+    fn subagent_token_budget_is_optional_and_zero_disables() {
+        assert_eq!(Config::default().subagent_token_budget(), None);
+
+        let disabled = Config {
+            subagents: Some(SubagentsConfig {
+                token_budget: Some(0),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(disabled.subagent_token_budget(), None);
+
+        let configured = Config {
+            subagents: Some(SubagentsConfig {
+                token_budget: Some(50_000),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(configured.subagent_token_budget(), Some(50_000));
+    }
+
+    #[test]
+    fn subagent_admission_limit_defaults_and_clamps() {
+        assert_eq!(
+            Config::default().max_admitted_subagents(),
+            MAX_SUBAGENT_ADMISSION
+        );
+
+        let configured = Config {
+            subagents: Some(SubagentsConfig {
+                max_concurrent: Some(4),
+                max_admitted: Some(80),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(configured.max_subagents(), 4);
+        assert_eq!(configured.max_admitted_subagents(), 80);
+
+        let low = Config {
+            subagents: Some(SubagentsConfig {
+                max_concurrent: Some(4),
+                max_admitted: Some(1),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(low.max_admitted_subagents(), 4);
+
+        let high = Config {
+            subagents: Some(SubagentsConfig {
+                max_admitted: Some(MAX_SUBAGENT_ADMISSION + 1),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(high.max_admitted_subagents(), MAX_SUBAGENT_ADMISSION);
+
+        let alias_cfg: SubagentsConfig =
+            toml::from_str("admission_limit = 80").expect("parse admission alias");
+        assert_eq!(alias_cfg.max_admitted, Some(80));
+    }
+
+    #[test]
+    fn provider_subagent_profiles_override_global_limits_with_aliases() {
+        let config: Config = toml::from_str(
+            r#"
+provider = "zai"
+
+[subagents]
+max_concurrent = 20
+launch_concurrency = 20
+max_admitted = 200
+max_depth = 6
+token_budget = 100000
+api_timeout_secs = 900
+heartbeat_timeout_secs = 1200
+
+[subagents.providers.glm]
+max_concurrent = 4
+launch_concurrency = 3
+max_admitted = 12
+max_depth = 2
+token_budget = 25000
+api_timeout_secs = 180
+heartbeat_timeout_secs = 240
+"#,
+        )
+        .expect("parse provider subagent profile");
+
+        assert_eq!(config.api_provider(), ApiProvider::Zai);
+        assert_eq!(config.max_subagents(), 20);
+        assert_eq!(config.max_subagents_for_provider(ApiProvider::Zai), 4);
+        assert_eq!(config.launch_concurrency_for_provider(ApiProvider::Zai), 3);
+        assert_eq!(
+            config.max_admitted_subagents_for_provider(ApiProvider::Zai),
+            12
+        );
+        assert_eq!(
+            config.subagent_max_spawn_depth_for_provider(ApiProvider::Zai),
+            2
+        );
+        assert_eq!(
+            config.subagent_token_budget_for_provider(ApiProvider::Zai),
+            Some(25_000)
+        );
+        assert_eq!(
+            config.subagent_api_timeout_secs_for_provider(ApiProvider::Zai),
+            180
+        );
+        assert_eq!(
+            config.subagent_heartbeat_timeout_secs_for_provider(ApiProvider::Zai),
+            240
+        );
+    }
+
+    #[test]
+    fn provider_subagent_profiles_inherit_and_clamp_against_provider_max() {
+        let config: Config = toml::from_str(
+            r#"
+[subagents]
+max_concurrent = 12
+launch_concurrency = 8
+max_depth = 5
+api_timeout_secs = 300
+
+[subagents.providers.deepseek_api]
+max_concurrent = 30
+launch_concurrency = 30
+max_admitted = 1
+
+[subagents.providers.anthropic]
+enabled = false
+"#,
+        )
+        .expect("parse inherited provider subagent profile");
+
+        assert_eq!(
+            config.max_subagents_for_provider(ApiProvider::Deepseek),
+            MAX_SUBAGENTS
+        );
+        assert_eq!(
+            config.launch_concurrency_for_provider(ApiProvider::Deepseek),
+            MAX_SUBAGENTS
+        );
+        assert_eq!(
+            config.max_admitted_subagents_for_provider(ApiProvider::Deepseek),
+            MAX_SUBAGENTS
+        );
+        assert_eq!(
+            config.subagent_max_spawn_depth_for_provider(ApiProvider::Deepseek),
+            5
+        );
+        assert_eq!(
+            config.subagent_api_timeout_secs_for_provider(ApiProvider::Deepseek),
+            300
+        );
+        assert!(config.subagents_enabled_for_provider(ApiProvider::Deepseek));
+        assert!(!config.subagents_enabled_for_provider(ApiProvider::Anthropic));
+    }
+
+    #[test]
     fn subagents_max_concurrent_overrides_top_level_cap() {
         let config = Config {
             max_subagents: Some(3),
@@ -7370,6 +7815,64 @@ action = "session.compact"
             ..Config::default()
         };
         assert_eq!(high.max_subagents(), MAX_SUBAGENTS);
+    }
+
+    #[test]
+    fn subagents_enabled_reports_disable_precedence() {
+        assert!(Config::default().subagents_enabled());
+
+        let mut feature_disabled = Config::default();
+        feature_disabled
+            .set_feature("subagents", false)
+            .expect("known feature");
+        assert!(!feature_disabled.subagents_enabled());
+        assert_eq!(
+            feature_disabled.subagents_disabled_reason(),
+            Some("features.subagents=false")
+        );
+
+        let explicit_disabled = Config {
+            subagents: Some(SubagentsConfig {
+                enabled: Some(false),
+                max_concurrent: Some(0),
+                max_depth: Some(0),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert!(!explicit_disabled.subagents_enabled());
+        assert_eq!(
+            explicit_disabled.subagents_disabled_reason(),
+            Some("subagents.enabled=false")
+        );
+
+        let zero_concurrency = Config {
+            subagents: Some(SubagentsConfig {
+                enabled: Some(true),
+                max_concurrent: Some(0),
+                max_depth: Some(1),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(
+            zero_concurrency.subagents_disabled_reason(),
+            Some("subagents.max_concurrent=0")
+        );
+
+        let zero_depth = Config {
+            subagents: Some(SubagentsConfig {
+                enabled: Some(true),
+                max_concurrent: Some(1),
+                max_depth: Some(0),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(
+            zero_depth.subagents_disabled_reason(),
+            Some("subagents.max_depth=0")
+        );
     }
 
     #[test]

@@ -269,7 +269,7 @@ reflect very different cost classes:
 
 | Tool | What each child does | Wall-clock | Token cost | Cap |
 |---|---|---|---|---|
-| `agent` | Full sub-agent loop (planning, tool calls, multi-turn streaming) | minutes | thousands of tokens | 10 in flight by default (`[subagents].max_concurrent`, hard ceiling 20) |
+| `agent` | Full sub-agent loop (planning, tool calls, multi-turn streaming) | minutes | thousands of tokens | 20 running by default (`[subagents].max_concurrent`, hard ceiling 20), with up to 200 running + queued admitted by default |
 | `rlm_eval` helper `sub_query_batch` | One-shot non-streaming Chat Completions calls pinned to `deepseek-v4-flash` inside a live RLM session | seconds | ~hundreds of tokens | 16 per call |
 
 The caps appear in each tool's description and error messages so the model

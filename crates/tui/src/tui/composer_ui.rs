@@ -173,6 +173,20 @@ pub(crate) fn is_composer_newline_key(key: KeyEvent) -> bool {
     }
 }
 
+pub(crate) fn is_forced_submit_key(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => key.modifiers.contains(KeyModifiers::CONTROL),
+        // Several terminals encode Ctrl+Enter / Cmd+Enter as Ctrl+J. Keep
+        // Ctrl+J available as a newline while idle, but let the event loop use
+        // this helper to force a live steer when a turn is already running.
+        KeyCode::Char('j') | KeyCode::Char('J') => {
+            key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn handle_history_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Enter => {

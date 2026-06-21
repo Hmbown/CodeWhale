@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.63] - 2026-06-19
+
+### Added
+
+- **Sub-agent fanout safeguards (#3318, #3319).** High-fanout Workflow runs can
+  now queue and drain more agents than the instantaneous concurrency cap by
+  default, with `[subagents] max_admitted` available to tune that bounded
+  admission population. Distinct `agent` calls are no longer capped by the
+  per-turn loop guard before runtime launch concurrency and provider
+  rate-limit backoff can apply. `[subagents] token_budget` applies a shared
+  aggregate token ceiling to a root `agent` run and its descendants.
+- **Per-worker sub-agent token enforcement (#3321).** A `token_budget` /
+  `max_tokens` set on an individual `agent` call now bounds that single worker
+  mid-run: once its accumulated model tokens exceed the cap it stops cleanly
+  with a `budget_exhausted` status instead of running to `max_steps`. This
+  complements the scope-level admission gate (#3319) — the per-worker cap stops
+  one runaway worker, the scope cap bounds total fan-out — without
+  double-counting. Harvested from #3321 by @donglovejava.
+- **Provider-specific sub-agent fanout config.** `[subagents.providers.<provider>]`
+  profiles now override `enabled`, `max_concurrent`, `max_admitted`,
+  `launch_concurrency`, `max_depth`, token budget, API timeout, and heartbeat
+  timeout for the active provider. Use broad direct-API profiles such as
+  `[subagents.providers.deepseek]` and tighter subscription profiles such as
+  `[subagents.providers.glm]`; `/config subagents status` shows both global
+  and active-provider resolved values.
+- **Sub-agent control and isolation.** The single `agent` tool now exposes
+  status, peek, and cancel actions for running children, and accepts
+  `worktree: true` to create an isolated git worktree/branch for parallel edit
+  lanes instead of requiring callers to hand-roll a `cwd`.
+
+### Fixed
+
+- **Mode and tool catalog correctness.** Core action tools remain discoverable
+  in the model-facing catalog/tool search, and a consistency self-check flags
+  registered handlers that drift out of the advertised catalog. Review-looking
+  prompts in explicit Agent/YOLO mode now keep the requested mode and tools,
+  with only an advisory review hint.
+- **Sub-agent orchestration recovery.** Child agents now retry transient
+  provider header/SSE timeouts before failing, and parent runs synthesize missed
+  child completions from terminal child state so orchestration cannot hang on a
+  lost completion event.
+- **DeepSeek thinking tool calls.** DeepSeek chat-completions requests now omit
+  explicit `tool_choice` whenever reasoning/thinking is enabled, avoiding
+  provider rejections while leaving no-thinking routes unchanged.
+- **Task sidebar shortcuts and attribution.** Ctrl-K stays palette/emacs-kill,
+  while Ctrl-X is scoped to Tasks-sidebar background shell cancellation. Shell
+  jobs launched by sub-agents now render with their child-agent owner in the
+  Tasks sidebar and transcript.
+- **Benchmark-turn recovery and context economy.** Repeated read-only search
+  loop blocks now return guidance instead of fatal tool failures, Python build
+  failures that are missing `setuptools` include an install/retry hint, long
+  foreground shell timeouts steer models toward background execution, and noisy
+  shell/test/web outputs are compacted earlier for large-context routes.
+- **Config display redaction.** `codew config get/list` now recursively masks
+  token-, secret-, password-, credential-, and authorization-like keys inside
+  unknown `extras` tables and redacts sensitive HTTP header values before
+  printing config output.
+- **Queued follow-up hints and force-steer keys.** The pending-input preview now
+  advertises `Ctrl+S send now` whenever queued follow-ups exist, and
+  Ctrl/Cmd+Enter force-steering also accepts the common Ctrl+J terminal
+  encoding while a turn is running.
+- **Sidebar default visibility restored (#3328).** New and upgraded sessions
+  now use a pinned composed sidebar by default when the terminal is wide
+  enough, so live Agents and Tasks surface without opting back into idle
+  auto-collapse. Older settings files that captured the v0.8.62 auto-collapse
+  default now migrate to `pinned` unless `/sidebar auto --save` records an
+  explicit opt-in. `/sidebar` now reports when width or auto-collapse
+  suppresses rendering instead of saying the sidebar is visible. Reported by
+  @dxfq.
+- **JavaScript execution proxy env handling (#3273, #3331).** `js_execution`
+  now enables Node's environment-proxy mode when proxy variables are present,
+  mirrors lowercase proxy variables for the child process, and backfills
+  `HTTP_PROXY` / `HTTPS_PROXY` from `ALL_PROXY`. Reported by @lordwedggie and
+  harvested from #3331 by @cyq1017.
+- **Legacy app-server non-loopback auth hardening (#3258).** Bare
+  `codewhale app-server --host 0.0.0.0` now fails fast unless an explicit
+  `--auth-token` or `CODEWHALE_APP_SERVER_TOKEN` is supplied, keeping generated
+  one-time `cwapp_*` tokens loopback-only.
+- **Legacy `.deepseek` state write-path migration (#3240).** State subdirectories
+  (`sessions`, `slop_ledger`, `trophies`, `catalog`) are now always written under
+  `~/.codewhale/`, and the first write of a subdir relocates any pre-existing
+  `~/.deepseek/<sub>` contents into the primary location so the legacy tree stops
+  growing while old data is preserved. The read resolver still finds legacy data
+  for backfill until each subdir migrates. Reported by @Final527; onboarding
+  marker slice from #3302 by @nightt5879.
+- **State subdir validation on Windows (#3240).** State path hardening now
+  rejects rooted/prefixed subdir strings such as `/etc` before resolving or
+  migrating state directories, keeping the `.codewhale` write resolver inside
+  its state root across platforms.
+
 ## [0.8.62] - 2026-06-17
 
 ### Changed
@@ -1393,50 +1483,6 @@ also to issue reporters and verification helpers including **@New2Niu**
 **@Dr3259** (#2380), **@caiyilian** (#2567), and **@chinaqy110** (#2571) for
 reports and acceptance details that shaped these fixes, plus the WeChat/Chinese
 UX reports relayed during the final triage pass.
-
-## [0.8.49] - 2026-06-01
-
-### Added
-
-- Added the missing `[providers.moonshot]` example block for Moonshot/Kimi,
-  documented `completion_sound`, and refreshed the tool-surface docs for the
-  current registry, including `finance`, `web.run`, git history tools, memory,
-  OCR, and other registered tools.
-
-### Changed
-
-- Hardened prefix-cache fingerprints to hash API-visible tool schema details,
-  not just tool names, so schema and description drift invalidates cached
-  prefixes before it can confuse model calls (#2264).
-- Kept `finance` registered independently from web-search tools and prevented
-  duplicate web/patch tool registration in agent and YOLO modes.
-
-### Fixed
-
-- Fixed the DeepSeek V4-Pro cost estimate after the 2026-05-31 pricing cutoff:
-  the post-promotion official rate remains one quarter of the original price,
-  so CodeWhale no longer shows roughly 4x too much after June 1 (#2489).
-- Fixed Kimi/Moonshot tool schema normalization by moving parent `type` fields
-  into `anyOf`/`oneOf` items, with regression coverage for nested schema shapes
-  that could otherwise still fail Kimi validation (#2438).
-- Fixed raw ANSI/SGR fragments leaking into footer, shell-label, and sidebar
-  activity text during active tool execution (#2481).
-- Fixed `[tui]` config parsing when `status_items` is omitted, restoring the
-  documented default footer order for older and hand-written configs (#2483).
-- Fixed a shell env-scrubbing test so it does not depend on the user's default
-  shell understanding POSIX parameter expansion.
-- Removed stale `qwen/qwen3.7-max` references left in `config.example.toml`
-  after the v0.8.48 preset removal.
-
-### Community
-
-Thanks to **@idling11** (#2480, #2485), **@reidliu41** (#2493),
-**@hongqitai** (#2495), and **@encyc** (#2477) for the fixes and reliability
-work harvested into this release.
-
-Thanks also to reporters and verification helpers whose issues shaped the
-release: **@A-Corner** (#2438), **@taiwan988** (#2483), **@AiurArtanis**
-(#2489), and **@Hmbown** (#2481).
 
 ---
 

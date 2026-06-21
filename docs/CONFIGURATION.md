@@ -121,7 +121,7 @@ Supported keys in the project overlay (top-level fields only):
 | `sandbox_mode` | `"read-only"` / `"workspace-write"` / `"danger-full-access"` |
 | `mcp_config_path` | per-repo MCP server set |
 | `notes_path` | keep notes in-repo |
-| `max_subagents` | clamp concurrency for a constrained repo (clamped to 1..=20) |
+| `max_subagents` | clamp sub-agent concurrency for a constrained repo (clamped to 1..=20) |
 | `allow_shell` | gate shell tool access on `false` |
 
 The overlay is intentionally narrow — it covers the fields a repo
@@ -827,7 +827,9 @@ Press **Ctrl+S** in the composer to park the current draft to
 drafts with one-line previews and timestamps; `/stash pop`
 restores the most recently parked draft (LIFO); `/stash clear`
 wipes the file. Capped at 200 entries; multiline drafts
-round-trip intact.
+round-trip intact. When a turn is already running and queued follow-ups exist,
+the pending-input preview advertises **Ctrl+S send now**; in that state Ctrl+S
+sends the next queued follow-up into the active turn instead of stashing.
 
 ## Settings File (Persistent UI Preferences)
 
@@ -886,12 +888,16 @@ Common settings keys:
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.
 - `default_mode` (agent, plan, yolo; legacy `normal` is accepted and normalized to `agent`)
-- `sidebar_focus` (`auto`, `work`, `tasks`, `agents`, `context`, `hidden`; default
-  `auto`): selects the right sidebar focus. `auto` prioritizes Work, Tasks,
-  Agents, then optional Context, and uses Work as the single quiet empty state.
+- `sidebar_focus` (`pinned`, `auto`, `tasks`, `agents`, `context`, `hidden`; default
+  `pinned`): selects the right sidebar focus. `pinned` keeps the right sidebar
+  visible when the terminal is wide enough and composes Work, Tasks, Agents,
+  and optional Context as they have live content. `auto` uses the same composed
+  panels but collapses while idle. Saving
+  `/sidebar auto --save` records an explicit auto-collapse opt-in so upgraded
+  settings files that only captured the old default can migrate back to `pinned`.
   `hidden` disables the right sidebar entirely so raw terminal selection cannot
   cross from the transcript into sidebar borders. Legacy `plan` and `todos`
-  values are accepted and normalized to `work`.
+  values, plus the old `work` name, are accepted and normalized to `pinned`.
 - `max_history` (number of submitted input history entries; cleared drafts are
   also kept locally for composer history search)
 - `default_model` (model name override)
@@ -985,22 +991,64 @@ If you are upgrading from older releases:
   Explicit tool `model` values win, then role/type
   overrides, then the parent runtime model. Supported convenience keys are
   `default_model`, `worker_model`, `explorer_model`, `awaiter_model`,
-  `review_model`, `custom_model`, `max_concurrent`, `launch_concurrency`,
-  `api_timeout_secs`, and `heartbeat_timeout_secs`. The `[subagents]
-  max_concurrent` value overrides top-level `max_subagents` and is also clamped
-  to `1..=20`. `[subagents] launch_concurrency` sets how many direct children
-  start at once before the rest queue for a launch slot; it defaults to the
-  resolved `max_subagents` cap and is clamped to `1..=max_subagents` (the
-  deprecated `interactive_max_launch` key is accepted as an alias, with the new
-  key winning when both are set). `[subagents]
-  api_timeout_secs` controls the per-step API timeout for sub-agent model calls
-  and is clamped to `1..=1800`, with `0` or unset preserving the legacy 120
-  second default. `[subagents] heartbeat_timeout_secs` controls stale running
-  agent cleanup, defaults to `300`, and is clamped to `30..=3600` while staying
-  above the resolved API timeout.
+  `review_model`, `custom_model`, `max_concurrent`, `max_admitted`,
+  `launch_concurrency`, `token_budget`, `api_timeout_secs`, and
+  `heartbeat_timeout_secs`. The `[subagents] max_concurrent` value overrides
+  top-level `max_subagents` and is also clamped to `1..=20`. `[subagents]
+  max_admitted` (aliases: `max_total`, `admission_limit`) is the bounded total
+  of queued plus running sub-agents; it defaults to `200` so high-fanout turns
+  can queue and drain while runtime launch pressure remains bounded, and is
+  clamped to `max_concurrent..=200`. `[subagents]
+  launch_concurrency` sets how many direct children start at once before the
+  rest queue for a launch slot; it defaults to the resolved `max_subagents` cap
+  and is clamped to `1..=max_subagents` (the deprecated
+  `interactive_max_launch` key is accepted as an alias, with the new key
+  winning when both are set). `[subagents] token_budget` is an optional
+  aggregate token ceiling for each root `agent` run and its descendants; unset
+  or `0` preserves unlimited legacy behavior. `[subagents] api_timeout_secs`
+  controls the per-step API timeout for sub-agent model calls and is clamped to
+  `1..=1800`, with `0` or unset preserving the legacy 120 second default.
+  `[subagents] heartbeat_timeout_secs` controls stale running agent cleanup,
+  defaults to `300`, and is clamped to `30..=3600` while staying above the
+  resolved API timeout. `[subagents.providers.<provider>]` accepts the same
+  fanout, depth, budget, and timeout knobs (`enabled`, `max_concurrent`,
+  `max_admitted`, `launch_concurrency`, `max_depth`, `token_budget`,
+  `api_timeout_secs`, `heartbeat_timeout_secs`) and inherits the global
+  `[subagents]` value for any key you omit. Provider keys accept canonical
+  names such as `deepseek`, `zai`, `openrouter`, `anthropic`, plus convenience
+  aliases such as `glm` for Z.ai and `deepseek_api` for direct DeepSeek:
+
+  ```toml
+  [subagents]
+  max_concurrent = 20
+  launch_concurrency = 20
+  max_admitted = 200
+  max_depth = 6
+
+  [subagents.providers.deepseek]
+  max_concurrent = 20
+  launch_concurrency = 20
+  max_admitted = 200
+
+  [subagents.providers.glm]
+  max_concurrent = 4
+  launch_concurrency = 3
+  max_admitted = 12
+  max_depth = 2
+
+  [subagents.providers.openrouter]
+  max_concurrent = 5
+  launch_concurrency = 3
+  max_admitted = 20
+  ```
+
+  `/config subagents status` prints both global values and the active
+  provider's resolved profile so rate-limit tuning is visible in the TUI.
   `[subagents.models]` accepts lower-case role or type keys such as `worker`,
-  `explorer`, `general`, `explore`, `plan`, and `review`. Values must normalize
-  to a supported DeepSeek model id before an agent is spawned.
+  `explorer`, `general`, `explore`, `plan`, and `review`. Values are validated
+  against the active provider at spawn time; direct DeepSeek requires DeepSeek
+  IDs, while OpenAI-compatible/custom provider routes pass explicit model IDs
+  through to that provider.
 - `skills_dir` (string, optional): defaults to `~/.codewhale/skills` (each skill is
   a directory containing `SKILL.md`). Workspace-local `.agents/skills` or
   `./skills` are preferred when present; the runtime also discovers global

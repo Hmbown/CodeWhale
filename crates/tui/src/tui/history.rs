@@ -1125,6 +1125,8 @@ pub struct ExecCell {
     pub output: Option<String>,
     pub live_output: Option<String>,
     pub shell_task_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub owner_agent_name: Option<String>,
     pub started_at: Option<Instant>,
     pub duration_ms: Option<u64>,
     pub source: ExecSource,
@@ -1184,6 +1186,19 @@ impl ExecCell {
             lines.extend(render_compact_kv(
                 "source",
                 "started by you",
+                Style::default().fg(palette::TEXT_MUTED),
+                width,
+            ));
+        }
+
+        if let Some(owner) = self
+            .owner_agent_name
+            .as_deref()
+            .or(self.owner_agent_id.as_deref())
+        {
+            lines.extend(render_compact_kv(
+                "owner",
+                owner,
                 Style::default().fg(palette::TEXT_MUTED),
                 width,
             ));
@@ -4674,6 +4689,8 @@ mod tests {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -5015,6 +5032,8 @@ mod tests {
             output: Some("a\nb\n".to_string()),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(10),
             source: ExecSource::Assistant,
@@ -5047,6 +5066,8 @@ mod tests {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -5365,6 +5386,8 @@ mod tests {
             output: Some("boom".to_string()),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(42),
             source: ExecSource::Assistant,
@@ -5428,6 +5451,8 @@ mod tests {
             output: None,
             live_output: Some("running line 1\nrunning line 2".to_string()),
             shell_task_id: Some("shell_live".to_string()),
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -5450,6 +5475,8 @@ mod tests {
             output: Some("final output".to_string()),
             live_output: Some("stale live tail".to_string()),
             shell_task_id: Some("shell_live".to_string()),
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -5581,6 +5608,8 @@ mod tests {
             output: Some(output),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(120),
             source: ExecSource::Assistant,
@@ -5642,6 +5671,8 @@ mod tests {
             output: Some(output),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(120),
             source: ExecSource::Assistant,
@@ -6112,6 +6143,8 @@ mod tests {
             output: Some("ok".to_string()),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,

@@ -17,7 +17,7 @@ Rust 製の TUI と CLI、25 のプロバイダ。DeepSeek、OpenRouter、Huggin
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.62
+codewhale --version   # 0.8.63
 ```
 
 npm wrapper（Node 18+）は GitHub Releases から SHA-256 検証済みのバイナリをダウンロードし、`codewhale`、`codew`、`codewhale-tui` をインストールします。ソースからビルドしたい場合は cargo（Rust 1.88+）で:
@@ -44,8 +44,8 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # または GitHub Releases の NSIS インストーラ
 
 # GitHub に安定して到達できない場合の CNB ミラー
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-tui --locked --force
 
 # 旧 Homebrew 互換。formula の改名が完了するまで deepseek-tui 名のままです
 brew tap Hmbown/deepseek-tui
@@ -87,12 +87,12 @@ codewhale exec --allowed-tools read_file,exec_shell --max-turns 10 "fix the fail
 
 - **承認ゲート付きツールと OS サンドボックス。** ファイル、Shell、Git、Web、MCP、サブエージェントの各ツールは、明示的な承認ゲートとサンドボックスバックエンド（bwrap、Landlock、Seatbelt、seccomp）の背後で動きます。
 - **信頼できるロールバック。** side-git スナップショットと `/restore` は、リポジトリの `.git` の外側に置かれます — ターンを取り消しても履歴には一切触れません。
-- **Hooks v2** *(0.8.58)*。`tool_call_before` フックが JSON で `allow`/`deny`/`ask` の判定を返します。deny 優先の優先順位、glob マッチャ、プロジェクトローカルな `.codewhale/hooks.toml` に対応。
-- **プロバイダを認識する並行サブエージェント** *(0.8.58)*。調査と実装を並列に進め、big/cheap のモデル階層はプロバイダごとに解決されます — モデル ID のハードコードはありません。
-- **耐久性のあるセッション。** fork、relay 引き継ぎ、そして Plan/Agent/YOLO のモード切り替えをまたいでもバイト単位で安定する、セッション横断のディスク永続プロンプトキャッシュ *(0.8.56)*。ターンはシステムのスリープも生き延びます *(0.8.57)*: ストリーミング中にサスペンドしても、復帰後にリクエストが静かに再発行され、ターンは失敗しません。
-- **ヘッドレスモード。** スクリプトや CI 向けに、`codewhale exec` が `--allowed-tools`、`--disallowed-tools`（deny 優先）、`--max-turns`、`--append-system-prompt` *(0.8.58)* に対応。
+- **Hooks v2**。`tool_call_before` フックが JSON で `allow`/`deny`/`ask` の判定を返します。deny 優先の優先順位、glob マッチャ、プロジェクトローカルな `.codewhale/hooks.toml` に対応。
+- **プロバイダを認識する並行サブエージェント**。調査と実装を並列に進め、big/cheap のモデル階層はプロバイダごとに解決されます — モデル ID のハードコードはありません。
+- **耐久性のあるセッション。** fork、relay 引き継ぎ、そして Plan/Agent/YOLO のモード切り替えをまたいでもバイト単位で安定する、セッション横断のディスク永続プロンプトキャッシュ。ターンはシステムのスリープも生き延びます: ストリーミング中にサスペンドしても、復帰後にリクエストが静かに再発行され、ターンは失敗しません。
+- **ヘッドレスモード。** スクリプトや CI 向けに、`codewhale exec` が `--allowed-tools`、`--disallowed-tools`（deny 優先）、`--max-turns`、`--append-system-prompt` に対応。
 - **どこにでも組み込める。** HTTP/SSE と ACP の Runtime API、VS Code 拡張（Phase 0）、Telegram/Feishu ブリッジ（Weixin ブリッジは実験的）。
-- **日常使いの磨き込み。** MCP のクライアント*かつ*サーバー、再利用可能なスキル、7 ロケールのローカライズ（0.8.56 から承認ダイアログも対象）、Xiaomi MiMo による音声合成（TTS）。
+- **日常使いの磨き込み。** MCP のクライアント*かつ*サーバー、再利用可能なスキル、7 ロケールのローカライズ、Xiaomi MiMo による音声合成（TTS）。
 
 ### あらゆるモデル、まずはオープンモデル
 
@@ -100,11 +100,18 @@ codewhale exec --allowed-tools read_file,exec_shell --max-turns 10 "fix the fail
 
 - **オープンモデル（ホスト型）:** `deepseek`（同格の中の筆頭）、`openrouter`、`huggingface`（Inference Providers）、`moonshot`（Kimi）、`volcengine`（Ark）、`nvidia-nim`、`together`、`fireworks`、`novita`、`siliconflow` / `siliconflow-CN`、`arcee`、`xiaomi-mimo`、`deepinfra`、`atlascloud`、`wanjie-ark`、さらに任意のゲートウェイに使える汎用の `openai` 互換ルート。
 - **オープンモデル（セルフホスト型）:** `vllm`、`sglang`、`ollama` を自分の localhost エンドポイントに向けて使えます — キーは不要です。
-- **クローズドプロバイダ（ネイティブ対応）:** `anthropic` は専用の `/v1/messages` アダプタ *(0.8.58)* 経由で、適応的 thinking、プロンプトキャッシュのブレークポイント、署名付き thinking のリプレイに対応します — OpenAI 方言のシムではありません。`openai-codex` は既存の ChatGPT/Codex CLI ログインを再利用します。
+- **クローズドプロバイダ（ネイティブ対応）:** `anthropic` は専用の `/v1/messages` アダプタ経由で、適応的 thinking、プロンプトキャッシュのブレークポイント、署名付き thinking のリプレイに対応します — OpenAI 方言のシムではありません。`openai-codex` は既存の ChatGPT/Codex CLI ログインを再利用します。
 
-ルーティングは base URL の差し替えにとどまりません: `/reasoning` の effort は各プロバイダのワイヤ方言に翻訳され、サブエージェントの階層はプロバイダごとに解決され、システムプロンプト内のモデル情報はハードコードではなくモデルごとにテンプレート化されます *(0.8.58)*。セッション中の切り替えは `/provider` と `/model` で。認証情報、base URL、能力の境界を含む完全なレジストリは [docs/PROVIDERS.md](docs/PROVIDERS.md) にあります。
+ルーティングは base URL の差し替えにとどまりません: `/reasoning` の effort は各プロバイダのワイヤ方言に翻訳され、サブエージェントの階層はプロバイダごとに解決され、システムプロンプト内のモデル情報はハードコードではなくモデルごとにテンプレート化されます。セッション中の切り替えは `/provider` と `/model` で。認証情報、base URL、能力の境界を含む完全なレジストリは [docs/PROVIDERS.md](docs/PROVIDERS.md) にあります。
 
-上のバージョンタグは、直近 3 リリース（0.8.56 → 0.8.58）で入ったものを示しています。詳細は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+サブエージェントの fanout は設定優先です。`[subagents]` に全体の既定値を置き、
+`[subagents.providers.deepseek]`、`[subagents.providers.glm]`、
+`[subagents.providers.openrouter]` などで API ごとの上限を調整できます。直結の
+DeepSeek API は広めに、サブスクリプション型や rate-limit のあるルートは 3–5
+並列に抑える、といった運用を prompt やコード変更なしで行えます。詳しくは
+[docs/SUBAGENTS.md](docs/SUBAGENTS.md#concurrency-cap) を参照してください。
+
+完全な変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## 考え方 — このバージョンに入れている mission idea
 

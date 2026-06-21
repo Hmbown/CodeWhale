@@ -1122,7 +1122,27 @@ fn char_boundary_index(text: &str, max_chars: usize) -> usize {
 mod tests {
     use super::*;
     use crate::tools::shell::ShellStatus;
+    use std::time::Duration;
     use tempfile::tempdir;
+
+    const BACKGROUND_COMPLETION_WAIT_MS: u64 = 30_000;
+
+    fn wait_for_completed_shell(
+        manager: &mut crate::tools::shell::ShellManager,
+        task_id: &str,
+    ) -> crate::tools::shell::ShellResult {
+        let deadline = Instant::now() + Duration::from_millis(BACKGROUND_COMPLETION_WAIT_MS);
+
+        loop {
+            let result = manager
+                .get_output(task_id, true, 1_000)
+                .expect("background output");
+            if result.status != ShellStatus::Running || Instant::now() >= deadline {
+                return result;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 
     #[test]
     fn run_verifiers_requires_user_approval() {
@@ -1316,12 +1336,10 @@ mod tests {
             Some("nonblocking")
         );
 
-        let output = ctx
-            .shell_manager
-            .lock()
-            .expect("shell manager")
-            .get_output(task_id, true, 10_000)
-            .expect("background output");
+        let output = wait_for_completed_shell(
+            &mut ctx.shell_manager.lock().expect("shell manager"),
+            task_id,
+        );
         assert_eq!(output.status, ShellStatus::Completed);
         assert!(
             output.stdout.contains("rustc"),

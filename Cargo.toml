@@ -20,7 +20,7 @@ default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.62"
+version = "0.8.63"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older
@@ -46,7 +46,7 @@ serde_json = "1.0.149"
 semver = "1.0.28"
 thiserror = "2.0"
 tempfile = "3.27"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 toml = "0.9.7"
 toml_edit = "0.23.10"
 sha2 = "0.10"

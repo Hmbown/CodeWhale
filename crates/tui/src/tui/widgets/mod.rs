@@ -1354,6 +1354,30 @@ impl Renderable for ApprovalWidget<'_> {
             }
         }
 
+        if let Some(preview) = self.request.ask_rule_preview() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    label_ask_rule_preview(locale),
+                    Style::default().fg(palette::TEXT_HINT),
+                ),
+            ]));
+            let max_width = card_area.width.saturating_sub(6) as usize;
+            for line in preview
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .take(4)
+            {
+                let truncated =
+                    crate::utils::truncate_with_ellipsis(line.trim(), max_width.max(20), "...");
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(truncated, Style::default().fg(palette::TEXT_SECONDARY)),
+                ]));
+            }
+        }
+
         lines.push(Line::from(""));
 
         let options = approval_options_for(risk, locale);
@@ -1399,6 +1423,14 @@ impl Renderable for ApprovalWidget<'_> {
                 footer_controls(locale),
                 Style::default().fg(palette::TEXT_HINT),
             ),
+            if self.request.can_save_ask_rule() {
+                Span::styled(
+                    save_ask_rule_hint(locale),
+                    Style::default().fg(palette_colors.shortcut),
+                )
+            } else {
+                Span::raw("")
+            },
         ]));
 
         let title = format!(
@@ -1600,6 +1632,20 @@ fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command
 
 fn footer_controls(locale: Locale) -> &'static str {
     tr(locale, MessageId::ApprovalControlsHint)
+}
+
+fn save_ask_rule_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  s 批准并保存询问规则",
+        _ => "  s approve + save ask rule",
+    }
+}
+
+fn label_ask_rule_preview(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "询问规则预览：",
+        _ => "Ask rule preview:",
+    }
 }
 
 fn selection_hint_prefix(locale: Locale) -> &'static str {

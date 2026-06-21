@@ -618,6 +618,8 @@ mod tests {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: None,
             source: ExecSource::Assistant,

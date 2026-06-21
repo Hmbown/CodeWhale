@@ -1,11 +1,31 @@
 //! Queue commands: queue list/edit/drop/clear
 
+use crate::commands::traits::{CommandInfo, RegisterCommand};
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::App;
 
 use super::CommandResult;
 
 const PREVIEW_LIMIT: usize = 120;
+
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "queue",
+    aliases: &["queued"],
+    usage: "/queue [list|send <n>|edit <n>|drop <n>|clear]",
+    description_id: MessageId::CmdQueueDescription,
+};
+
+pub(in crate::commands) struct QueueCmd;
+
+impl RegisterCommand for QueueCmd {
+    fn info() -> &'static CommandInfo {
+        &COMMAND_INFO
+    }
+
+    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
+        queue(app, arg)
+    }
+}
 
 pub fn queue(app: &mut App, args: Option<&str>) -> CommandResult {
     let locale = app.ui_locale;

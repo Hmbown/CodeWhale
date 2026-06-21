@@ -24,14 +24,19 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Generate derived facts
+        # facts.generated.ts is gitignored and produced by derive-facts.mjs;
+        # tsc --noEmit fails without it (TS2307) and downstream inferences
+        # cascade into spurious TS7006 errors, so regenerate before type check.
+        run: npm run prebuild
       - name: Run ESLint
         run: npm run lint
       - name: TypeScript type check
@@ -49,8 +54,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: 'npm'

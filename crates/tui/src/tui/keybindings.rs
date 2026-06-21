@@ -191,6 +191,11 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
+        chord: "Ctrl+X (Tasks sidebar)",
+        description_id: crate::localization::MessageId::KbCancelBackgroundShellJobs,
+        section: KeybindingSection::Submission,
+    },
+    KeybindingEntry {
         chord: "Ctrl+P",
         description_id: crate::localization::MessageId::KbFuzzyFilePicker,
         section: KeybindingSection::Submission,
@@ -249,11 +254,6 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
     KeybindingEntry {
         chord: "Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+0 / Ctrl+Alt+0",
         description_id: crate::localization::MessageId::KbFocusSidebar,
-        section: KeybindingSection::Modes,
-    },
-    KeybindingEntry {
-        chord: "Ctrl+X",
-        description_id: crate::localization::MessageId::KbTogglePlanAgent,
         section: KeybindingSection::Modes,
     },
     // --- Sessions ---
@@ -353,6 +353,19 @@ mod tests {
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, ctrl_o.description_id,),
             "Open Activity Detail"
+        );
+    }
+
+    #[test]
+    fn ctrl_x_tasks_sidebar_cancel_all_is_documented() {
+        let ctrl_x_tasks = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.chord == "Ctrl+X (Tasks sidebar)")
+            .expect("Ctrl+X Tasks sidebar keybinding should be documented");
+
+        assert_eq!(
+            ctrl_x_tasks.description_id,
+            crate::localization::MessageId::KbCancelBackgroundShellJobs
         );
     }
 

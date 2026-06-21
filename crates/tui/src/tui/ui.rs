@@ -178,7 +178,7 @@ const TOOL_HANG_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(900);
 // the per-tool spinner pulse — keep this fast enough that the spout reads as
 // motion (~12 fps) instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = 80;
-const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
+pub(crate) const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 const PERIODIC_FULL_REPAINT_EVERY_N: u64 = 50;
 const TURN_META_PREFIX: &str = "<turn_meta>";
@@ -225,6 +225,51 @@ fn should_auto_approve_approval_request(
             || app.approval_mode == ApprovalMode::Auto)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarRenderState {
+    Hidden,
+    SuppressedByWidth {
+        available_width: u16,
+        min_width: u16,
+    },
+    AutoCollapsed,
+    Visible,
+}
+
+pub(crate) fn sidebar_render_state(app: &mut App) -> SidebarRenderState {
+    if app.sidebar_focus == SidebarFocus::Hidden {
+        return SidebarRenderState::Hidden;
+    }
+
+    if let Some(available_width) = sidebar_host_width_hint(app)
+        && available_width < SIDEBAR_VISIBLE_MIN_WIDTH
+    {
+        return SidebarRenderState::SuppressedByWidth {
+            available_width,
+            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
+        };
+    }
+
+    if crate::tui::sidebar::sidebar_auto_idle(app) {
+        return SidebarRenderState::AutoCollapsed;
+    }
+
+    SidebarRenderState::Visible
+}
+
+fn sidebar_host_width_hint(app: &App) -> Option<u16> {
+    app.last_sidebar_host_width.or_else(|| {
+        let transcript_width = app.viewport.last_transcript_area.map(|area| area.width)?;
+        let sidebar_width = app
+            .viewport
+            .last_sidebar_area
+            .or(app.last_sidebar_area)
+            .map(|area| area.width)
+            .unwrap_or(0);
+        Some(transcript_width.saturating_add(sidebar_width))
+    })
+}
+
 fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
     if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
         return None;
@@ -265,6 +310,12 @@ enum TranslationEvent {
 // TurnComplete / focus-gain / resize. The alt-screen buffer's double-buffering
 // plus ratatui's `terminal.clear()` are sufficient to repaint cleanly.
 const TERMINAL_ORIGIN_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[H";
+// Xterm alternate-scroll mode keeps wheel events inside the alternate-screen
+// viewport. Crossterm's mouse-capture command does not enable this DEC private
+// mode, so terminals can still scroll the host scrollback if mouse capture is
+// disabled, dropped during focus changes, or unavailable in the host.
+const ENABLE_ALT_SCROLL_MODE: &[u8] = b"\x1b[?1007h";
+const DISABLE_ALT_SCROLL_MODE: &[u8] = b"\x1b[?1007l";
 /// Begin synchronized update (DEC 2026): tell the terminal to defer
 /// rendering until END_SYNC_UPDATE is received. Best-effort —
 /// terminals that don't support this silently ignore the sequence.
@@ -808,6 +859,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 
     cleanup_guard.defused = true;
     pop_keyboard_enhancement_flags(terminal.backend_mut());
+    disable_alternate_scroll_mode(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
     disable_raw_mode()?;
     if use_alt_screen {
@@ -998,6 +1050,7 @@ impl Drop for TerminalCleanupGuard {
 
         let mut stdout = io::stdout();
         pop_keyboard_enhancement_flags(&mut stdout);
+        disable_alternate_scroll_mode(&mut stdout);
         let _ = execute!(stdout, DisableFocusChange);
         let _ = disable_raw_mode();
         if self.use_alt_screen {
@@ -1059,6 +1112,8 @@ fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
 }
 
 fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
+    let provider = app.api_provider;
+    let max_subagents = app.max_subagents.clamp(1, crate::config::MAX_SUBAGENTS);
     EngineConfig {
         model: app.model.clone(),
         workspace: app.workspace.clone(),
@@ -1086,8 +1141,12 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         // model stops emitting tool calls. A real runaway is rare and
         // human-noticeable; we trust the operator over a hard step cap.
         max_steps: u32::MAX,
-        max_subagents: app.max_subagents,
-        launch_concurrency: config.launch_concurrency(),
+        max_subagents,
+        max_admitted_subagents: config
+            .max_admitted_subagents_for_provider(provider)
+            .max(max_subagents),
+        launch_concurrency: config.launch_concurrency_for_provider(provider),
+        subagents_enabled: config.subagents_enabled_for_provider(provider),
         features: config.features(),
         compaction: app.compaction_config(),
         todos: app.todos.clone(),
@@ -1097,7 +1156,8 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             app.hunt.token_budget,
             app.hunt.verdict.goal_status(),
         ),
-        max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        max_spawn_depth: config.subagent_max_spawn_depth_for_provider(provider),
+        subagent_token_budget: config.subagent_token_budget_for_provider(provider),
         allowed_tools: app.active_allowed_tools.clone(),
         disallowed_tools: None,
         hook_executor: app.runtime_services.hook_executor.clone(),
@@ -1115,9 +1175,13 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .map(crate::config::LspConfigToml::into_runtime),
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
-        subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
+        subagent_api_timeout: Duration::from_secs(
+            config.subagent_api_timeout_secs_for_provider(provider),
+        ),
         stream_chunk_timeout: Duration::from_secs(app.stream_chunk_timeout_secs),
-        subagent_heartbeat_timeout: Duration::from_secs(config.subagent_heartbeat_timeout_secs()),
+        subagent_heartbeat_timeout: Duration::from_secs(
+            config.subagent_heartbeat_timeout_secs_for_provider(provider),
+        ),
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
@@ -1221,6 +1285,8 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
                 kind: TaskPanelEntryKind::Background,
                 stale: job.stale,
                 elapsed_since_output_ms: job.elapsed_since_output_ms,
+                owner_agent_id: job.owner_agent_id,
+                owner_agent_name: job.owner_agent_name,
             });
         }
     }
@@ -1334,6 +1400,8 @@ fn active_reasoning_task_entries(app: &App) -> Vec<TaskPanelEntry> {
                 kind: TaskPanelEntryKind::ModelReasoning,
                 stale: false,
                 elapsed_since_output_ms: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
             }),
             _ => None,
         })
@@ -1375,6 +1443,8 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
                 kind: TaskPanelEntryKind::Background,
                 stale: false,
                 elapsed_since_output_ms: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
             })
         })
         .collect()
@@ -3588,20 +3658,14 @@ async fn run_event_loop(
                 continue;
             }
 
+            if key.code == KeyCode::Char('x')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && prefill_jobs_cancel_all_if_tasks_sidebar(app)
+            {
+                continue;
+            }
+
             if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                if app.view_stack.is_empty()
-                    && app.sidebar_focus == SidebarFocus::Tasks
-                    && app
-                        .task_panel
-                        .iter()
-                        .any(|task| task.id.starts_with("shell_") && task.status == "running")
-                {
-                    app.input = "/jobs cancel-all".to_string();
-                    app.cursor_position = app.input.len();
-                    app.status_message =
-                        Some("Press Enter to cancel all running commands".to_string());
-                    continue;
-                }
                 // When the composer is the active input target (no modal/pager
                 // intercepting keys), Ctrl+K performs an emacs-style kill to
                 // end-of-line. If the kill is a no-op (cursor at end of empty
@@ -3926,8 +3990,8 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Work);
-                    app.status_message = Some("Sidebar focus: work".to_string());
+                    app.set_sidebar_focus(SidebarFocus::Pinned);
+                    app.status_message = Some("Sidebar focus: pinned".to_string());
                     continue;
                 }
                 KeyCode::Char('2')
@@ -3963,8 +4027,8 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Work);
-                    app.status_message = Some("Sidebar focus: work".to_string());
+                    app.set_sidebar_focus(SidebarFocus::Pinned);
+                    app.status_message = Some("Sidebar focus: pinned".to_string());
                     continue;
                 }
                 KeyCode::Char('@')
@@ -4413,7 +4477,9 @@ async fn run_event_loop(
                     }
                 }
                 // Input handling
-                _ if is_composer_newline_key(key) => {
+                _ if is_composer_newline_key(key)
+                    && !(app.is_loading && is_forced_submit_key(key)) =>
+                {
                     app.insert_char('\n');
                 }
                 KeyCode::Enter
@@ -4426,7 +4492,12 @@ async fn run_event_loop(
                     continue;
                 }
                 // #382: Ctrl+Enter forces a steer into the current turn.
-                KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Some terminals report Ctrl/Cmd+Enter as Ctrl+J; while a
+                // turn is running, accept that encoding here instead of
+                // inserting a newline.
+                _ if is_forced_submit_key(key)
+                    && (matches!(key.code, KeyCode::Enter) || app.is_loading) =>
+                {
                     if let Some(input) = app.submit_input() {
                         if handle_bang_shell_input(app, &engine_handle, &input).await? {
                             continue;
@@ -4773,13 +4844,6 @@ async fn run_event_loop(
                         } else {
                             app.push_status_toast("Cut failed", StatusToastLevel::Error, None);
                         }
-                    } else {
-                        let new_mode = match app.mode {
-                            AppMode::Plan => AppMode::Agent,
-                            AppMode::Agent => AppMode::Yolo,
-                            AppMode::Yolo => AppMode::Plan,
-                        };
-                        apply_mode_update(app, &engine_handle, new_mode).await;
                     }
                 }
                 _ if key_shortcuts::is_paste_shortcut(&key) => {
@@ -4933,8 +4997,8 @@ fn persist_sidebar_settings_if_dirty(app: &mut App) {
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.sidebar_focus == SidebarFocus::Hidden {
-            app.set_sidebar_focus(SidebarFocus::Auto);
-            app.status_message = Some("Sidebar focus: auto".to_string());
+            app.set_sidebar_focus(SidebarFocus::Pinned);
+            app.status_message = Some("Sidebar focus: pinned".to_string());
         } else {
             app.set_sidebar_focus(SidebarFocus::Hidden);
             app.status_message = Some("Sidebar hidden".to_string());
@@ -6199,6 +6263,7 @@ async fn dispatch_user_message(
             dynamic_tools: Vec::new(),
             hook_executor: app.runtime_services.hook_executor.clone(),
             verbosity: app.verbosity.clone(),
+            provenance: crate::core::ops::UserInputProvenance::ExternalUser,
         })
         .await
     {
@@ -6670,6 +6735,9 @@ async fn switch_provider(
     let new_endpoint = display_base_url_host(&new_base_url);
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
+    app.max_subagents = config
+        .max_subagents_for_provider(target)
+        .clamp(1, crate::config::MAX_SUBAGENTS);
     app.provider_chain = target
         .kind()
         .map(|kind| codewhale_config::ProviderChain::new(kind, &config.fallback_providers))
@@ -7125,6 +7193,25 @@ async fn apply_command_result(
             AppAction::UpdateStreamChunkTimeout(timeout_secs) => {
                 let _ = engine_handle
                     .send(Op::SetStreamChunkTimeout { timeout_secs })
+                    .await;
+            }
+            AppAction::UpdateSubagentRuntimeConfig {
+                enabled,
+                max_subagents,
+                launch_concurrency,
+                max_spawn_depth,
+                api_timeout_secs,
+                heartbeat_timeout_secs,
+            } => {
+                let _ = engine_handle
+                    .send(Op::SetSubagentRuntimeConfig {
+                        enabled,
+                        max_subagents,
+                        launch_concurrency,
+                        max_spawn_depth,
+                        api_timeout_secs,
+                        heartbeat_timeout_secs,
+                    })
                     .await;
             }
             AppAction::OpenConfigEditor(mode) => match mode {
@@ -8276,6 +8363,7 @@ fn render(f: &mut Frame, app: &mut App) {
         // Auto-reveal: in Auto focus mode, collapse the sidebar to a
         // full-width transcript when nothing is active; bring it back the
         // moment there is a To-do, a live fleet, or background jobs.
+        app.last_sidebar_host_width = Some(chat_area.width);
         let sidebar_auto_collapsed = crate::tui::sidebar::sidebar_auto_idle(app);
         if !sidebar_auto_collapsed
             && let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width)
@@ -8664,10 +8752,12 @@ async fn handle_view_events(
                 timed_out,
                 approval_key,
                 approval_grouping_key,
+                persistent_ask_rules,
             } => {
                 apply_approval_decision(
                     app,
                     engine_handle,
+                    config,
                     ApprovalDecisionEvent {
                         tool_id,
                         tool_name,
@@ -8675,6 +8765,7 @@ async fn handle_view_events(
                         timed_out,
                         approval_key,
                         approval_grouping_key,
+                        persistent_ask_rules,
                     },
                 )
                 .await;
@@ -8832,6 +8923,25 @@ async fn handle_view_events(
                         AppAction::UpdateStreamChunkTimeout(timeout_secs) => {
                             let _ = engine_handle
                                 .send(Op::SetStreamChunkTimeout { timeout_secs })
+                                .await;
+                        }
+                        AppAction::UpdateSubagentRuntimeConfig {
+                            enabled,
+                            max_subagents,
+                            launch_concurrency,
+                            max_spawn_depth,
+                            api_timeout_secs,
+                            heartbeat_timeout_secs,
+                        } => {
+                            let _ = engine_handle
+                                .send(Op::SetSubagentRuntimeConfig {
+                                    enabled,
+                                    max_subagents,
+                                    launch_concurrency,
+                                    max_spawn_depth,
+                                    api_timeout_secs,
+                                    heartbeat_timeout_secs,
+                                })
                                 .await;
                         }
                         AppAction::OpenConfigView => {}
@@ -9014,11 +9124,13 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
+    persistent_ask_rules: Vec<codewhale_config::ToolAskRule>,
 }
 
 async fn apply_approval_decision(
     app: &mut App,
     engine_handle: &mut EngineHandle,
+    config: &mut Config,
     event: ApprovalDecisionEvent,
 ) {
     if event.decision == ReviewDecision::ApprovedForSession {
@@ -9029,6 +9141,15 @@ async fn apply_approval_decision(
             .insert(event.tool_name.clone());
         app.approval_session_approved
             .insert(event.approval_grouping_key.clone());
+    }
+
+    if matches!(
+        event.decision,
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+    ) && !event.persistent_ask_rules.is_empty()
+        && !event.timed_out
+    {
+        persist_ask_rules_from_approval(app, config, &event.persistent_ask_rules);
     }
 
     match event.decision {
@@ -9049,6 +9170,35 @@ async fn apply_approval_decision(
             engine_handle.cancel();
             mark_active_turn_cancelled_locally(app);
             app.status_message = Some("Request cancelled".to_string());
+        }
+    }
+}
+
+fn persist_ask_rules_from_approval(
+    app: &mut App,
+    config: &mut Config,
+    rules: &[codewhale_config::ToolAskRule],
+) {
+    match codewhale_config::ConfigStore::load(app.config_path.clone()).and_then(|mut store| {
+        let added = store.append_ask_rules(rules)?;
+        let permissions_path = store.permissions_path();
+        config.exec_policy_engine = store.exec_policy_engine();
+        Ok((added, permissions_path))
+    }) {
+        Ok((added, path)) if added > 0 => {
+            app.status_message = Some(format!(
+                "Saved {added} ask permission rule(s) to {}",
+                path.display()
+            ));
+        }
+        Ok((_added, path)) => {
+            app.status_message = Some(format!(
+                "Ask permission rule already saved in {}",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            app.status_message = Some(format!("Failed to save ask permission rule: {err:#}"));
         }
     }
 }
@@ -9540,6 +9690,7 @@ fn pause_terminal(
     // mode. Best-effort — terminals that didn't accept the flags
     // silently ignore the pop. Matches the shutdown and panic paths.
     pop_keyboard_enhancement_flags(terminal.backend_mut());
+    disable_alternate_scroll_mode(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
     disable_raw_mode()?;
     if use_alt_screen {
@@ -9678,6 +9829,29 @@ pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     let _ = execute!(writer, PopKeyboardEnhancementFlags);
 }
 
+fn set_alternate_scroll_mode<W: Write>(writer: &mut W, enabled: bool) {
+    let sequence = if enabled {
+        ENABLE_ALT_SCROLL_MODE
+    } else {
+        DISABLE_ALT_SCROLL_MODE
+    };
+    if let Err(err) = writer.write_all(sequence).and_then(|()| writer.flush()) {
+        tracing::debug!(
+            ?err,
+            enabled,
+            "alternate-scroll terminal mode change ignored"
+        );
+    }
+}
+
+fn enable_alternate_scroll_mode<W: Write>(writer: &mut W) {
+    set_alternate_scroll_mode(writer, true);
+}
+
+fn disable_alternate_scroll_mode<W: Write>(writer: &mut W) {
+    set_alternate_scroll_mode(writer, false);
+}
+
 /// Best-effort terminal restoration for emergency exit paths
 /// (panic hook, signal handlers). Mirrors the normal teardown in
 /// `run_event_loop` but tolerates any subset of modes not actually being
@@ -9688,6 +9862,7 @@ pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
 pub fn emergency_restore_terminal() {
     let mut stdout = std::io::stdout();
     pop_keyboard_enhancement_flags(&mut stdout);
+    disable_alternate_scroll_mode(&mut stdout);
     let _ = execute!(stdout, DisableFocusChange);
     let _ = execute!(stdout, DisableBracketedPaste);
     let _ = execute!(stdout, DisableMouseCapture);
@@ -9748,6 +9923,7 @@ fn recover_terminal_modes<W: Write>(
 
     pop_keyboard_enhancement_flags(writer);
     push_keyboard_enhancement_flags(writer);
+    enable_alternate_scroll_mode(writer);
     if use_mouse_capture && let Err(err) = execute!(writer, EnableMouseCapture) {
         tracing::debug!(?err, "EnableMouseCapture ignored");
     }
@@ -9870,6 +10046,23 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
             app.status_message = Some("Shell manager lock is poisoned".to_string());
         }
     }
+}
+
+pub(crate) fn prefill_jobs_cancel_all_if_tasks_sidebar(app: &mut App) -> bool {
+    if !app.view_stack.is_empty()
+        || app.sidebar_focus != SidebarFocus::Tasks
+        || !app
+            .task_panel
+            .iter()
+            .any(|task| task.id.starts_with("shell_") && task.status == "running")
+    {
+        return false;
+    }
+
+    app.input = "/jobs cancel-all".to_string();
+    app.cursor_position = app.input.len();
+    app.status_message = Some("Press Enter to cancel all running commands".to_string());
+    true
 }
 
 pub(crate) fn active_foreground_shell_running(app: &App) -> bool {

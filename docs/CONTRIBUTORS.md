@@ -28,6 +28,92 @@ notes, and relevant issue/PR comments.
 ## Contributors by time
 
 <details>
+<summary><strong>v0.8.63 — sub-agent budgets, command extraction &amp; reliability</strong></summary>
+
+
+The v0.8.63 release hardened sub-agent fanout with token-budget governance and
+queue-and-drain admission, split the TUI command surface into focused modules,
+and landed reliability fixes for app-server teardown, JavaScript-execution
+proxying, and DeepSeek thinking tool calls — alongside community contributions.
+
+- **[donglovejava](https://github.com/donglovejava)** — per-worker sub-agent
+  token-budget enforcement, so a `token_budget`/`max_tokens` on an individual
+  `agent` call bounds that worker mid-run with a clean `budget_exhausted` stop
+  (#3321, harvested)
+- **[cyq1017](https://github.com/cyq1017)** — `js_execution` proxy-environment
+  handling (#3331), Hugging Face API-key env in the auth probe (#3329), and Codex
+  Responses request retry (#3344) — harvested into the train
+- **[aboimpinto](https://github.com/aboimpinto)** — FEAT-005 command extraction:
+  core/session command groups split into focused modules via `RegisterCommand`,
+  `/swarm` migration, and Gherkin acceptance coverage (#3330, merged literally
+  with authorship preserved)
+- **[wuisabel-gif](https://github.com/wuisabel-gif)** — tear down the delegated
+  serve/app-server child process when the dispatcher exits (#3259 / #3317)
+- **[nightt5879](https://github.com/nightt5879)** — keep the onboarding marker in
+  the codewhale home view (#3302) and branch-hygiene check hardening (#3348)
+- **[gaord](https://github.com/gaord)** — preserve thinking/tool blocks when
+  seeding a thread from a saved session, plus Hugging Face provider env (#3329)
+- **[greyfreedom](https://github.com/greyfreedom)** — persist ask-permission rules
+  from approvals and stabilize the CI verifier/provider-registry checks
+- Reports that shaped fixes: **[lordwedggie](https://github.com/lordwedggie)**
+  (#3331 proxy env), **[Final527](https://github.com/Final527)** (#3240 legacy
+  state migration), **[dxfq](https://github.com/dxfq)** (#3228 sidebar default)
+
+</details>
+
+<details>
+<summary><strong>v0.8.62 — provider/model routing, TOML comment preservation &amp; community closeout</strong></summary>
+
+
+The v0.8.62 release retuned provider/model routing (GLM-5.2 as the default direct
+Z.AI model, `type: "explore"` sub-agents defaulting to the cheaper same-family
+sibling), added TOML comment preservation and the CodeWhale-only skill discovery
+gate, and shipped the static Linux x64 musl binary — alongside a broad community
+closeout and a retroactive credit reconciliation pass.
+
+- **[zlh124](https://github.com/zlh124)** — preserve user comments and formatting
+  when rewriting `config.toml`/`settings.toml`/`tui.toml` (with a malformed-file
+  fallback) and Linux build deps in the cargo install guides (#3270)
+- **[idling11](https://github.com/idling11)** — Kimi `type:object` schema root for
+  all parameter shapes (#3281), `approval_mode` restore on Plan→Agent with a
+  wait-for-user guard (#3279), and workroom metadata draft types
+- **[LeoLin990405](https://github.com/LeoLin990405)** — Poppler `pdftotext -v`
+  detection (#1667), session persistence before stall/cancel recovery (#2739),
+  and debounced thinking-stream re-renders (#1620)
+- **[nightt5879](https://github.com/nightt5879)** — CodeWhale-only skill discovery
+  gate (`[skills].scan_codewhale_only`) ignoring cross-tool directories (#3296) and
+  app-server no-auth loopback docs
+- **[reidliu41](https://github.com/reidliu41)** — slash commands exposed as hotbar
+  actions (#3269)
+- **[wavezhang](https://github.com/wavezhang)** — static Linux x64 (musl) release
+  binaries
+- **[wuisabel-gif](https://github.com/wuisabel-gif)** — per-tool snapshot gate
+  respecting `[snapshots].enabled` (#3292) and composer history written under
+  `.codewhale`
+- **[gaord](https://github.com/gaord)** — `workspace_follow_symlinks` setting for
+  symlink-aware tool operations with hardened path handling
+- **[greyfreedom](https://github.com/greyfreedom)** — ask-permission rules honored
+  at runtime (#3295)
+- **[aboimpinto](https://github.com/aboimpinto)** — EPIC-001 command-boundary
+  replay and user-registry review feedback
+- **[h3c-hexin](https://github.com/h3c-hexin)** — volatile workspace path moved
+  out of the static system prefix (prefix-cache hygiene)
+- **[hongchen1993](https://github.com/hongchen1993)** — heuristic-only auto routing
+  when the flash router is unavailable
+- **[lucaszhu-hue](https://github.com/lucaszhu-hue)** — Atlas Cloud provider setup
+  docs
+- Retroactive reconciliation (shipped earlier, credited now):
+  **[manaskarra](https://github.com/manaskarra)** / **[xfy6238](https://github.com/xfy6238)** (#1157),
+  **[djairjr](https://github.com/djairjr)** (#1309 alongside reidliu41),
+  **[Geallier](https://github.com/Geallier)** (#1470),
+  **[quentin-lian](https://github.com/quentin-lian)** / **[k0tran](https://github.com/k0tran)** (#1531 / #1992),
+  **[F1LT3R](https://github.com/F1LT3R)** (#1656),
+  **[cmyyy](https://github.com/cmyyy)** (#1842),
+  **[Final527](https://github.com/Final527)** (#3058)
+
+</details>
+
+<details>
 <summary><strong>v0.8.61 — runtime control plane &amp; community closeout</strong></summary>
 
 

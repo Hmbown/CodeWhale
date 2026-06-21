@@ -9,7 +9,6 @@ use serde_json::Value;
 
 const IDENTICAL_CALL_BLOCK_THRESHOLD: u32 = 3;
 const IDENTICAL_READ_ONLY_CALL_BLOCK_THRESHOLD: u32 = 2;
-const DELEGATED_TOOL_LOOP_BLOCK_THRESHOLD: u32 = 4;
 const BROAD_READ_ONLY_TOOL_LOOP_BLOCK_THRESHOLD: u32 = 6;
 const FAILURE_WARN_THRESHOLD: u32 = 3;
 const FAILURE_HALT_THRESHOLD: u32 = 8;
@@ -118,10 +117,6 @@ fn is_delegated_tool(tool: &str) -> bool {
 }
 
 fn no_progress_attempt_threshold(tool: &str, _read_only: bool) -> Option<u32> {
-    if is_delegated_tool(tool) {
-        return Some(DELEGATED_TOOL_LOOP_BLOCK_THRESHOLD);
-    }
-
     let tool_name = tool.to_ascii_lowercase();
     let search_like = matches!(
         tool,
@@ -292,23 +287,33 @@ mod tests {
     }
 
     #[test]
-    fn repeated_agent_delegation_is_capped_separately() {
+    fn distinct_agent_delegation_is_not_turn_capped() {
         let mut guard = LoopGuard::default();
 
-        for idx in 0..(DELEGATED_TOOL_LOOP_BLOCK_THRESHOLD - 1) {
+        for idx in 0..12 {
             assert_eq!(
                 guard.record_attempt("agent", &json!({"prompt": format!("task {idx}")}), false),
                 AttemptDecision::Proceed
             );
         }
+    }
 
-        let AttemptDecision::Block { kind, message } =
-            guard.record_attempt("agent", &json!({"prompt": "task final"}), false)
+    #[test]
+    fn identical_agent_delegation_is_still_blocked() {
+        let mut guard = LoopGuard::default();
+        let args = json!({"prompt": "repeat the same work"});
+
+        assert_eq!(
+            guard.record_attempt("agent", &args, false),
+            AttemptDecision::Proceed
+        );
+
+        let AttemptDecision::Block { kind, message } = guard.record_attempt("agent", &args, false)
         else {
-            panic!("repeated delegation should force synthesis");
+            panic!("identical delegation should still be blocked");
         };
-        assert_eq!(kind, AttemptBlockKind::NoProgressToolLoop);
-        assert!(message.contains("without new user input"));
+        assert_eq!(kind, AttemptBlockKind::IdenticalToolCall);
+        assert!(message.contains("already ran this turn"));
     }
 
     #[test]

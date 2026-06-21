@@ -364,12 +364,15 @@ Reach for them when the work is genuinely independent:
   yourself, then decide whether to open a sub-agent based on what A found.
   Do not pre-open dependent work.
 - **Concurrency, honestly**: Up to 20 sub-agents run at once by default
-  (`[subagents].max_concurrent`, default 20 / ceiling 20). Open one `agent`
-  call per genuinely independent target in the same turn — the dispatcher
-  runs them in parallel — then coordinate as completion events report back.
-  Need more than the cap? Wait for some to finish, or ask the user. To fan
-  out more gently you can lower `[subagents].launch_concurrency` (how many
-  start at once); the default is the full cap.
+  (`[subagents].max_concurrent`, default 20 / ceiling 20), and additional
+  accepted workers queue up to the configured admission cap while launch
+  slots drain. Open one `agent` call per genuinely independent target in the
+  same turn — the dispatcher runs them in parallel or queues them — then
+  coordinate as completion events report back. Let runtime capacity errors,
+  provider rate-limit pauses, and user-visible cost/risk decide whether to
+  launch more; do not invent a smaller per-turn limit. To fan out more gently
+  you can lower `[subagents].launch_concurrency` (how many start at once);
+  the default is the full running cap.
 
 ## Thinking Delegation
 

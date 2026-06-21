@@ -259,9 +259,11 @@ pub struct SlopLedger {
 }
 
 impl SlopLedger {
-    /// Resolve the default ledger path.
+    /// Resolve the default ledger path under the primary `~/.codewhale` root
+    /// (with one-time legacy migration) so loads and saves never perpetuate
+    /// `~/.deepseek` (#3240).
     pub fn default_path() -> io::Result<PathBuf> {
-        codewhale_config::resolve_state_dir("slop_ledger")
+        codewhale_config::ensure_state_dir("slop_ledger")
             .map(|p| p.join("slop_ledger.json"))
             .map_err(io::Error::other)
     }
@@ -294,6 +296,9 @@ impl SlopLedger {
 
     /// Persist the ledger to disk.
     pub fn save(&self) -> io::Result<()> {
+        // `ledger_path` is resolved by `default_path()` against the primary
+        // ~/.codewhale root (with one-time legacy migration), so persisting
+        // here never perpetuates ~/.deepseek (#3240).
         if let Some(parent) = self.ledger_path.parent() {
             fs::create_dir_all(parent)?;
         }

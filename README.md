@@ -31,7 +31,7 @@ there's a model, endpoint, or feature you don't see that you want, open an issue
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.62
+codewhale --version   # 0.8.63
 ```
 
 The npm wrapper (Node 18+) downloads SHA-256-verified binaries from GitHub
@@ -60,8 +60,8 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # or the NSIS installer from GitHub Releases
 
 # CNB mirror for users who cannot reliably reach GitHub
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-tui --locked --force
 
 # Legacy Homebrew compatibility while the formula is renamed
 brew tap Hmbown/deepseek-tui
@@ -137,6 +137,13 @@ Switch mid-session with `/provider` and `/model`. The full registry —
 credentials, base URLs, capability boundaries — lives in
 [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
+Sub-agent fanout is config-first. Set global `[subagents]` defaults, then add
+`[subagents.providers.deepseek]`, `[subagents.providers.glm]`,
+`[subagents.providers.openrouter]`, or other provider profiles to match the API
+you are actually using. Direct DeepSeek can stay wide; subscription or
+rate-limited routes can stay at 3-5 concurrent agents without changing prompts
+or code. See [docs/SUBAGENTS.md](docs/SUBAGENTS.md#concurrency-cap).
+
 Atlas Cloud is included as an OpenAI-compatible hosted route for users who want
 its curated catalog behind one key: set `DEEPSEEK_PROVIDER=atlascloud`,
 `ATLASCLOUD_API_KEY`, and optionally `ATLASCLOUD_MODEL`, for example
@@ -180,8 +187,8 @@ structure intact.
   goal is done, it's blocked, or you stop it. No turn cap. `/task` tracks
   background tasks; the Work sidebar shows live plan and checklist state.
 - **Sub-agents.** Independent investigations and implementation slices run in
-  parallel — up to 20 at once — each with its own clean context and
-  provider-aware model tier (big vs. cheap).
+  parallel with provider-specific fanout caps, clean context, and
+  provider-aware model tiers (big vs. cheap).
 - **25 providers.** DeepSeek, GLM, Claude, GPT, Kimi, MiniMax, OpenRouter, and
   local vLLM/SGLang/Ollama, all behind the same harness and tools. Switch
   mid-session with `/provider` and `/model`.

@@ -250,8 +250,8 @@ impl HotbarAction for AppHotbarAction {
             }
             AppHotbarKind::SidebarToggle => {
                 if app.sidebar_focus == SidebarFocus::Hidden {
-                    app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
+                    app.set_sidebar_focus(SidebarFocus::Pinned);
+                    app.status_message = Some("Sidebar focus: pinned".to_string());
                 } else {
                     app.set_sidebar_focus(SidebarFocus::Hidden);
                     app.status_message = Some("Sidebar hidden".to_string());
@@ -610,6 +610,7 @@ mod tests {
         let registry = HotbarActionRegistry::with_builtins();
         let sidebar = registry.get("sidebar.toggle").expect("sidebar action");
         let mut app = test_app();
+        app.sidebar_focus = SidebarFocus::Pinned;
 
         assert!(sidebar.is_active(&app));
         assert_eq!(
@@ -620,7 +621,7 @@ mod tests {
         assert!(!sidebar.is_active(&app));
 
         sidebar.dispatch(&mut app).expect("dispatch sidebar show");
-        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
         assert!(sidebar.is_active(&app));
     }
 

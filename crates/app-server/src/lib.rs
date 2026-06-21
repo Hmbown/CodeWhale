@@ -392,6 +392,7 @@ fn resolve_auth_token(options: &AppServerOptions) -> Result<Option<String>> {
     {
         bail!("app-server auth token cannot be empty");
     }
+    let has_explicit_token = configured.is_some();
 
     if options.insecure_no_auth {
         if !options.listen.ip().is_loopback() {
@@ -401,10 +402,16 @@ fn resolve_auth_token(options: &AppServerOptions) -> Result<Option<String>> {
         return Ok(None);
     }
 
+    if !has_explicit_token && !options.listen.ip().is_loopback() {
+        bail!(
+            "refusing non-loopback app-server bind without explicit auth token; pass --auth-token or set CODEWHALE_APP_SERVER_TOKEN"
+        );
+    }
+
     let token = configured
         .map(str::to_string)
         .unwrap_or_else(|| format!("cwapp_{}", Uuid::new_v4().simple()));
-    if options.auth_token.is_some() {
+    if has_explicit_token {
         eprintln!("app-server auth: bearer token required for HTTP routes.");
     } else {
         eprintln!("app-server auth: generated bearer token for this process.");
@@ -1189,15 +1196,13 @@ mod tests {
             listen: "0.0.0.0:8787".parse().expect("socket addr"),
             config_path: None,
             auth_token: None,
-            insecure_no_auth: true,
+            insecure_no_auth: false,
             cors_origins: Vec::new(),
         };
 
-        let err = resolve_auth_token(&options).expect_err("non-loopback unauth should fail");
-        assert!(
-            err.to_string()
-                .contains("refusing unauthenticated app-server bind")
-        );
+        let err =
+            resolve_auth_token(&options).expect_err("non-loopback generated auth should fail");
+        assert!(err.to_string().contains("without explicit auth token"));
     }
 
     #[tokio::test]
@@ -1414,6 +1419,19 @@ mod tests {
     }
 
     #[test]
+    fn auth_token_explicit_allows_non_loopback_bind() {
+        let options = AppServerOptions {
+            listen: "0.0.0.0:8787".parse().expect("socket addr"),
+            config_path: None,
+            auth_token: Some("my-secret".to_string()),
+            insecure_no_auth: false,
+            cors_origins: Vec::new(),
+        };
+        let token = resolve_auth_token(&options).unwrap();
+        assert_eq!(token.as_deref(), Some("my-secret"));
+    }
+
+    #[test]
     fn insecure_no_auth_on_loopback_returns_none() {
         let options = AppServerOptions {
             listen: "127.0.0.1:0".parse().expect("addr"),
@@ -1424,6 +1442,23 @@ mod tests {
         };
         let token = resolve_auth_token(&options).unwrap();
         assert!(token.is_none());
+    }
+
+    #[test]
+    fn insecure_no_auth_on_non_loopback_fails_fast() {
+        let options = AppServerOptions {
+            listen: "0.0.0.0:8787".parse().expect("socket addr"),
+            config_path: None,
+            auth_token: None,
+            insecure_no_auth: true,
+            cors_origins: Vec::new(),
+        };
+
+        let err = resolve_auth_token(&options).expect_err("non-loopback unauth should fail");
+        assert!(
+            err.to_string()
+                .contains("refusing unauthenticated app-server bind")
+        );
     }
 
     // ── cors_layer ─────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ const RELEASE_CONTRIBUTORS = [
   "@dzyuan",
   "@mvanhorn",
   "@malsony",
+  "@manaskarra",
   "@gaord",
   "@yuanchenglu",
   "@idling11",
@@ -55,6 +56,7 @@ const RELEASE_CONTRIBUTORS = [
   "@mo-vic",
   "@hufanexplore",
   "@hoclaptrinh33",
+  "@quentin-lian",
   "@BryonGo",
 ];
 
@@ -69,7 +71,15 @@ const RELEASE_HELPERS = [
   "@jretz",
   "@Neo-millunnium",
   "@caeserchen",
+  "@cmyyy",
+  "@djairjr",
+  "@F1LT3R",
+  "@Final527",
+  "@Geallier",
+  "@k0tran",
+  "@lordwedggie",
   "@T-Phuong-Nguyen",
+  "@xfy6238",
   "@zhyuzhyu",
   "@0gl20shk0sbt36",
   "@hatakes",
@@ -132,7 +142,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   }
 
   const highlights = isZh && dispatch.highlightsZh ? dispatch.highlightsZh : dispatch.highlights;
-  const releaseVersion = facts.version ?? "0.8.62";
 
   return (
     <>

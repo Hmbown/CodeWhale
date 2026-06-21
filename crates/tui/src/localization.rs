@@ -302,6 +302,7 @@ pub enum MessageId {
     CmdFeedbackDescription,
     CmdHfDescription,
     CmdHelpDescription,
+    CmdProfileDescription,
     CmdHomeDescription,
     CmdHooksDescription,
     CmdAgentDescription,
@@ -425,6 +426,7 @@ pub enum MessageId {
     KbShellControls,
     KbExitEmpty,
     KbCommandPalette,
+    KbCancelBackgroundShellJobs,
     KbFuzzyFilePicker,
     KbCompactInspector,
     KbLastMessagePager,
@@ -437,7 +439,6 @@ pub enum MessageId {
     KbJumpPlanAgentYolo,
     KbAltJumpPlanAgentYolo,
     KbFocusSidebar,
-    KbTogglePlanAgent,
     KbSessionPicker,
     KbPasteAttach,
     KbCopySelection,
@@ -742,6 +743,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdFeedbackDescription,
     MessageId::CmdHfDescription,
     MessageId::CmdHelpDescription,
+    MessageId::CmdProfileDescription,
     MessageId::CmdHomeDescription,
     MessageId::CmdHooksDescription,
     MessageId::CmdAgentDescription,
@@ -867,6 +869,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbShellControls,
     MessageId::KbExitEmpty,
     MessageId::KbCommandPalette,
+    MessageId::KbCancelBackgroundShellJobs,
     MessageId::KbFuzzyFilePicker,
     MessageId::KbCompactInspector,
     MessageId::KbLastMessagePager,
@@ -879,7 +882,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbJumpPlanAgentYolo,
     MessageId::KbAltJumpPlanAgentYolo,
     MessageId::KbFocusSidebar,
-    MessageId::KbTogglePlanAgent,
     MessageId::KbSessionPicker,
     MessageId::KbPasteAttach,
     MessageId::KbCopySelection,
@@ -1380,6 +1382,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdFeedbackDescription => "Generate a GitHub feedback URL",
         MessageId::CmdHfDescription => "Inspect Hugging Face MCP setup and concepts",
         MessageId::CmdHelpDescription => "Show help information",
+        MessageId::CmdProfileDescription => "Switch to a named config profile",
         MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
         MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
         MessageId::CmdAgentDescription => {
@@ -1569,6 +1572,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbShellControls => "Background the running foreground shell command",
         MessageId::KbExitEmpty => "Exit when input is empty",
         MessageId::KbCommandPalette => "Open the command palette",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "Cancel all running background shell jobs (Tasks sidebar)"
+        }
         MessageId::KbFuzzyFilePicker => "Open the fuzzy file picker (insert @path on Enter)",
         MessageId::KbCompactInspector => "Open compact session context inspector",
         MessageId::KbLastMessagePager => "Open pager for the last message (when input is empty)",
@@ -1587,9 +1593,8 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbJumpPlanAgentYolo => "Trigger hotbar slots",
         MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to Plan / Agent / YOLO mode",
         MessageId::KbFocusSidebar => {
-            "Focus Work / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 hides it"
+            "Focus Pinned / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 toggles pinned sidebar"
         }
-        MessageId::KbTogglePlanAgent => "Toggle between Plan and Agent modes",
         MessageId::KbSessionPicker => "Open the session picker",
         MessageId::KbPasteAttach => "Paste text or attach a clipboard image",
         MessageId::KbCopySelection => "Copy the current selection (Cmd+C on macOS)",
@@ -1635,7 +1640,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeQuickHelp => "/help        - Show help",
         MessageId::HomeModeTips => "Mode Tips",
         MessageId::HomeAgentModeTip => "Agent mode - Use tools for autonomous tasks",
-        MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in Plan mode before executing",
+        MessageId::HomeAgentModeReviewTip => "  Type /mode plan to review before executing",
         MessageId::HomeAgentModeYoloTip => "  Type /mode yolo to enable full tool access",
         MessageId::HomeYoloModeTip => "YOLO mode - Full tool access, no approvals",
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
@@ -1987,6 +1992,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdFeedbackDescription => "Tạo một URL để gửi phản hồi trên GitHub",
         MessageId::CmdHfDescription => "Kiểm tra thiết lập và khái niệm Hugging Face MCP",
         MessageId::CmdHelpDescription => "Hiển thị thông tin trợ giúp",
+        MessageId::CmdProfileDescription => "Chuyển sang profile cấu hình đã đặt tên",
         MessageId::CmdHomeDescription => {
             "Hiển thị bảng điều khiển trang chủ với số liệu thống kê và hành động nhanh"
         }
@@ -2193,6 +2199,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::KbShellControls => "Chuyển lệnh shell đang chạy ở tiền cảnh xuống nền",
         MessageId::KbExitEmpty => "Thoát khi khung nhập trống",
         MessageId::KbCommandPalette => "Mở bảng lệnh (command palette)",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "Hủy mọi tác vụ shell nền đang chạy (thanh bên Tasks)"
+        }
         MessageId::KbFuzzyFilePicker => {
             "Mở trình tìm file nhanh (fuzzy) (chèn @path khi nhấn Enter)"
         }
@@ -2217,9 +2226,8 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Phím tắt thay thế để nhảy sang chế độ Plan / Agent / YOLO"
         }
         MessageId::KbFocusSidebar => {
-            "Focus vào thanh bên Work / Tasks / Agents / Context / Auto; Ctrl+Alt+0 để ẩn"
+            "Focus vào thanh bên Pinned / Tasks / Agents / Context / Auto; Ctrl+Alt+0 để ẩn"
         }
-        MessageId::KbTogglePlanAgent => "Chuyển đổi giữa chế độ Plan và Agent",
         MessageId::KbSessionPicker => "Mở bảng chọn phiên làm việc",
         MessageId::KbPasteAttach => "Dán văn bản hoặc đính kèm hình ảnh từ bộ nhớ tạm",
         MessageId::KbCopySelection => "Sao chép vùng chọn hiện tại (Cmd+C trên macOS)",
@@ -2265,9 +2273,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickHelp => "/help        - Hiển thị trợ giúp",
         MessageId::HomeModeTips => "Mẹo về Chế độ",
         MessageId::HomeAgentModeTip => "Chế độ Agent - Sử dụng công cụ cho các nhiệm vụ tự chủ",
-        MessageId::HomeAgentModeReviewTip => {
-            "  Sử dụng Ctrl+X để xem xét ở chế độ Plan trước khi thực thi"
-        }
+        MessageId::HomeAgentModeReviewTip => "  Nhập /mode plan để xem xét trước khi thực thi",
         MessageId::HomeAgentModeYoloTip => "  Nhập /mode yolo để bật toàn quyền truy cập công cụ",
         MessageId::HomeYoloModeTip => {
             "Chế độ YOLO - Toàn quyền truy cập công cụ, không cần phê duyệt"
@@ -2796,6 +2802,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdFeedbackDescription => "GitHub フィードバック URL を生成",
         MessageId::CmdHfDescription => "Hugging Face MCP の設定と概念を確認",
         MessageId::CmdHelpDescription => "ヘルプを表示",
+        MessageId::CmdProfileDescription => "名前付き設定プロファイルに切り替え",
         MessageId::CmdHomeDescription => "統計とクイックアクション付きのホームダッシュボードを表示",
         MessageId::CmdHooksDescription => {
             "設定済みのライフサイクルフックを一覧表示（読み取り専用）"
@@ -2986,6 +2993,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbShellControls => "実行中のフォアグラウンドコマンドをバックグラウンドへ移す",
         MessageId::KbExitEmpty => "入力が空の時に終了",
         MessageId::KbCommandPalette => "コマンドパレットを開く",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "実行中のバックグラウンド shell ジョブをすべてキャンセル（Tasks サイドバー）"
+        }
         MessageId::KbFuzzyFilePicker => "ファジーファイルピッカーを開く（Enter で @path を挿入）",
         MessageId::KbCompactInspector => "コンパクトなセッションコンテキスト検査ツールを開く",
         MessageId::KbLastMessagePager => "最後のメッセージのページャーを開く（入力が空の時）",
@@ -3004,9 +3014,8 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbJumpPlanAgentYolo => "ホットバースロットを起動",
         MessageId::KbAltJumpPlanAgentYolo => "Plan / Agent / YOLO モードへの代替ジャンプ",
         MessageId::KbFocusSidebar => {
-            "Work / Tasks / Agents / Context / Auto / Hidden サイドバーにフォーカス"
+            "Pinned / Tasks / Agents / Context / Auto / Hidden サイドバーにフォーカス"
         }
-        MessageId::KbTogglePlanAgent => "Plan モードと Agent モードを切り替え",
         MessageId::KbSessionPicker => "セッションピッカーを開く",
         MessageId::KbPasteAttach => "テキストを貼り付けまたはクリップボード画像を添付",
         MessageId::KbCopySelection => "現在の選択をコピー（macOS は Cmd+C）",
@@ -3054,7 +3063,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickHelp => "/help        - ヘルプを表示",
         MessageId::HomeModeTips => "モードヒント",
         MessageId::HomeAgentModeTip => "Agent モード - ツールを使って自律的なタスクを実行",
-        MessageId::HomeAgentModeReviewTip => "  実行前に Ctrl+X で Plan モードでレビュー",
+        MessageId::HomeAgentModeReviewTip => "  実行前のレビューには /mode plan を入力",
         MessageId::HomeAgentModeYoloTip => "  /mode yolo と入力して完全なツールアクセスを有効化",
         MessageId::HomeYoloModeTip => "YOLO モード - 完全なツールアクセス、承認なし",
         MessageId::HomeYoloModeCaution => "  破壊的な操作には注意してください！",
@@ -3382,6 +3391,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdFeedbackDescription => "生成 GitHub 反馈链接",
         MessageId::CmdHfDescription => "检查 Hugging Face MCP 设置和概念",
         MessageId::CmdHelpDescription => "显示帮助信息",
+        MessageId::CmdProfileDescription => "切换到命名配置配置文件",
         MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
         MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
         MessageId::CmdAgentDescription => "打开持久子代理会话：/agent [0-3] <task>",
@@ -3548,6 +3558,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbShellControls => "将正在运行的前台命令转入后台",
         MessageId::KbExitEmpty => "输入框为空时退出",
         MessageId::KbCommandPalette => "打开命令面板",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "取消所有正在运行的后台 shell 作业（Tasks 侧边栏）"
+        }
         MessageId::KbFuzzyFilePicker => "打开模糊文件选择器（按 Enter 插入 @path）",
         MessageId::KbCompactInspector => "打开紧凑会话上下文检查器",
         MessageId::KbLastMessagePager => "打开最后一条消息的分页器（输入框为空时）",
@@ -3561,8 +3574,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "触发快捷栏槽位",
         MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
-        MessageId::KbTogglePlanAgent => "在 Plan 和 Agent 模式之间切换",
+        MessageId::KbFocusSidebar => "聚焦 Pinned / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
         MessageId::KbSessionPicker => "打开会话选择器",
         MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
         MessageId::KbCopySelection => "复制当前选中内容（macOS 为 Cmd+C）",
@@ -3606,7 +3618,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickHelp => "/help        - 显示帮助",
         MessageId::HomeModeTips => "模式提示",
         MessageId::HomeAgentModeTip => "Agent 模式 - 使用工具执行自主任务",
-        MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在 Plan 模式下审查后再执行",
+        MessageId::HomeAgentModeReviewTip => "  输入 /mode plan 可在执行前审查",
         MessageId::HomeAgentModeYoloTip => "  输入 /mode yolo 启用完整工具访问",
         MessageId::HomeYoloModeTip => "YOLO 模式 - 完整工具访问，无需审批",
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
@@ -3918,6 +3930,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdFeedbackDescription => "Gerar uma URL de feedback no GitHub",
         MessageId::CmdHfDescription => "Inspecionar configuracao e conceitos do Hugging Face MCP",
         MessageId::CmdHelpDescription => "Exibir informações de ajuda",
+        MessageId::CmdProfileDescription => "Alternar para um perfil de configuracao nomeado",
         MessageId::CmdHomeDescription => "Exibir o painel inicial com estatísticas e ações rápidas",
         MessageId::CmdHooksDescription => {
             "Listar hooks de ciclo de vida configurados (somente leitura)"
@@ -4122,6 +4135,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbShellControls => "Enviar o comando em primeiro plano para segundo plano",
         MessageId::KbExitEmpty => "Sair quando entrada vazia",
         MessageId::KbCommandPalette => "Abrir paleta de comandos",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "Cancelar todos os trabalhos shell em segundo plano em execução (barra lateral Tasks)"
+        }
         MessageId::KbFuzzyFilePicker => {
             "Abrir seletor de arquivo fuzzy (insere @path ao pressionar Enter)"
         }
@@ -4144,9 +4160,8 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbJumpPlanAgentYolo => "Acionar slots da hotbar",
         MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo Plan / Agent / YOLO",
         MessageId::KbFocusSidebar => {
-            "Focar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
+            "Focar barra lateral Pinned / Tasks / Agents / Context / Auto / Ocultar"
         }
-        MessageId::KbTogglePlanAgent => "Alternar entre modos Plan e Agent",
         MessageId::KbSessionPicker => "Abrir seletor de sessões",
         MessageId::KbPasteAttach => "Colar texto ou anexar imagem da área de transferência",
         MessageId::KbCopySelection => "Copiar seleção atual (Cmd+C no macOS)",
@@ -4192,9 +4207,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickHelp => "/help        - Exibir ajuda",
         MessageId::HomeModeTips => "Dicas de Modo",
         MessageId::HomeAgentModeTip => "Modo Agent - Use ferramentas para tarefas autônomas",
-        MessageId::HomeAgentModeReviewTip => {
-            "  Use Ctrl+X para revisar no modo Plan antes de executar"
-        }
+        MessageId::HomeAgentModeReviewTip => "  Digite /mode plan para revisar antes de executar",
         MessageId::HomeAgentModeYoloTip => {
             "  Digite /mode yolo para habilitar acesso total às ferramentas"
         }
@@ -4540,6 +4553,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdFeedbackDescription => "Generar una URL de feedback en GitHub",
         MessageId::CmdHfDescription => "Inspeccionar configuracion y conceptos de Hugging Face MCP",
         MessageId::CmdHelpDescription => "Mostrar información de ayuda",
+        MessageId::CmdProfileDescription => "Cambiar a un perfil de configuración con nombre",
         MessageId::CmdHomeDescription => {
             "Mostrar el panel inicial con estadísticas y acciones rápidas"
         }
@@ -4754,6 +4768,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbShellControls => "Enviar el comando en primer plano a segundo plano",
         MessageId::KbExitEmpty => "Salir cuando la entrada está vacía",
         MessageId::KbCommandPalette => "Abrir paleta de comandos",
+        MessageId::KbCancelBackgroundShellJobs => {
+            "Cancelar todos los trabajos shell en segundo plano en ejecución (barra lateral Tasks)"
+        }
         MessageId::KbFuzzyFilePicker => {
             "Abrir selector de archivo fuzzy (inserta @ruta al presionar Enter)"
         }
@@ -4776,9 +4793,8 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbJumpPlanAgentYolo => "Activar ranuras de la hotbar",
         MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo Plan / Agent / YOLO",
         MessageId::KbFocusSidebar => {
-            "Enfocar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
+            "Enfocar barra lateral Pinned / Tasks / Agents / Context / Auto / Ocultar"
         }
-        MessageId::KbTogglePlanAgent => "Alternar entre modos Plan y Agent",
         MessageId::KbSessionPicker => "Abrir selector de sesiones",
         MessageId::KbPasteAttach => "Pegar texto o adjuntar imagen del portapapeles",
         MessageId::KbCopySelection => "Copiar selección actual (Cmd+C en macOS)",
@@ -4826,9 +4842,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::HomeQuickHelp => "/help        - Mostrar ayuda",
         MessageId::HomeModeTips => "Tips de Modo",
         MessageId::HomeAgentModeTip => "Modo Agent - Usar herramientas para tareas autónomas",
-        MessageId::HomeAgentModeReviewTip => {
-            "  Usa Ctrl+X para revisar en modo Plan antes de ejecutar"
-        }
+        MessageId::HomeAgentModeReviewTip => "  Escribe /mode plan para revisar antes de ejecutar",
         MessageId::HomeAgentModeYoloTip => {
             "  Escribe /mode yolo para habilitar acceso total a las herramientas"
         }

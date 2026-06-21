@@ -30,6 +30,7 @@ use crate::localization::Locale;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
+use codewhale_config::ToolAskRule;
 use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -138,6 +139,8 @@ pub struct ApprovalRequest {
     /// Displayed in the approval view so users understand *why* the change
     /// is being made before reviewing *what* will change.
     pub intent_summary: Option<String>,
+    /// Ask-only persistent rules that can be saved with the approval.
+    pub persistent_ask_rules: Vec<ToolAskRule>,
 }
 
 /// Key approval details rendered prominently in the approval card.
@@ -193,6 +196,7 @@ impl ApprovalRequest {
                     Some(summary.to_string())
                 }
             }),
+            persistent_ask_rules: build_persistent_ask_rules(tool_name, params),
         }
     }
 
@@ -218,6 +222,22 @@ impl ApprovalRequest {
         }
     }
 
+    #[must_use]
+    pub fn can_save_ask_rule(&self) -> bool {
+        !self.persistent_ask_rules.is_empty()
+    }
+
+    #[must_use]
+    pub fn ask_rule_preview(&self) -> Option<String> {
+        if self.persistent_ask_rules.is_empty() {
+            return None;
+        }
+        let permissions = codewhale_config::PermissionsToml {
+            rules: self.persistent_ask_rules.clone(),
+        };
+        toml::to_string_pretty(&permissions).ok()
+    }
+
     /// Extract the most important params for the approval card.
     #[must_use]
     pub fn prominent_detail_items(&self, locale: Locale) -> Vec<ApprovalDetail> {
@@ -229,6 +249,22 @@ impl ApprovalRequest {
             })
             .collect()
     }
+}
+
+#[must_use]
+fn build_persistent_ask_rules(tool_name: &str, params: &Value) -> Vec<ToolAskRule> {
+    if tool_name != "exec_shell" {
+        return Vec::new();
+    }
+    let Some(command) = params
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+    else {
+        return Vec::new();
+    };
+    vec![ToolAskRule::exec_shell(command)]
 }
 
 /// Get the category for a tool by name
@@ -888,6 +924,15 @@ impl ApprovalView {
     }
 
     fn emit_decision(&self, decision: ReviewDecision, timed_out: bool) -> ViewAction {
+        self.emit_decision_with_rules(decision, timed_out, Vec::new())
+    }
+
+    fn emit_decision_with_rules(
+        &self,
+        decision: ReviewDecision,
+        timed_out: bool,
+        persistent_ask_rules: Vec<ToolAskRule>,
+    ) -> ViewAction {
         ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
             tool_id: self.request.id.clone(),
             tool_name: self.request.tool_name.clone(),
@@ -895,6 +940,7 @@ impl ApprovalView {
             timed_out,
             approval_key: self.request.approval_key.clone(),
             approval_grouping_key: self.request.approval_grouping_key.clone(),
+            persistent_ask_rules,
         })
     }
 
@@ -947,6 +993,12 @@ impl ModalView for ApprovalView {
             KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Char('2') => {
                 self.commit_option(ApprovalOption::ApproveAlways)
             }
+            KeyCode::Char('s') | KeyCode::Char('S') if self.request.can_save_ask_rule() => self
+                .emit_decision_with_rules(
+                    ReviewDecision::Approved,
+                    false,
+                    self.request.persistent_ask_rules.clone(),
+                ),
             KeyCode::Char('n')
             | KeyCode::Char('N')
             | KeyCode::Char('d')
@@ -1261,6 +1313,16 @@ mod tests {
         )
     }
 
+    fn shell_request() -> ApprovalRequest {
+        ApprovalRequest::new(
+            "test-id",
+            "exec_shell",
+            "Run a shell command",
+            &json!({"command": "cargo test --workspace"}),
+            "tool:exec_shell",
+        )
+    }
+
     // ========================================================================
     // Tool Category Tests
     // ========================================================================
@@ -1550,6 +1612,28 @@ mod tests {
     }
 
     #[test]
+    fn exec_shell_request_builds_ask_rule_preview() {
+        let request = shell_request();
+
+        assert_eq!(
+            request.persistent_ask_rules,
+            vec![ToolAskRule::exec_shell("cargo test --workspace")]
+        );
+        let preview = request.ask_rule_preview().expect("preview");
+        assert!(preview.contains("[[rules]]"));
+        assert!(preview.contains("tool = \"exec_shell\""));
+        assert!(preview.contains("command = \"cargo test --workspace\""));
+    }
+
+    #[test]
+    fn non_shell_request_has_no_persistent_ask_rules() {
+        let request = destructive_request();
+
+        assert!(request.persistent_ask_rules.is_empty());
+        assert_eq!(request.ask_rule_preview(), None);
+    }
+
+    #[test]
     fn tab_toggles_collapsed_card_so_transcript_stays_visible() {
         // Regression for PR #1455 / @tiger-dog: the approval modal
         // rendered as a full-screen takeover that hid the transcript
@@ -1607,6 +1691,36 @@ mod tests {
                 "expected Approved for {code:?}"
             );
         }
+    }
+
+    #[test]
+    fn save_ask_rule_shortcut_approves_once_with_rule() {
+        let mut view = ApprovalView::new(shell_request());
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('s')));
+        let ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
+            decision,
+            persistent_ask_rules,
+            ..
+        }) = action
+        else {
+            panic!("expected approval decision");
+        };
+
+        assert_eq!(decision, ReviewDecision::Approved);
+        assert_eq!(
+            persistent_ask_rules,
+            vec![ToolAskRule::exec_shell("cargo test --workspace")]
+        );
+    }
+
+    #[test]
+    fn save_ask_rule_shortcut_is_ignored_without_rule() {
+        let mut view = ApprovalView::new(benign_request());
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('s')));
+
+        assert!(matches!(action, ViewAction::None));
     }
 
     #[test]

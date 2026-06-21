@@ -83,7 +83,10 @@ impl Engine {
         if rendered.is_empty() {
             return;
         }
-        self.add_session_message(self.user_text_message_with_turn_metadata(rendered))
-            .await;
+        self.add_session_message(self.runtime_text_message_with_turn_metadata(
+            rendered,
+            crate::core::ops::UserInputProvenance::Runtime,
+        ))
+        .await;
     }
 }

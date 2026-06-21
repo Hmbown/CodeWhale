@@ -58,6 +58,12 @@ retry while an equivalent fleet worker would retry and preserve ledger evidence,
 then the cutover is incomplete. Treat that as a CodeWhale runtime gap, not as
 normal "sub-agent behavior".
 
+The compatibility `agent` runtime now retries transient provider header,
+stream, and timeout failures with backoff before marking a worker interrupted;
+when retries are exhausted it preserves a checkpoint and returns a continuation
+handle. The remaining convergence work is to keep that lifecycle durable across
+process restarts, remote execution, and full fleet-ledger scheduling.
+
 The target rule is:
 
 - durable or long-running work goes through the fleet worker lifecycle;
@@ -107,7 +113,7 @@ delegation levels. Sub-agents and fleet workers share **one** axis, sourced from
 
 - `DEFAULT_SPAWN_DEPTH = 3` — the default budget for both standalone sub-agents
   and fleet workers (so they cannot drift into "two moving targets");
-- `MAX_SPAWN_DEPTH_CEILING = 3` — the hard cap that every configured value
+- `MAX_SPAWN_DEPTH_CEILING = 8` — the opt-in cap that every configured value
   (fleet `max_spawn_depth`, `agent`'s `max_depth`) clamps to.
 
 The root worker always runs even at budget 0; the budget gates *child*

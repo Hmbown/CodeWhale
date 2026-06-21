@@ -1,4 +1,4 @@
-//! Sidebar rendering — Work / Tasks / Agents / Context panels.
+//! Sidebar rendering — Pinned / Tasks / Agents / Context panels.
 //!
 //! Extracted from `tui/ui.rs` (P1.2). The sidebar appears to the right of
 //! the chat transcript when the available width allows it. Each section
@@ -57,7 +57,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
 
     match app.sidebar_focus {
         SidebarFocus::Auto => render_sidebar_auto(f, area, app),
-        SidebarFocus::Work => render_sidebar_work(f, area, app),
+        SidebarFocus::Pinned => render_sidebar_pinned(f, area, app),
         SidebarFocus::Tasks => render_sidebar_tasks(f, area, app),
         SidebarFocus::Agents => render_sidebar_subagents(f, area, app),
         SidebarFocus::Context => render_context_panel(f, area, app),
@@ -72,7 +72,22 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
 /// useful content, or as the one quiet empty state when nothing else is active.
 fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &mut App) {
     let visible = auto_sidebar_panels(auto_sidebar_state(app));
+    render_sidebar_panel_stack(f, area, app, &visible);
+}
 
+/// Build the pinned panel stack. This uses the same content-sensitive panels
+/// as Auto, but it never participates in idle auto-collapse.
+fn render_sidebar_pinned(f: &mut Frame, area: Rect, app: &mut App) {
+    let visible = auto_sidebar_panels(auto_sidebar_state(app));
+    render_sidebar_panel_stack(f, area, app, &visible);
+}
+
+fn render_sidebar_panel_stack(
+    f: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    visible: &[AutoSidebarPanel],
+) {
     let constraints: Vec<Constraint> = match visible.len() {
         1 => vec![Constraint::Min(0)],
         2 => vec![Constraint::Percentage(50), Constraint::Min(0)],
@@ -1110,12 +1125,12 @@ fn task_panel_rows(
                 .any(|task| task.id.starts_with("shell_") && task.status == "running");
             let hint_action = if stale_running_shells.len() == 1 {
                 Some((
-                    "Ctrl+K -> cancel stale job".to_string(),
+                    "Ctrl+X -> cancel stale job".to_string(),
                     format!("/jobs cancel {}", stale_running_shells[0].id),
                 ))
             } else if any_running_shell {
                 Some((
-                    "Ctrl+K -> /jobs cancel-all".to_string(),
+                    "Ctrl+X -> /jobs cancel-all".to_string(),
                     "/jobs cancel-all".to_string(),
                 ))
             } else {
@@ -1245,9 +1260,9 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
                 .iter()
                 .any(|task| task.id.starts_with("shell_") && task.status == "running");
             if stale_running_shells == 1 {
-                texts.push("Ctrl+K -> cancel stale job".to_string());
+                texts.push("Ctrl+X -> cancel stale job".to_string());
             } else if any_running_shell {
-                texts.push("Ctrl+K -> /jobs cancel-all".to_string());
+                texts.push("Ctrl+X -> /jobs cancel-all".to_string());
             }
         }
     }
@@ -1370,6 +1385,13 @@ fn push_reasoning_row_hover_texts(
 
 fn background_task_labels(task: &TaskPanelEntry, duration: &str) -> (String, String) {
     let stale_label = stale_no_output_label(task);
+    let owner_label = task
+        .owner_agent_name
+        .as_deref()
+        .or(task.owner_agent_id.as_deref())
+        .filter(|owner| !owner.trim().is_empty())
+        .map(|owner| format!("by {owner}"))
+        .unwrap_or_default();
     let status = stale_label
         .as_ref()
         .map(|label| format!("{} ({label})", task.status))
@@ -1381,6 +1403,7 @@ fn background_task_labels(task: &TaskPanelEntry, duration: &str) -> (String, Str
             format!("Bash {status} {command} {duration}"),
             compact_join([
                 format!("{} \u{00B7} Bash", task.id),
+                owner_label,
                 stale_label.unwrap_or_default(),
             ]),
         );
@@ -1393,7 +1416,11 @@ fn background_task_labels(task: &TaskPanelEntry, duration: &str) -> (String, Str
             status,
             duration
         ),
-        compact_join([task.prompt_summary.clone(), stale_label.unwrap_or_default()]),
+        compact_join([
+            task.prompt_summary.clone(),
+            owner_label,
+            stale_label.unwrap_or_default(),
+        ]),
     )
 }
 
@@ -2382,6 +2409,7 @@ fn subagent_status_text(status: &SubAgentStatus) -> &'static str {
         SubAgentStatus::Interrupted(_) => "interrupted",
         SubAgentStatus::Failed(_) => "failed",
         SubAgentStatus::Cancelled => "canceled",
+        SubAgentStatus::BudgetExhausted => "budget",
     }
 }
 
@@ -3001,11 +3029,11 @@ mod tests {
         SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, SidebarToolRow,
         SidebarWorkChecklistItem, SidebarWorkStrategyStep, SidebarWorkSummary, ToolRowOrder,
         agent_row_hover_text, auto_sidebar_panels, background_task_spinner_prefix,
-        context_panel_cost_line, editorial_tool_rows, normalize_activity_text, sidebar_agent_rows,
-        sidebar_hover_rows, sidebar_work_summary, sort_sidebar_agent_rows_as_tree,
-        subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
-        task_panel_hover_texts, task_panel_lines, task_panel_rows, work_panel_empty_hint,
-        work_panel_hover_texts, work_panel_lines,
+        context_panel_cost_line, editorial_tool_rows, normalize_activity_text, render_sidebar,
+        sidebar_agent_rows, sidebar_hover_rows, sidebar_work_summary,
+        sort_sidebar_agent_rows_as_tree, subagent_panel_hover_texts, subagent_panel_lines,
+        subagent_panel_rows, task_panel_hover_texts, task_panel_lines, task_panel_rows,
+        work_panel_empty_hint, work_panel_hover_texts, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette;
@@ -3019,7 +3047,7 @@ mod tests {
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
     };
-    use ratatui::text::Line;
+    use ratatui::{Terminal, backend::TestBackend, text::Line};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -3181,6 +3209,44 @@ mod tests {
         });
 
         assert_eq!(panels, vec![AutoSidebarPanel::Work]);
+    }
+
+    #[test]
+    fn pinned_sidebar_renders_agents_section_when_subagents_are_active() {
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Pinned;
+        app.subagent_cache
+            .push(cached_agent("agent-active-1", Some("critic")));
+        app.agent_progress.insert(
+            "agent-active-1".to_string(),
+            "checking sidebar visibility".to_string(),
+        );
+
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), &mut app))
+            .expect("draw sidebar");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("Agents"),
+            "pinned sidebar must surface active sub-agents: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("critic") || rendered.contains("Agent 1"),
+            "pinned sidebar should render the child agent label: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("checking sidebar visibility"),
+            "pinned sidebar should render child progress: {rendered:?}"
+        );
     }
 
     #[test]
@@ -3784,6 +3850,8 @@ mod tests {
                     output: None,
                     live_output: None,
                     shell_task_id: None,
+                    owner_agent_id: None,
+                    owner_agent_name: None,
                     started_at: None,
                     duration_ms: Some(ACTIVE_TOOL_STALE_RUNNING_ROW_TTL.as_millis() as u64 + 1),
                     source: ExecSource::Assistant,
@@ -3819,6 +3887,8 @@ mod tests {
                 output: None,
                 live_output: None,
                 shell_task_id: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
                 started_at: Some(std::time::Instant::now()),
                 duration_ms: None,
                 source: ExecSource::Assistant,
@@ -3835,6 +3905,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 80, 10));
@@ -3869,6 +3941,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 96, 8));
@@ -3889,6 +3963,33 @@ mod tests {
     }
 
     #[test]
+    fn tasks_panel_attributes_subagent_owned_shell_jobs() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_owned".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cargo test -p codewhale-tui".to_string(),
+            duration_ms: Some(2_000),
+            kind: TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: Some("agent_verifier".to_string()),
+            owner_agent_name: Some("verifier".to_string()),
+        });
+
+        let text = lines_to_text(&task_panel_lines(&app, 96, 8));
+
+        assert!(
+            text.iter().any(|line| line.contains("by verifier")),
+            "owned shell job should show sub-agent attribution: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("shell_owned")),
+            "shell id should remain visible with attribution: {text:?}"
+        );
+    }
+
+    #[test]
     fn background_task_spinner_advances_at_readable_cadence() {
         let mut task = TaskPanelEntry {
             id: "shell_33a08c3c".to_string(),
@@ -3898,6 +3999,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         };
 
         assert_eq!(background_task_spinner_prefix(&task), Some("⠋"));
@@ -3921,6 +4024,8 @@ mod tests {
             kind: TaskPanelEntryKind::ModelReasoning,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 80, 8));
@@ -3980,6 +4085,8 @@ mod tests {
             kind: TaskPanelEntryKind::ModelReasoning,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
         app.task_panel.push(TaskPanelEntry {
             id: "shell_live".to_string(),
@@ -3989,6 +4096,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let text = lines_to_text(&task_panel_lines(&app, 96, 12));
@@ -4029,6 +4138,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let (lines, actions) = task_panel_rows(&app, 80, 12);
@@ -4067,6 +4178,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: true,
             elapsed_since_output_ms: Some(61_000),
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let (lines, actions) = task_panel_rows(&app, 80, 12);
@@ -4108,6 +4221,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
         app.task_panel.push(TaskPanelEntry {
             id: "task_bbb".to_string(),
@@ -4117,6 +4232,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let (lines, actions) = task_panel_rows(&app, 96, 16);
@@ -4165,7 +4282,7 @@ mod tests {
 
         let hint_idx = text
             .iter()
-            .position(|line| line.contains("Ctrl+K"))
+            .position(|line| line.contains("Ctrl+X"))
             .expect("cancel-all hint row");
         assert_eq!(actions[hint_idx].as_deref(), Some("/jobs cancel-all"));
     }
@@ -4182,6 +4299,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let (lines, actions) = task_panel_rows(&app, 80, 12);
@@ -4213,6 +4332,8 @@ mod tests {
                 output: None,
                 live_output: None,
                 shell_task_id: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
                 started_at: Some(Instant::now()),
                 duration_ms: None,
                 source: ExecSource::Assistant,
@@ -4229,6 +4350,8 @@ mod tests {
             kind: TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         });
 
         let (lines, actions) = task_panel_rows(&app, 96, 16);
@@ -4539,6 +4662,8 @@ mod tests {
                 output: Some("Lint pending\nTest pending".to_string()),
                 live_output: None,
                 shell_task_id: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
                 started_at: None,
                 duration_ms: Some(15_000),
                 source: ExecSource::Assistant,
@@ -4582,6 +4707,8 @@ mod tests {
             output: Some("test failed".to_string()),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(1_250),
             source: ExecSource::Assistant,
@@ -4614,6 +4741,8 @@ mod tests {
             output: Some("Finished".to_string()),
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(1_250),
             source: ExecSource::Assistant,
