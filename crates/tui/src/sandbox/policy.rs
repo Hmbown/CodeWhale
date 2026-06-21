@@ -7,6 +7,7 @@
 //! tightly controlled workspace-only write access.
 
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -171,6 +172,14 @@ impl SandboxPolicy {
                     roots.push(cwd.to_path_buf());
                 }
 
+                // Git worktrees keep mutable metadata outside the worktree
+                // directory. Allow only the gitdir and commondir derived from
+                // a workspace `.git` pointer, preserving the workspace boundary
+                // for all other external paths.
+                for root in roots.clone() {
+                    roots.extend(resolve_git_worktree_writable_roots(&root));
+                }
+
                 // Add /tmp unless excluded
                 if !exclude_slash_tmp && let Ok(tmp) = Path::new("/tmp").canonicalize() {
                     roots.push(tmp);
@@ -209,6 +218,57 @@ impl SandboxPolicy {
             }
         }
     }
+}
+
+fn resolve_git_worktree_writable_roots(root: &Path) -> Vec<PathBuf> {
+    let Some(git_dir) = resolve_gitdir_pointer(root) else {
+        return Vec::new();
+    };
+    let Some(common_dir) = resolve_git_common_dir(&git_dir) else {
+        return Vec::new();
+    };
+    if !git_dir.starts_with(common_dir.join("worktrees")) {
+        return Vec::new();
+    }
+
+    vec![git_dir, common_dir]
+}
+
+fn resolve_gitdir_pointer(root: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(root.join(".git")).ok()?;
+    let value = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:"))?
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(value);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+
+    resolved.canonicalize().ok()
+}
+
+fn resolve_git_common_dir(git_dir: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(git_dir.join("commondir")).ok()?;
+    let value = contents.lines().next()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(value);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        git_dir.join(path)
+    };
+
+    resolved.canonicalize().ok()
 }
 
 /// A directory tree where writes are allowed, with optional read-only subpaths.
@@ -344,6 +404,39 @@ mod tests {
         let policy = SandboxPolicy::workspace_with_network();
         assert!(policy.has_network_access());
         assert!(policy.should_sandbox());
+    }
+
+    #[test]
+    fn workspace_write_includes_git_worktree_metadata_roots() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let common_git_dir = tmp.path().join("main-repo").join(".git");
+        let worktree_git_dir = common_git_dir.join("worktrees").join("feature");
+        let worktree = tmp.path().join("feature-worktree");
+        std::fs::create_dir_all(&worktree_git_dir).expect("mkdir gitdir");
+        std::fs::create_dir_all(&worktree).expect("mkdir worktree");
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .expect("write git pointer");
+        std::fs::write(worktree_git_dir.join("commondir"), "../..").expect("write commondir");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![worktree.clone()],
+            network_access: true,
+            exclude_tmpdir: true,
+            exclude_slash_tmp: true,
+        };
+
+        let root_paths: Vec<PathBuf> = policy
+            .get_writable_roots(&worktree)
+            .into_iter()
+            .map(|root| root.root)
+            .collect();
+
+        assert!(root_paths.contains(&worktree.canonicalize().expect("canonical worktree")));
+        assert!(root_paths.contains(&worktree_git_dir.canonicalize().expect("canonical gitdir")));
+        assert!(root_paths.contains(&common_git_dir.canonicalize().expect("canonical common git")));
     }
 
     #[test]
