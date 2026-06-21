@@ -4505,9 +4505,13 @@ async fn launch_gate_queues_extra_direct_children() {
     }
 
     tokio::spawn(run_subagent_task(task_a));
-    // Give the first task time to take the only permit before the second
-    // task tries; the second must then queue with a visible reason.
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while gate.available_permits() != 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("first child should acquire the launch gate");
     tokio::spawn(run_subagent_task(task_b));
 
     let mut messages = Vec::new();
