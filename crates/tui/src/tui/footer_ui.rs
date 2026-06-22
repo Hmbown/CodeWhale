@@ -171,13 +171,23 @@ pub(crate) fn provider_wait_idle_secs(app: &App) -> u64 {
         .unwrap_or(0)
 }
 
-/// `waiting for model` reason — kept short: just elapsed idle time. The
-/// provider and model are already visible in the header bar, so repeating
-/// them in the footer stall reason is noise. The structured incident logger
-/// (`maybe_log_provider_wait_incident`) still captures the full detail for
-/// diagnostics.
+/// Idle threshold (seconds) above which the footer surfaces the elapsed
+/// idle time during a provider wait.  Below this threshold the footer shows
+/// only the concise label without a running counter (#3189).
+const PROVIDER_WAIT_IDLE_SHOW_SECS: u64 = 60;
+
+/// `waiting for model` reason — kept short by default: only the label when
+/// the idle time is below [`PROVIDER_WAIT_IDLE_SHOW_SECS`].  Once the idle
+/// exceeds that threshold the elapsed seconds appear, and when the idle
+/// approaches the stream-idle budget the full `Ns/Ms idle timeout` detail
+/// surfaces so the user knows the stream is at risk of timing out (#3189).
+/// Provider and model stay in the header bar; the structured incident logger
+/// (`maybe_log_provider_wait_incident`) captures full diagnostics regardless
+/// of the footer copy.
 fn provider_wait_reason(app: &App) -> String {
     let idle = provider_wait_idle_secs(app);
+    let budget = app.stream_chunk_timeout_secs;
+
     if running_agent_count(app) == 0 {
         if let Some((0, total)) = active_fanout_counts(app) {
             return format!("waiting · fanout 0/{total}");
@@ -185,7 +195,20 @@ fn provider_wait_reason(app: &App) -> String {
             return "waiting · dispatch pending".to_string();
         }
     }
-    format!("waiting for model · {idle}s")
+
+    // Normal wait — no countdown noise.
+    if idle < PROVIDER_WAIT_IDLE_SHOW_SECS {
+        return "waiting for model".to_string();
+    }
+
+    // Significant idle — surface the elapsed seconds so the user can judge
+    // whether the stream is making progress.
+    let near_timeout = budget > 0 && idle >= budget.saturating_mul(3) / 4; // ≥ 75%
+    if near_timeout {
+        format!("waiting for model · {idle}s/{budget}s idle timeout")
+    } else {
+        format!("waiting for model · {idle}s")
+    }
 }
 
 /// Threshold after which a provider wait with a planned fanout is logged as
@@ -359,6 +382,54 @@ mod tests {
         let app = create_test_app();
         let (label, _) = footer_state_label(&app);
         assert_eq!(label, "idle");
+    }
+
+    // #3189: provider-wait reason thresholds
+
+    #[test]
+    fn provider_wait_reason_fresh_show_only_label() {
+        let mut app = create_test_app();
+        app.stream_chunk_timeout_secs = 300;
+        app.turn_started_at = Some(std::time::Instant::now()); // < 60s
+        let reason = super::provider_wait_reason(&app);
+        assert_eq!(reason, "waiting for model");
+        assert!(!reason.contains("idle"));
+        assert!(!reason.contains("s/"));
+    }
+
+    #[test]
+    fn provider_wait_reason_thresholded_show_idle_seconds() {
+        let mut app = create_test_app();
+        app.stream_chunk_timeout_secs = 300;
+        // Simulate idle >= 60s
+        app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        let reason = super::provider_wait_reason(&app);
+        assert!(reason.contains("waiting for model"));
+        assert!(reason.contains("60s"));
+        // Should NOT show the full timeout budget yet (<75% of 300s = 225s)
+        assert!(!reason.contains("/300s"));
+    }
+
+    #[test]
+    fn provider_wait_reason_near_timeout_show_full_idle_budget() {
+        let mut app = create_test_app();
+        app.stream_chunk_timeout_secs = 300;
+        // ≥ 75% of 300s = 225s
+        app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(240));
+        let reason = super::provider_wait_reason(&app);
+        assert!(reason.contains("waiting for model"));
+        assert!(reason.contains("/300s idle timeout"));
+        assert!(reason.contains("240s"));
+    }
+
+    #[test]
+    fn provider_wait_reason_dispatch_pending() {
+        let mut app = create_test_app();
+        app.stream_chunk_timeout_secs = 300;
+        app.turn_started_at = Some(std::time::Instant::now());
+        app.pending_subagent_dispatch = Some("test".to_string());
+        let reason = super::provider_wait_reason(&app);
+        assert_eq!(reason, "waiting · dispatch pending");
     }
 }
 
