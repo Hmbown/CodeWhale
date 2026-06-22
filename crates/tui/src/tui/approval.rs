@@ -271,7 +271,10 @@ fn build_persistent_ask_rules(tool_name: &str, params: &Value) -> Vec<ToolAskRul
 pub fn get_tool_category(name: &str) -> ToolCategory {
     if matches!(name, "write_file" | "edit_file" | "apply_patch") {
         ToolCategory::FileWrite
-    } else if matches!(name, "web_run" | "web_search" | "fetch_url") {
+    } else if matches!(
+        name,
+        "web_run" | "web_search" | "fetch_url" | "wait_for_dev_server"
+    ) {
         ToolCategory::Network
     } else if matches!(
         name,
@@ -328,7 +331,7 @@ pub fn classify_risk(tool_name: &str, category: ToolCategory, params: &Value) ->
         // Query-only network is benign; opening a URL pulls arbitrary
         // remote content, so it stays destructive.
         ToolCategory::Network => match tool_name {
-            "web_search" | "web_run" => RiskLevel::Benign,
+            "web_search" | "web_run" | "wait_for_dev_server" => RiskLevel::Benign,
             _ => RiskLevel::Destructive,
         },
         // Shell is always destructive. We probe command_safety for
@@ -1398,6 +1401,11 @@ mod tests {
         assert_eq!(
             classify_risk("fetch_url", cat, &json!({"url": "https://example.com"})),
             RiskLevel::Destructive
+        );
+        // wait_for_dev_server only permits loopback targets.
+        assert_eq!(
+            classify_risk("wait_for_dev_server", cat, &json!({"port": 5173})),
+            RiskLevel::Benign
         );
     }
 

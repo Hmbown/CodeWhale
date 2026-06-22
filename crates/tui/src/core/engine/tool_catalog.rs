@@ -61,6 +61,7 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "task_shell_start",
     "task_shell_wait",
     "update_plan",
+    "wait_for_dev_server",
     "web_search",
     "write_file",
 ];

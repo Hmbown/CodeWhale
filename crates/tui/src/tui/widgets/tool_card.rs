@@ -90,7 +90,11 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
         "grep_files" | "file_search" | "web_search" | "fetch_url" => ToolFamily::Find,
         "agent" => ToolFamily::Delegate,
         "rlm_open" | "rlm_eval" | "rlm_configure" | "rlm_close" | "rlm" => ToolFamily::Rlm,
-        "run_tests" | "run_verifiers" | "task_gate_run" | "validate_data" => ToolFamily::Verify,
+        "run_tests"
+        | "run_verifiers"
+        | "task_gate_run"
+        | "validate_data"
+        | "wait_for_dev_server" => ToolFamily::Verify,
         _ => ToolFamily::Generic,
     }
 }
@@ -277,6 +281,10 @@ mod tests {
         assert_eq!(tool_family_for_name("agent"), ToolFamily::Delegate);
         assert_eq!(tool_family_for_name("rlm_eval"), ToolFamily::Rlm);
         assert_eq!(tool_family_for_name("run_verifiers"), ToolFamily::Verify);
+        assert_eq!(
+            tool_family_for_name("wait_for_dev_server"),
+            ToolFamily::Verify
+        );
         assert_eq!(
             tool_family_for_name("totally_new_tool"),
             ToolFamily::Generic

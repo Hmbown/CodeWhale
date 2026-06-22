@@ -856,6 +856,10 @@ fn non_yolo_mode_retains_default_defer_policy() {
     assert!(!should_default_defer_tool("run_tests", &always_load));
     assert!(!should_default_defer_tool("agent", &always_load));
     assert!(!should_default_defer_tool("read_file", &always_load));
+    assert!(!should_default_defer_tool(
+        "wait_for_dev_server",
+        &always_load
+    ));
     assert!(!should_default_defer_tool("web_search", &always_load));
     assert!(!should_default_defer_tool("write_file", &always_load));
     assert!(!should_default_defer_tool("task_shell_start", &always_load));

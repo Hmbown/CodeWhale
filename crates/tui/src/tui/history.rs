@@ -973,6 +973,7 @@ fn classify_tool_name_activity(name: &str) -> ToolRunActivity {
         | "task_shell_wait"
         | "run_tests"
         | "run_verifiers"
+        | "wait_for_dev_server"
         | "task_gate_run"
         | "validate_data" => ToolRunActivity::Command,
         "edit_file" | "apply_patch" | "write_file" | "diff" => ToolRunActivity::Edit,

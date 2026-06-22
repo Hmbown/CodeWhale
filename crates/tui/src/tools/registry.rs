@@ -726,11 +726,13 @@ impl ToolRegistryBuilder {
     /// NOT gated behind the web-search feature.
     #[must_use]
     pub fn with_web_tools(self) -> Self {
+        use super::dev_server_readiness::WaitForDevServerTool;
         use super::fetch_url::FetchUrlTool;
         use super::web_run::WebRunTool;
         use super::web_search::WebSearchTool;
         self.with_tool(Arc::new(WebSearchTool))
             .with_tool(Arc::new(FetchUrlTool))
+            .with_tool(Arc::new(WaitForDevServerTool))
             .with_tool(Arc::new(WebRunTool))
     }
 
@@ -1634,9 +1636,10 @@ mod tests {
         let registry = ToolRegistryBuilder::new().with_web_tools().build(ctx);
 
         // finance was moved to with_finance_tool() in v0.8.49;
-        // with_web_tools() now only registers web search / fetch / web.run
+        // with_web_tools() registers web search/fetch plus local dev-server readiness.
         assert!(registry.contains("web_search"));
         assert!(registry.contains("fetch_url"));
+        assert!(registry.contains("wait_for_dev_server"));
         assert!(registry.contains("web.run"));
         assert!(!registry.contains("finance"));
     }
