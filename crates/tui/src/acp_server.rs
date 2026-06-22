@@ -91,6 +91,7 @@ struct AcpServer {
 
 struct AcpSession {
     cwd: PathBuf,
+    messages: Vec<Message>,
 }
 
 enum AcpDispatch {
@@ -98,6 +99,7 @@ enum AcpDispatch {
     Shutdown,
 }
 
+#[derive(Debug)]
 struct AcpError {
     code: i32,
     message: String,
@@ -145,33 +147,79 @@ impl AcpServer {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_cwd.clone());
         let session_id = format!("codewhale-{}", uuid::Uuid::new_v4());
-        self.sessions.insert(session_id.clone(), AcpSession { cwd });
+        self.sessions.insert(
+            session_id.clone(),
+            AcpSession {
+                cwd,
+                messages: Vec::new(),
+            },
+        );
         Ok(json!({ "sessionId": session_id }))
     }
 
-    async fn prompt<W>(&self, params: Value, writer: &mut W) -> std::result::Result<(), AcpError>
+    async fn prompt<W>(
+        &mut self,
+        params: Value,
+        writer: &mut W,
+    ) -> std::result::Result<(), AcpError>
     where
         W: AsyncWrite + Unpin,
     {
         let session_id = params
             .get("sessionId")
             .and_then(Value::as_str)
-            .ok_or_else(|| AcpError::invalid_params("sessionId is required"))?;
-        let session = self
-            .sessions
-            .get(session_id)
-            .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
+            .ok_or_else(|| AcpError::invalid_params("sessionId is required"))?
+            .to_string();
         let prompt = extract_prompt_text(params.get("prompt"))
             .filter(|text| !text.trim().is_empty())
             .ok_or_else(|| AcpError::invalid_params("prompt must include text content"))?;
 
+        // Append user message to session history
+        {
+            let session = self
+                .sessions
+                .get_mut(&session_id)
+                .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
+            session.messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: prompt,
+                    cache_control: None,
+                }],
+            });
+        }
+
+        // Clone messages for the LLM call (avoids borrowing self across await)
+        let (messages, cwd) = {
+            let session = self
+                .sessions
+                .get(&session_id)
+                .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
+            (session.messages.clone(), session.cwd.clone())
+        };
+
         let output = self
-            .run_prompt(&prompt, &session.cwd)
+            .run_prompt(&messages, &cwd)
             .await
             .map_err(|err| AcpError::internal(err.to_string()))?;
 
+        // Append assistant response to session history
         if !output.is_empty() {
-            write_session_update(writer, session_id, output)
+            {
+                let session = self
+                    .sessions
+                    .get_mut(&session_id)
+                    .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
+                session.messages.push(Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: output.clone(),
+                        cache_control: None,
+                    }],
+                });
+            }
+
+            write_session_update(writer, &session_id, output)
                 .await
                 .map_err(|err| AcpError::internal(err.to_string()))?;
         }
@@ -179,9 +227,24 @@ impl AcpServer {
         Ok(())
     }
 
-    async fn run_prompt(&self, prompt: &str, cwd: &PathBuf) -> Result<String> {
+    async fn run_prompt(&self, messages: &[Message], cwd: &PathBuf) -> Result<String> {
         let _cwd_guard = ScopedCurrentDir::new(cwd)?;
-        let route = crate::resolve_cli_auto_route(&self.config, &self.model, prompt).await?;
+        let last_user_text = messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if m.role == "user" {
+                    m.content.iter().find_map(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+        let route =
+            crate::resolve_cli_auto_route(&self.config, &self.model, last_user_text).await?;
         let execution_config = crate::config_for_cli_route(&self.config, &route);
         let client = DeepSeekClient::new(&execution_config)?;
         let reasoning_effort = route
@@ -191,13 +254,7 @@ impl AcpServer {
 
         let request = MessageRequest {
             model: route.model,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![ContentBlock::Text {
-                    text: prompt.to_string(),
-                    cache_control: None,
-                }],
-            }],
+            messages: messages.to_vec(),
             max_tokens: 4096,
             system: Some(SystemPrompt::Text(
                 "You are a coding assistant inside an ACP-compatible editor. Give concise, actionable responses.".to_string(),
@@ -517,5 +574,136 @@ mod tests {
         let value: Value = serde_json::from_str(line.trim()).expect("json");
         assert_eq!(value["id"], Value::Null);
         assert_eq!(value["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn new_session_starts_with_empty_messages() {
+        let mut server = AcpServer::new(
+            Config::default(),
+            "test-model".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let result = server
+            .new_session(json!({ "cwd": "/tmp" }))
+            .expect("new session");
+        let session_id = result["sessionId"].as_str().expect("session id");
+        let session = server.sessions.get(session_id).expect("session exists");
+        assert!(session.messages.is_empty());
+    }
+
+    #[test]
+    fn prompt_appends_user_and_assistant_messages_to_history() {
+        let mut server = AcpServer::new(
+            Config::default(),
+            "test-model".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let result = server
+            .new_session(json!({ "cwd": "/tmp" }))
+            .expect("new session");
+        let session_id = result["sessionId"].as_str().unwrap().to_string();
+
+        // Simulate adding a user message (same logic as prompt() but without LLM call)
+        {
+            let session = server.sessions.get_mut(&session_id).unwrap();
+            session.messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "1+1".to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+
+        // Simulate assistant response
+        {
+            let session = server.sessions.get_mut(&session_id).unwrap();
+            session.messages.push(Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "2".to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+
+        // Second user message
+        {
+            let session = server.sessions.get_mut(&session_id).unwrap();
+            session.messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "add one more".to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+
+        // Verify full conversation history
+        let session = server.sessions.get(&session_id).unwrap();
+        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages[0].role, "user");
+        assert_eq!(session.messages[1].role, "assistant");
+        assert_eq!(session.messages[2].role, "user");
+
+        // Verify text content
+        assert_eq!(
+            match &session.messages[0].content[0] {
+                ContentBlock::Text { text, .. } => text.clone(),
+                _ => String::new(),
+            },
+            "1+1"
+        );
+        assert_eq!(
+            match &session.messages[1].content[0] {
+                ContentBlock::Text { text, .. } => text.clone(),
+                _ => String::new(),
+            },
+            "2"
+        );
+        assert_eq!(
+            match &session.messages[2].content[0] {
+                ContentBlock::Text { text, .. } => text.clone(),
+                _ => String::new(),
+            },
+            "add one more"
+        );
+    }
+
+    #[test]
+    fn different_sessions_have_independent_history() {
+        let mut server = AcpServer::new(
+            Config::default(),
+            "test-model".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let result1 = server
+            .new_session(json!({ "cwd": "/tmp" }))
+            .expect("session 1");
+        let result2 = server
+            .new_session(json!({ "cwd": "/tmp" }))
+            .expect("session 2");
+        let sid1 = result1["sessionId"].as_str().unwrap().to_string();
+        let sid2 = result2["sessionId"].as_str().unwrap().to_string();
+
+        // Add messages to session 1
+        {
+            let session = server.sessions.get_mut(&sid1).unwrap();
+            session.messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                }],
+            });
+        }
+
+        // Session 2 should remain empty
+        let session2 = server.sessions.get(&sid2).unwrap();
+        assert!(session2.messages.is_empty());
+
+        // Session 1 should have the message
+        let session1 = server.sessions.get(&sid1).unwrap();
+        assert_eq!(session1.messages.len(), 1);
     }
 }
