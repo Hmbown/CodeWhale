@@ -552,7 +552,10 @@ mod tests {
             ..Default::default()
         };
         let hardened = apply_exec_hardening(spec.clone(), &exec);
-        assert_eq!(hardened.max_spawn_depth, 3);
+        assert_eq!(
+            hardened.max_spawn_depth,
+            codewhale_config::MAX_SPAWN_DEPTH_CEILING
+        );
 
         let exec = codewhale_config::FleetExecConfig {
             max_spawn_depth: 0,

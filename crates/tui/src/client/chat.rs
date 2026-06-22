@@ -147,7 +147,8 @@ impl DeepSeekClient {
             }
             body["tools"] = json!(chat_tools);
         }
-        if let Some(choice) = request.tool_choice.as_ref()
+        if should_send_tool_choice_for_chat(self.api_provider, request.reasoning_effort.as_deref())
+            && let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
         {
             body["tool_choice"] = mapped;
@@ -270,7 +271,8 @@ impl DeepSeekClient {
             }
             body["tools"] = json!(chat_tools);
         }
-        if let Some(choice) = request.tool_choice.as_ref()
+        if should_send_tool_choice_for_chat(self.api_provider, request.reasoning_effort.as_deref())
+            && let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
         {
             body["tool_choice"] = mapped;
@@ -1846,6 +1848,23 @@ fn map_tool_choice_for_chat(choice: &Value) -> Option<Value> {
     }
 }
 
+fn should_send_tool_choice_for_chat(provider: ApiProvider, effort: Option<&str>) -> bool {
+    if !matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+        return true;
+    }
+    !reasoning_effort_enables_thinking(effort)
+}
+
+fn reasoning_effort_enables_thinking(effort: Option<&str>) -> bool {
+    let Some(effort) = effort else {
+        return false;
+    };
+    !matches!(
+        effort.trim().to_ascii_lowercase().as_str(),
+        "off" | "disabled" | "none" | "false"
+    )
+}
+
 /// Final-pass sanitizer over the outgoing chat-completions JSON payload.
 /// Forces a non-empty `reasoning_content` onto assistant messages that carry
 /// `tool_calls`, when the model + effort combination requires it. DeepSeek's
@@ -2664,6 +2683,37 @@ mod stream_diagnostics_tests {
             stream_open_timeout_from_env(Some("999")),
             Duration::from_secs(300)
         );
+    }
+
+    #[test]
+    fn deepseek_thinking_omits_tool_choice() {
+        for effort in [Some("high"), Some("max"), Some("medium"), Some("")] {
+            assert!(
+                !should_send_tool_choice_for_chat(ApiProvider::Deepseek, effort),
+                "DeepSeek thinking rejects explicit tool_choice for {effort:?}"
+            );
+            assert!(
+                !should_send_tool_choice_for_chat(ApiProvider::DeepseekCN, effort),
+                "DeepSeek CN thinking rejects explicit tool_choice for {effort:?}"
+            );
+        }
+
+        for effort in [
+            None,
+            Some("off"),
+            Some("disabled"),
+            Some("none"),
+            Some("false"),
+        ] {
+            assert!(should_send_tool_choice_for_chat(
+                ApiProvider::Deepseek,
+                effort
+            ));
+        }
+        assert!(should_send_tool_choice_for_chat(
+            ApiProvider::Openrouter,
+            Some("high")
+        ));
     }
 
     #[test]

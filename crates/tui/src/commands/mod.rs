@@ -801,7 +801,8 @@ mod tests {
     #[test]
     fn execute_sidebar_toggles_visibility() {
         let mut app = create_test_app();
-        app.set_sidebar_focus(SidebarFocus::Auto);
+        app.set_sidebar_focus(SidebarFocus::Pinned);
+        app.last_sidebar_host_width = Some(120);
 
         let result = execute("/sidebar", &mut app);
         assert!(!result.is_error);
@@ -811,7 +812,7 @@ mod tests {
 
         let result = execute("/sidebar", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
         assert!(app.status_message.is_none());
         assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
     }
@@ -819,6 +820,7 @@ mod tests {
     #[test]
     fn execute_sidebar_accepts_explicit_focus_targets() {
         let mut app = create_test_app();
+        app.last_sidebar_host_width = Some(120);
 
         let result = execute("/sidebar tasks", &mut app);
         assert!(!result.is_error);
@@ -842,7 +844,7 @@ mod tests {
 
         let result = execute("/sidebar on", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
         assert!(app.status_message.is_none());
     }
 

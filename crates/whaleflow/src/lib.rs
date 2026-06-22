@@ -183,6 +183,8 @@ pub struct BudgetSpec {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_parallel: Option<u8>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -669,6 +671,8 @@ pub struct MockWorkflowExecutor {
     cancelled: bool,
     max_leaf_steps: Option<u32>,
     leaf_steps_executed: u32,
+    max_leaf_tokens: Option<u64>,
+    leaf_tokens_used: u64,
 }
 
 impl MockWorkflowExecutor {
@@ -710,6 +714,11 @@ impl MockWorkflowExecutor {
 
     pub fn with_max_leaf_steps(mut self, max_leaf_steps: u32) -> Self {
         self.max_leaf_steps = Some(max_leaf_steps);
+        self
+    }
+
+    pub fn with_max_leaf_tokens(mut self, max_leaf_tokens: u64) -> Self {
+        self.max_leaf_tokens = Some(max_leaf_tokens);
         self
     }
 
@@ -946,14 +955,44 @@ impl MockWorkflowExecutor {
                 status: WorkflowRunStatus::BudgetExceeded,
                 usage: WorkflowUsage::default(),
                 memo_usage: WorkflowMemoUsage::default(),
-                output: Some("mock workflow leaf budget exhausted".to_string()),
+                output: Some("mock workflow leaf step budget exhausted".to_string()),
+                artifacts: Vec::new(),
+            };
+        }
+        if self
+            .max_leaf_tokens
+            .is_some_and(|max| self.leaf_tokens_used >= max)
+            || spec.budget.max_tokens == Some(0)
+        {
+            return MockLeafOutcome {
+                status: WorkflowRunStatus::BudgetExceeded,
+                usage: WorkflowUsage::default(),
+                memo_usage: WorkflowMemoUsage::default(),
+                output: Some("mock workflow leaf token budget exhausted".to_string()),
                 artifacts: Vec::new(),
             };
         }
         self.leaf_steps_executed = self.leaf_steps_executed.saturating_add(1);
-        self.leaf_outcomes
+        let outcome = self
+            .leaf_outcomes
             .remove(&spec.id)
-            .unwrap_or_else(|| MockLeafOutcome::succeeded(format!("mock leaf {}", spec.id)))
+            .unwrap_or_else(|| MockLeafOutcome::succeeded(format!("mock leaf {}", spec.id)));
+        let tokens = outcome.usage.total_tokens();
+        if let Some(per_leaf_token_cap) = spec.budget.max_tokens {
+            if tokens > per_leaf_token_cap {
+                return MockLeafOutcome {
+                    status: WorkflowRunStatus::BudgetExceeded,
+                    usage: outcome.usage,
+                    memo_usage: outcome.memo_usage,
+                    output: Some(format!(
+                        "mock workflow leaf token budget exhausted ({tokens} > {per_leaf_token_cap})"
+                    )),
+                    artifacts: outcome.artifacts,
+                };
+            }
+        }
+        self.leaf_tokens_used = self.leaf_tokens_used.saturating_add(tokens);
+        outcome
     }
 
     fn next_predicate_result(&mut self, node_id: &str) -> bool {
@@ -2148,6 +2187,7 @@ mod tests {
                 max_steps: Some(8),
                 timeout_secs: Some(300),
                 max_parallel: None,
+                max_tokens: None,
             },
             permissions: PermissionSpec::default(),
             model_policy: ModelPolicy {
@@ -2164,6 +2204,7 @@ mod tests {
                 max_steps: Some(30),
                 timeout_secs: Some(1_800),
                 max_parallel: Some(2),
+                max_tokens: None,
             },
             permissions: PermissionSpec {
                 allow_write: false,
@@ -2191,6 +2232,7 @@ mod tests {
                         max_steps: Some(12),
                         timeout_secs: Some(600),
                         max_parallel: Some(2),
+                        max_tokens: None,
                     },
                     permissions: PermissionSpec::default(),
                     model_policy: ModelPolicy::default(),
@@ -2593,6 +2635,7 @@ mod tests {
                         max_steps: Some(0),
                         timeout_secs: None,
                         max_parallel: None,
+                        max_tokens: None,
                     },
                 ),
                 leaf_node("summarize"),
@@ -2615,6 +2658,180 @@ mod tests {
                 .unwrap_or_default()
                 .contains("budget exhausted")
         );
+    }
+
+    #[test]
+    fn mock_executor_stops_when_global_token_budget_is_exhausted() {
+        let workflow = workflow_spec(vec![WorkflowNode::BranchSet(BranchSpec {
+            id: "discover".to_string(),
+            description: None,
+            parallel: true,
+            budget: BudgetSpec::default(),
+            permissions: PermissionSpec::default(),
+            model_policy: ModelPolicy::default(),
+            children: vec![
+                leaf_node("scan-readme"),
+                leaf_node("scan-config"),
+                leaf_node("scan-tests"),
+            ],
+        })]);
+
+        // First leaf uses 600 tokens (300 in + 300 out); after the second leaf
+        // (500 tokens) the running total is 1100, exceeding the 1000-token
+        // global cap, so the third leaf hits the exhausted budget and halts the
+        // run.
+        let mut executor = MockWorkflowExecutor::new()
+            .with_max_leaf_tokens(1000)
+            .with_leaf_outcome(
+                "scan-readme",
+                MockLeafOutcome::succeeded("readme done").with_usage(WorkflowUsage {
+                    input_tokens: 300,
+                    output_tokens: 300,
+                    cost_microusd: 0,
+                }),
+            )
+            .with_leaf_outcome(
+                "scan-config",
+                MockLeafOutcome::succeeded("config done").with_usage(WorkflowUsage {
+                    input_tokens: 250,
+                    output_tokens: 250,
+                    cost_microusd: 0,
+                }),
+            );
+        let execution = executor.run(&workflow).expect("mock workflow should run");
+
+        assert_eq!(execution.status, WorkflowRunStatus::BudgetExceeded);
+        // Leaves 1+2 consume 1100 tokens, exhausting the 1000-token global cap.
+        // The third leaf is attempted, sees the budget already exceeded, and is
+        // recorded as BudgetExceeded — the same boundary-leaf behaviour used by
+        // step budgets (max_leaf_steps). The budget outcome carries no tokens,
+        // so total usage stays at 1100.
+        assert_eq!(execution.leaf_results.len(), 3);
+        assert_eq!(
+            execution.leaf_results[0].status,
+            WorkflowRunStatus::Succeeded
+        );
+        assert_eq!(
+            execution.leaf_results[1].status,
+            WorkflowRunStatus::Succeeded
+        );
+        assert_eq!(
+            execution.leaf_results[2].status,
+            WorkflowRunStatus::BudgetExceeded
+        );
+        assert_eq!(execution.usage.total_tokens(), 1100);
+    }
+
+    #[test]
+    fn mock_executor_honors_zero_token_leaf_budget() {
+        let workflow = workflow_spec(vec![WorkflowNode::BranchSet(BranchSpec {
+            id: "verify".to_string(),
+            description: None,
+            parallel: false,
+            budget: BudgetSpec::default(),
+            permissions: PermissionSpec::default(),
+            model_policy: ModelPolicy::default(),
+            children: vec![
+                leaf_node_with_budget(
+                    "run-tests",
+                    BudgetSpec {
+                        max_steps: None,
+                        timeout_secs: None,
+                        max_parallel: None,
+                        max_tokens: Some(0),
+                    },
+                ),
+                leaf_node("summarize"),
+            ],
+        })]);
+
+        let mut executor = MockWorkflowExecutor::new();
+        let execution = executor.run(&workflow).expect("mock workflow should run");
+
+        assert_eq!(execution.status, WorkflowRunStatus::BudgetExceeded);
+        assert_eq!(execution.leaf_results.len(), 1);
+        assert_eq!(
+            execution.leaf_results[0].status,
+            WorkflowRunStatus::BudgetExceeded
+        );
+        assert!(
+            execution.leaf_results[0]
+                .output
+                .as_deref()
+                .unwrap_or_default()
+                .contains("token budget exhausted")
+        );
+    }
+
+    #[test]
+    fn mock_executor_honors_per_leaf_token_cap() {
+        let workflow = workflow_spec(vec![WorkflowNode::BranchSet(BranchSpec {
+            id: "review".to_string(),
+            description: None,
+            parallel: false,
+            budget: BudgetSpec::default(),
+            permissions: PermissionSpec::default(),
+            model_policy: ModelPolicy::default(),
+            children: vec![
+                leaf_node_with_budget(
+                    "expensive-scan",
+                    BudgetSpec {
+                        max_steps: None,
+                        timeout_secs: None,
+                        max_parallel: None,
+                        max_tokens: Some(500),
+                    },
+                ),
+                leaf_node("summarize"),
+            ],
+        })]);
+
+        // The leaf outcome uses 800 tokens which exceeds the per-leaf cap of 500.
+        let mut executor = MockWorkflowExecutor::new().with_leaf_outcome(
+            "expensive-scan",
+            MockLeafOutcome::succeeded("scan done").with_usage(WorkflowUsage {
+                input_tokens: 500,
+                output_tokens: 300,
+                cost_microusd: 0,
+            }),
+        );
+        let execution = executor.run(&workflow).expect("mock workflow should run");
+
+        assert_eq!(execution.status, WorkflowRunStatus::BudgetExceeded);
+        assert_eq!(execution.leaf_results.len(), 1);
+        assert_eq!(
+            execution.leaf_results[0].status,
+            WorkflowRunStatus::BudgetExceeded
+        );
+        assert!(
+            execution.leaf_results[0]
+                .output
+                .as_deref()
+                .unwrap_or_default()
+                .contains("token budget exhausted")
+        );
+    }
+
+    #[test]
+    fn budget_spec_serializes_max_tokens() {
+        let budget = BudgetSpec {
+            max_steps: Some(10),
+            timeout_secs: Some(600),
+            max_parallel: Some(4),
+            max_tokens: Some(50_000),
+        };
+        let json = serde_json::to_string(&budget).expect("serialize budget");
+        let parsed: BudgetSpec = serde_json::from_str(&json).expect("parse budget");
+        assert_eq!(parsed, budget);
+        assert!(json.contains("\"max_tokens\":50000"));
+
+        // Default (all None) round-trips without the field present.
+        let default_json =
+            serde_json::to_string(&BudgetSpec::default()).expect("serialize default");
+        let parsed_default: BudgetSpec =
+            serde_json::from_str(&default_json).expect("parse default budget");
+        assert_eq!(parsed_default, BudgetSpec::default());
+        assert!(parsed_default.max_tokens.is_none());
     }
 
     #[test]

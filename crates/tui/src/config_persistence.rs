@@ -170,6 +170,69 @@ pub(crate) fn persist_tui_integer_key(
     Ok(path)
 }
 
+pub(crate) fn persist_subagents_bool_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: bool,
+) -> anyhow::Result<PathBuf> {
+    persist_subagents_value_key(config_path, key, toml::Value::Boolean(value))
+}
+
+pub(crate) fn persist_subagents_integer_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: u64,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+
+    let value = i64::try_from(value).context("integer value is too large for TOML")?;
+    persist_subagents_value_key(config_path, key, toml::Value::Integer(value))
+}
+
+fn persist_subagents_value_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: toml::Value,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let (mut doc, original_raw) = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        let doc: toml::Value = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        (doc, Some(raw))
+    } else {
+        (toml::Value::Table(toml::value::Table::new()), None)
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let subagents_entry = table
+        .entry("subagents".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let subagents_table = subagents_entry
+        .as_table_mut()
+        .context("`subagents` section in config.toml must be a table")?;
+    subagents_table.insert(key.to_string(), value);
+
+    if let Some(raw) = original_raw {
+        save_toml_preserving_comments(&path, &doc, &raw)?;
+    } else {
+        let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+        fs::write(&path, body)
+            .with_context(|| format!("failed to write config at {}", path.display()))?;
+    }
+    Ok(path)
+}
+
 pub(crate) fn persist_provider_base_url_key(
     config_path: Option<&Path>,
     provider: ApiProvider,

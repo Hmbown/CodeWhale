@@ -13,6 +13,7 @@ tui = ["dep:schemaui", "schemaui/tui", "json", "toml"]
 web = ["dep:schemaui", "schemaui/web", "json", "toml"]
 json = ["schemaui/json"]
 toml = ["schemaui/toml"]
+long-running-tests = []
 
 [[bin]]
 name = "codewhale-tui"
@@ -20,12 +21,12 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.100"
-codewhale-config = { path = "../config", version = "0.8.62" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.62" }
-codewhale-protocol = { path = "../protocol", version = "0.8.62" }
-codewhale-release = { path = "../release", version = "0.8.62" }
-codewhale-secrets = { path = "../secrets", version = "0.8.62" }
-codewhale-tools = { path = "../tools", version = "0.8.62" }
+codewhale-config = { path = "../config", version = "0.8.63" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.63" }
+codewhale-protocol = { path = "../protocol", version = "0.8.63" }
+codewhale-release = { path = "../release", version = "0.8.63" }
+codewhale-secrets = { path = "../secrets", version = "0.8.63" }
+codewhale-tools = { path = "../tools", version = "0.8.63" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -50,7 +51,7 @@ serde_json = { version = "1.0.149", features = ["preserve_order"] }
 schemars = { version = "1.2.1", features = ["derive", "preserve_order"] }
 shellexpand = "3"
 toml = "0.9.7"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 tokio-util = { version = "0.7.16", features = ["io"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

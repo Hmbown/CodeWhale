@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 mod metrics;
 mod update;
 
@@ -743,7 +745,9 @@ fn run() -> Result<()> {
         }
         Some(Commands::Serve(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            delegate_to_tui(&cli, &resolved_runtime, tui_args("serve", args))
+            // `serve` starts a long-running runtime API listener; supervise the
+            // delegated child so it is torn down with the dispatcher (#3259).
+            delegate_server_to_tui(&cli, &resolved_runtime, tui_args("serve", args))
         }
         Some(Commands::Completions(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1619,7 +1623,9 @@ fn run_app_server_command(
     // canonical `app-server --http`/`--mobile` entrypoint reuses that mature server
     // by delegating to the sibling TUI binary (the same mechanism `serve` uses).
     if args.http || args.mobile {
-        return delegate_to_tui(cli, resolved_runtime, app_server_serve_passthrough(&args));
+        // Delegated runtime API listener — supervise it so the child does not
+        // outlive the dispatcher (#3259).
+        return delegate_server_to_tui(cli, resolved_runtime, app_server_serve_passthrough(&args));
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1748,6 +1754,167 @@ fn delegate_to_tui(
         .status()
         .map_err(|err| anyhow!("{}", tui_spawn_error(&tui, &err)))?;
     exit_with_tui_status(status)
+}
+
+/// Delegate a long-running server command (`serve --http`/`--mobile`,
+/// `app-server --http`/`--mobile`) to the sibling TUI binary, supervising the
+/// child so its listener does not outlive the dispatcher (#3259).
+///
+/// Plain [`delegate_to_tui`] blocks on `Command::status()`, which reaps the
+/// child only on the child's own exit. If the dispatcher is terminated while
+/// the delegated server is still running, the child can be reparented and keep
+/// its listener bound. Here the child runs under a Tokio supervisor that
+/// forwards termination (Ctrl+C / SIGTERM / SIGHUP) by killing and reaping the
+/// child before the dispatcher exits, and `kill_on_drop` tears the child down
+/// if the dispatcher unwinds.
+///
+/// An uncatchable `SIGKILL` of the dispatcher cannot run this path; covering
+/// that needs `PR_SET_PDEATHSIG` (Linux) / Job Objects (Windows) and is tracked
+/// as follow-up on #3259.
+fn delegate_server_to_tui(
+    cli: &Cli,
+    resolved_runtime: &ResolvedRuntimeOptions,
+    passthrough: Vec<String>,
+) -> Result<()> {
+    let std_cmd = build_tui_command(cli, resolved_runtime, passthrough)?;
+    let tui = PathBuf::from(std_cmd.get_program());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create server-teardown runtime")?;
+    runtime.block_on(async move {
+        let mut cmd = tokio::process::Command::from(std_cmd);
+        cmd.kill_on_drop(true);
+        let mut child = cmd
+            .spawn()
+            .map_err(|err| anyhow!("{}", tui_spawn_error(&tui, &err)))?;
+        match supervise_server_child(&mut child, server_shutdown_signal()).await? {
+            ServerTeardown::Exited(status) => exit_with_tui_status(status),
+            // The child has been killed and reaped; exit with the conventional
+            // 128 + signal code for the signal that initiated the shutdown.
+            ServerTeardown::Signaled(code) => std::process::exit(code),
+        }
+    })
+}
+
+/// Outcome of supervising a delegated server child.
+#[derive(Debug)]
+enum ServerTeardown {
+    /// The child exited on its own; its status is carried for propagation.
+    Exited(std::process::ExitStatus),
+    /// A shutdown signal fired; the child was killed and reaped. Carries the
+    /// conventional `128 + signal` exit code to propagate.
+    Signaled(i32),
+}
+
+/// Wait for the server `child` to exit, or for `shutdown` to fire first. On
+/// shutdown, kill the child and reap it so no listener is left reparented.
+async fn supervise_server_child<F>(
+    child: &mut tokio::process::Child,
+    shutdown: F,
+) -> io::Result<ServerTeardown>
+where
+    F: std::future::Future<Output = i32>,
+{
+    tokio::select! {
+        status = child.wait() => Ok(ServerTeardown::Exited(status?)),
+        code = shutdown => {
+            // Send the kill, then wait so the PID is reaped before the
+            // dispatcher returns and exits.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            Ok(ServerTeardown::Signaled(code))
+        }
+    }
+}
+
+/// Resolve when the dispatcher should tear down a delegated server child, and
+/// the conventional `128 + signal` exit code to propagate: Ctrl+C on every
+/// platform (130), plus SIGTERM (143) and SIGHUP (129) on Unix (e.g.
+/// `kill <pid>` or a service manager stopping the process). A signal source
+/// that fails to install simply never fires, leaving Ctrl+C as the floor.
+/// Mirrors `wait_for_terminating_signal` in `crates/tui/src/main.rs`.
+#[cfg(unix)]
+async fn server_shutdown_signal() -> i32 {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut terminate = signal(SignalKind::terminate()).ok();
+    let mut hangup = signal(SignalKind::hangup()).ok();
+    let term = async {
+        match terminate.as_mut() {
+            Some(s) => {
+                s.recv().await;
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let hup = async {
+        match hangup.as_mut() {
+            Some(s) => {
+                s.recv().await;
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => 130,
+        _ = term => 143,
+        _ = hup => 129,
+    }
+}
+
+#[cfg(not(unix))]
+async fn server_shutdown_signal() -> i32 {
+    let _ = tokio::signal::ctrl_c().await;
+    130
+}
+
+#[cfg(all(test, unix))]
+mod server_teardown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn supervisor_propagates_child_exit_when_no_shutdown() {
+        // `true` exits immediately with success; a never-firing shutdown must
+        // let the child's own exit win.
+        let mut child = tokio::process::Command::new("true")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn true");
+        let outcome = supervise_server_child(&mut child, std::future::pending::<i32>())
+            .await
+            .expect("supervise");
+        match outcome {
+            ServerTeardown::Exited(status) => assert!(status.success()),
+            other => panic!("expected Exited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_kills_and_reaps_long_running_child() {
+        // A long-lived child stands in for the delegated server listener; the
+        // regression is that it outlives dispatcher teardown (#3259).
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        assert!(
+            child.id().is_some(),
+            "child should be running before shutdown"
+        );
+        // A ready future models an immediate shutdown signal carrying the
+        // SIGTERM exit code (143).
+        let outcome = supervise_server_child(&mut child, async { 143 })
+            .await
+            .expect("supervise");
+        assert!(matches!(outcome, ServerTeardown::Signaled(143)));
+        // Once supervise returns the child has been killed AND reaped, so tokio
+        // drops the recorded pid — no listener is left reparented.
+        assert!(
+            child.id().is_none(),
+            "delegated child must be reaped after dispatcher teardown"
+        );
+    }
 }
 
 fn run_resume_command(

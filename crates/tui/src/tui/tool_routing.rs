@@ -103,6 +103,8 @@ pub(super) fn handle_tool_call_started(
                     output: None,
                     live_output: None,
                     shell_task_id: None,
+                    owner_agent_id: None,
+                    owner_agent_name: None,
                     started_at: Some(Instant::now()),
                     duration_ms: None,
                     source,
@@ -137,6 +139,8 @@ pub(super) fn handle_tool_call_started(
                 output: None,
                 live_output: None,
                 shell_task_id: None,
+                owner_agent_id: None,
+                owner_agent_name: None,
                 started_at: Some(Instant::now()),
                 duration_ms: None,
                 source,
@@ -533,6 +537,20 @@ pub(super) fn handle_tool_call_complete(
                     if shell_task_id.is_some() {
                         exec.shell_task_id = shell_task_id;
                     }
+                    exec.owner_agent_id = tool_result
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("owner_agent_id"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|agent_id| !agent_id.trim().is_empty())
+                        .map(str::to_string);
+                    exec.owner_agent_name = tool_result
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("owner_agent_name"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|agent_name| !agent_name.trim().is_empty())
+                        .map(str::to_string);
                     if let Some(meta_command) = tool_result
                         .metadata
                         .as_ref()
@@ -1322,6 +1340,8 @@ mod tests {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: None,
             duration_ms: Some(120),
             source: ExecSource::Assistant,

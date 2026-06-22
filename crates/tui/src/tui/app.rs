@@ -343,7 +343,7 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarFocus {
     Auto,
-    Work,
+    Pinned,
     Tasks,
     Agents,
     Context,
@@ -396,7 +396,7 @@ impl SidebarFocus {
     #[must_use]
     pub fn from_setting(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "work" | "plan" | "todos" => Self::Work,
+            "pinned" | "visible" | "show" | "on" | "work" | "plan" | "todos" => Self::Pinned,
             "tasks" => Self::Tasks,
             "agents" | "subagents" | "sub-agents" => Self::Agents,
             "context" | "session" => Self::Context,
@@ -410,7 +410,7 @@ impl SidebarFocus {
     pub fn as_setting(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Work => "work",
+            Self::Pinned => "pinned",
             Self::Tasks => "tasks",
             Self::Agents => "agents",
             Self::Context => "context",
@@ -1570,6 +1570,8 @@ pub struct App {
     pub sidebar_resize_anchor_width: u16,
     /// Last sidebar area rendered (for mouse hit-testing the resize handle).
     pub last_sidebar_area: Option<Rect>,
+    /// Last total chat/sidebar width considered for sidebar rendering.
+    pub last_sidebar_host_width: Option<u16>,
     /// Handle rect painted on the left edge of the sidebar (1 col).
     pub last_sidebar_handle_area: Option<Rect>,
     /// Total horizontal space (chat + sidebar) used to compute the percentage
@@ -1972,6 +1974,8 @@ pub struct TaskPanelEntry {
     pub kind: TaskPanelEntryKind,
     pub stale: bool,
     pub elapsed_since_output_ms: Option<u64>,
+    pub owner_agent_id: Option<String>,
+    pub owner_agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2410,6 +2414,7 @@ impl App {
             sidebar_resize_anchor_x: 0,
             sidebar_resize_anchor_width: 0,
             last_sidebar_area: None,
+            last_sidebar_host_width: None,
             last_sidebar_handle_area: None,
             sidebar_resize_total_width: 0,
             sidebar_width_dirty: false,
@@ -5570,6 +5575,14 @@ pub enum AppAction {
     },
     UpdateCompaction(CompactionConfig),
     UpdateStreamChunkTimeout(u64),
+    UpdateSubagentRuntimeConfig {
+        enabled: bool,
+        max_subagents: usize,
+        launch_concurrency: usize,
+        max_spawn_depth: u32,
+        api_timeout_secs: u64,
+        heartbeat_timeout_secs: u64,
+    },
     OpenContextInspector,
     CompactContext,
     PurgeContext,
@@ -6106,17 +6119,18 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_focus_accepts_work_and_maps_legacy_trackers_to_work() {
+    fn sidebar_focus_accepts_pinned_and_maps_legacy_trackers_to_pinned() {
         assert_eq!(SidebarFocus::from_setting("auto"), SidebarFocus::Auto);
-        assert_eq!(SidebarFocus::from_setting("work"), SidebarFocus::Work);
-        assert_eq!(SidebarFocus::from_setting("plan"), SidebarFocus::Work);
-        assert_eq!(SidebarFocus::from_setting("todos"), SidebarFocus::Work);
+        assert_eq!(SidebarFocus::from_setting("pinned"), SidebarFocus::Pinned);
+        assert_eq!(SidebarFocus::from_setting("work"), SidebarFocus::Pinned);
+        assert_eq!(SidebarFocus::from_setting("plan"), SidebarFocus::Pinned);
+        assert_eq!(SidebarFocus::from_setting("todos"), SidebarFocus::Pinned);
         assert_eq!(SidebarFocus::from_setting("tasks"), SidebarFocus::Tasks);
         assert_eq!(SidebarFocus::from_setting("agents"), SidebarFocus::Agents);
         assert_eq!(SidebarFocus::from_setting("context"), SidebarFocus::Context);
         assert_eq!(SidebarFocus::from_setting("hidden"), SidebarFocus::Hidden);
         assert_eq!(SidebarFocus::from_setting("off"), SidebarFocus::Hidden);
-        assert_eq!(SidebarFocus::Work.as_setting(), "work");
+        assert_eq!(SidebarFocus::Pinned.as_setting(), "pinned");
         assert_eq!(SidebarFocus::Hidden.as_setting(), "hidden");
     }
 

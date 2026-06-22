@@ -103,6 +103,7 @@ impl ToolRegistry {
     }
 
     /// Execute a tool by name with the given input.
+    #[allow(dead_code)]
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, ToolError> {
         let tool = self
             .get(name)

@@ -739,6 +739,19 @@ fn get_provider_config_value(
     }
 }
 
+fn get_provider_config_display_value(
+    config: &ProviderConfigToml,
+    field: ProviderConfigField,
+) -> Option<String> {
+    match field {
+        ProviderConfigField::ApiKey => config.api_key.as_deref().map(redact_secret),
+        ProviderConfigField::HttpHeaders => {
+            serialize_http_headers_for_display(&config.http_headers)
+        }
+        _ => get_provider_config_value(config, field),
+    }
+}
+
 fn set_provider_config_value(
     config: &mut ConfigToml,
     provider: ProviderKind,
@@ -886,7 +899,7 @@ fn insert_provider_config_values(
             v.to_string(),
         );
     }
-    if let Some(v) = serialize_http_headers(&config.http_headers) {
+    if let Some(v) = serialize_http_headers_for_display(&config.http_headers) {
         out.insert(
             provider_config_key(provider, ProviderConfigField::HttpHeaders),
             v,
@@ -1327,7 +1340,7 @@ pub struct FleetConfigToml {
 /// workers so the two cannot drift into "two moving targets":
 /// - [`DEFAULT_SPAWN_DEPTH`] is the default recursion budget (the sub-agent
 ///   runtime's `DEFAULT_MAX_SPAWN_DEPTH` is defined as this value).
-/// - [`MAX_SPAWN_DEPTH_CEILING`] is the hard safety cap; every configured
+/// - [`MAX_SPAWN_DEPTH_CEILING`] is the opt-in safety cap; every configured
 ///   value (fleet `max_spawn_depth`, the `agent` tool's `max_depth`) clamps to it.
 ///
 /// A worker runs at `spawn_depth = 0` and may spawn while
@@ -1337,10 +1350,12 @@ pub struct FleetConfigToml {
 /// depth 0 even when the budget is 0.
 pub const DEFAULT_SPAWN_DEPTH: u32 = 3;
 
-/// Hard ceiling on recursion depth for any worker/sub-agent. See
-/// [`DEFAULT_SPAWN_DEPTH`]. Raising this single constant lifts the limit
-/// everywhere (the fleet clamp and `agent` validation both read it).
-pub const MAX_SPAWN_DEPTH_CEILING: u32 = 3;
+/// Hard ceiling on recursion depth for any worker/sub-agent. The default stays
+/// conservative at [`DEFAULT_SPAWN_DEPTH`], while explicit config can opt into
+/// deeper trees for direct-API providers that can tolerate the fanout.
+/// Raising this single constant lifts the limit everywhere (the fleet clamp
+/// and `agent` validation both read it).
+pub const MAX_SPAWN_DEPTH_CEILING: u32 = 8;
 
 /// Headless worker execution constraints (#3027).
 ///
@@ -1661,6 +1676,18 @@ impl ConfigToml {
 
     #[must_use]
     pub fn get_display_value(&self, key: &str) -> Option<String> {
+        if let Some((provider, field)) = parse_provider_config_key(key) {
+            return get_provider_config_display_value(self.providers.for_provider(provider), field);
+        }
+
+        if key == "http_headers" {
+            return serialize_http_headers_for_display(&self.http_headers);
+        }
+
+        if let Some(value) = self.extras.get(key) {
+            return Some(redact_toml_value_for_display(key, value));
+        }
+
         self.get_value(key).map(|value| {
             if is_sensitive_config_key(key) {
                 redact_secret(&value)
@@ -1754,7 +1781,7 @@ impl ConfigToml {
         if let Some(v) = self.base_url.as_ref() {
             out.insert("base_url".to_string(), v.clone());
         }
-        if let Some(v) = serialize_http_headers(&self.http_headers) {
+        if let Some(v) = serialize_http_headers_for_display(&self.http_headers) {
             out.insert("http_headers".to_string(), v);
         }
         if let Some(v) = self.default_text_model.as_ref() {
@@ -1804,7 +1831,7 @@ impl ConfigToml {
         }
 
         for (k, v) in &self.extras {
-            out.insert(k.clone(), v.to_string());
+            out.insert(k.clone(), redact_toml_value_for_display(k, v));
         }
         out
     }
@@ -3204,6 +3231,38 @@ fn effective_home_dir() -> Option<PathBuf> {
         .or_else(dirs::home_dir)
 }
 
+/// Reject state subdirs that could escape the state root via path injection.
+///
+/// `ensure_state_dir` / `resolve_state_dir` are public APIs taking an arbitrary
+/// subdir string; every in-tree caller passes a hardcoded single component
+/// (e.g. `"sessions"`, `"."`). This validates defensively so a future caller
+/// can never traverse out of the state root via `..` components or an absolute
+/// path. Nested relative paths such as `"a/b"` are permitted.
+fn ensure_safe_state_subdir(subdir: &str) -> Result<()> {
+    if subdir.is_empty() {
+        bail!("state subdir must not be empty");
+    }
+    let path = std::path::Path::new(subdir);
+    if path.is_absolute() {
+        bail!("state subdir must not be an absolute path: {subdir}");
+    }
+    if path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::RootDir | std::path::Component::Prefix(_)
+        )
+    }) {
+        bail!("state subdir must not contain a root or prefix: {subdir}");
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        bail!("state subdir must not contain parent-dir (..) components: {subdir}");
+    }
+    Ok(())
+}
+
 /// Resolve a state subdirectory, preferring the CodeWhale root if
 /// it already exists, otherwise falling back to the legacy root.
 ///
@@ -3211,6 +3270,7 @@ fn effective_home_dir() -> Option<PathBuf> {
 /// migration has occurred or on a fresh install, but keeps reading
 /// from the legacy path for users who haven't migrated yet.
 pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
+    ensure_safe_state_subdir(subdir)?;
     let primary = codewhale_home()?.join(subdir);
     if primary.exists() {
         return Ok(primary);
@@ -3225,11 +3285,109 @@ pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
 
 /// Ensure a state subdirectory exists under the primary CodeWhale root,
 /// creating it if necessary. This is the write-path resolver.
+///
+/// On the first creation of a real subdirectory (not the root sentinel `"."`),
+/// if a legacy `~/.deepseek/<subdir>` exists but the primary
+/// `~/.codewhale/<subdir>` does not, the legacy directory is relocated into
+/// the primary location so the user keeps their data and the legacy tree
+/// stops growing (#3240). After migration, [`resolve_state_dir`] finds the
+/// data in the primary location; the read resolver itself is unchanged.
 pub fn ensure_state_dir(subdir: &str) -> Result<PathBuf> {
+    ensure_safe_state_subdir(subdir)?;
     let dir = codewhale_home()?.join(subdir);
+    migrate_legacy_state_dir(&dir, subdir)?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}/", dir.display()))?;
     Ok(dir)
+}
+
+/// One-time relocation of a legacy `~/.deepseek/<subdir>` state directory into
+/// the primary `~/.codewhale/<subdir>` location (#3240). No-op once the primary
+/// exists, for the root sentinel `"."` (a whole-tree move is owned by the
+/// config-file migration), or when no legacy directory is present.
+fn migrate_legacy_state_dir(primary: &Path, subdir: &str) -> Result<()> {
+    if primary.exists() || subdir == "." || subdir.is_empty() {
+        return Ok(());
+    }
+    let legacy = match legacy_deepseek_home() {
+        Ok(home) => home.join(subdir),
+        Err(_) => return Ok(()),
+    };
+    if !legacy.exists() {
+        return Ok(());
+    }
+    // The primary's parent (the ~/.codewhale root) must exist for the rename.
+    if let Some(parent) = primary.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                target: "config::migration",
+                "Could not create {} for state migration ({}); writing to primary anyway",
+                parent.display(),
+                err
+            );
+        }
+    }
+    match std::fs::rename(&legacy, primary) {
+        Ok(()) => {
+            tracing::info!(
+                target: "config::migration",
+                "Migrated legacy state directory {} -> {} (relocated). The .deepseek copy was removed.",
+                legacy.display(),
+                primary.display()
+            );
+        }
+        Err(err) => {
+            // Cross-device rename or permission issue: fall back to a
+            // recursive copy so the user keeps their data. The legacy tree is
+            // left in place; it stops growing because writes now target the
+            // primary path.
+            match copy_dir_recursive(&legacy, primary) {
+                Ok(()) => {
+                    tracing::info!(
+                        target: "config::migration",
+                        "Migrated legacy state directory {} -> {} (copied; rename failed: {err}). \
+                         The legacy .deepseek copy was left in place.",
+                        legacy.display(),
+                        primary.display()
+                    );
+                }
+                Err(copy_err) => {
+                    tracing::warn!(
+                        target: "config::migration",
+                        "Could not migrate legacy state {} -> {} (rename: {err}; copy: {copy_err}). \
+                         New data is written to the primary path; the legacy tree remains untouched.",
+                        legacy.display(),
+                        primary.display()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recursively copy a directory tree from `src` to `dst`, creating `dst`.
+/// Symlinks and other non-file/non-dir entries are skipped (rare in state dirs).
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("failed to create {}", dst.display()))?;
+    for entry in
+        std::fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))?
+    {
+        let entry = entry.with_context(|| format!("failed to read entry in {}", src.display()))?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type for {}", path.display()))?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&path, &target).with_context(|| {
+                format!("failed to copy {} -> {}", path.display(), target.display())
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Resolve a project-local state subdirectory, preferring `.codewhale/`
@@ -3500,6 +3658,26 @@ fn serialize_http_headers(headers: &BTreeMap<String, String>) -> Option<String> 
     )
 }
 
+fn serialize_http_headers_for_display(headers: &BTreeMap<String, String>) -> Option<String> {
+    if headers.is_empty() {
+        return None;
+    }
+    Some(
+        headers
+            .iter()
+            .map(|(name, value)| {
+                let display_value = if is_sensitive_config_key(name) {
+                    redact_secret(value)
+                } else {
+                    value.clone()
+                };
+                format!("{name}={display_value}")
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
 fn redact_secret(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
     if chars.len() <= 16 {
@@ -3519,7 +3697,78 @@ fn redact_secret(secret: &str) -> String {
 
 #[must_use]
 pub fn is_sensitive_config_key(key: &str) -> bool {
-    key == "api_key" || key.ends_with(".api_key")
+    let Some(segment) = key.rsplit('.').next() else {
+        return false;
+    };
+    let normalized = segment
+        .trim()
+        .trim_matches('"')
+        .replace('-', "_")
+        .to_ascii_lowercase();
+
+    matches!(
+        normalized.as_str(),
+        "api_key"
+            | "apikey"
+            | "api_keys"
+            | "authorization"
+            | "bearer"
+            | "client_secret"
+            | "credential"
+            | "credentials"
+            | "id_token"
+            | "password"
+            | "passwords"
+            | "passwd"
+            | "proxy_authorization"
+            | "refresh_token"
+            | "secret"
+            | "secrets"
+            | "token"
+            | "tokens"
+    ) || normalized.ends_with("_api_key")
+        || normalized.ends_with("_authorization")
+        || normalized.ends_with("_password")
+        || normalized.ends_with("_secret")
+        || normalized.ends_with("_token")
+}
+
+fn redact_toml_value_for_display(key: &str, value: &toml::Value) -> String {
+    redact_toml_value_for_display_inner(key, false, value).to_string()
+}
+
+fn redact_toml_value_for_display_inner(
+    key: &str,
+    sensitive_ancestor: bool,
+    value: &toml::Value,
+) -> toml::Value {
+    let sensitive = sensitive_ancestor || is_sensitive_config_key(key);
+    match value {
+        toml::Value::String(value) if sensitive => toml::Value::String(redact_secret(value)),
+        toml::Value::Array(values) => toml::Value::Array(
+            values
+                .iter()
+                .map(|value| redact_toml_value_for_display_inner(key, sensitive, value))
+                .collect(),
+        ),
+        toml::Value::Table(table) => {
+            let mut redacted = toml::map::Map::new();
+            for (child_key, child_value) in table {
+                let path = if key.is_empty() {
+                    child_key.clone()
+                } else {
+                    format!("{key}.{child_key}")
+                };
+                redacted.insert(
+                    child_key.clone(),
+                    redact_toml_value_for_display_inner(&path, sensitive, child_value),
+                );
+            }
+            toml::Value::Table(redacted)
+        }
+        _ if sensitive => toml::Value::String("********".to_string()),
+        _ => value.clone(),
+    }
 }
 
 fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
@@ -5074,6 +5323,77 @@ command = "cargo check"
     }
 
     #[test]
+    fn config_display_redacts_nested_extra_secrets() {
+        let mut config = ConfigToml::default();
+        let mut profile = toml::map::Map::new();
+        profile.insert(
+            "chatgpt_access_token".to_string(),
+            toml::Value::String("raw-chatgpt-access-token-value".to_string()),
+        );
+        profile.insert(
+            "safe_label".to_string(),
+            toml::Value::String("visible".to_string()),
+        );
+
+        let mut nested = toml::map::Map::new();
+        nested.insert(
+            "refresh_token".to_string(),
+            toml::Value::String("raw-refresh-token-value".to_string()),
+        );
+        nested.insert("expires_at".to_string(), toml::Value::Integer(1234));
+        profile.insert("session".to_string(), toml::Value::Table(nested));
+
+        config
+            .extras
+            .insert("extras".to_string(), toml::Value::Table(profile));
+
+        let listed = config.list_values();
+        let rendered = listed.get("extras").expect("extras are listed");
+
+        assert!(rendered.contains("chatgpt_access_token"));
+        assert!(rendered.contains("refresh_token"));
+        assert!(rendered.contains("safe_label = \"visible\""));
+        assert!(!rendered.contains("raw-chatgpt-access-token-value"));
+        assert!(!rendered.contains("raw-refresh-token-value"));
+
+        let display = config
+            .get_display_value("extras")
+            .expect("extras display value");
+        assert!(!display.contains("raw-chatgpt-access-token-value"));
+        assert!(!display.contains("raw-refresh-token-value"));
+    }
+
+    #[test]
+    fn config_display_redacts_sensitive_extra_leaf_keys_and_headers() {
+        let mut config = ConfigToml::default();
+        config.extras.insert(
+            "chatgpt_access_token".to_string(),
+            toml::Value::String("raw-chatgpt-token-value".to_string()),
+        );
+        config.http_headers.insert(
+            "Authorization".to_string(),
+            "Bearer raw-header-token".to_string(),
+        );
+        config
+            .http_headers
+            .insert("X-Test".to_string(), "ok".to_string());
+
+        assert_eq!(
+            config.get_display_value("chatgpt_access_token").as_deref(),
+            Some("\"raw-***alue\"")
+        );
+
+        let headers = config
+            .list_values()
+            .get("http_headers")
+            .expect("headers are listed")
+            .clone();
+        assert!(headers.contains("Authorization=Bear***oken"));
+        assert!(headers.contains("X-Test=ok"));
+        assert!(!headers.contains("raw-header-token"));
+    }
+
+    #[test]
     fn hook_sinks_config_uses_separate_table_from_lifecycle_hooks() -> Result<()> {
         let raw = r#"
 [hooks]
@@ -5742,6 +6062,184 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         );
 
         let _ = fs::remove_dir_all(home);
+    }
+
+    // ── ensure_state_dir legacy migration (#3240) ───────────────────────
+
+    /// Saves and restores the env vars that the state-resolvers read.
+    struct StateEnvRestore {
+        home: Option<OsString>,
+        userprofile: Option<OsString>,
+        codewhale_home: Option<OsString>,
+    }
+
+    impl Drop for StateEnvRestore {
+        fn drop(&mut self) {
+            // Safety: test-only environment mutation is serialized by env_lock().
+            unsafe {
+                match self.home.take() {
+                    Some(value) => env::set_var("HOME", value),
+                    None => env::remove_var("HOME"),
+                }
+                match self.userprofile.take() {
+                    Some(value) => env::set_var("USERPROFILE", value),
+                    None => env::remove_var("USERPROFILE"),
+                }
+                match self.codewhale_home.take() {
+                    Some(value) => env::set_var("CODEWHALE_HOME", value),
+                    None => env::remove_var("CODEWHALE_HOME"),
+                }
+            }
+        }
+    }
+
+    /// Points `HOME`/`USERPROFILE`/`CODEWHALE_HOME` at a fresh temp tree so
+    /// `codewhale_home()` -> `<home>/.codewhale` and `legacy_deepseek_home()`
+    /// -> `<home>/.deepseek`. Env is restored on drop.
+    struct StateDirEnv {
+        home: PathBuf,
+        _restore: StateEnvRestore,
+    }
+
+    impl StateDirEnv {
+        fn install(unique: u128) -> Self {
+            let home = std::env::temp_dir().join(format!(
+                "codewhale-state-migration-{}-{unique}",
+                std::process::id()
+            ));
+            let restore = StateEnvRestore {
+                home: env::var_os("HOME"),
+                userprofile: env::var_os("USERPROFILE"),
+                codewhale_home: env::var_os("CODEWHALE_HOME"),
+            };
+            // Safety: test-only environment mutation is serialized by env_lock().
+            unsafe {
+                env::set_var("HOME", &home);
+                env::set_var("USERPROFILE", &home);
+                env::set_var("CODEWHALE_HOME", home.join(CODEWHALE_APP_DIR));
+            }
+            Self {
+                home,
+                _restore: restore,
+            }
+        }
+        fn legacy(&self, sub: &str) -> PathBuf {
+            self.home.join(LEGACY_APP_DIR).join(sub)
+        }
+        fn primary(&self, sub: &str) -> PathBuf {
+            self.home.join(CODEWHALE_APP_DIR).join(sub)
+        }
+    }
+
+    #[test]
+    fn ensure_state_dir_relocates_legacy_subdir_on_first_write() {
+        let _lock = env_lock();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let state_env = StateDirEnv::install(unique);
+        // Seed a legacy subdir; primary must not exist yet.
+        fs::create_dir_all(state_env.legacy("slop_ledger")).expect("legacy dir");
+        fs::write(
+            state_env.legacy("slop_ledger").join("slop_ledger.json"),
+            b"legacy",
+        )
+        .expect("legacy file");
+        assert!(!state_env.primary("slop_ledger").exists());
+
+        let dir = ensure_state_dir("slop_ledger").expect("ensure_state_dir");
+        assert_eq!(dir, state_env.primary("slop_ledger"));
+        // Legacy contents relocated into primary.
+        assert_eq!(
+            fs::read_to_string(state_env.primary("slop_ledger").join("slop_ledger.json"))
+                .expect("migrated file"),
+            "legacy"
+        );
+        // The legacy subdir was relocated (moved), so .deepseek stops growing.
+        assert!(
+            !state_env.legacy("slop_ledger").exists(),
+            "legacy subdir should be removed after relocation"
+        );
+        // Idempotent: a second call is a no-op now that primary exists.
+        ensure_state_dir("slop_ledger").expect("idempotent ensure");
+        let _ = fs::remove_dir_all(&state_env.home);
+    }
+
+    #[test]
+    fn ensure_state_dir_writes_to_primary_when_both_exist() {
+        let _lock = env_lock();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let state_env = StateDirEnv::install(unique);
+        // Migrated user: primary already exists; a legacy orphan also remains.
+        fs::create_dir_all(state_env.primary("sessions")).expect("primary dir");
+        fs::write(state_env.primary("sessions").join("a.json"), b"primary").expect("primary file");
+        fs::create_dir_all(state_env.legacy("sessions")).expect("legacy dir");
+        fs::write(state_env.legacy("sessions").join("old.json"), b"legacy").expect("legacy file");
+
+        let dir = ensure_state_dir("sessions").expect("ensure_state_dir");
+        assert_eq!(dir, state_env.primary("sessions"));
+        // Primary untouched; legacy orphan left as-is (not migrated, not deleted).
+        assert_eq!(
+            fs::read_to_string(state_env.primary("sessions").join("a.json")).expect("primary"),
+            "primary"
+        );
+        assert!(
+            state_env.legacy("sessions").exists(),
+            "existing legacy orphan must not be deleted when primary exists"
+        );
+        let _ = fs::remove_dir_all(&state_env.home);
+    }
+
+    #[test]
+    fn resolve_state_dir_still_finds_legacy_for_backfill() {
+        let _lock = env_lock();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let state_env = StateDirEnv::install(unique);
+        // Only legacy exists -> read resolver returns legacy (backfill).
+        fs::create_dir_all(state_env.legacy("catalog")).expect("legacy dir");
+        assert_eq!(
+            resolve_state_dir("catalog").expect("resolve"),
+            state_env.legacy("catalog")
+        );
+        // After the primary is created (e.g. via a write), the read resolver
+        // returns primary — legacy is reachable only while primary is absent.
+        ensure_state_dir("catalog").expect("ensure");
+        assert_eq!(
+            resolve_state_dir("catalog").expect("resolve after migrate"),
+            state_env.primary("catalog")
+        );
+        let _ = fs::remove_dir_all(&state_env.home);
+    }
+
+    #[test]
+    fn state_resolvers_reject_path_traversal_subdirs() {
+        // Defense against path injection (#3240 hardening): the public state
+        // resolvers must refuse subdirs that could escape the state root.
+        for bad in ["..", "../secret", "/etc", "a/../../b"] {
+            let err = ensure_state_dir(bad)
+                .err()
+                .unwrap_or_else(|| panic!("expected {bad:?} to be rejected"));
+            assert!(
+                format!("{err:#}").contains("state subdir"),
+                "expected rejection of {bad:?}, got {err:#}"
+            );
+            assert!(
+                resolve_state_dir(bad).is_err(),
+                "read resolver must also reject {bad:?}"
+            );
+        }
+        // Safe values are accepted (including the root sentinel ".").
+        assert!(ensure_safe_state_subdir(".").is_ok());
+        assert!(ensure_safe_state_subdir("sessions").is_ok());
+        assert!(ensure_safe_state_subdir("a/b").is_ok());
+        assert!(ensure_safe_state_subdir("").is_err());
     }
 
     #[test]

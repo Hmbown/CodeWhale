@@ -14,6 +14,7 @@
 //! `core::engine::tool_catalog::ensure_advanced_tooling` for the
 //! catalog-side dispatch.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::time::Duration;
 
@@ -30,6 +31,60 @@ pub const JS_EXECUTION_TOOL_NAME: &str = "js_execution";
 /// Anthropic message API expects so the wire shape stays stable
 /// across the two interpreters.
 const JS_EXECUTION_TOOL_TYPE: &str = "code_execution_20250825";
+const NODE_USE_ENV_PROXY: &str = "NODE_USE_ENV_PROXY";
+const NODE_PROXY_PAIRS: &[(&str, &str)] =
+    &[("HTTP_PROXY", "http_proxy"), ("HTTPS_PROXY", "https_proxy")];
+
+fn first_non_empty_env_from(
+    keys: &[&str],
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Option<OsString> {
+    keys.iter()
+        .filter_map(|key| env(key))
+        .find(|value| !value.is_empty())
+}
+
+fn node_proxy_env_overrides_from(
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Vec<(&'static str, OsString)> {
+    let all_proxy = first_non_empty_env_from(&["ALL_PROXY", "all_proxy"], &env);
+    let proxy_configured = all_proxy.is_some()
+        || NODE_PROXY_PAIRS
+            .iter()
+            .any(|(upper, lower)| first_non_empty_env_from(&[upper, lower], &env).is_some());
+
+    let mut overrides = Vec::new();
+    if proxy_configured && first_non_empty_env_from(&[NODE_USE_ENV_PROXY], &env).is_none() {
+        overrides.push((NODE_USE_ENV_PROXY, OsString::from("1")));
+    }
+
+    for (upper, lower) in NODE_PROXY_PAIRS {
+        if first_non_empty_env_from(&[upper], &env).is_none()
+            && let Some(value) =
+                first_non_empty_env_from(&[lower], &env).or_else(|| all_proxy.clone())
+        {
+            overrides.push((*upper, value));
+        }
+    }
+
+    if first_non_empty_env_from(&["NO_PROXY"], &env).is_none()
+        && let Some(value) = first_non_empty_env_from(&["no_proxy"], &env)
+    {
+        overrides.push(("NO_PROXY", value));
+    }
+
+    overrides
+}
+
+fn node_proxy_env_overrides() -> Vec<(&'static str, OsString)> {
+    node_proxy_env_overrides_from(|key| std::env::var_os(key))
+}
+
+fn apply_node_proxy_env(cmd: &mut tokio::process::Command) {
+    for (key, value) in node_proxy_env_overrides() {
+        cmd.env(key, value);
+    }
+}
 
 /// Build the `Tool` definition the catalog should advertise when
 /// Node.js is present on the host. Kept as a constructor (rather
@@ -87,6 +142,9 @@ pub async fn execute_js_execution_tool(
     let mut cmd = crate::dependencies::Node::tokio_command().ok_or_else(|| {
         ToolError::execution_failed("js_execution: Node.js runtime became unavailable".to_string())
     })?;
+    // Recent Node releases use this startup env to make fetch/http(s) honor
+    // standard proxy variables; older runtimes ignore it and keep prior behavior.
+    apply_node_proxy_env(&mut cmd);
     cmd.arg(&script_path).current_dir(workspace);
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
@@ -116,6 +174,7 @@ pub async fn execute_js_execution_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::tempdir;
 
     /// Skip helper — `js_execution` is a no-op on hosts without Node.
@@ -123,6 +182,14 @@ mod tests {
     /// tests don't fail; they just don't exercise the spawn path.
     fn node_present() -> bool {
         crate::dependencies::resolve_node().is_some()
+    }
+
+    fn proxy_env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find_map(|(name, value)| (*name == key).then(|| OsString::from(value)))
+        }
     }
 
     #[test]
@@ -138,6 +205,35 @@ mod tests {
         assert!(
             required.iter().any(|v| v.as_str() == Some("code")),
             "input_schema must require `code`",
+        );
+    }
+
+    #[test]
+    fn node_proxy_overrides_enable_env_proxy_when_proxy_env_is_present() {
+        let overrides =
+            node_proxy_env_overrides_from(proxy_env(&[("HTTPS_PROXY", "http://127.0.0.1:20499")]));
+
+        assert_eq!(
+            overrides,
+            vec![(NODE_USE_ENV_PROXY, OsString::from("1"))],
+            "uppercase proxy vars are inherited by the child; only Node's env-proxy flag is needed"
+        );
+    }
+
+    #[test]
+    fn node_proxy_overrides_mirror_lowercase_proxy_vars() {
+        let overrides = node_proxy_env_overrides_from(proxy_env(&[
+            ("https_proxy", "http://127.0.0.1:20499"),
+            ("no_proxy", "localhost"),
+        ]));
+
+        assert_eq!(
+            overrides,
+            vec![
+                (NODE_USE_ENV_PROXY, OsString::from("1")),
+                ("HTTPS_PROXY", OsString::from("http://127.0.0.1:20499")),
+                ("NO_PROXY", OsString::from("localhost")),
+            ]
         );
     }
 

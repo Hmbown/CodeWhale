@@ -332,6 +332,50 @@ async fn background_start_advertises_task_status_completion() {
 }
 
 #[tokio::test]
+async fn background_shell_job_carries_subagent_owner() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path()).with_owner_agent("agent_owner", "verifier");
+    let result = ExecShellTool
+        .execute(
+            json!({"command": sleep_command(2), "background": true}),
+            &ctx,
+        )
+        .await
+        .expect("start owned background shell");
+
+    let metadata = result.metadata.as_ref().expect("metadata");
+    assert_eq!(
+        metadata.get("owner_agent_id").and_then(Value::as_str),
+        Some("agent_owner")
+    );
+    assert_eq!(
+        metadata.get("owner_agent_name").and_then(Value::as_str),
+        Some("verifier")
+    );
+    let task_id = metadata
+        .get("task_id")
+        .and_then(Value::as_str)
+        .expect("task id")
+        .to_string();
+
+    {
+        let mut manager = ctx.shell_manager.lock().expect("shell manager");
+        let snapshot = manager
+            .list_jobs()
+            .into_iter()
+            .find(|job| job.id == task_id)
+            .expect("owned shell job snapshot");
+        assert_eq!(snapshot.owner_agent_id.as_deref(), Some("agent_owner"));
+        assert_eq!(snapshot.owner_agent_name.as_deref(), Some("verifier"));
+    }
+
+    ShellCancelTool
+        .execute(json!({"task_id": task_id}), &ctx)
+        .await
+        .expect("cancel owned background shell");
+}
+
+#[tokio::test]
 async fn drain_finished_jobs_reports_once() {
     let tmp = tempdir().expect("tempdir");
     let ctx = ToolContext::new(tmp.path());
@@ -812,6 +856,58 @@ fn shell_delta_result_keeps_existing_summary_for_generic_cargo_failure() {
     assert_eq!(
         metadata["summary"],
         json!("command failed without structured cargo diagnostics")
+    );
+}
+
+#[test]
+fn shell_delta_result_surfaces_python_build_dependency_hint() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let result = ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: "running build_ext\nModuleNotFoundError: No module named 'setuptools'\n"
+            .to_string(),
+        duration_ms: 12,
+        stdout_len: 0,
+        stderr_len: 72,
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+    };
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "python setup.py build_ext --inplace".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 72,
+        },
+        &ctx,
+    );
+
+    assert!(!tool_result.success);
+    assert!(
+        tool_result
+            .content
+            .starts_with("Python build dependency missing")
+    );
+    let metadata = tool_result.metadata.expect("metadata");
+    assert_eq!(
+        metadata["python_build_dependency_hint"]["kind"],
+        json!("missing_setuptools")
+    );
+    assert!(
+        metadata["python_build_dependency_hint"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("setuptools")
     );
 }
 

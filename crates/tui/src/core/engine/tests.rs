@@ -988,6 +988,121 @@ fn agent_catalog_keeps_edit_file_loaded_when_fuzz_is_omitted() {
 }
 
 #[test]
+fn agent_catalog_advertises_and_searches_core_action_tools() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let always_load = HashSet::new();
+    let mut catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+        &always_load,
+    );
+    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
+
+    let issues = tool_catalog_consistency_issues(&catalog, &registry);
+    assert!(
+        issues.is_empty(),
+        "Agent catalog should match the runtime registry: {issues:?}"
+    );
+
+    let names = catalog
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<HashSet<_>>();
+    for tool_name in ["exec_shell", "write_file", "edit_file", "apply_patch"] {
+        assert!(
+            names.contains(tool_name),
+            "{tool_name} must be advertised in Agent mode"
+        );
+
+        let mut active = initial_active_tools(&catalog);
+        let result = execute_tool_search(
+            TOOL_SEARCH_BM25_NAME,
+            &json!({ "query": tool_name }),
+            &catalog,
+            &mut active,
+        )
+        .expect("tool search succeeds");
+        let references = result.metadata.as_ref().unwrap()["tool_references"]
+            .as_array()
+            .expect("tool references are an array");
+        assert!(
+            references
+                .iter()
+                .any(|reference| reference.as_str() == Some(tool_name)),
+            "{tool_name} should be discoverable by tool_search"
+        );
+        assert!(
+            active.contains(tool_name),
+            "{tool_name} should be activated by tool_search"
+        );
+    }
+}
+
+#[test]
+fn catalog_consistency_self_check_flags_registered_core_tool_missing_from_catalog() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let always_load = HashSet::new();
+    let mut catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+        &always_load,
+    );
+    catalog.retain(|tool| tool.name != "exec_shell");
+
+    let issues = tool_catalog_consistency_issues(&catalog, &registry);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.contains("registered core tool 'exec_shell'")),
+        "missing registered exec_shell should be reported: {issues:?}"
+    );
+}
+
+#[test]
+fn tool_search_reports_known_core_action_tool_when_current_catalog_omits_it() {
+    let catalog = vec![api_tool("read_file")];
+    let mut active = initial_active_tools(&catalog);
+
+    let result = execute_tool_search(
+        TOOL_SEARCH_BM25_NAME,
+        &json!({ "query": "exec_shell" }),
+        &catalog,
+        &mut active,
+    )
+    .expect("tool search succeeds");
+
+    assert!(!active.contains("exec_shell"));
+    let unavailable = result.metadata.as_ref().unwrap()["unavailable_tool_references"]
+        .as_array()
+        .expect("unavailable references are an array");
+    assert!(
+        unavailable.iter().any(|reference| {
+            reference["tool_name"].as_str() == Some("exec_shell")
+                && reference["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("allow_shell = true"))
+        }),
+        "known-but-omitted core action tool should surface with a reason: {unavailable:?}"
+    );
+}
+
+#[test]
 fn tools_always_load_overrides_default_native_deferral() {
     let always_load = HashSet::from(["git_blame".to_string()]);
     assert!(!should_default_defer_tool("git_blame", &always_load));
@@ -2308,15 +2423,20 @@ fn internal_context_budget_tiers_reserved_output_by_window() {
 }
 
 #[test]
-fn v4_tool_outputs_keep_large_file_reads_in_context() {
+fn v4_keeps_large_file_reads_but_compacts_noisy_shell_output() {
     let content = "0123456789abcdef\n".repeat(2_000);
     let output = ToolResult::success(content.clone());
 
-    let v4_context = compact_tool_result_for_context("deepseek-v4-pro", "exec_shell", &output);
+    let v4_context = compact_tool_result_for_context("deepseek-v4-pro", "read_file", &output);
     assert_eq!(v4_context, content.trim());
 
+    let v4_shell_context =
+        compact_tool_result_for_context("deepseek-v4-pro", "exec_shell", &output);
+    assert!(v4_shell_context.contains("exec_shell output compacted to protect context"));
+    assert!(v4_shell_context.len() < v4_context.len());
+
     let legacy_context =
-        compact_tool_result_for_context("deepseek-v3.2-128k", "exec_shell", &output);
+        compact_tool_result_for_context("deepseek-v3.2-128k", "read_file", &output);
     assert!(legacy_context.contains("output compacted to protect context"));
     assert!(legacy_context.len() < v4_context.len());
 }
@@ -2577,6 +2697,29 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     assert!(text.starts_with("<turn_meta>\n"));
     assert!(text.contains(&format!("Current local date: {today}")));
     assert!(text.contains("Current model: deepseek-v4-flash"));
+    assert!(text.contains("Input provenance: external_user"));
+    assert!(text.contains("Input authority: external_current_turn"));
+}
+
+#[test]
+fn runtime_turn_metadata_marks_non_authoritative_input() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    let msg = engine.runtime_text_message_with_turn_metadata(
+        "改吧".to_string(),
+        UserInputProvenance::AssistantGenerated,
+    );
+    let last_block = msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains("Input provenance: assistant_generated"));
+    assert!(text.contains("Input authority: non_authoritative"));
 }
 
 #[test]
@@ -2604,6 +2747,83 @@ fn turn_metadata_includes_auto_model_route() {
     assert!(text.contains("Auto model route: deepseek-v4-pro"));
     assert!(text.contains("Auto reasoning effort: max"));
     assert!(!text.contains("debug this regression"));
+}
+
+#[test]
+fn non_external_provenance_cannot_inherit_yolo_auto_approval() {
+    let policy = effective_input_policy(
+        UserInputProvenance::SubAgentHandoff,
+        AppMode::Yolo,
+        "改吧",
+        true,
+        true,
+        true,
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+
+    assert_eq!(policy.mode, AppMode::Agent);
+    assert!(policy.allow_shell);
+    assert!(!policy.trust_mode);
+    assert!(!policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Suggest
+    );
+    assert!(
+        policy
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("not external user input"))
+    );
+}
+
+#[test]
+fn review_only_external_input_keeps_explicit_mode_with_advisory_hint() {
+    // Review-only wording must never silently override an explicitly chosen
+    // mode (Yolo/Agent) or strip its tools. The heuristic should only surface
+    // an advisory hint suggesting `/mode plan` for strict read-only tools.
+
+    let agent = effective_input_policy(
+        UserInputProvenance::ExternalUser,
+        AppMode::Agent,
+        "你在帮我看看 外卖部分还哪里没有使用多语言",
+        true,
+        true,
+        true,
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+    assert_eq!(agent.mode, AppMode::Agent);
+    assert!(agent.allow_shell);
+    assert!(agent.trust_mode);
+    assert!(agent.auto_approve);
+    assert!(matches!(
+        agent.approval_mode,
+        crate::tui::approval::ApprovalMode::Auto
+    ));
+    assert!(agent.status.as_deref().is_some_and(|status| {
+        status.contains("Keeping your current mode") && status.contains("/mode plan")
+    }));
+
+    let yolo = effective_input_policy(
+        UserInputProvenance::ExternalUser,
+        AppMode::Yolo,
+        "check the failing tests and review the logs",
+        true,
+        true,
+        true,
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+    assert_eq!(yolo.mode, AppMode::Yolo);
+    assert!(yolo.allow_shell);
+    assert!(yolo.trust_mode);
+    assert!(yolo.auto_approve);
+    assert!(matches!(
+        yolo.approval_mode,
+        crate::tui::approval::ApprovalMode::Auto
+    ));
+    assert!(yolo.status.as_deref().is_some_and(|status| {
+        status.contains("Keeping your current mode") && status.contains("/mode plan")
+    }));
 }
 
 #[test]

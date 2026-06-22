@@ -76,7 +76,7 @@ jobs:
             artifact_name: codewhale-tui-windows-x64.exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -141,7 +141,7 @@ jobs:
           artifact=${{ matrix.artifact_name }}
           INFO
           echo "name=${{ matrix.artifact_name }}-${short_sha}" >> "${GITHUB_OUTPUT}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.stage.outputs.name }}
           path: nightly/*

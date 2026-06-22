@@ -6,10 +6,37 @@
 //! checkpoints, and loop termination.
 
 use super::*;
+use crate::core::ops::UserInputProvenance;
 use crate::prompt_zones::PinnedPrefix;
 
-fn loop_guard_block_tool_result(message: String, kind: AttemptBlockKind) -> ToolResult {
+fn loop_guard_block_tool_result(
+    tool_name: &str,
+    message: String,
+    kind: AttemptBlockKind,
+) -> ToolResult {
+    if loop_guard_block_is_guidance(tool_name) {
+        return ToolResult::success(message).with_metadata(json!({
+            "loop_guard": kind.as_str(),
+            "loop_guard_guidance": true,
+            "executed": false,
+        }));
+    }
+
     ToolResult::error(message).with_metadata(json!({"loop_guard": kind.as_str()}))
+}
+
+fn loop_guard_block_is_guidance(tool_name: &str) -> bool {
+    let normalized = tool_name.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "grep_files"
+            | "file_search"
+            | "list_dir"
+            | "web_search"
+            | "fetch_url"
+            | "tool_search_tool_regex"
+            | "tool_search_tool_bm25"
+    ) || normalized.contains("search")
 }
 
 const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
@@ -42,7 +69,27 @@ impl Engine {
     async fn drain_subagent_completion_events(&mut self, status_label: &str) -> usize {
         let mut completions: Vec<crate::tools::subagent::SubAgentCompletion> = Vec::new();
         while let Ok(completion) = self.rx_subagent_completion.try_recv() {
-            completions.push(completion);
+            if self
+                .delivered_subagent_completion_ids
+                .insert(completion.agent_id.clone())
+            {
+                completions.push(completion);
+            }
+        }
+
+        let synthesized = {
+            let manager = self.subagent_manager.read().await;
+            manager.terminal_results_excluding(&self.delivered_subagent_completion_ids)
+        };
+        for result in synthesized {
+            if self
+                .delivered_subagent_completion_ids
+                .insert(result.agent_id.clone())
+            {
+                completions.push(crate::tools::subagent::subagent_completion_from_result(
+                    &result,
+                ));
+            }
         }
 
         let count = completions.len();
@@ -92,6 +139,16 @@ impl Engine {
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
             ensure_advanced_tooling(&mut tool_catalog, mode, &self.config.tools_always_load);
+        }
+        if let Some(registry) = tool_registry {
+            let issues = tool_catalog_consistency_issues(&tool_catalog, registry);
+            if !issues.is_empty() {
+                tracing::warn!(
+                    target: "engine.tool_catalog",
+                    ?issues,
+                    "model/search tool catalog is inconsistent with the runtime registry"
+                );
+            }
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();
@@ -1185,7 +1242,10 @@ impl Engine {
                                     format!("[REPL round {round_num} output]\n{}", round.stdout)
                                 };
                                 self.add_session_message(
-                                    self.user_text_message_with_turn_metadata(feedback),
+                                    self.runtime_text_message_with_turn_metadata(
+                                        feedback,
+                                        UserInputProvenance::Runtime,
+                                    ),
                                 )
                                 .await;
                             }
@@ -1197,9 +1257,10 @@ impl Engine {
                                     )))
                                     .await;
                                 self.add_session_message(
-                                    self.user_text_message_with_turn_metadata(format!(
-                                        "[REPL round {round_num} execution failed]\n{e}"
-                                    )),
+                                    self.runtime_text_message_with_turn_metadata(
+                                        format!("[REPL round {round_num} execution failed]\n{e}"),
+                                        UserInputProvenance::Runtime,
+                                    ),
                                 )
                                 .await;
                             }
@@ -1259,9 +1320,10 @@ impl Engine {
                     )
                     .await
                 {
-                    self.add_session_message(
-                        self.user_text_message_with_turn_metadata(continuation),
-                    )
+                    self.add_session_message(self.runtime_text_message_with_turn_metadata(
+                        continuation,
+                        UserInputProvenance::Runtime,
+                    ))
                     .await;
                     turn.next_step();
                     continue;
@@ -1573,7 +1635,7 @@ impl Engine {
                         loop_guard.record_attempt(&tool_name, &tool_input, read_only)
                 {
                     crate::logging::warn(message.clone());
-                    guard_result = Some(loop_guard_block_tool_result(message, kind));
+                    guard_result = Some(loop_guard_block_tool_result(&tool_name, message, kind));
                 }
 
                 plans.push(ToolExecutionPlan {
@@ -2444,10 +2506,23 @@ fn subagent_completion_runtime_message(payload: &str) -> Message {
     // role carries no semantic weight here — only template-compatibility cost.
     Message {
         role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: subagent_completion_runtime_text(payload),
-            cache_control: None,
-        }],
+        content: vec![
+            ContentBlock::Text {
+                text: subagent_completion_runtime_text(payload),
+                cache_control: None,
+            },
+            runtime_event_turn_metadata_block(UserInputProvenance::SubAgentHandoff),
+        ],
+    }
+}
+
+fn runtime_event_turn_metadata_block(provenance: UserInputProvenance) -> ContentBlock {
+    ContentBlock::Text {
+        text: format!(
+            "<turn_meta>\nInput provenance: {}\nInput authority: non_authoritative\n</turn_meta>",
+            provenance.as_str()
+        ),
+        cache_control: None,
     }
 }
 
@@ -2481,6 +2556,14 @@ fn shell_completion_status_text(
     {
         let command = truncate_runtime_status_field(&event.command, 80);
         status.push_str(&format!(": {command}"));
+        if let Some(owner) = event
+            .owner_agent_name
+            .as_deref()
+            .or(event.owner_agent_id.as_deref())
+            .filter(|owner| !owner.trim().is_empty())
+        {
+            status.push_str(&format!(" (by {owner})"));
+        }
     }
 
     Some(status)
@@ -2857,6 +2940,8 @@ mod tests {
                 stdout_tail: "running tests".to_string(),
                 stderr_tail: "test failed".to_string(),
                 linked_task_id: Some("task_1".to_string()),
+                owner_agent_id: Some("agent_verifier".to_string()),
+                owner_agent_name: Some("verifier".to_string()),
             }],
             "",
         )
@@ -2864,6 +2949,7 @@ mod tests {
 
         assert!(status.contains("1 background shell job finished (1 failed)"));
         assert!(status.contains("cargo test -p codewhale-tui"));
+        assert!(status.contains("by verifier"));
         assert!(!status.contains("runtime_event"));
         assert!(!status.contains("manual exec_shell_wait polling"));
         assert!(!status.contains("stderr_tail"));
@@ -3022,6 +3108,7 @@ mod tests {
     #[test]
     fn loop_guard_block_tool_result_counts_as_failure() {
         let result = loop_guard_block_tool_result(
+            "edit_file",
             "Blocked: repeated call".to_string(),
             AttemptBlockKind::IdenticalToolCall,
         );
@@ -3037,6 +3124,35 @@ mod tests {
                 .and_then(|m| m.get("loop_guard"))
                 .and_then(|v| v.as_str()),
             Some("identical_tool_call")
+        );
+    }
+
+    #[test]
+    fn loop_guard_search_block_tool_result_is_guidance() {
+        let result = loop_guard_block_tool_result(
+            "grep_files",
+            "Stop calling `grep_files`; use current evidence.".to_string(),
+            AttemptBlockKind::NoProgressToolLoop,
+        );
+
+        assert!(
+            result.success,
+            "read-only search loop blocks should guide the model without feeding the failure loop"
+        );
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert_eq!(
+            metadata.get("loop_guard").and_then(|v| v.as_str()),
+            Some("no_progress_tool_loop")
+        );
+        assert_eq!(
+            metadata
+                .get("loop_guard_guidance")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            metadata.get("executed").and_then(|v| v.as_bool()),
+            Some(false)
         );
     }
 

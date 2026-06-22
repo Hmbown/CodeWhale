@@ -31,8 +31,8 @@ use super::worker_runtime::fleet_task_prompt;
 /// `--auto` is always passed: a headless worker has no human to approve tool
 /// calls, so it runs with full (policy-gated) tool access. `--output-format
 /// stream-json` makes the worker emit the NDJSON event stream this module
-/// parses. Recursion depth is inherited from the worker's own config
-/// (`[runtime] max_spawn_depth`, default [`codewhale_config::DEFAULT_SPAWN_DEPTH`]).
+/// parses. Fleet recursion depth is inherited from the worker's own config
+/// (`[fleet.exec] max_spawn_depth`, default [`codewhale_config::DEFAULT_SPAWN_DEPTH`]).
 ///
 /// Secrets are NEVER placed on the argv: provider credentials are resolved by
 /// the worker process from its own config/keyring exactly like an interactive

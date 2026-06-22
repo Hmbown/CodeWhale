@@ -8,5 +8,5 @@ description = "Execution policy and approval model parity for DeepSeek workspace
 
 [dependencies]
 anyhow.workspace = true
-codewhale-protocol = { path = "../protocol", version = "0.8.62" }
+codewhale-protocol = { path = "../protocol", version = "0.8.63" }
 serde.workspace = true

@@ -171,7 +171,10 @@ impl PendingInputPreview {
             }
             if !self.queued_messages.is_empty() {
                 lines.push(Line::from(vec![Span::styled(
-                    format!("    {} edit last queued message", self.edit_binding.label),
+                    format!(
+                        "    Ctrl+S send now · {} edit last queued",
+                        self.edit_binding.label
+                    ),
                     dim,
                 )]));
             }
@@ -395,7 +398,8 @@ mod tests {
         assert!(rows[2].contains("/queue send 1"));
         assert!(rows[2].contains("drop 1"));
         assert!(rows[2].contains("clear"));
-        assert!(rows[3].contains("edit last queued message"));
+        assert!(rows[3].contains("Ctrl+S send now"));
+        assert!(rows[3].contains("edit last queued"));
     }
 
     #[test]
@@ -417,9 +421,7 @@ mod tests {
             "missing restore hint: {rows:?}"
         );
         assert!(
-            !rows
-                .iter()
-                .any(|row| row.contains("edit last queued message")),
+            !rows.iter().any(|row| row.contains("edit last queued")),
             "editing mode should not also advertise opening a queued edit: {rows:?}"
         );
     }
@@ -484,7 +486,7 @@ mod tests {
             "unexpected Esc hint: {rows:?}"
         );
         assert!(
-            !rows.iter().any(|r| r.contains("edit last queued message")),
+            !rows.iter().any(|r| r.contains("edit last queued")),
             "unexpected edit hint in pending-steer-only view: {rows:?}"
         );
     }
@@ -505,6 +507,7 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("rejected")));
         assert!(rows.iter().any(|r| r.contains("queued")));
         assert!(rows.iter().any(|r| r.contains("↑")));
+        assert!(rows.iter().any(|r| r.contains("Ctrl+S")));
     }
 
     #[test]
@@ -574,7 +577,8 @@ mod tests {
         assert!(rows[3].contains("line3"));
         assert!(rows[4].contains("…"));
         assert!(rows[5].contains("/queue send 1"));
-        assert!(rows[6].contains("edit last queued message"));
+        assert!(rows[6].contains("Ctrl+S send now"));
+        assert!(rows[6].contains("edit last queued"));
     }
 
     #[test]

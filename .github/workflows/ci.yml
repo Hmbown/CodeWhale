@@ -20,9 +20,9 @@ jobs:
     name: Version drift
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Check version drift
@@ -34,7 +34,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@master
@@ -89,7 +89,7 @@ jobs:
         # coverage CNB cannot provide.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: runner.os != 'Linux'
       - uses: dtolnay/rust-toolchain@stable
         if: runner.os != 'Linux'
@@ -118,11 +118,11 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: runner.os != 'Linux'
       - uses: dtolnay/rust-toolchain@stable
         if: runner.os != 'Linux'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: runner.os != 'Linux'
         with:
           node-version: 20
@@ -145,7 +145,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux system dependencies
         run: |
@@ -167,7 +167,7 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'

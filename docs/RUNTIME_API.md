@@ -58,6 +58,9 @@ every endpoint documented below is identical across both entrypoints. The
 runtime API token is read from `--auth-token`, then `CODEWHALE_RUNTIME_TOKEN`,
 then `DEEPSEEK_RUNTIME_TOKEN`; use `--insecure-no-auth` only with a loopback
 bind. The `serve` compatibility aliases keep their `--insecure` flag.
+The legacy in-process `codewhale app-server` also requires an explicit
+`--auth-token` or `CODEWHALE_APP_SERVER_TOKEN` before binding a non-loopback
+host; its generated one-time `cwapp_*` token is loopback-only.
 
 The `--stdio` control transport is newline-delimited JSON-RPC 2.0. Probe it
 without spending model tokens:

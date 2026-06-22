@@ -1,5 +1,7 @@
 //! CLI entry point for CodeWhale.
 
+#![allow(clippy::uninlined_format_args)]
+
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1156,8 +1158,9 @@ async fn main() -> Result<()> {
                     || args.disallowed_tools.is_some()
                     || args.append_system_prompt.is_some();
                 if needs_engine {
+                    let provider = config.api_provider();
                     let max_subagents = cli.max_subagents.map_or_else(
-                        || config.max_subagents(),
+                        || config.max_subagents_for_provider(provider),
                         |value| value.clamp(1, MAX_SUBAGENTS),
                     );
                     let auto_mode = args.auto || yolo;
@@ -1204,8 +1207,9 @@ async fn main() -> Result<()> {
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
+                let provider = config.api_provider();
                 let max_subagents = cli.max_subagents.map_or_else(
-                    || config.max_subagents(),
+                    || config.max_subagents_for_provider(provider),
                     |value| value.clamp(1, MAX_SUBAGENTS),
                 );
                 run_swebench_command(&config, &model, workspace, max_subagents, args).await
@@ -5884,8 +5888,9 @@ async fn run_interactive(
     }
 
     let model = config.default_model();
+    let provider = config.api_provider();
     let max_subagents = cli.max_subagents.map_or_else(
-        || config.max_subagents(),
+        || config.max_subagents_for_provider(provider),
         |value| value.clamp(1, MAX_SUBAGENTS),
     );
     let use_alt_screen = should_use_alt_screen(cli, config);
@@ -6282,6 +6287,14 @@ async fn run_exec_agent(
     let auto_model = route.auto_model;
     let effective_provider = route.provider;
     let effective_model = route.model;
+    let max_subagents = if max_subagents == config.max_subagents_for_provider(config.api_provider())
+    {
+        execution_config
+            .max_subagents_for_provider(effective_provider)
+            .clamp(1, MAX_SUBAGENTS)
+    } else {
+        max_subagents
+    };
     let effective_reasoning_effort = route
         .reasoning_effort
         .and_then(|effort| cli_reasoning_effort_value(&execution_config, effort));
@@ -6338,13 +6351,19 @@ async fn run_exec_agent(
         show_thinking: settings.show_thinking,
         max_steps: max_turns,
         max_subagents,
-        launch_concurrency: execution_config.launch_concurrency(),
+        max_admitted_subagents: execution_config
+            .max_admitted_subagents_for_provider(effective_provider)
+            .max(max_subagents),
+        launch_concurrency: execution_config.launch_concurrency_for_provider(effective_provider),
+        subagents_enabled: execution_config.subagents_enabled_for_provider(effective_provider),
         features: execution_config.features(),
         compaction,
         todos: new_shared_todo_list(),
         plan_state: new_shared_plan_state(),
         goal_state: crate::tools::goal::new_shared_goal_state(),
-        max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        max_spawn_depth: execution_config.subagent_max_spawn_depth_for_provider(effective_provider),
+        subagent_token_budget: execution_config
+            .subagent_token_budget_for_provider(effective_provider),
         network_policy,
         snapshots_enabled: execution_config.snapshots_config().enabled,
         snapshots_max_workspace_bytes: execution_config
@@ -6355,13 +6374,13 @@ async fn run_exec_agent(
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: execution_config.subagent_model_overrides(),
         subagent_api_timeout: std::time::Duration::from_secs(
-            execution_config.subagent_api_timeout_secs(),
+            execution_config.subagent_api_timeout_secs_for_provider(effective_provider),
         ),
         stream_chunk_timeout: std::time::Duration::from_secs(
             execution_config.stream_chunk_timeout_secs(),
         ),
         subagent_heartbeat_timeout: std::time::Duration::from_secs(
-            execution_config.subagent_heartbeat_timeout_secs(),
+            execution_config.subagent_heartbeat_timeout_secs_for_provider(effective_provider),
         ),
         prefer_bwrap: execution_config.prefer_bwrap.unwrap_or(false),
         memory_enabled: execution_config.memory_enabled(),
@@ -6464,6 +6483,7 @@ async fn run_exec_agent(
                     .unwrap_or_default()
             },
             verbosity: execution_config.verbosity.clone(),
+            provenance: crate::core::ops::UserInputProvenance::ExternalUser,
         })
         .await?;
 

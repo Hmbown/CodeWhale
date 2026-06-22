@@ -78,6 +78,11 @@ struct SettingsHomeGuard {
     _tmp: TempDir,
     previous_home: Option<OsString>,
     previous_userprofile: Option<OsString>,
+    previous_codewhale_home: Option<OsString>,
+    previous_deepseek_config_path: Option<OsString>,
+    previous_xdg_config_home: Option<OsString>,
+    previous_appdata: Option<OsString>,
+    previous_localappdata: Option<OsString>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -87,15 +92,31 @@ impl SettingsHomeGuard {
         let tmp = TempDir::new().expect("settings tempdir");
         let previous_home = std::env::var_os("HOME");
         let previous_userprofile = std::env::var_os("USERPROFILE");
+        let previous_codewhale_home = std::env::var_os("CODEWHALE_HOME");
+        let previous_deepseek_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_appdata = std::env::var_os("APPDATA");
+        let previous_localappdata = std::env::var_os("LOCALAPPDATA");
+        let codewhale_home = tmp.path().join(".codewhale");
         // Safety: test-only environment mutation guarded by a global mutex.
         unsafe {
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("USERPROFILE", tmp.path());
+            std::env::set_var("CODEWHALE_HOME", &codewhale_home);
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", codewhale_home.join("config.toml"));
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg-config"));
+            std::env::set_var("APPDATA", tmp.path().join("appdata"));
+            std::env::set_var("LOCALAPPDATA", tmp.path().join("localappdata"));
         }
         Self {
             _tmp: tmp,
             previous_home,
             previous_userprofile,
+            previous_codewhale_home,
+            previous_deepseek_config_path,
+            previous_xdg_config_home,
+            previous_appdata,
+            previous_localappdata,
             _lock: lock,
         }
     }
@@ -103,17 +124,26 @@ impl SettingsHomeGuard {
 
 impl Drop for SettingsHomeGuard {
     fn drop(&mut self) {
-        // Safety: test-only environment mutation guarded by a global mutex.
-        unsafe {
-            match self.previous_home.take() {
-                Some(previous) => std::env::set_var("HOME", previous),
-                None => std::env::remove_var("HOME"),
-            }
-            match self.previous_userprofile.take() {
-                Some(previous) => std::env::set_var("USERPROFILE", previous),
-                None => std::env::remove_var("USERPROFILE"),
+        fn restore(key: &str, previous: Option<OsString>) {
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                match previous {
+                    Some(previous) => std::env::set_var(key, previous),
+                    None => std::env::remove_var(key),
+                }
             }
         }
+
+        restore("HOME", self.previous_home.take());
+        restore("USERPROFILE", self.previous_userprofile.take());
+        restore("CODEWHALE_HOME", self.previous_codewhale_home.take());
+        restore(
+            "DEEPSEEK_CONFIG_PATH",
+            self.previous_deepseek_config_path.take(),
+        );
+        restore("XDG_CONFIG_HOME", self.previous_xdg_config_home.take());
+        restore("APPDATA", self.previous_appdata.take());
+        restore("LOCALAPPDATA", self.previous_localappdata.take());
     }
 }
 
@@ -174,6 +204,10 @@ fn recover_terminal_modes_emits_expected_csi_sequences_with_gating() {
         on.contains("\x1b[>1u") && off.contains("\x1b[>1u"),
         "Kitty keyboard disambiguation flag must be re-pushed regardless of gating"
     );
+    assert!(
+        on.contains("\x1b[?1007h") && off.contains("\x1b[?1007h"),
+        "alternate-scroll mode must be re-armed regardless of mouse-capture gating"
+    );
 
     assert!(
         on.contains("\x1b[?1000h"),
@@ -200,6 +234,17 @@ fn recover_terminal_modes_runs_without_panic_on_windows() {
     let mut buf: Vec<u8> = Vec::new();
     recover_terminal_modes(&mut buf, true, true);
     recover_terminal_modes(&mut buf, false, false);
+}
+
+#[test]
+fn alternate_scroll_mode_disable_emits_xterm_reset() {
+    let mut buf: Vec<u8> = Vec::new();
+    disable_alternate_scroll_mode(&mut buf);
+    let seq = String::from_utf8_lossy(&buf);
+    assert!(
+        seq.contains("\x1b[?1007l"),
+        "disable_alternate_scroll_mode must emit the xterm alternate-scroll reset"
+    );
 }
 
 // On Windows crossterm's PushKeyboardEnhancementFlags never writes bytes
@@ -285,6 +330,34 @@ fn composer_newline_shortcuts_do_not_steal_ctrl_enter() {
     assert!(!is_composer_newline_key(KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    )));
+}
+
+#[test]
+fn forced_submit_accepts_ctrl_enter_and_ctrl_j_encodings() {
+    assert!(is_forced_submit_key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::CONTROL,
+    )));
+    assert!(is_forced_submit_key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    )));
+    assert!(is_forced_submit_key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::CONTROL,
+    )));
+    assert!(is_forced_submit_key(KeyEvent::new(
+        KeyCode::Char('J'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    )));
+    assert!(!is_forced_submit_key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::ALT | KeyModifiers::CONTROL,
+    )));
+    assert!(!is_forced_submit_key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::ALT,
     )));
 }
 
@@ -2094,6 +2167,8 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: app.turn_started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -2134,6 +2209,8 @@ fn shell_live_output_update_matches_exact_task_id_only() {
         output: None,
         live_output: None,
         shell_task_id: Some("shell_a".to_string()),
+        owner_agent_id: None,
+        owner_agent_name: None,
         started_at: None,
         duration_ms: None,
         source: ExecSource::Assistant,
@@ -2146,6 +2223,8 @@ fn shell_live_output_update_matches_exact_task_id_only() {
         output: None,
         live_output: Some("previous".to_string()),
         shell_task_id: Some("shell_b".to_string()),
+        owner_agent_id: None,
+        owner_agent_name: None,
         started_at: None,
         duration_ms: None,
         source: ExecSource::Assistant,
@@ -2172,6 +2251,8 @@ fn shell_live_output_update_matches_exact_task_id_only() {
             stale: false,
             elapsed_since_output_ms: None,
             linked_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         },
     );
 
@@ -2196,6 +2277,8 @@ fn shell_live_output_update_skips_finalized_exec_cell() {
         output: Some("final output".to_string()),
         live_output: Some("old live output".to_string()),
         shell_task_id: Some("shell_a".to_string()),
+        owner_agent_id: None,
+        owner_agent_name: None,
         started_at: None,
         duration_ms: Some(10),
         source: ExecSource::Assistant,
@@ -2221,6 +2304,8 @@ fn shell_live_output_update_skips_finalized_exec_cell() {
             stale: false,
             elapsed_since_output_ms: None,
             linked_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         },
     );
 
@@ -2241,6 +2326,8 @@ fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: app.turn_started_at,
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -2457,54 +2544,10 @@ fn provider_picker_reselecting_active_provider_preserves_current_model() {
 #[tokio::test]
 async fn provider_switch_clears_turn_cache_history() {
     // `switch_provider` persists the new provider to `Settings`, which
-    // writes through `dirs::data_dir()` (`~/Library/Application
-    // Support/deepseek/settings.toml` on macOS). Without redirecting
-    // HOME / USERPROFILE we would clobber the developer's real
-    // preferences and leave `default_provider = "ollama"` behind —
-    // which then leaks into any subsequent test that constructs an
-    // `App`. Hold the process-wide env lock for the duration so we
-    // serialize with other tests that mutate the same env vars.
-    // Wrap the lock inside a guard struct so clippy's
-    // `await_holding_lock` doesn't fire on the `.await` below; the
-    // pattern matches other tests that guard HOME / USERPROFILE mutations.
-    struct HomeGuard {
-        _tmp: tempfile::TempDir,
-        prev_home: Option<std::ffi::OsString>,
-        prev_userprofile: Option<std::ffi::OsString>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            // SAFETY: still holding the process-wide env lock.
-            unsafe {
-                match self.prev_home.take() {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
-                match self.prev_userprofile.take() {
-                    Some(v) => std::env::set_var("USERPROFILE", v),
-                    None => std::env::remove_var("USERPROFILE"),
-                }
-            }
-        }
-    }
-    let _home = {
-        let lock = crate::test_support::lock_test_env();
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let prev_home = std::env::var_os("HOME");
-        let prev_userprofile = std::env::var_os("USERPROFILE");
-        // SAFETY: serialized by the process-wide test env lock.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-            std::env::set_var("USERPROFILE", tmp.path());
-        }
-        HomeGuard {
-            _tmp: tmp,
-            prev_home,
-            prev_userprofile,
-            _lock: lock,
-        }
-    };
+    // writes through settings path resolution. Without redirecting the
+    // CodeWhale/legacy config homes we would clobber the developer's real
+    // preferences and leave `default_provider = "ollama"` behind.
+    let _home = SettingsHomeGuard::new();
 
     let mut app = create_test_app();
     app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
@@ -3715,14 +3758,14 @@ fn ctrl_alt_0_hides_sidebar() {
 }
 
 #[test]
-fn ctrl_alt_0_restores_auto_sidebar_when_already_hidden() {
+fn ctrl_alt_0_restores_pinned_sidebar_when_already_hidden() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Hidden;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
+    assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
+    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: pinned"));
 }
 
 #[test]
@@ -3744,11 +3787,47 @@ fn hidden_sidebar_focus_suppresses_sidebar_split_even_when_wide() {
     let mut app = create_test_app();
     app.sidebar_width_percent = 28;
 
-    app.sidebar_focus = SidebarFocus::Auto;
+    app.sidebar_focus = SidebarFocus::Pinned;
     assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(33));
 
     app.sidebar_focus = SidebarFocus::Hidden;
     assert_eq!(sidebar_width_for_chat_area(&app, 120), None);
+}
+
+#[test]
+fn sidebar_width_gate_suppresses_visible_focus_when_narrow() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Pinned;
+    app.last_sidebar_host_width = Some(80);
+
+    assert_eq!(
+        sidebar_render_state(&mut app),
+        SidebarRenderState::SuppressedByWidth {
+            available_width: 80,
+            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
+        }
+    );
+}
+
+#[test]
+fn pinned_sidebar_is_visible_when_idle_and_wide() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Pinned;
+    app.last_sidebar_host_width = Some(120);
+
+    assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
+}
+
+#[test]
+fn auto_sidebar_status_reports_idle_collapse_when_wide() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Auto;
+    app.last_sidebar_host_width = Some(120);
+
+    assert_eq!(
+        sidebar_render_state(&mut app),
+        SidebarRenderState::AutoCollapsed
+    );
 }
 
 #[test]
@@ -3791,6 +3870,8 @@ fn jobs_panel_ignores_model_reasoning_but_shows_for_real_jobs() {
         kind: crate::tui::app::TaskPanelEntryKind::ModelReasoning,
         stale: false,
         elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
     }];
     assert!(
         crate::tui::sidebar::sidebar_auto_idle(&mut app),
@@ -3806,6 +3887,8 @@ fn jobs_panel_ignores_model_reasoning_but_shows_for_real_jobs() {
         kind: crate::tui::app::TaskPanelEntryKind::Background,
         stale: false,
         elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
     });
     assert!(
         crate::tui::sidebar::sidebar_auto_idle(&mut app),
@@ -3821,11 +3904,83 @@ fn jobs_panel_ignores_model_reasoning_but_shows_for_real_jobs() {
         kind: crate::tui::app::TaskPanelEntryKind::Background,
         stale: false,
         elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
     });
     assert!(
         !crate::tui::sidebar::sidebar_auto_idle(&mut app),
         "a live background job must surface the jobs panel"
     );
+}
+
+#[test]
+fn ctrl_x_jobs_prefill_only_catches_running_shell_jobs_in_tasks_sidebar() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Tasks;
+    app.input = "draft".to_string();
+    app.cursor_position = app.input.len();
+    app.task_panel.push(TaskPanelEntry {
+        id: "shell_active".to_string(),
+        status: "running".to_string(),
+        prompt_summary: "shell: cargo test".to_string(),
+        duration_ms: Some(10),
+        kind: TaskPanelEntryKind::Background,
+        stale: false,
+        elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+    });
+
+    assert!(prefill_jobs_cancel_all_if_tasks_sidebar(&mut app));
+    assert_eq!(app.input, "/jobs cancel-all");
+    assert_eq!(app.cursor_position, app.input.len());
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Press Enter to cancel all running commands")
+    );
+}
+
+#[test]
+fn ctrl_x_jobs_prefill_falls_through_outside_tasks_sidebar_shell_jobs() {
+    let mut non_shell = create_test_app();
+    non_shell.sidebar_focus = SidebarFocus::Tasks;
+    non_shell.input = "draft".to_string();
+    non_shell.cursor_position = non_shell.input.len();
+    non_shell.task_panel.push(TaskPanelEntry {
+        id: "task_active".to_string(),
+        status: "running".to_string(),
+        prompt_summary: "summarize the release notes".to_string(),
+        duration_ms: Some(10),
+        kind: TaskPanelEntryKind::Background,
+        stale: false,
+        elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+    });
+
+    assert!(!prefill_jobs_cancel_all_if_tasks_sidebar(&mut non_shell));
+    assert_eq!(non_shell.input, "draft");
+
+    let mut other_sidebar = create_test_app();
+    other_sidebar.sidebar_focus = SidebarFocus::Agents;
+    other_sidebar.input = "draft".to_string();
+    other_sidebar.cursor_position = other_sidebar.input.len();
+    other_sidebar.task_panel.push(TaskPanelEntry {
+        id: "shell_active".to_string(),
+        status: "running".to_string(),
+        prompt_summary: "shell: cargo test".to_string(),
+        duration_ms: Some(10),
+        kind: TaskPanelEntryKind::Background,
+        stale: false,
+        elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+    });
+
+    assert!(!prefill_jobs_cancel_all_if_tasks_sidebar(
+        &mut other_sidebar
+    ));
+    assert_eq!(other_sidebar.input, "draft");
 }
 
 // ── Sidebar resize-handle mouse tests ──────────────────────────────
@@ -6662,6 +6817,8 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
             output: None,
             live_output: None,
             shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
             started_at: Some(Instant::now()),
             duration_ms: None,
             source: ExecSource::Assistant,
@@ -8546,6 +8703,60 @@ fn approval_prompt_uses_event_input_after_message_complete_drain() {
     assert_ne!(content.trim(), "{}");
 }
 
+#[tokio::test]
+async fn approval_decision_persists_ask_rules_to_permissions_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let mut app = create_test_app();
+    app.config_path = Some(config_path.clone());
+    let mut config = Config::default();
+    let mut engine = mock_engine_handle();
+    let rule = codewhale_config::ToolAskRule::exec_shell("cargo test");
+
+    apply_approval_decision(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApprovalDecisionEvent {
+            tool_id: "tool-1".to_string(),
+            tool_name: "exec_shell".to_string(),
+            decision: ReviewDecision::Approved,
+            timed_out: false,
+            approval_key: "approval-key".to_string(),
+            approval_grouping_key: "approval-group".to_string(),
+            persistent_ask_rules: vec![rule.clone()],
+        },
+    )
+    .await;
+
+    assert_eq!(
+        engine.recv_approval_event().await,
+        Some(crate::core::engine::MockApprovalEvent::Approved {
+            id: "tool-1".to_string()
+        })
+    );
+    let store = codewhale_config::ConfigStore::load(Some(config_path)).expect("load config store");
+    assert_eq!(store.permissions().rules, vec![rule]);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Saved 1 ask permission rule"))
+    );
+
+    let decision = config
+        .exec_policy_engine
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test --workspace",
+            cwd: tmp.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnFailure,
+            sandbox_mode: None,
+        })
+        .expect("check persisted runtime policy");
+    assert!(decision.requires_approval);
+}
+
 #[test]
 fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // Real V4 turns can emit Thinking → Tool → Thinking → Tool before any
@@ -9274,6 +9485,8 @@ fn render_footer_from_surfaces_background_shell_even_without_tasks_panel() {
         kind: crate::tui::app::TaskPanelEntryKind::Background,
         stale: false,
         elapsed_since_output_ms: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
     }];
 
     let props = render_footer_from(&app, &[], None);
@@ -10503,6 +10716,8 @@ mod work_sidebar_projection_tests {
             kind: crate::tui::app::TaskPanelEntryKind::Background,
             stale: false,
             elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
         };
         assert_eq!(entry.status, "completed");
         assert_ne!(entry.status, "running");
@@ -10609,8 +10824,9 @@ fn agent_progress_redraw_coalesces_once_per_agent_per_drain() {
 
 #[test]
 fn six_worker_progress_storm_keeps_input_render_and_cancel_live() {
+    let max_engine_events_per_drain = MAX_ENGINE_EVENTS_PER_DRAIN;
     assert!(
-        MAX_ENGINE_EVENTS_PER_DRAIN <= 128,
+        max_engine_events_per_drain <= 128,
         "engine event drains must stay bounded so high sub-agent fanout cannot monopolize the UI tick"
     );
 

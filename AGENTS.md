@@ -6,20 +6,21 @@
   **not** hard-code a device-specific checkout path here — work in whichever
   local checkout you have and always **confirm with
   `git branch --show-current` before editing.**
-- **Active branch:** `hunter/0.8.62-glm-subagents` (also at
-  `origin/hunter/0.8.62-glm-subagents`). 0.8.61 has shipped; all new work lands
-  here.
-- **Workspace version is intentionally still `0.8.61`** in `Cargo.toml` — the
-  bump to `0.8.62` is deferred until the GLM-5.2 routing is smoke-tested end to
-  end against live Z.ai + OpenRouter (see CHANGELOG `## [Unreleased]`). Do not
-  bump it opportunistically.
-- **Milestone guidepost:** GitHub milestone `v0.8.62` (id 47). Check live state
-  with `gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.62" --state open`.
-- **Default branch is `main`.** Never commit directly to `main`; always work on
-  `hunter/0.8.62-glm-subagents` (or a fresh branch off it for an isolated
-  change). Open a PR into `main` only when a unit of work is reviewable.
+- **Active branch:** `codex/v0.8.63-integration` (also at
+  `origin/codex/v0.8.63-integration`) for the current fix/integration lane.
+  If a newer handoff or objective file names a different branch, verify with
+  `git branch --show-current` and follow the live branch.
+- **Workspace version is `0.8.63`** in `Cargo.toml`. Do not bump versions
+  opportunistically; version bumps, tags, release artifacts, publishing, and
+  GitHub Releases require Hunter's explicit approval.
+- **Milestone guidepost:** GitHub milestone `v0.8.63`. Check live state with
+  `gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.63" --state open`.
+- **Default branch is `main`.** Never commit directly to `main`; work on the
+  active integration branch or a fresh `codex/...` branch/worktree off it for
+  an isolated change. Open a PR into `main` only when a unit of work is
+  reviewable.
 - **Always run before pushing a change:** `cargo fmt`, then the targeted tests
-  for the area (`cargo test -p codewhale-tui --bins <filter>`,
+  for the area (`cargo test -p codewhale-tui --bin codewhale-tui --locked <filter>`,
   `cargo test -p codewhale-config`, `cargo test -p codewhale-protocol`, …). Full
   gate: `cargo test --workspace`. Release build:
   `cargo build --release -p codewhale-cli -p codewhale-tui`.
@@ -96,7 +97,7 @@
 - Close or update issues and PRs only after verifying the landed commit on the
   relevant branch. If the release branch already contains equivalent behavior,
   leave a clear note linking the commit and describing any remaining delta.
-- For the active release queue, start from the GitHub `v0.8.62` milestone
-  (`gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.62"`) and refresh
+- For the active release queue, start from the GitHub `v0.8.63` milestone
+  (`gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.63"`) and refresh
   state before acting. Older per-version triage docs under `docs/` are
   historical reference only.

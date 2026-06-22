@@ -120,6 +120,42 @@ The harness writes raw Harbor logs plus `summary.json`, `summary.md`, and
 reported as JSON `null`, and generated run directories are intentionally ignored
 by git; keep only curated summaries in docs or release notes.
 
+### Compare local release artifacts against baselines
+
+Use the local-artifact runner when npm still points at the previous public
+release and you need Terminal-Bench rows for a candidate branch. It uploads
+explicit Linux `codewhale` and `codewhale-tui` binaries into each Harbor task
+container, so the benchmark evidence is tied to the intended build instead of
+whatever npm currently serves.
+
+```bash
+export CODEWHALE_LINUX_BIN=/path/to/codewhale-linux-x64-0.8.63
+export CODEWHALE_TUI_LINUX_BIN=/path/to/codewhale-tui-linux-x64-0.8.63
+
+python scripts/benchmarks/run-codewhale-terminal-bench.py \
+  --task build-cython-ext \
+  --model deepseek/deepseek-v4-flash \
+  --reasoning-effort off
+```
+
+Run the thin direct DeepSeek baseline and stock mini-swe-agent baseline with
+matching task/model settings when you need comparison rows:
+
+```bash
+python scripts/benchmarks/run-deepseek-direct-terminal-bench.py \
+  --task build-cython-ext \
+  --model deepseek/deepseek-v4-flash \
+  --reasoning-effort off
+
+python scripts/benchmarks/run-mini-swe-terminal-bench.py \
+  --task build-cython-ext \
+  --model deepseek/deepseek-v4-flash
+```
+
+All three runners support `--dry-run` to print the Harbor command and write
+metadata scaffolding without launching task containers. Generated run
+directories stay under `benchmark_results/` and remain ignored by git.
+
 ## PinchBench
 
 PinchBench measures agent performance on real-world tasks — scheduling, email

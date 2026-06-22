@@ -1,11 +1,32 @@
 //! `/rename` command — set a custom title for the current session.
 
+use crate::commands::traits::{CommandInfo, RegisterCommand};
+use crate::localization::MessageId;
 use crate::session_manager::{SessionManager, update_session};
 use crate::tui::app::App;
 
 use super::CommandResult;
 
 const MAX_TITLE_LEN: usize = 100;
+
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "rename",
+    aliases: &["gaiming", "chongmingming"],
+    usage: "/rename <new title>",
+    description_id: MessageId::CmdRenameDescription,
+};
+
+pub(in crate::commands) struct RenameCmd;
+
+impl RegisterCommand for RenameCmd {
+    fn info() -> &'static CommandInfo {
+        &COMMAND_INFO
+    }
+
+    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
+        rename(app, arg)
+    }
+}
 
 /// Rename the current session to the given title.
 ///

@@ -1,9 +1,30 @@
 //! `/hf` - Hugging Face MCP and provider concept helpers.
 
+use crate::commands::traits::{CommandInfo, RegisterCommand};
+use crate::localization::MessageId;
 use crate::mcp::{McpConfig, McpServerConfig};
 use crate::tui::app::App;
 
 use super::CommandResult;
+
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "hf",
+    aliases: &["huggingface"],
+    usage: "/hf [mcp <status|setup>|concepts]",
+    description_id: MessageId::CmdHfDescription,
+};
+
+pub(in crate::commands) struct HfCmd;
+
+impl RegisterCommand for HfCmd {
+    fn info() -> &'static CommandInfo {
+        &COMMAND_INFO
+    }
+
+    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
+        hf(app, arg)
+    }
+}
 
 const HF_MCP_SETTINGS_URL: &str = "https://huggingface.co/settings/mcp";
 const HF_MCP_DOCS_URL: &str = "https://huggingface.co/docs/hub/hf-mcp-server";

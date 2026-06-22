@@ -43,7 +43,7 @@ start_server() {
     SERVER_PID=$!
     # Wait for the server to become ready.
     for _ in $(seq 1 30); do
-        if curl -sf "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+        if curl -sf --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.3
@@ -73,7 +73,7 @@ assert_status() {
     fi
 
     local url="http://127.0.0.1:${PORT}${path}"
-    local curl_args=(-sf -o /dev/null -w '%{http_code}' -X "$method")
+    local curl_args=(-sf --max-time 10 -o /dev/null -w '%{http_code}' -X "$method")
     if [[ -n "$header" ]]; then
         curl_args+=(-H "$header")
     fi
@@ -95,7 +95,7 @@ assert_status() {
 assert_body_contains() {
     local method="$1" path="$2" header="$3" substring="$4"
     local url="http://127.0.0.1:${PORT}${path}"
-    local curl_args=(-sf -X "$method")
+    local curl_args=(-sf --max-time 10 -X "$method")
     if [[ -n "$header" ]]; then
         curl_args+=(-H "$header")
     fi
@@ -157,7 +157,7 @@ STDOUT_FILE=$(mktemp)
 SERVER_PID=$!
 SERVER_READY=0
 for _ in $(seq 1 30); do
-    if curl -sf "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; then
+    if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; then
         SERVER_READY=1
         break
     fi

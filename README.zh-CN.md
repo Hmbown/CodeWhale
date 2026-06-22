@@ -20,7 +20,7 @@ DeepInfra 以及本地 vLLM/SGLang/Ollama 都是一等路由；当你手里是 A
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.62
+codewhale --version   # 0.8.63
 ```
 
 npm wrapper（Node 18+）会从 GitHub Releases 下载经 SHA-256 校验的二进制，并安装
@@ -49,8 +49,8 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # 或使用 GitHub Releases 中的 NSIS 安装包
 
 # CNB 镜像：适合无法稳定访问 GitHub 的用户
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.62 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.63 codewhale-tui --locked --force
 
 # 旧 Homebrew 兼容路径：formula 改名期间仍沿用 deepseek-tui
 brew tap Hmbown/deepseek-tui
@@ -129,18 +129,22 @@ codewhale exec --allowed-tools read_file,exec_shell --max-turns 10 "fix the fail
   `deepinfra`、`wanjie-ark`，外加一条通用的 `openai` 兼容路由，可接任意网关。
 - **开放模型，自托管：** `vllm`、`sglang`、`ollama` 直连你自己的 localhost
   端点——无需任何 key。
-- **闭源 provider，原生直连：** `anthropic` 走专用的 `/v1/messages` 适配器
-  *(0.8.58)*，支持自适应思考、prompt-cache 断点和签名思考重放——不是
-  OpenAI 方言的转译垫片；还有 `openai-codex`，复用已有的 ChatGPT/Codex CLI
-  登录。
+- **闭源 provider，原生直连：** `anthropic` 走专用的 `/v1/messages` 适配器，
+  支持自适应思考、prompt-cache 断点和签名思考重放——不是 OpenAI 方言的转译
+  垫片；还有 `openai-codex`，复用已有的 ChatGPT/Codex CLI 登录。
 
 路由不只是换个 base URL：`/reasoning` 努力档位会翻译成各 provider 的协议方言，
-子 Agent 分档按 provider 解析，系统提示中的模型事实也按模型模板化而非写死
-*(0.8.58)*。会话中途用 `/provider` 和 `/model` 即可切换。完整注册表——凭据、
-base URL、能力边界——见 [docs/PROVIDERS.md](docs/PROVIDERS.md)。
+子 Agent 分档按 provider 解析，系统提示中的模型事实也按模型模板化而非写死。
+会话中途用 `/provider` 和 `/model` 即可切换。完整注册表——凭据、base URL、
+能力边界——见 [docs/PROVIDERS.md](docs/PROVIDERS.md)。
 
-上面的版本标注对应最近三个版本（0.8.56 → 0.8.58）落地的内容。完整细节见
-[CHANGELOG.md](CHANGELOG.md)。
+子 Agent 扇出优先走配置：在 `[subagents]` 写全局默认值，再用
+`[subagents.providers.deepseek]`、`[subagents.providers.glm]`、
+`[subagents.providers.openrouter]` 等按 API 调整。直连 DeepSeek 可以放宽；
+订阅或限流 route 可以保持 3–5 个并发，不需要改 prompt 或代码。详见
+[docs/SUBAGENTS.md](docs/SUBAGENTS.md#concurrency-cap)。
+
+完整细节见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心想法 —— 这个版本放进来的 mission idea
 

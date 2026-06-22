@@ -618,9 +618,11 @@ fn is_git_metadata_entry(path: &Path) -> bool {
 /// Resolve the default session directory path.
 ///
 /// v0.8.44: prefers `~/.codewhale/sessions`, falls back to
-/// `~/.deepseek/sessions` for existing installs.
+/// `~/.deepseek/sessions` for existing installs. Uses the write-path resolver
+/// so the first access relocates any legacy `~/.deepseek/sessions` into
+/// `~/.codewhale/sessions` (#3240); reads still surface migrated data.
 pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
-    codewhale_config::resolve_state_dir("sessions")
+    codewhale_config::ensure_state_dir("sessions")
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
 }
 

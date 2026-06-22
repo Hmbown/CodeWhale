@@ -146,7 +146,7 @@ for _ in $(seq 1 20); do
   curl -fsS --max-time 2 http://127.0.0.1:7878/health >/dev/null 2>&1 && break
   sleep 1
 done
-curl -fsS http://127.0.0.1:7878/health; echo
+curl -fsS --max-time 3 http://127.0.0.1:7878/health; echo
 systemctl start codewhale-telegram-bridge
 sleep 3
 CODEWHALE_BRIDGE=telegram bash /tmp/codewhale/scripts/tencent-lighthouse/doctor.sh

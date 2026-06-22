@@ -66,6 +66,15 @@ pub trait CommandGroup: Send + Sync {
 
 pub(crate) type CommandHandler = fn(&mut App, Option<&str>) -> CommandResult;
 
+/// Trait implemented by focused built-in command modules.
+///
+/// A command module owns its metadata and exposes a static execution function
+/// that the group registry can wire into [`FunctionCommand`].
+pub trait RegisterCommand {
+    fn info() -> &'static CommandInfo;
+    fn execute(app: &mut App, arg: Option<&str>) -> CommandResult;
+}
+
 pub(crate) struct FunctionCommand {
     info: &'static CommandInfo,
     handler: CommandHandler,

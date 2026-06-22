@@ -29,6 +29,7 @@ use std::time::Duration;
 use regex::Regex;
 
 use crate::commands::CommandResult;
+use crate::commands::traits::{CommandInfo, RegisterCommand};
 use crate::config::Config;
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction};
@@ -37,6 +38,61 @@ use crate::tui::app::{App, AppAction};
 const ASR_MODEL: &str = "mimo-v2.5-asr";
 /// Model used for the AI-assisted voice-control pipeline.
 const VOICE_CONTROL_MODEL: &str = "mimo-v2.5";
+
+pub(in crate::commands) const VOICE_INFO: CommandInfo = CommandInfo {
+    name: "voice",
+    aliases: &["yuyin", "语音"],
+    usage: "/voice",
+    description_id: MessageId::CmdVoiceDescription,
+};
+
+pub(in crate::commands) const VOICE_SEND_INFO: CommandInfo = CommandInfo {
+    name: "voicesend",
+    aliases: &["voice-send", "yuyinsend", "语音发送"],
+    usage: "/voicesend",
+    description_id: MessageId::CmdVoiceSendDescription,
+};
+
+pub(in crate::commands) const VOICE_CONTROL_INFO: CommandInfo = CommandInfo {
+    name: "voicecontrol",
+    aliases: &["voice-control", "yuyincontrol", "语音控制"],
+    usage: "/voicecontrol",
+    description_id: MessageId::CmdVoiceControlDescription,
+};
+
+pub(in crate::commands) struct VoiceCmd;
+pub(in crate::commands) struct VoiceSendCmd;
+pub(in crate::commands) struct VoiceControlCmd;
+
+impl RegisterCommand for VoiceCmd {
+    fn info() -> &'static CommandInfo {
+        &VOICE_INFO
+    }
+
+    fn execute(app: &mut App, _arg: Option<&str>) -> CommandResult {
+        voice(app)
+    }
+}
+
+impl RegisterCommand for VoiceSendCmd {
+    fn info() -> &'static CommandInfo {
+        &VOICE_SEND_INFO
+    }
+
+    fn execute(app: &mut App, _arg: Option<&str>) -> CommandResult {
+        voice_send(app)
+    }
+}
+
+impl RegisterCommand for VoiceControlCmd {
+    fn info() -> &'static CommandInfo {
+        &VOICE_CONTROL_INFO
+    }
+
+    fn execute(app: &mut App, _arg: Option<&str>) -> CommandResult {
+        voice_control(app)
+    }
+}
 
 // --- Recorder detection ----------------------------------------------------
 
