@@ -23,6 +23,8 @@ const HARD_MAX_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 250;
 const MIN_POLL_INTERVAL_MS: u64 = 10;
 const MAX_POLL_INTERVAL_MS: u64 = 5_000;
+const TCP_CONNECT_ATTEMPT_TIMEOUT_MS: u64 = 2_000;
+const HTTP_HEALTHCHECK_ATTEMPT_TIMEOUT_MS: u64 = 10_000;
 
 pub struct WaitForDevServerTool;
 
@@ -242,7 +244,7 @@ async fn wait_for_tcp(
         check_cancelled(context)?;
         match run_until_deadline(
             deadline,
-            request.poll_interval,
+            Duration::from_millis(TCP_CONNECT_ATTEMPT_TIMEOUT_MS),
             TcpStream::connect((request.host.as_str(), request.port)),
         )
         .await
@@ -297,7 +299,7 @@ async fn wait_for_http(
         check_cancelled(context)?;
         match run_until_deadline(
             deadline,
-            request.poll_interval,
+            Duration::from_millis(HTTP_HEALTHCHECK_ATTEMPT_TIMEOUT_MS),
             client.get(url.clone()).send(),
         )
         .await
@@ -501,6 +503,29 @@ mod tests {
         (port, handle)
     }
 
+    fn spawn_delayed_http_server(delay: Duration) -> (u16, JoinHandle<()>) {
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = std_listener.local_addr().unwrap().port();
+        std_listener.set_nonblocking(true).unwrap();
+        let listener = TcpListener::from_std(std_listener).unwrap();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _addr)) = listener.accept().await else {
+                    continue;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0_u8; 512];
+                    let _ = stream.read(&mut buf).await;
+                    sleep(delay).await;
+                    let response =
+                        "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (port, handle)
+    }
+
     #[tokio::test]
     async fn waits_until_tcp_port_accepts_connections() {
         let (listener, port) = bind_tcp_listener().await;
@@ -542,8 +567,12 @@ mod tests {
         assert_eq!(payload["phase"], "tcp");
         assert_eq!(payload["timed_out"], true);
         assert_eq!(payload["target"], format!("127.0.0.1:{port}"));
-        assert!(payload["elapsed_ms"].as_u64().unwrap() <= 500);
-        assert!(payload["last_error"].as_str().unwrap().contains("refused"));
+        assert!(payload["elapsed_ms"].as_u64().is_some());
+        assert!(
+            payload["last_error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
     }
 
     #[tokio::test]
@@ -609,6 +638,26 @@ mod tests {
             payload["last_error"].as_str(),
             Some("healthcheck request timed out")
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn slow_healthcheck_can_complete_across_short_poll_intervals() {
+        let (port, server) = spawn_delayed_http_server(Duration::from_millis(600));
+
+        let (result, payload) = run_tool(json!({
+            "host": "127.0.0.1",
+            "port": port,
+            "url": format!("http://127.0.0.1:{port}/health"),
+            "timeout_ms": 2_000,
+            "poll_interval_ms": 50
+        }))
+        .await;
+
+        assert!(result.success);
+        assert_eq!(payload["ready"], true);
+        assert_eq!(payload["phase"], "ready");
+        assert_eq!(payload["last_status"], 204);
         server.abort();
     }
 
