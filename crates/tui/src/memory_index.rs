@@ -88,7 +88,6 @@ impl MemoryIndex {
 
     /// Search by tags (OR logic — any matching tag). Returns matching
     /// entries in display order.
-    #[allow(dead_code)]
     #[must_use]
     pub fn search_by_tags(&self, tags: &[&str]) -> Vec<&MemoryEntry> {
         if tags.is_empty() {
