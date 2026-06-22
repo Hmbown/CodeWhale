@@ -8,8 +8,12 @@ on:
 permissions:
   contents: read
 
+# Prevent concurrent nightly builds for the same branch; cancel older runs
+# when a new push arrives. The group key includes the branch name so that
+# nightly builds on main are serialized, but manual dispatches from other
+# branches can still run independently.
 concurrency:
-  group: nightly-${{ github.ref }}
+  group: nightly-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -18,7 +22,61 @@ env:
   DEEPSEEK_BUILD_SHA: ${{ github.sha }}
 
 jobs:
+  # Idempotency guard: skip the entire workflow if nightly artifacts for
+  # this exact commit already exist. This prevents wasteful rebuilds when
+  # multiple commits land on main in quick succession or when a workflow
+  # is re-run manually.
+  check-artifacts:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check if nightly artifacts already exist
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          short_sha="${COMMIT_SHA::12}"
+          # Check for any artifact from this commit in the last 14 days
+          # (matching the retention-days setting below). If all platform
+          # artifacts exist, we can safely skip the build.
+          artifact_count=$(gh run list --workflow nightly.yml \
+            --branch main \
+            --created ">=$(date -d '14 days ago' +%Y-%m-%d)" \
+            --json databaseId \
+            --jq 'length')
+
+          if [[ "${artifact_count}" -gt 0 ]]; then
+            latest_run_id=$(gh run list --workflow nightly.yml \
+              --branch main \
+              --created ">=$(date -d '14 days ago' +%Y-%m-%d)" \
+              --json databaseId,headSha \
+              --jq '[.[] | select(.headSha == env.COMMIT_SHA)] | first | .databaseId' 2>/dev/null || true)
+
+            if [[ -n "${latest_run_id}" ]]; then
+              artifacts=$(gh run view "${latest_run_id}" --json artifacts --jq '.artifacts | length')
+              # We expect 10 artifacts (5 platforms × 2 binaries: codewhale + codewhale-tui)
+              if [[ "${artifacts}" -ge 10 ]]; then
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "Nightly artifacts for commit ${short_sha} already exist; skipping build."
+              else
+                echo "skip=false" >> "$GITHUB_OUTPUT"
+                echo "Nightly artifacts incomplete (${artifacts}/10); rebuilding."
+              fi
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "No nightly run found for this commit; building."
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "No recent nightly runs found; building."
+          fi
+
   build:
+    needs: [check-artifacts]
+    if: ${{ needs.check-artifacts.outputs.skip != 'true' }}
     name: Build ${{ matrix.artifact_name }}
     strategy:
       fail-fast: false
@@ -86,7 +144,20 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Build
         shell: bash
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: |
+          # Retry build up to 2 times on transient failure (e.g. network
+          # issues fetching crates, OOM kills on shared runners).
+          for attempt in 1 2 3; do
+            if cargo build --release --locked --target ${{ matrix.target }}; then
+              exit 0
+            fi
+            if [[ ${attempt} -lt 3 ]]; then
+              echo "Build attempt ${attempt} failed; retrying in 30s..."
+              sleep 30
+            fi
+          done
+          echo "Build failed after 3 attempts" >&2
+          exit 1
       - name: Stage artifact
         id: stage
         shell: bash
@@ -113,3 +184,21 @@ jobs:
           name: ${{ steps.stage.outputs.name }}
           path: nightly/*
           retention-days: 14
+
+  # Summary job that aggregates the matrix build results and provides a
+  # single status indicator for branch protection rules.
+  nightly-complete:
+    needs: [build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix build status
+        run: |
+          if [[ "${{ needs.build.result }}" == "success" ]]; then
+            echo "✅ All nightly builds completed successfully"
+          elif [[ "${{ needs.build.result }}" == "skipped" ]]; then
+            echo "ℹ️ Nightly builds were skipped (artifacts already exist)"
+          else
+            echo "❌ Nightly builds failed or were cancelled"
+            exit 1
+          fi

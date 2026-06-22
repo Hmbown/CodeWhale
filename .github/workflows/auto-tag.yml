@@ -25,6 +25,12 @@ on:
 permissions:
   contents: write
 
+# Serialize auto-tag runs per branch to prevent race conditions when
+# multiple version bumps land on main in quick succession.
+concurrency:
+  group: auto-tag-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   tag:
     runs-on: ubuntu-latest
@@ -39,11 +45,20 @@ jobs:
       - name: Read workspace version
         id: ver
         run: |
+          # Robust version parsing: extract version from workspace Cargo.toml
+          # and validate it matches semver format vX.Y.Z (without v prefix).
           v="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
           if [ -z "$v" ]; then
             echo "::error::Could not parse workspace version from Cargo.toml" >&2
             exit 1
           fi
+
+          # Validate semver format (digits.digits.digits)
+          if ! echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Workspace version '$v' is not valid semver (expected X.Y.Z)" >&2
+            exit 1
+          fi
+
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
           echo "Workspace version: $v"
@@ -54,10 +69,12 @@ jobs:
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           git fetch --tags --quiet
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
-             || git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+
+          # Check both local tags and remote tags for idempotency
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1 || \
+             git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${TAG} already exists; nothing to do."
+            echo "::notice::Tag ${TAG} already exists; nothing to do (idempotent)."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Tag ${TAG} does not exist; will create."
@@ -65,7 +82,13 @@ jobs:
 
       - name: Verify version consistency
         if: steps.check.outputs.exists == 'false'
-        run: ./scripts/release/check-versions.sh
+        run: |
+          # Run version consistency check before creating tag
+          # This prevents tagging inconsistent versions
+          ./scripts/release/check-versions.sh || {
+            echo "::error::Version consistency check failed. Aborting tag creation." >&2
+            exit 1
+          }
 
       - name: Create and push tag
         if: steps.check.outputs.exists == 'false'
@@ -74,9 +97,33 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${TAG}"
-          git push origin "${TAG}"
-          echo "Pushed ${TAG}. release.yml should now run (requires RELEASE_TAG_PAT for trigger)."
+
+          # Create annotated tag with release information
+          git tag -a "${TAG}" -m "Release ${TAG}
+
+Automatically created by auto-tag workflow.
+Commit: ${GITHUB_SHA}
+Repository: ${GITHUB_REPOSITORY}
+"
+
+          # Push with retry logic for network resilience
+          max_retries=3
+          retry_count=0
+          while [[ ${retry_count} -lt ${max_retries} ]]; do
+            if git push origin "${TAG}" 2>/dev/null; then
+              echo "Successfully pushed ${TAG}."
+              echo "release.yml should now run (requires RELEASE_TAG_PAT for trigger)."
+              exit 0
+            fi
+            retry_count=$((retry_count + 1))
+            if [[ ${retry_count} -lt ${max_retries} ]]; then
+              echo "Push attempt ${retry_count} failed; retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          echo "::error::Failed to push tag ${TAG} after ${max_retries} attempts." >&2
+          exit 1
 
       - name: Warn if PAT missing
         if: steps.check.outputs.exists == 'false' && env.HAS_PAT != 'true'
