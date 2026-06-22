@@ -20,7 +20,7 @@ Check the [releases page](https://github.com/Hmbown/CodeWhale/releases) for the 
 Report privately via one of:
 
 - **GitHub private advisory**: [github.com/Hmbown/CodeWhale/security/advisories/new](https://github.com/Hmbown/CodeWhale/security/advisories/new)
-- **Email**: [security@deepseek-tui.com](mailto:security@deepseek-tui.com) — include `[SECURITY]` in the subject line
+- **Email**: [security@codewhale.com](mailto:security@codewhale.com) — include `[SECURITY]` in the subject line
 
 Include in your report:
 
