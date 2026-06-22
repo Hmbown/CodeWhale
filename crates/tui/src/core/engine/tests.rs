@@ -295,6 +295,14 @@ fn ask_rule_engine(command: &str) -> codewhale_execpolicy::ExecPolicyEngine {
     ])
 }
 
+fn file_ask_rule_engine(tool: &str, path: &str) -> codewhale_execpolicy::ExecPolicyEngine {
+    codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+        codewhale_execpolicy::Ruleset::user(vec![], vec![]).with_ask_rules(vec![
+            codewhale_execpolicy::ToolAskRule::file_path(tool, path),
+        ]),
+    ])
+}
+
 #[test]
 fn exec_shell_ask_rule_decision_prompts_for_matching_auto_command() {
     let config = EngineConfig {
@@ -312,7 +320,7 @@ fn exec_shell_ask_rule_decision_prompts_for_matching_auto_command() {
 
     assert_eq!(
         decision,
-        Some(ExecShellAskRuleDecision::Prompt(
+        Some(ToolAskRuleDecision::Prompt(
             "Typed ask rule 'tool=exec_shell command=cargo test' requires approval.".to_string()
         ))
     );
@@ -335,7 +343,7 @@ fn exec_shell_ask_rule_decision_blocks_matching_never_command() {
 
     assert_eq!(
         decision,
-        Some(ExecShellAskRuleDecision::Block(
+        Some(ToolAskRuleDecision::Block(
             "Typed ask rule 'tool=exec_shell command=cargo test' requires approval, but approval policy is never.".to_string()
         ))
     );
@@ -352,6 +360,71 @@ fn exec_shell_ask_rule_decision_ignores_unmatched_command() {
         &config,
         "exec_shell",
         &json!({"command": "git status"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+
+    assert_eq!(decision, None);
+}
+
+#[test]
+fn file_ask_rule_decision_prompts_for_matching_read_path() {
+    let config = EngineConfig {
+        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+        ..EngineConfig::default()
+    };
+
+    let decision = file_tool_ask_rule_decision(
+        &config,
+        "read_file",
+        &json!({"path": "secrets/api_key.txt"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Auto,
+    );
+
+    assert_eq!(
+        decision,
+        Some(ToolAskRuleDecision::Prompt(
+            "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval."
+                .to_string()
+        ))
+    );
+}
+
+#[test]
+fn file_ask_rule_decision_blocks_matching_read_path_when_approval_is_never() {
+    let config = EngineConfig {
+        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+        ..EngineConfig::default()
+    };
+
+    let decision = file_tool_ask_rule_decision(
+        &config,
+        "read_file",
+        &json!({"path": "secrets/api_key.txt"}),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Never,
+    );
+
+    assert_eq!(
+        decision,
+        Some(ToolAskRuleDecision::Block(
+            "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval, but approval policy is never.".to_string()
+        ))
+    );
+}
+
+#[test]
+fn file_ask_rule_decision_ignores_unmatched_path() {
+    let config = EngineConfig {
+        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+        ..EngineConfig::default()
+    };
+
+    let decision = file_tool_ask_rule_decision(
+        &config,
+        "read_file",
+        &json!({"path": "docs/readme.md"}),
         Path::new("/repo"),
         crate::tui::approval::ApprovalMode::Auto,
     );

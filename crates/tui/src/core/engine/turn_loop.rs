@@ -1582,22 +1582,32 @@ impl Engine {
                     approval_required = true;
                 }
 
-                if blocked_error.is_none()
-                    && let Some(decision) = exec_shell_ask_rule_decision(
+                let ask_rule_decision = exec_shell_ask_rule_decision(
+                    &self.config,
+                    &tool_name,
+                    &tool_input,
+                    &self.session.workspace,
+                    self.session.approval_mode,
+                )
+                .or_else(|| {
+                    file_tool_ask_rule_decision(
                         &self.config,
                         &tool_name,
                         &tool_input,
                         &self.session.workspace,
                         self.session.approval_mode,
                     )
+                });
+                if blocked_error.is_none()
+                    && let Some(decision) = ask_rule_decision
                 {
                     match decision {
-                        ExecShellAskRuleDecision::Prompt(reason) => {
+                        ToolAskRuleDecision::Prompt(reason) => {
                             approval_required = true;
                             approval_description = reason;
                             approval_force_prompt = true;
                         }
-                        ExecShellAskRuleDecision::Block(reason) => {
+                        ToolAskRuleDecision::Block(reason) => {
                             approval_required = false;
                             approval_force_prompt = false;
                             blocked_error = Some(ToolError::permission_denied(reason));
