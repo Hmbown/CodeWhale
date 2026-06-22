@@ -174,8 +174,8 @@ impl AcpServer {
             .filter(|text| !text.trim().is_empty())
             .ok_or_else(|| AcpError::invalid_params("prompt must include text content"))?;
 
-        // Append user message to session history
-        {
+        // Append user message to session history and clone for the LLM call (avoids borrowing self across await)
+        let (messages, cwd) = {
             let session = self
                 .sessions
                 .get_mut(&session_id)
@@ -187,14 +187,6 @@ impl AcpServer {
                     cache_control: None,
                 }],
             });
-        }
-
-        // Clone messages for the LLM call (avoids borrowing self across await)
-        let (messages, cwd) = {
-            let session = self
-                .sessions
-                .get(&session_id)
-                .ok_or_else(|| AcpError::invalid_params("unknown sessionId"))?;
             (session.messages.clone(), session.cwd.clone())
         };
 
