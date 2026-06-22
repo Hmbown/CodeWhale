@@ -1,0 +1,19 @@
+{
+  "name": "@codewhale/wecom-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "企业微信(WeCom)智能机器人长连接bridge，用于从手机控制codewhale serve --http runtime",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs && node --check src/lib.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
