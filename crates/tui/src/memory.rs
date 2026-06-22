@@ -268,18 +268,18 @@ pub fn list_tags(content: &str) -> Vec<(String, usize)> {
 }
 
 /// Filter entries that match any of the given tags (OR logic). Tag
-/// matching is case-sensitive and supports both `#tag` and `tag` forms.
+/// matching is case-insensitive and supports both `#tag` and `tag` forms.
 pub fn search_by_tags<'a>(entries: &'a [MemoryEntry], tags: &[&str]) -> Vec<&'a MemoryEntry> {
     if tags.is_empty() {
         return entries.iter().collect();
     }
     let normalized: Vec<String> = tags
         .iter()
-        .map(|t| t.trim_start_matches('#').to_string())
+        .map(|t| t.trim_start_matches('#').to_lowercase())
         .collect();
     entries
         .iter()
-        .filter(|e| normalized.iter().any(|t| e.tags.iter().any(|et| et == t)))
+        .filter(|e| normalized.iter().any(|t| e.tags.iter().any(|et| et.to_lowercase() == *t)))
         .collect()
 }
 
@@ -315,9 +315,7 @@ pub fn auto_tag(text: &str, max_tags: usize) -> Vec<String> {
             if seen.insert(tag.clone()) {
                 candidates.push(tag);
             }
-        }
-        // Words with non-alphanumeric chars (camelCase, snake_case, namespaced)
-        if clean.contains(|c: char| !c.is_alphanumeric() && c != '\'') {
+        } else if clean.contains(|c: char| !c.is_alphanumeric() && c != '\'') {
             let tag = clean.to_lowercase();
             if seen.insert(tag.clone()) {
                 candidates.push(tag);
