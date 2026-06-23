@@ -21,6 +21,7 @@ use qa_harness::keys;
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 const KEY_TIMEOUT: Duration = Duration::from_secs(5);
+const COMPOSER_READY_TEXT: &str = "Write a task";
 static QA_PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn qa_pty_test_lock() -> MutexGuard<'static, ()> {
@@ -107,8 +108,7 @@ fn smoke_boot_paints_composer() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
 
-    // The composer panel border is labelled "Composer" — wait for it.
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
 
     let f = h.frame();
     assert!(
@@ -182,7 +182,7 @@ web_search = true
 fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal_without_retry()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
     assert_viewport_starts_at_top(h.frame());
 
     h.send(keys::key::text("trigger a failed turn"))?;
@@ -210,7 +210,7 @@ fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
 fn smoke_keystroke_reaches_composer() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
 
     h.send(keys::key::text("hello-from-pty"))?;
     h.wait_for_text("hello-from-pty", KEY_TIMEOUT)?;
@@ -249,7 +249,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
         .size(40, 140)
         .spawn()?;
 
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
     h.send(keys::key::text("/skills"))?;
     h.wait_for_text("/skills", KEY_TIMEOUT)?;
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(2))?;
@@ -282,7 +282,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
 fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
 
     // ~200 chars matching the original report. Trailing newline is the
     // payload that historically triggered the auto-submit.
@@ -323,7 +323,7 @@ fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result
 fn paste_unbracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
     // Let the boot fully settle so input handling is wired up.
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(3))?;
 
