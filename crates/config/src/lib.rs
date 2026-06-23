@@ -1,6 +1,7 @@
 pub mod auth_source;
 pub mod catalog;
 pub mod models_dev;
+pub mod pricing;
 pub mod provider;
 pub mod route;
 
