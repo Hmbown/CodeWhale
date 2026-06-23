@@ -6,6 +6,7 @@
 //! runtime. They are intentionally data-driven over [`ProviderKind::all`] and
 //! network-free; provider execution/adapter behavior is exercised elsewhere.
 
+use super::bundled_offerings;
 use super::descriptor::ProviderDescriptor;
 use super::ids::{LogicalModelRef, ProviderId};
 use super::resolver::{RouteRequest, RouteResolver};
@@ -63,6 +64,7 @@ fn every_provider_kind_has_a_wellformed_descriptor() {
 #[test]
 fn every_provider_kind_resolves_its_default_route() {
     let resolver = RouteResolver::new();
+    let bundled = bundled_offerings();
     for &kind in ProviderKind::all() {
         let descriptor = ProviderDescriptor::for_kind(kind);
         let candidate = resolver.resolve(&none_request(kind)).unwrap_or_else(|err| {
@@ -78,10 +80,25 @@ fn every_provider_kind_resolves_its_default_route() {
             ProviderId::from_kind(kind),
             "{kind:?}: resolved provider id mismatch"
         );
+
+        // The resolver prefers this provider's bundled *default offering* wire id
+        // when one exists, and otherwise falls back to the descriptor default
+        // wire model. Assert that exact contract so a future drift between
+        // OFFERING_SEEDS and `Provider::default_model()` fails with an honest
+        // message instead of coincidentally passing.
+        let expected_wire = bundled
+            .iter()
+            .find(|offering| {
+                offering.provider == ProviderId::from_kind(kind) && offering.default_for_provider
+            })
+            .map_or_else(
+                || descriptor.default_wire_model().as_str().to_string(),
+                |offering| offering.wire_model_id.as_str().to_string(),
+            );
         assert_eq!(
             candidate.wire_model_id.as_str(),
-            descriptor.default_wire_model().as_str(),
-            "{kind:?}: a None selector must resolve to the descriptor default wire model"
+            expected_wire,
+            "{kind:?}: None selector must resolve to the bundled default offering (or descriptor default)"
         );
     }
 }
