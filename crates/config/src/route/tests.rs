@@ -2,8 +2,20 @@
 
 use super::RequestProtocol;
 use super::descriptor::ProviderDescriptor;
+use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, WireModelId};
+use super::resolver::{RouteRequest, RouteResolver};
 use crate::ProviderKind;
+
+/// Build a request with only an explicit provider + a model selector string.
+fn req(provider: Option<ProviderKind>, model: Option<&str>) -> RouteRequest {
+    RouteRequest {
+        explicit_provider: provider,
+        model_selector: model.map(LogicalModelRef::from),
+        saved_provider_model: None,
+        base_url_override: None,
+    }
+}
 
 #[test]
 fn provider_id_from_kind_uses_canonical_id() {
@@ -115,4 +127,134 @@ fn descriptor_protocol_matches_provider_wire() {
         };
         assert_eq!(d.protocol(), expected, "{kind:?} protocol mismatch");
     }
+}
+
+#[test]
+fn resolver_explicit_provider_scoped_model_maps_to_wire_id() {
+    let r = RouteResolver::new();
+    let out = r
+        .resolve(&req(Some(ProviderKind::Deepseek), Some("deepseek-v4-pro")))
+        .expect("should resolve");
+    assert_eq!(out.provider_kind, ProviderKind::Deepseek);
+    assert_eq!(out.wire_model_id.as_str(), "deepseek-v4-pro");
+    assert_eq!(
+        out.canonical_model.as_ref().map(ModelId::as_str),
+        Some("deepseek-v4-pro")
+    );
+}
+
+#[test]
+fn resolver_aggregator_preserves_prefixed_wire_id_without_inferring_deepseek() {
+    let r = RouteResolver::new();
+    let out = r
+        .resolve(&req(
+            Some(ProviderKind::Together),
+            Some("deepseek-ai/DeepSeek-V4-Pro"),
+        ))
+        .expect("aggregator should resolve");
+    // Provider stays Together, NOT Deepseek, despite the deepseek-ai/ prefix.
+    assert_eq!(out.provider_kind, ProviderKind::Together);
+    assert_ne!(out.provider_kind, ProviderKind::Deepseek);
+    // Wire id preserved verbatim.
+    assert_eq!(out.wire_model_id.as_str(), "deepseek-ai/DeepSeek-V4-Pro");
+}
+
+#[test]
+fn resolver_openrouter_keeps_provider_for_every_namespace_prefix() {
+    let r = RouteResolver::new();
+    let prefixes = [
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "deepseek/deepseek-v4-pro",
+        "anthropic/claude-foo",
+        "openai/gpt-foo",
+        "qwen/qwen-foo",
+    ];
+    for raw in prefixes {
+        let selector = LogicalModelRef::from(raw);
+        // The selector DOES carry a namespace hint...
+        assert!(
+            selector.namespace_hint().is_some(),
+            "{raw} should have a namespace hint"
+        );
+        let out = r
+            .resolve(&req(Some(ProviderKind::Openrouter), Some(raw)))
+            .unwrap_or_else(|e| panic!("{raw} should resolve on openrouter: {e}"));
+        // ...but the provider stays Openrouter regardless.
+        assert_eq!(
+            out.provider_kind,
+            ProviderKind::Openrouter,
+            "{raw} must not change provider"
+        );
+        assert_eq!(out.wire_model_id.as_str(), raw, "{raw} wire id verbatim");
+    }
+}
+
+#[test]
+fn resolver_no_explicit_provider_does_not_infer_deepseek_from_prefix() {
+    let r = RouteResolver::new();
+    // explicit_provider=None => default scope (Deepseek). A prefixed selector
+    // is foreign for the strict-direct default, so it ERRORS rather than being
+    // silently accepted as a deepseek model: the prefix never *selects* it.
+    let out = r.resolve(&req(None, Some("deepseek/deepseek-v4-pro")));
+    match out {
+        Err(RouteError::ForeignModelForDirectProvider { provider, model }) => {
+            assert_eq!(provider.as_str(), "deepseek");
+            assert_eq!(model, "deepseek/deepseek-v4-pro");
+        }
+        other => panic!("expected ForeignModelForDirectProvider, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolver_auto_is_sentinel_not_literal_model() {
+    let r = RouteResolver::new();
+    let out = r
+        .resolve(&req(Some(ProviderKind::Deepseek), Some("auto")))
+        .expect("auto should resolve");
+    // The logical selector is the auto sentinel...
+    assert!(out.logical_model.is_auto());
+    // ...and "auto" is NOT put on the wire as a literal model.
+    assert_ne!(out.wire_model_id.as_str(), "auto");
+    assert_eq!(out.wire_model_id.as_str(), "deepseek-v4-pro");
+}
+
+#[test]
+fn resolver_strict_direct_rejects_clearly_foreign_selector() {
+    let r = RouteResolver::new();
+    let out = r.resolve(&req(Some(ProviderKind::Zai), Some("anthropic/claude-foo")));
+    match out {
+        Err(RouteError::ForeignModelForDirectProvider { provider, model }) => {
+            assert_eq!(provider.as_str(), "zai");
+            assert_eq!(model, "anthropic/claude-foo");
+        }
+        other => panic!("expected ForeignModelForDirectProvider, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolver_deepseek_none_selector_uses_default_wire_id() {
+    let r = RouteResolver::new();
+    let out = r
+        .resolve(&req(Some(ProviderKind::Deepseek), None))
+        .expect("none selector should use provider default");
+    assert_eq!(out.provider_kind, ProviderKind::Deepseek);
+    assert_eq!(out.wire_model_id.as_str(), "deepseek-v4-pro");
+}
+
+#[test]
+fn resolver_empty_string_selector_is_empty_model_error() {
+    let r = RouteResolver::new();
+    let out = r.resolve(&req(Some(ProviderKind::Deepseek), Some("")));
+    assert!(matches!(out, Err(RouteError::EmptyModel)));
+}
+
+#[test]
+fn resolver_passthrough_provider_preserves_custom_id_verbatim() {
+    let r = RouteResolver::new();
+    let out = r
+        .resolve(&req(Some(ProviderKind::Ollama), Some("my-local:7b")))
+        .expect("local passthrough should resolve");
+    assert_eq!(out.provider_kind, ProviderKind::Ollama);
+    assert_eq!(out.wire_model_id.as_str(), "my-local:7b");
+    assert!(out.validation.ok);
 }

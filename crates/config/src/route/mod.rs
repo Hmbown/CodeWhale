@@ -12,6 +12,7 @@
 //! - [`offering`] — provider/model offering seam (wire-id binding).
 //! - [`candidate`] — the runtime-resolved executable route + its parts.
 //! - [`errors`] — route resolution errors.
+//! - [`resolver`] — the sole producer of [`candidate::ReadyRouteCandidate`].
 //!
 //! Naming: the request/response wire shape is spelled [`RequestProtocol`],
 //! which is a re-export alias of [`crate::provider::WireFormat`] rather than a
@@ -30,6 +31,7 @@ pub mod descriptor;
 pub mod errors;
 pub mod ids;
 pub mod offering;
+pub mod resolver;
 
 pub use candidate::{
     PricingSku, ReadyRouteCandidate, ResolvedAuthSource, ResolvedEndpoint, ValidationReport,
@@ -38,6 +40,7 @@ pub use descriptor::{EndpointDescriptor, ProviderDescriptor};
 pub use errors::RouteError;
 pub use ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, WireModelId};
 pub use offering::{ProviderModelOffering, bundled_offerings};
+pub use resolver::{RouteRequest, RouteResolver};
 
 #[cfg(test)]
 mod tests;
