@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
+    "check:facts": "node scripts/check-facts.mjs",
     "lint": "eslint .",
     "preview": "opennextjs-cloudflare preview",
     "predeploy": "node scripts/check-kv-id.mjs",

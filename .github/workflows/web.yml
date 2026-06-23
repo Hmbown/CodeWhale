@@ -37,6 +37,11 @@ jobs:
         # tsc --noEmit fails without it (TS2307) and downstream inferences
         # cascade into spurious TS7006 errors, so regenerate before type check.
         run: npm run prebuild
+      - name: Check facts drift
+        # Fails CI when facts.generated.ts is stale (version, providers, etc.
+        # differ from the workspace sources). Catches mechanical drift before
+        # deploy so the website never serves wrong version/provider data.
+        run: npm run check:facts
       - name: Run ESLint
         run: npm run lint
       - name: TypeScript type check
