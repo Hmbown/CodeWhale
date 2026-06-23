@@ -39,6 +39,18 @@ const fn default_task_schema_version() -> u32 {
     CURRENT_TASK_SCHEMA_VERSION
 }
 
+fn validate_storage_component(value: &str, field: &str) -> Result<()> {
+    let path = Path::new(value);
+    let mut components = path.components();
+    let Some(component) = components.next() else {
+        bail!("{field} must not be empty");
+    };
+    if components.next().is_some() || !matches!(component, std::path::Component::Normal(_)) {
+        bail!("{field} must be a single path component");
+    }
+    Ok(())
+}
+
 /// Durable task status.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1361,6 +1373,7 @@ impl TaskManager {
     }
 
     fn write_artifact(&self, task_id: &str, label: &str, content: &str) -> Result<PathBuf> {
+        validate_storage_component(task_id, "task_id")?;
         let artifact_dir = self.artifacts_dir.join(task_id);
         fs::create_dir_all(&artifact_dir)
             .with_context(|| format!("Failed to create artifact dir {}", artifact_dir.display()))?;
@@ -1959,6 +1972,22 @@ mod tests {
 
         assert_eq!(updated.gates.len(), 1);
         assert_eq!(updated.gates[0].classification, "passed");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn artifact_writer_rejects_path_component_task_ids() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
+                .await?;
+
+        let err = manager
+            .write_task_artifact("../escape", "patch", "diff")
+            .expect_err("path-shaped task id should be rejected");
+
+        assert!(err.to_string().contains("task_id"));
+        assert!(!root.join("escape").exists());
         Ok(())
     }
 

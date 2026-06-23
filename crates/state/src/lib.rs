@@ -305,8 +305,11 @@ impl StateStore {
     }
 
     fn conn(&self) -> Result<Connection> {
-        Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open state db {}", self.db_path.display()))
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open state db {}", self.db_path.display()))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .context("failed to enable sqlite foreign keys")?;
+        Ok(conn)
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -1865,6 +1868,45 @@ mod tests {
             .upsert_thread_goal(&test_goal("missing-thread", "nope"))
             .expect_err("goal without a thread should fail");
         assert!(err.to_string().contains("thread missing-thread not found"));
+    }
+
+    #[test]
+    fn delete_thread_cascades_child_rows() {
+        let store = temp_state_store("delete-thread-cascades");
+        store
+            .upsert_thread(&test_thread("thread-1"))
+            .expect("upsert thread");
+        store
+            .append_message("thread-1", "user", "hello", Some(serde_json::json!({})))
+            .expect("append message");
+        store
+            .save_checkpoint(
+                "thread-1",
+                "checkpoint-1",
+                &serde_json::json!({ "ok": true }),
+            )
+            .expect("save checkpoint");
+
+        store.delete_thread("thread-1").expect("delete thread");
+
+        let conn = store.conn().expect("conn");
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE thread_id = ?1",
+                params!["thread-1"],
+                |row| row.get(0),
+            )
+            .expect("count messages");
+        let checkpoint_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?1",
+                params!["thread-1"],
+                |row| row.get(0),
+            )
+            .expect("count checkpoints");
+
+        assert_eq!(message_count, 0);
+        assert_eq!(checkpoint_count, 0);
     }
 
     #[test]

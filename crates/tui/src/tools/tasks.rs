@@ -25,6 +25,22 @@ const MAX_SUMMARY_CHARS: usize = 900;
 const DEFAULT_GATE_TIMEOUT_MS: u64 = 120_000;
 const MAX_GATE_TIMEOUT_MS: u64 = 600_000;
 
+fn validate_storage_component(value: &str, field: &str) -> Result<(), ToolError> {
+    let path = Path::new(value);
+    let mut components = path.components();
+    let Some(component) = components.next() else {
+        return Err(ToolError::invalid_input(format!(
+            "{field} must not be empty"
+        )));
+    };
+    if components.next().is_some() || !matches!(component, std::path::Component::Normal(_)) {
+        return Err(ToolError::invalid_input(format!(
+            "{field} must be a single path component"
+        )));
+    }
+    Ok(())
+}
+
 fn build_gate_command_parts(command: &str) -> (String, Vec<String>) {
     (
         "/bin/sh".to_string(),
@@ -836,6 +852,7 @@ fn write_runtime_artifact(
     let Some(data_dir) = context.runtime.task_data_dir.as_ref() else {
         return Ok(None);
     };
+    validate_storage_component(task_id, "task_id")?;
     let artifact_dir = data_dir.join("artifacts").join(task_id);
     std::fs::create_dir_all(&artifact_dir)
         .map_err(|e| ToolError::execution_failed(format!("create artifact dir: {e}")))?;

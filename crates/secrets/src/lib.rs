@@ -480,7 +480,22 @@ impl FileKeyringStore {
             }
         }
         let body = serde_json::to_string_pretty(blob)?;
-        fs::write(&self.path, body)?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(&self.path)?;
+            file.write_all(body.as_bytes())?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&self.path, body)?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -3239,14 +3239,22 @@ pub const LEGACY_APP_DIR: &str = ".deepseek";
 /// `$CODEWHALE_HOME` takes precedence when set. Otherwise defaults to
 /// `$HOME/.codewhale`. This is the write target for new product state.
 pub fn codewhale_home() -> Result<PathBuf> {
-    if let Ok(val) = std::env::var("CODEWHALE_HOME") {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
+    if let Some(path) = explicit_codewhale_home() {
+        return Ok(path);
     }
     let home = effective_home_dir().context("failed to resolve home directory")?;
     Ok(home.join(CODEWHALE_APP_DIR))
+}
+
+fn explicit_codewhale_home() -> Option<PathBuf> {
+    std::env::var("CODEWHALE_HOME").ok().and_then(|val| {
+        let trimmed = val.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(trimmed))
+        }
+    })
 }
 
 /// Resolve the legacy DeepSeek home directory (`$HOME/.deepseek`).
@@ -3308,6 +3316,9 @@ pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
     if primary.exists() {
         return Ok(primary);
     }
+    if explicit_codewhale_home().is_some() {
+        return Ok(primary);
+    }
     let legacy = legacy_deepseek_home()?.join(subdir);
     if legacy.exists() {
         return Ok(legacy);
@@ -3328,7 +3339,9 @@ pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
 pub fn ensure_state_dir(subdir: &str) -> Result<PathBuf> {
     ensure_safe_state_subdir(subdir)?;
     let dir = codewhale_home()?.join(subdir);
-    migrate_legacy_state_dir(&dir, subdir)?;
+    if explicit_codewhale_home().is_none() {
+        migrate_legacy_state_dir(&dir, subdir)?;
+    }
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}/", dir.display()))?;
     Ok(dir)
@@ -3599,6 +3612,9 @@ pub fn default_config_path() -> Result<PathBuf> {
     if primary.exists() {
         return Ok(primary);
     }
+    if explicit_codewhale_home().is_some() {
+        return Ok(primary);
+    }
     let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
     if legacy.exists() {
         return Ok(legacy);
@@ -3630,6 +3646,9 @@ impl ConfigMigration {
 pub fn migrate_config_if_needed() -> Result<Option<ConfigMigration>> {
     let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
     if primary.exists() {
+        return Ok(None);
+    }
+    if explicit_codewhale_home().is_some() {
         return Ok(None);
     }
     let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);

@@ -1911,7 +1911,7 @@ fn migrate_config_reports_copied_legacy_path() {
     unsafe {
         env::set_var("HOME", &home);
         env::set_var("USERPROFILE", &home);
-        env::set_var("CODEWHALE_HOME", &primary_dir);
+        env::remove_var("CODEWHALE_HOME");
     }
 
     let migration = migrate_config_if_needed()
@@ -1962,9 +1962,9 @@ impl Drop for StateEnvRestore {
     }
 }
 
-/// Points `HOME`/`USERPROFILE`/`CODEWHALE_HOME` at a fresh temp tree so
-/// `codewhale_home()` -> `<home>/.codewhale` and `legacy_deepseek_home()`
-/// -> `<home>/.deepseek`. Env is restored on drop.
+/// Points `HOME`/`USERPROFILE` at a fresh temp tree so `codewhale_home()` ->
+/// `<home>/.codewhale` and `legacy_deepseek_home()` -> `<home>/.deepseek`.
+/// Env is restored on drop.
 struct StateDirEnv {
     home: PathBuf,
     _restore: StateEnvRestore,
@@ -1985,7 +1985,7 @@ impl StateDirEnv {
         unsafe {
             env::set_var("HOME", &home);
             env::set_var("USERPROFILE", &home);
-            env::set_var("CODEWHALE_HOME", home.join(CODEWHALE_APP_DIR));
+            env::remove_var("CODEWHALE_HOME");
         }
         Self {
             home,
@@ -2085,6 +2085,89 @@ fn resolve_state_dir_still_finds_legacy_for_backfill() {
         state_env.primary("catalog")
     );
     let _ = fs::remove_dir_all(&state_env.home);
+}
+
+#[test]
+fn explicit_codewhale_home_does_not_read_or_migrate_legacy_state() {
+    let _lock = env_lock();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let home = std::env::temp_dir().join(format!(
+        "codewhale-explicit-state-home-{}-{unique}",
+        std::process::id()
+    ));
+    let explicit = home.join("isolated-codewhale");
+    let restore = StateEnvRestore {
+        home: env::var_os("HOME"),
+        userprofile: env::var_os("USERPROFILE"),
+        codewhale_home: env::var_os("CODEWHALE_HOME"),
+    };
+    // Safety: test-only environment mutation is serialized by env_lock().
+    unsafe {
+        env::set_var("HOME", &home);
+        env::set_var("USERPROFILE", &home);
+        env::set_var("CODEWHALE_HOME", &explicit);
+    }
+    let _restore = restore;
+
+    let legacy_catalog = home.join(LEGACY_APP_DIR).join("catalog");
+    fs::create_dir_all(&legacy_catalog).expect("legacy catalog");
+    fs::write(legacy_catalog.join("state.json"), b"legacy").expect("legacy file");
+
+    assert_eq!(
+        resolve_state_dir("catalog").expect("resolve"),
+        explicit.join("catalog")
+    );
+    assert_eq!(
+        ensure_state_dir("catalog").expect("ensure"),
+        explicit.join("catalog")
+    );
+    assert!(!explicit.join("catalog").join("state.json").exists());
+    assert!(legacy_catalog.join("state.json").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn explicit_codewhale_home_does_not_read_or_migrate_legacy_config() {
+    let _lock = env_lock();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let home = std::env::temp_dir().join(format!(
+        "codewhale-explicit-config-home-{}-{unique}",
+        std::process::id()
+    ));
+    let explicit = home.join("isolated-codewhale");
+    let restore = StateEnvRestore {
+        home: env::var_os("HOME"),
+        userprofile: env::var_os("USERPROFILE"),
+        codewhale_home: env::var_os("CODEWHALE_HOME"),
+    };
+    // Safety: test-only environment mutation is serialized by env_lock().
+    unsafe {
+        env::set_var("HOME", &home);
+        env::set_var("USERPROFILE", &home);
+        env::set_var("CODEWHALE_HOME", &explicit);
+    }
+    let _restore = restore;
+
+    let legacy_config = home.join(LEGACY_APP_DIR).join(CONFIG_FILE_NAME);
+    fs::create_dir_all(legacy_config.parent().expect("legacy parent")).expect("legacy dir");
+    fs::write(&legacy_config, b"provider = \"deepseek\"\n").expect("legacy config");
+
+    assert_eq!(
+        default_config_path().expect("default config path"),
+        explicit.join(CONFIG_FILE_NAME)
+    );
+    assert_eq!(migrate_config_if_needed().expect("migration"), None);
+    assert!(!explicit.join(CONFIG_FILE_NAME).exists());
+    assert!(legacy_config.exists());
+
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]
