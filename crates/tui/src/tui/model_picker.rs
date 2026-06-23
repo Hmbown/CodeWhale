@@ -381,10 +381,14 @@ fn picker_model_ids_for_provider(provider: ApiProvider) -> Vec<&'static str> {
 }
 
 pub(crate) fn provider_scoped_model_completion_ids(app: &App) -> Vec<String> {
+    // Slash completions inline the current custom model so `/model <current>`
+    // stays visible even when it is outside the provider catalog.
     provider_scoped_model_ids_for_app(app, true)
 }
 
 fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
+    // The picker renders the current custom model as a dedicated row, so the
+    // provider catalog list does not need to duplicate it.
     let model_ids = provider_scoped_model_ids_for_app(app, false);
     let mut rows = Vec::new();
     for id in model_ids {
@@ -404,6 +408,8 @@ fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
 }
 
 fn provider_scoped_model_ids_for_app(app: &App, include_current_model: bool) -> Vec<String> {
+    // `include_current_model` is for completion surfaces that do not have a
+    // separate custom/current-model row.
     let mut models = Vec::new();
     push_model_id(&mut models, "auto");
     for id in model_completion_names_for_provider(app.api_provider) {
