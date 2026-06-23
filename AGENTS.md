@@ -37,13 +37,34 @@ state, trust live state and mention the mismatch in your handoff.
 3. Inspect the issue body, linked PRs, comments, code, docs, and tests before
    deciding what to change.
 4. Implement the smallest coherent slice that moves the issue toward done.
-5. Format, run targeted tests, commit, push, and open a draft PR.
+5. Format, run targeted tests, commit, push, and open a draft PR while the work
+   is still under active validation.
 6. In the PR body include goal, changes, verification commands/results, risks,
    and the linked issue.
 
 If the issue is already fixed, verify it from current code or CI before
 commenting or closing. If blocked, leave a precise comment with the blocker,
 attempted work, branch or commit if any, and next action.
+
+## PR Completion Loop
+
+Opening a PR is not the finish line. Every agent-owned PR needs an explicit
+completion pass:
+
+1. Read back the PR body, diff, commits, linked issue, and CI/check status.
+2. If checks fail, fix the branch or leave a precise blocker comment.
+3. If the branch is verified and no longer needs draft protection, mark it
+   ready for review or say why it must remain draft.
+4. When Hunter has authorized merge for the current lane, merge green,
+   reviewable PRs instead of letting them pile up. Prefer the repository's
+   normal merge method and preserve contributor credit.
+5. After merge, verify the landed commit on the target branch, then update or
+   close linked issues with a short evidence-based comment.
+
+Do not merge just because a PR exists. Merge only after scope, tests, CI,
+review state, issue linkage, and the user's current approval posture all support
+it. If the user explicitly asks to advance the lane, include ready/merge/issue
+cleanup work in the plan instead of only opening more PRs.
 
 ## Verification Defaults
 
@@ -82,6 +103,9 @@ while passing in isolation.
 - Treat provider docs and hosted model catalogs as time-sensitive. When current
   provider behavior matters, check the actual provider docs or API and add tests
   or drift checks where practical.
+- Website work should be sparse, calm, and accurate. Prefer a simple product
+  and docs surface over busy marketing sections; keep public claims tied to
+  current repo/runtime facts and provider documentation.
 
 ## Stewardship
 
