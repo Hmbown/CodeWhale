@@ -25,6 +25,9 @@ pub use renderable::Renderable;
 use std::collections::HashSet;
 use std::time::Duration;
 
+use crate::commands;
+#[cfg(test)]
+use crate::config::ApiProvider;
 #[cfg(test)]
 use crate::config::model_completion_names_for_provider;
 use crate::localization::{Locale, MessageId, tr};
@@ -35,7 +38,6 @@ use crate::tui::approval::{
 };
 use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus};
 use crate::tui::scrolling::TranscriptLineMeta;
-use crate::{commands, config::ApiProvider};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -2348,7 +2350,6 @@ pub(crate) fn slash_completion_hints(
         cached_skills,
         locale,
         workspace,
-        api_provider,
         &model_candidates,
     )
 }
@@ -2359,7 +2360,6 @@ pub(crate) fn slash_completion_hints_with_model_candidates(
     cached_skills: &[(String, String)],
     locale: crate::localization::Locale,
     workspace: Option<&std::path::Path>,
-    _api_provider: ApiProvider,
     model_candidates: &[String],
 ) -> Vec<SlashMenuEntry> {
     if !super::app::looks_like_slash_command_input(input) {
