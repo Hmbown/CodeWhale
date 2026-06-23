@@ -5,12 +5,11 @@ CodeWhale codebase. It is intentionally conservative: shipped entries are
 limited to provider IDs, config keys, auth paths, base URLs, model resolution,
 and capability metadata that the code already knows about.
 
-DeepSeek remains the first-class default provider. NVIDIA NIM, OpenRouter,
-Volcengine Ark, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Arcee AI,
-DeepInfra, Together AI, Baidu Qianfan, Z.ai, StepFun, MiniMax, generic OpenAI-compatible
-endpoints, self-hosted runtimes, Moonshot/Kimi, and Hugging Face Inference
-Providers are additive routes for running the same terminal harness against
-other hosted or local model endpoints.
+DeepSeek remains the default provider, but every entry in `ProviderKind::ALL`
+and `PROVIDER_REGISTRY` is a first-class selectable provider route. Hosted
+routes, generic OpenAI-compatible endpoints, the OpenAI Codex/ChatGPT route,
+native Anthropic, and local runtimes all run the same terminal harness against
+the selected provider/model/base URL.
 
 Sources to keep in sync:
 
@@ -30,10 +29,10 @@ Sources to keep in sync:
 The canonical provider IDs are:
 
 `deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
-`openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`,
-`siliconflow-CN`, `arcee`, `moonshot`, `zai`, `stepfun`, `minimax`, `sglang`,
-`vllm`, `ollama`, `huggingface`, `deepinfra`, `together`, `qianfan`, `openai-codex`, and
-`anthropic`.
+`openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `arcee`,
+`siliconflow-CN`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface`,
+`together`, `qianfan`, `openai-codex`, `anthropic`, `zai`, `stepfun`,
+`minimax`, and `deepinfra`.
 
 Use any of these surfaces to select a provider:
 
@@ -53,6 +52,57 @@ artifact export.
 
 Fresh shared config writes to `~/.codewhale/config.toml`. Existing
 `~/.deepseek/config.toml` files are still read for compatibility.
+
+### Wire Protocol Compatibility
+
+Provider selection is explicit. A model string prefix such as
+`deepseek-ai/...`, `deepseek/...`, `qwen/...`, or `arcee-ai/...` is a
+provider-owned wire ID or catalog namespace hint under the selected provider.
+It is not a provider switch and must not be treated as proof that the route is
+DeepSeek, OpenRouter, or any other provider.
+
+Set the route with `provider = "<id>"`, `CODEWHALE_PROVIDER=<id>`, or
+`codewhale --provider <id>`. Set the request model with `CODEWHALE_MODEL`, a
+provider-specific model env var, top-level `default_text_model`, or
+`[providers.<table>].model`. Set the endpoint with `CODEWHALE_BASE_URL`, a
+provider-specific base URL env var, or `[providers.<table>].base_url`. Set auth
+with `codewhale auth set --provider <id>`, `[providers.<table>].api_key`, or
+the listed provider env vars.
+
+| Provider ID | TOML table | Wire protocol | Auth env vars |
+| --- | --- | --- | --- |
+| `deepseek` | `[providers.deepseek]` | OpenAI Chat Completions | `DEEPSEEK_API_KEY` |
+| `nvidia-nim` | `[providers.nvidia_nim]` | OpenAI Chat Completions | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
+| `openai` | `[providers.openai]` | OpenAI Chat Completions | `OPENAI_API_KEY` |
+| `atlascloud` | `[providers.atlascloud]` | OpenAI Chat Completions | `ATLASCLOUD_API_KEY` |
+| `wanjie-ark` | `[providers.wanjie_ark]` | OpenAI Chat Completions | `WANJIE_ARK_API_KEY`, `WANJIE_API_KEY`, `WANJIE_MAAS_API_KEY` |
+| `volcengine` | `[providers.volcengine]` | OpenAI Chat Completions | `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, `ARK_API_KEY` |
+| `openrouter` | `[providers.openrouter]` | OpenAI Chat Completions | `OPENROUTER_API_KEY` |
+| `xiaomi-mimo` | `[providers.xiaomi_mimo]` | OpenAI Chat Completions | `XIAOMI_MIMO_TOKEN_PLAN_API_KEY`, `MIMO_TOKEN_PLAN_API_KEY`, `XIAOMI_MIMO_API_KEY`, `XIAOMI_API_KEY`, `MIMO_API_KEY` |
+| `novita` | `[providers.novita]` | OpenAI Chat Completions | `NOVITA_API_KEY` |
+| `fireworks` | `[providers.fireworks]` | OpenAI Chat Completions | `FIREWORKS_API_KEY` |
+| `siliconflow` | `[providers.siliconflow]` | OpenAI Chat Completions | `SILICONFLOW_API_KEY` |
+| `arcee` | `[providers.arcee]` | OpenAI Chat Completions | `ARCEE_API_KEY` |
+| `siliconflow-CN` | `[providers.siliconflow_cn]` | OpenAI Chat Completions | `SILICONFLOW_API_KEY` |
+| `moonshot` | `[providers.moonshot]` | OpenAI Chat Completions | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
+| `sglang` | `[providers.sglang]` | OpenAI Chat Completions | `SGLANG_API_KEY` |
+| `vllm` | `[providers.vllm]` | OpenAI Chat Completions | `VLLM_API_KEY` |
+| `ollama` | `[providers.ollama]` | Ollama-local OpenAI-compatible Chat Completions | `OLLAMA_API_KEY` |
+| `huggingface` | `[providers.huggingface]` | OpenAI Chat Completions | `HUGGINGFACE_API_KEY`, `HF_TOKEN` |
+| `together` | `[providers.together]` | OpenAI Chat Completions | `TOGETHER_API_KEY` |
+| `qianfan` | `[providers.qianfan]` | OpenAI Chat Completions | `QIANFAN_API_KEY`, `BAIDU_QIANFAN_API_KEY` |
+| `openai-codex` | `[providers.openai_codex]` | OpenAI Responses | `OPENAI_CODEX_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN` |
+| `anthropic` | `[providers.anthropic]` | Anthropic Messages | `ANTHROPIC_API_KEY` |
+| `zai` | `[providers.zai]` | OpenAI Chat Completions | `ZAI_API_KEY`, `Z_AI_API_KEY` |
+| `stepfun` | `[providers.stepfun]` | OpenAI Chat Completions | `STEPFUN_API_KEY`, `STEP_API_KEY` |
+| `minimax` | `[providers.minimax]` | OpenAI Chat Completions | `MINIMAX_API_KEY` |
+| `deepinfra` | `[providers.deepinfra]` | OpenAI Chat Completions | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
+
+Default base URLs and models for each route are listed in the shipped provider
+table below. The wire protocol values above are derived from
+`crates/config/src/provider.rs`: `ChatCompletions` is the default,
+`openai-codex` overrides to `Responses`, and `anthropic` overrides to
+`AnthropicMessages`.
 
 ## Auth And Env Rules
 
