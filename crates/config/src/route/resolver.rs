@@ -73,14 +73,10 @@ impl RouteResolver {
         let descriptor = ProviderDescriptor::for_kind(provider_kind);
         let provider_id = descriptor.id();
 
-        // 2. Determine the logical selector + reject empties up front.
+        // 2. Determine the logical selector from explicit choice, then the
+        //    saved-model fallback, then the provider default.
         let logical_model = match &req.model_selector {
-            Some(selector) => {
-                if selector.raw().is_empty() {
-                    return Err(RouteError::EmptyModel);
-                }
-                selector.clone()
-            }
+            Some(selector) => selector.clone(),
             None => {
                 // No selector: fall back to saved wire model, then provider
                 // default. Both stay in the resolved provider's scope.
@@ -92,6 +88,12 @@ impl RouteResolver {
                 LogicalModelRef::from(raw)
             }
         };
+
+        // Reject an empty selector from ANY source (explicit, saved, or a
+        // degenerate default), not just an empty explicit selector.
+        if logical_model.raw().is_empty() {
+            return Err(RouteError::EmptyModel);
+        }
 
         // 3. `auto` is an opt-in sentinel: resolve to the provider default wire
         //    id without treating "auto" as a literal model name.

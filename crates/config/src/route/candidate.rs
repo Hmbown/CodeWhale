@@ -5,10 +5,13 @@
 //! > Execution requires a `ReadyRouteCandidate`.
 //! > A `ReadyRouteCandidate` can only be produced by `RouteResolver`.
 //!
-//! All fields are pub-read, but the ONLY constructor is
-//! [`ReadyRouteCandidate::new`], which is `pub(super)`. Only
-//! [`super::resolver`] (the [`super::resolver::RouteResolver`]) can mint one;
-//! no other code in or out of the crate can fabricate a candidate.
+//! Fields are pub-*read*, but the type cannot be *constructed* outside this
+//! crate: the struct is `#[non_exhaustive]` (no other crate can build it via a
+//! struct literal) and deliberately does not derive `Deserialize` (so it cannot
+//! be fabricated from JSON either). The only constructor is
+//! [`ReadyRouteCandidate::new`]
+//! (`pub(super)`), and [`super::resolver::RouteResolver::resolve`] is its sole
+//! caller. A candidate's existence is therefore proof it passed the resolver.
 //!
 //! DEFERRED: #3384's full sketch also carried `capabilities: CapabilityProfile`
 //! and `config_snapshot: Config`. Both are intentionally omitted here: pulling
@@ -98,9 +101,11 @@ pub struct ValidationReport {
 
 /// A runtime-resolved, executable route.
 ///
-/// All fields are read-only to callers. The only constructor is
+/// Fields are read-only to callers; the type cannot be constructed outside this
+/// crate (`#[non_exhaustive]` + no `Deserialize`). The only constructor is
 /// [`Self::new`], which is `pub(super)`; see module docs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ReadyRouteCandidate {
     /// Resolved provider id.
     pub provider_id: ProviderId,

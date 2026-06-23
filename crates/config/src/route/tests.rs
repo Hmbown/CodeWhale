@@ -249,6 +249,20 @@ fn resolver_empty_string_selector_is_empty_model_error() {
 }
 
 #[test]
+fn resolver_empty_saved_provider_model_is_empty_model_error() {
+    // An empty selector from the saved-model fallback must be rejected too, not
+    // just an empty explicit selector (the guard covers every selector source).
+    let r = RouteResolver::new();
+    let request = RouteRequest {
+        explicit_provider: Some(ProviderKind::Deepseek),
+        model_selector: None,
+        saved_provider_model: Some(WireModelId::from("")),
+        base_url_override: None,
+    };
+    assert!(matches!(r.resolve(&request), Err(RouteError::EmptyModel)));
+}
+
+#[test]
 fn resolver_passthrough_provider_preserves_custom_id_verbatim() {
     let r = RouteResolver::new();
     let out = r
