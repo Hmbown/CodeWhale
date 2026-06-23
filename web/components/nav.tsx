@@ -8,6 +8,7 @@ import { MobileMenu } from "./mobile-menu";
 
 const EN_LINKS = [
   { href: "/en/install", label: "Install", cn: "安装" },
+  { href: "/en/runtime", label: "Runtime", cn: "集成" },
   { href: "/en/docs", label: "Docs", cn: "文档" },
   { href: "/en/feed", label: "Activity", cn: "动态" },
   { href: "/en/roadmap", label: "Roadmap", cn: "路线" },
@@ -17,6 +18,7 @@ const EN_LINKS = [
 
 const ZH_LINKS = [
   { href: "/zh/install", label: "安装", cn: "" },
+  { href: "/zh/runtime", label: "集成", cn: "" },
   { href: "/zh/docs", label: "文档", cn: "" },
   { href: "/zh/feed", label: "动态", cn: "" },
   { href: "/zh/roadmap", label: "路线图", cn: "" },

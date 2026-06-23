@@ -4,7 +4,7 @@ import { SITE_URL } from "@/lib/page-meta";
 
 // Public, indexable routes (locale-prefixed). /admin and /api are
 // intentionally excluded; see app/robots.ts.
-const PATHS = ["", "/install", "/docs", "/faq", "/roadmap", "/feed", "/contribute"];
+const PATHS = ["", "/install", "/runtime", "/docs", "/faq", "/roadmap", "/feed", "/contribute"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const lastModified = new Date();
