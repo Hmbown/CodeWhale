@@ -305,8 +305,16 @@ impl StateStore {
     }
 
     fn conn(&self) -> Result<Connection> {
-        Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open state db {}", self.db_path.display()))
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open state db {}", self.db_path.display()))?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .with_context(|| {
+                format!(
+                    "failed to enable foreign keys for {}",
+                    self.db_path.display()
+                )
+            })?;
+        Ok(conn)
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -1865,6 +1873,50 @@ mod tests {
             .upsert_thread_goal(&test_goal("missing-thread", "nope"))
             .expect_err("goal without a thread should fail");
         assert!(err.to_string().contains("thread missing-thread not found"));
+    }
+
+    #[test]
+    fn delete_thread_cascades_child_rows() {
+        let store = temp_state_store("thread-delete-cascade");
+        store
+            .upsert_thread(&test_thread("thread-1"))
+            .expect("upsert thread");
+        store
+            .append_message("thread-1", "user", "hello", None)
+            .expect("append message");
+        store
+            .save_checkpoint("thread-1", "checkpoint-1", &serde_json::json!({"ok": true}))
+            .expect("save checkpoint");
+        store
+            .persist_dynamic_tools(
+                "thread-1",
+                &[DynamicToolRecord {
+                    position: 0,
+                    name: "test_tool".to_string(),
+                    description: Some("test".to_string()),
+                    input_schema: serde_json::json!({"type": "object"}),
+                }],
+            )
+            .expect("persist dynamic tools");
+        store
+            .upsert_thread_goal(&test_goal("thread-1", "Ship v0.8.67"))
+            .expect("upsert goal");
+
+        store.delete_thread("thread-1").expect("delete thread");
+
+        let conn = store.conn().expect("conn");
+        for table in [
+            "messages",
+            "checkpoints",
+            "thread_dynamic_tools",
+            "thread_goals",
+        ] {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE thread_id = ?1");
+            let count: i64 = conn
+                .query_row(&sql, params!["thread-1"], |row| row.get(0))
+                .expect("count child rows");
+            assert_eq!(count, 0, "{table} row survived thread deletion");
+        }
     }
 
     #[test]

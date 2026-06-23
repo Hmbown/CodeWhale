@@ -1361,6 +1361,7 @@ impl TaskManager {
     }
 
     fn write_artifact(&self, task_id: &str, label: &str, content: &str) -> Result<PathBuf> {
+        ensure_safe_storage_id("task id", task_id)?;
         let artifact_dir = self.artifacts_dir.join(task_id);
         fs::create_dir_all(&artifact_dir)
             .with_context(|| format!("Failed to create artifact dir {}", artifact_dir.display()))?;
@@ -1622,6 +1623,17 @@ fn summarize_text(text: &str, limit: usize) -> String {
         count += 1;
     }
     out
+}
+
+fn ensure_safe_storage_id(kind: &str, value: &str) -> Result<()> {
+    let mut components = Path::new(value).components();
+    let Some(component) = components.next() else {
+        bail!("{kind} must not be empty");
+    };
+    if components.next().is_some() || !matches!(component, std::path::Component::Normal(_)) {
+        bail!("{kind} must be a single path component");
+    }
+    Ok(())
 }
 
 fn sanitize_filename(input: &str) -> String {
@@ -1959,6 +1971,24 @@ mod tests {
 
         assert_eq!(updated.gates.len(), 1);
         assert_eq!(updated.gates[0].classification, "passed");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_task_artifact_rejects_traversal_task_id() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("tasks-root");
+        let escaped = temp.path().join("escape");
+        let manager =
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
+                .await?;
+
+        let err = manager
+            .write_task_artifact("../escape", "result", "artifact body")
+            .expect_err("traversal task ids must be rejected");
+
+        assert!(err.to_string().contains("single path component"));
+        assert!(!escaped.exists(), "artifact write escaped the task root");
         Ok(())
     }
 

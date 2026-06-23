@@ -1962,9 +1962,9 @@ impl Drop for StateEnvRestore {
     }
 }
 
-/// Points `HOME`/`USERPROFILE`/`CODEWHALE_HOME` at a fresh temp tree so
-/// `codewhale_home()` -> `<home>/.codewhale` and `legacy_deepseek_home()`
-/// -> `<home>/.deepseek`. Env is restored on drop.
+/// Points `HOME`/`USERPROFILE` at a fresh temp tree and clears
+/// `CODEWHALE_HOME` so `codewhale_home()` -> `<home>/.codewhale` and
+/// `legacy_deepseek_home()` -> `<home>/.deepseek`. Env is restored on drop.
 struct StateDirEnv {
     home: PathBuf,
     _restore: StateEnvRestore,
@@ -1985,7 +1985,7 @@ impl StateDirEnv {
         unsafe {
             env::set_var("HOME", &home);
             env::set_var("USERPROFILE", &home);
-            env::set_var("CODEWHALE_HOME", home.join(CODEWHALE_APP_DIR));
+            env::remove_var("CODEWHALE_HOME");
         }
         Self {
             home,
@@ -2083,6 +2083,42 @@ fn resolve_state_dir_still_finds_legacy_for_backfill() {
     assert_eq!(
         resolve_state_dir("catalog").expect("resolve after migrate"),
         state_env.primary("catalog")
+    );
+    let _ = fs::remove_dir_all(&state_env.home);
+}
+
+#[test]
+fn explicit_codewhale_home_bypasses_legacy_state_fallback_and_migration() {
+    let _lock = env_lock();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let state_env = StateDirEnv::install(unique);
+    let explicit_home = state_env.home.join("isolated-codewhale");
+    // Safety: test-only environment mutation is serialized by env_lock().
+    unsafe {
+        env::set_var("CODEWHALE_HOME", &explicit_home);
+    }
+    fs::create_dir_all(state_env.legacy("catalog")).expect("legacy dir");
+    fs::write(state_env.legacy("catalog").join("legacy.json"), b"legacy").expect("legacy file");
+
+    let primary = explicit_home.join("catalog");
+    assert_eq!(
+        resolve_state_dir("catalog").expect("resolve"),
+        primary,
+        "explicit CODEWHALE_HOME must not read ambient legacy state"
+    );
+
+    let ensured = ensure_state_dir("catalog").expect("ensure");
+    assert_eq!(ensured, primary);
+    assert!(
+        state_env.legacy("catalog").join("legacy.json").exists(),
+        "explicit CODEWHALE_HOME must not migrate ambient legacy state"
+    );
+    assert!(
+        !primary.join("legacy.json").exists(),
+        "legacy contents must not be copied into an explicit CODEWHALE_HOME"
     );
     let _ = fs::remove_dir_all(&state_env.home);
 }

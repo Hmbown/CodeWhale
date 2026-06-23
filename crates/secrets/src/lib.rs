@@ -480,7 +480,7 @@ impl FileKeyringStore {
             }
         }
         let body = serde_json::to_string_pretty(blob)?;
-        fs::write(&self.path, body)?;
+        write_private_file(&self.path, body.as_bytes())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -498,6 +498,28 @@ impl FileKeyringStore {
         }
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn write_private_file(path: &Path, body: &[u8]) -> Result<(), SecretsError> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(body)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, body: &[u8]) -> Result<(), SecretsError> {
+    fs::write(path, body)?;
+    Ok(())
 }
 
 impl KeyringStore for FileKeyringStore {

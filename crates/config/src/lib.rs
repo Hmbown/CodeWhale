@@ -3239,14 +3239,21 @@ pub const LEGACY_APP_DIR: &str = ".deepseek";
 /// `$CODEWHALE_HOME` takes precedence when set. Otherwise defaults to
 /// `$HOME/.codewhale`. This is the write target for new product state.
 pub fn codewhale_home() -> Result<PathBuf> {
-    if let Ok(val) = std::env::var("CODEWHALE_HOME") {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
+    if let Some(path) = codewhale_home_env_override() {
+        return Ok(path);
     }
     let home = effective_home_dir().context("failed to resolve home directory")?;
     Ok(home.join(CODEWHALE_APP_DIR))
+}
+
+fn codewhale_home_env_override() -> Option<PathBuf> {
+    let val = std::env::var("CODEWHALE_HOME").ok()?;
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
 }
 
 /// Resolve the legacy DeepSeek home directory (`$HOME/.deepseek`).
@@ -3304,8 +3311,9 @@ fn ensure_safe_state_subdir(subdir: &str) -> Result<()> {
 /// from the legacy path for users who haven't migrated yet.
 pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
     ensure_safe_state_subdir(subdir)?;
+    let explicit_codewhale_home = codewhale_home_env_override().is_some();
     let primary = codewhale_home()?.join(subdir);
-    if primary.exists() {
+    if explicit_codewhale_home || primary.exists() {
         return Ok(primary);
     }
     let legacy = legacy_deepseek_home()?.join(subdir);
@@ -3327,8 +3335,11 @@ pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
 /// data in the primary location; the read resolver itself is unchanged.
 pub fn ensure_state_dir(subdir: &str) -> Result<PathBuf> {
     ensure_safe_state_subdir(subdir)?;
+    let explicit_codewhale_home = codewhale_home_env_override().is_some();
     let dir = codewhale_home()?.join(subdir);
-    migrate_legacy_state_dir(&dir, subdir)?;
+    if !explicit_codewhale_home {
+        migrate_legacy_state_dir(&dir, subdir)?;
+    }
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}/", dir.display()))?;
     Ok(dir)

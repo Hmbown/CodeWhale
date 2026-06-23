@@ -319,17 +319,21 @@ impl AutomationManager {
         Self::open(default_automations_dir())
     }
 
-    fn automation_path(&self, id: &str) -> PathBuf {
-        self.automations_dir.join(format!("{id}.json"))
+    fn automation_path(&self, id: &str) -> Result<PathBuf> {
+        ensure_safe_storage_id("automation id", id)?;
+        Ok(self.automations_dir.join(format!("{id}.json")))
     }
 
-    fn runs_dir_for(&self, automation_id: &str) -> PathBuf {
-        self.runs_dir.join(automation_id)
+    fn runs_dir_for(&self, automation_id: &str) -> Result<PathBuf> {
+        ensure_safe_storage_id("automation id", automation_id)?;
+        Ok(self.runs_dir.join(automation_id))
     }
 
-    fn run_path(&self, automation_id: &str, run_id: &str) -> PathBuf {
-        self.runs_dir_for(automation_id)
-            .join(format!("{run_id}.json"))
+    fn run_path(&self, automation_id: &str, run_id: &str) -> Result<PathBuf> {
+        ensure_safe_storage_id("run id", run_id)?;
+        Ok(self
+            .runs_dir_for(automation_id)?
+            .join(format!("{run_id}.json")))
     }
 
     pub fn create_automation(&self, req: CreateAutomationRequest) -> Result<AutomationRecord> {
@@ -362,7 +366,7 @@ impl AutomationManager {
     }
 
     pub fn get_automation(&self, id: &str) -> Result<AutomationRecord> {
-        let path = self.automation_path(id);
+        let path = self.automation_path(id)?;
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read automation {}", path.display()))?;
         let record: AutomationRecord = serde_json::from_str(&raw)
@@ -378,7 +382,7 @@ impl AutomationManager {
     }
 
     pub fn save_automation(&self, record: &AutomationRecord) -> Result<()> {
-        write_json_atomic(&self.automation_path(&record.id), record)
+        write_json_atomic(&self.automation_path(&record.id)?, record)
     }
 
     pub fn list_automations(&self) -> Result<Vec<AutomationRecord>> {
@@ -476,11 +480,11 @@ impl AutomationManager {
 
     pub fn delete_automation(&self, id: &str) -> Result<AutomationRecord> {
         let existing = self.get_automation(id)?;
-        let path = self.automation_path(id);
+        let path = self.automation_path(id)?;
         fs::remove_file(&path)
             .with_context(|| format!("Failed to delete automation {}", path.display()))?;
 
-        let runs_dir = self.runs_dir_for(id);
+        let runs_dir = self.runs_dir_for(id)?;
         if runs_dir.exists() {
             fs::remove_dir_all(&runs_dir).with_context(|| {
                 format!("Failed to delete automation runs {}", runs_dir.display())
@@ -495,7 +499,7 @@ impl AutomationManager {
         automation_id: &str,
         limit: Option<usize>,
     ) -> Result<Vec<AutomationRunRecord>> {
-        let dir = self.runs_dir_for(automation_id);
+        let dir = self.runs_dir_for(automation_id)?;
         if !dir.exists() {
             return Ok(Vec::new());
         }
@@ -531,9 +535,9 @@ impl AutomationManager {
     }
 
     fn save_run(&self, run: &AutomationRunRecord) -> Result<()> {
-        let dir = self.runs_dir_for(&run.automation_id);
+        let dir = self.runs_dir_for(&run.automation_id)?;
         fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-        write_json_atomic(&self.run_path(&run.automation_id, &run.id), run)
+        write_json_atomic(&self.run_path(&run.automation_id, &run.id)?, run)
     }
 
     async fn enqueue_run_task(
@@ -759,6 +763,17 @@ impl AutomationManager {
     }
 }
 
+fn ensure_safe_storage_id(kind: &str, value: &str) -> Result<()> {
+    let mut components = Path::new(value).components();
+    let Some(component) = components.next() else {
+        bail!("{kind} must not be empty");
+    };
+    if components.next().is_some() || !matches!(component, std::path::Component::Normal(_)) {
+        bail!("{kind} must be a single path component");
+    }
+    Ok(())
+}
+
 fn validate_name_and_prompt(name: &str, prompt: &str) -> Result<()> {
     if name.trim().is_empty() {
         bail!("Automation name is required");
@@ -941,14 +956,64 @@ mod tests {
             error: None,
         };
         manager.save_run(&run).expect("save run");
-        assert!(manager.runs_dir_for(&created.id).exists());
+        assert!(
+            manager
+                .runs_dir_for(&created.id)
+                .expect("runs dir")
+                .exists()
+        );
 
         manager
             .delete_automation(&created.id)
             .expect("delete automation");
 
         assert!(manager.get_automation(&created.id).is_err());
-        assert!(!manager.runs_dir_for(&created.id).exists());
+        assert!(
+            !manager
+                .runs_dir_for(&created.id)
+                .expect("runs dir")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn automation_storage_rejects_traversal_ids() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let manager = AutomationManager::open(tempdir.path().join("root")).expect("manager");
+        let escaped_file = tempdir.path().join("escape.json");
+        let escaped_runs = tempdir.path().join("escape-runs");
+
+        let err = manager
+            .get_automation("../escape")
+            .expect_err("traversal automation ids must be rejected");
+        assert!(err.to_string().contains("single path component"));
+        assert!(!escaped_file.exists());
+
+        let err = manager
+            .list_runs("../escape-runs", None)
+            .expect_err("traversal run dirs must be rejected");
+        assert!(err.to_string().contains("single path component"));
+        assert!(!escaped_runs.exists());
+
+        let run = AutomationRunRecord {
+            schema_version: CURRENT_RUN_SCHEMA_VERSION,
+            id: "../escape-run".to_string(),
+            automation_id: Uuid::new_v4().to_string(),
+            scheduled_for: Utc::now(),
+            status: AutomationRunStatus::Queued,
+            created_at: Utc::now(),
+            started_at: None,
+            ended_at: None,
+            task_id: None,
+            thread_id: None,
+            turn_id: None,
+            error: None,
+        };
+        let err = manager
+            .save_run(&run)
+            .expect_err("traversal run ids must be rejected");
+        assert!(err.to_string().contains("single path component"));
+        assert!(!tempdir.path().join("escape-run.json").exists());
     }
 
     #[test]
