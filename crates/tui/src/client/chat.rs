@@ -1,8 +1,8 @@
 //! Chat Completions API helpers for DeepSeek's OpenAI-compatible endpoint.
 //!
 //! This is the production code path. Streaming (`create_message_stream`),
-//! request building (`build_chat_messages*`), and SSE parsing (`parse_sse_chunk`)
-//! all live here.
+//! request building (`build_chat_messages*`), and SSE parsing
+//! (`parse_sse_chunk_with_reasoning_style`) all live here.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -2152,8 +2152,13 @@ fn reasoning_stream_style_for_stream(
     model: &str,
     configured: Option<&str>,
 ) -> ReasoningStreamStyle {
-    if let Some(style) = configured.and_then(parse_reasoning_stream_style) {
-        return style;
+    if let Some(configured) = configured {
+        if let Some(style) = parse_reasoning_stream_style(configured) {
+            return style;
+        }
+        logging::warn(format!(
+            "Ignoring unrecognized reasoning_stream_style `{configured}`; expected separate_field, inline_tags, or none"
+        ));
     }
     if is_reasoning_model_for_stream(provider, model) {
         ReasoningStreamStyle::SeparateField
@@ -2739,7 +2744,7 @@ fn parse_sse_chunk_with_reasoning_style(
                 .map(str::to_string);
 
             // Handle reasoning_content / reasoning thinking deltas.
-            if reasoning_stream_style != ReasoningStreamStyle::None
+            if reasoning_stream_style == ReasoningStreamStyle::SeparateField
                 && let Some(reasoning) = reasoning_text.as_deref()
             {
                 push_thinking_delta(
@@ -3617,6 +3622,33 @@ mod stream_decoder_tests {
             !text_delta_text(&events).contains("<think>"),
             "inline reasoning tags must not leak into visible text: {events:?}"
         );
+    }
+
+    #[test]
+    fn reasoning_style_inline_tags_flushes_unclosed_think_at_stream_end() {
+        let events = decode_chunks_with_style(
+            &[
+                r#"{"choices":[{"delta":{"content":"Before <think>partial reasoning"}}]}"#,
+                r#"{"choices":[{"finish_reason":"stop"}]}"#,
+            ],
+            ReasoningStreamStyle::InlineTags,
+        );
+
+        assert_eq!(thinking_delta_text(&events), "partial reasoning");
+        assert_eq!(text_delta_text(&events), "Before ");
+    }
+
+    #[test]
+    fn reasoning_style_inline_tags_ignores_separate_reasoning_field() {
+        let events = decode_chunks_with_style(
+            &[
+                r#"{"choices":[{"delta":{"reasoning_content":"metadata","content":"<think>tagged</think> answer"}}]}"#,
+            ],
+            ReasoningStreamStyle::InlineTags,
+        );
+
+        assert_eq!(thinking_delta_text(&events), "tagged");
+        assert_eq!(text_delta_text(&events), " answer");
     }
 
     #[test]
