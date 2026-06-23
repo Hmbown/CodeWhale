@@ -1,6 +1,5 @@
 import Link from "next/link";
 import type { Locale } from "@/lib/i18n/config";
-import { FACTS } from "@/lib/facts.generated";
 import { Seal } from "./seal";
 import { Whale } from "./whale";
 import { LocaleSwitcher } from "./locale-switcher";
@@ -11,6 +10,8 @@ const EN_LINKS = [
   { href: "/en/runtime", label: "Runtime", cn: "集成" },
   { href: "/en/docs", label: "Docs", cn: "文档" },
   { href: "/en/feed", label: "Activity", cn: "动态" },
+  /* ADDED NEW DIGEST ARCHIVE LINK HERE */
+  { href: "/en/digest", label: "Digest", cn: "摘要" },
   { href: "/en/roadmap", label: "Roadmap", cn: "路线" },
   { href: "/en/faq", label: "FAQ", cn: "问答" },
   { href: "/en/contribute", label: "Contribute", cn: "参与" },
@@ -21,6 +22,8 @@ const ZH_LINKS = [
   { href: "/zh/runtime", label: "集成", cn: "" },
   { href: "/zh/docs", label: "文档", cn: "" },
   { href: "/zh/feed", label: "动态", cn: "" },
+  /* ADDED NEW ZH DIGEST ARCHIVE LINK HERE */
+  { href: "/zh/digest", label: "每周摘要", cn: "" },
   { href: "/zh/roadmap", label: "路线图", cn: "" },
   { href: "/zh/faq", label: "常见问题", cn: "" },
   { href: "/zh/contribute", label: "参与贡献", cn: "" },
@@ -41,7 +44,7 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden md:inline">codewhale.net</span>
-            <span className="tabular">{FACTS.version ? `v${FACTS.version}` : "v0.8.x"}</span>
+            <span className="tabular">v0.8.x</span>
           </div>
         </div>
       </div>
