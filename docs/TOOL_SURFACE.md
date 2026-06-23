@@ -76,7 +76,11 @@ ask records are currently a narrow foundation: when one matches under
 ask the user; existing allow/deny behavior is otherwise unchanged. The TUI
 runtime loads ask-only records from the sibling `permissions.toml` file and
 applies matching `exec_shell` command ask-rules and explicit file-path ask-rules
-before Auto/session approval shortcuts.
+before Auto/session approval shortcuts. In an `exec_shell` approval card, `S`
+approves once and saves an ask rule containing that command; only `exec_shell`
+cards support the shortcut, and saved command rules use existing arity-aware
+prefix matching. File-path ask rules can be authored in `permissions.toml` and
+matched at runtime, but cannot yet be saved from the approval UI.
 
 ### MCP manager and palette discovery
 

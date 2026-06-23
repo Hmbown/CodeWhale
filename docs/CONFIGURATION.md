@@ -1011,8 +1011,13 @@ If you are upgrading from older releases:
   `[[rules]]` entries with `tool` plus optional `command` or `path` fields.
   Loaded rules feed the execution policy engine and force approval in approval
   modes that can ask; under `approval_policy = "never"`, matching ask rules are
-  rejected because no prompt can be shown. This intentionally does not accept
-  typed allow/deny records, glob expansion, or approval UI persistence yet.
+  rejected because no prompt can be shown. In an `exec_shell` approval card,
+  press `S` to approve the request once and save an ask rule containing that
+  command to this file. Only `exec_shell` cards support this shortcut; saved
+  command rules use existing arity-aware prefix matching. File-path ask rules
+  can be added manually and are matched at runtime, but the approval UI does
+  not save file rules yet. This intentionally does not accept typed allow/deny
+  records or glob expansion.
 - `[auto_review]` (table, optional): deterministic tool-call review policy.
   This layer sits on top of existing approval modes; it can force a prompt or
   block a tool call, but it is not an auto-push, auto-merge, or hosted review
