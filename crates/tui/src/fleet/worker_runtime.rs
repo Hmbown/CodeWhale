@@ -368,7 +368,10 @@ mod tests {
     #[test]
     fn fleet_tool_profile_empty_uses_inherited() {
         let profile = FleetTaskWorkerProfile {
+            agent_profile: None,
             role: None,
+            loadout: None,
+            model_class: None,
             tool_profile: None,
             tools: vec![],
             capabilities: vec![],
@@ -382,7 +385,10 @@ mod tests {
     #[test]
     fn fleet_tool_profile_explicit_passes_tools() {
         let profile = FleetTaskWorkerProfile {
+            agent_profile: None,
             role: None,
+            loadout: None,
+            model_class: None,
             tool_profile: None,
             tools: vec!["cargo".to_string(), "git".to_string()],
             capabilities: vec![],
@@ -541,7 +547,10 @@ mod tests {
                 objective: Some(format!("{role} objective")),
                 instructions: "Complete the assigned fanout lane.".to_string(),
                 worker: Some(FleetTaskWorkerProfile {
+                    agent_profile: None,
                     role: Some(role.to_string()),
+                    loadout: None,
+                    model_class: None,
                     tool_profile: None,
                     tools: match &expected_tools {
                         AgentWorkerToolProfile::Explicit(tools) => tools.clone(),

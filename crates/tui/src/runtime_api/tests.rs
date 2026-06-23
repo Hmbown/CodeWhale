@@ -1024,7 +1024,10 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
         objective: Some("Inspect fleet status through Runtime API".to_string()),
         instructions: "Stay running for inspection.".to_string(),
         worker: Some(codewhale_protocol::fleet::FleetTaskWorkerProfile {
+            agent_profile: None,
             role: Some("status-reviewer".to_string()),
+            loadout: None,
+            model_class: None,
             tool_profile: Some("read-only".to_string()),
             tools: vec!["rg".to_string()],
             capabilities: vec!["fleet".to_string()],

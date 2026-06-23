@@ -1807,6 +1807,9 @@ esac
             task.instructions = format!("run deterministic fleet smoke lane {marker}");
             task.worker = Some(FleetTaskWorkerProfile {
                 role: Some(role.to_string()),
+                agent_profile: None,
+                loadout: None,
+                model_class: None,
                 tool_profile: Some("explicit".to_string()),
                 tools: tools.into_iter().map(str::to_string).collect(),
                 capabilities: vec!["local-smoke".to_string()],
@@ -1987,7 +1990,10 @@ esac
         let mut contextual = task("task-a");
         contextual.objective = Some("Review the release ledger".to_string());
         contextual.worker = Some(FleetTaskWorkerProfile {
+            agent_profile: None,
             role: Some("release-reviewer".to_string()),
+            loadout: None,
+            model_class: None,
             tool_profile: Some("read-only".to_string()),
             tools: vec!["git".to_string()],
             capabilities: vec!["rust".to_string()],
@@ -2047,7 +2053,10 @@ esac
                 objective: Some("cargo check".to_string()),
                 instructions: "run cargo check and report result".to_string(),
                 worker: Some(FleetTaskWorkerProfile {
+                    agent_profile: None,
                     role: Some("release-checker".to_string()),
+                    loadout: None,
+                    model_class: None,
                     tool_profile: Some("read-only".to_string()),
                     tools: vec!["cargo".to_string()],
                     capabilities: vec!["rust".to_string()],
@@ -2082,7 +2091,10 @@ esac
                 objective: Some("review source".to_string()),
                 instructions: "read src/lib.rs and report findings".to_string(),
                 worker: Some(FleetTaskWorkerProfile {
+                    agent_profile: None,
                     role: Some("reviewer".to_string()),
+                    loadout: None,
+                    model_class: None,
                     tool_profile: Some("read-only".to_string()),
                     tools: vec!["cargo".to_string()],
                     capabilities: vec!["rust".to_string()],

@@ -364,7 +364,10 @@ mod tests {
             objective: Some("prove it runs".to_string()),
             instructions: instructions.to_string(),
             worker: Some(FleetTaskWorkerProfile {
+                agent_profile: None,
                 role: Some("reviewer".to_string()),
+                loadout: None,
+                model_class: None,
                 tool_profile: Some("read-only".to_string()),
                 tools: vec![],
                 capabilities: vec![],

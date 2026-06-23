@@ -109,8 +109,24 @@ pub struct FleetTaskSpec {
 /// Worker role and tool expectations for a task.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct FleetTaskWorkerProfile {
+    /// Named agent profile/persona posture to layer onto this worker.
+    ///
+    /// `profile` is accepted as a shorter authoring alias. This is an intent
+    /// reference only; profile loading and permission narrowing happen in the
+    /// Fleet runtime layer.
+    #[serde(default, alias = "profile", skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Fleet loadout intent such as `auto`, `fast`, or `review`.
+    ///
+    /// This is not a concrete provider/model selection; route resolution owns
+    /// the executable provider/model/wire-model decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadout: Option<String>,
+    /// Fleet model class hint such as `strong`, `balanced`, or `fast`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_profile: Option<String>,
     #[serde(default)]
@@ -876,7 +892,10 @@ mod tests {
                 objective: Some("Keep the workspace lint-clean".to_string()),
                 instructions: "run cargo clippy".to_string(),
                 worker: Some(FleetTaskWorkerProfile {
+                    agent_profile: None,
                     role: Some("release-checker".to_string()),
+                    loadout: None,
+                    model_class: None,
                     tool_profile: Some("read-only".to_string()),
                     tools: vec!["cargo".to_string()],
                     capabilities: vec!["rust".to_string()],
@@ -929,6 +948,34 @@ mod tests {
                 .required_files,
             vec![PathBuf::from("Cargo.toml")]
         );
+    }
+
+    #[test]
+    fn worker_profile_carries_agent_profile_and_loadout_intent() {
+        let json = r#"{
+            "profile": "adversarial_reviewer",
+            "role": "reviewer",
+            "loadout": "auto",
+            "model_class": "balanced",
+            "tool_profile": "read-only",
+            "tools": ["read_file"],
+            "capabilities": ["rust"]
+        }"#;
+
+        let profile: FleetTaskWorkerProfile = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            profile.agent_profile.as_deref(),
+            Some("adversarial_reviewer")
+        );
+        assert_eq!(profile.role.as_deref(), Some("reviewer"));
+        assert_eq!(profile.loadout.as_deref(), Some("auto"));
+        assert_eq!(profile.model_class.as_deref(), Some("balanced"));
+        assert_eq!(profile.tool_profile.as_deref(), Some("read-only"));
+
+        let serialized = serde_json::to_value(&profile).unwrap();
+        assert_eq!(serialized["agent_profile"], "adversarial_reviewer");
+        assert!(serialized.get("profile").is_none());
     }
 
     #[test]

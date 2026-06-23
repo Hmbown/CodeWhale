@@ -127,10 +127,45 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
         {
             bail!("fleet task {} objective cannot be empty", task.id);
         }
+        validate_worker_profile(&task.id, task.worker.as_ref())?;
         validate_tags(&task.id, &task.tags)?;
         validate_workspace_requirements(task)?;
     }
     Ok(())
+}
+
+fn validate_worker_profile(task_id: &str, worker: Option<&FleetTaskWorkerProfile>) -> Result<()> {
+    let Some(worker) = worker else {
+        return Ok(());
+    };
+    validate_worker_token(
+        task_id,
+        "worker.agent_profile",
+        worker.agent_profile.as_deref(),
+    )?;
+    validate_worker_token(task_id, "worker.loadout", worker.loadout.as_deref())?;
+    validate_worker_token(task_id, "worker.model_class", worker.model_class.as_deref())?;
+    Ok(())
+}
+
+fn validate_worker_token(task_id: &str, field: &str, value: Option<&str>) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("fleet task {task_id} {field} cannot be empty");
+    }
+    if trimmed != value || !trimmed.chars().all(is_worker_token_char) {
+        bail!(
+            "fleet task {task_id} {field} must be a simple token, not a path or provider/model id"
+        );
+    }
+    Ok(())
+}
+
+fn is_worker_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -553,7 +588,10 @@ mod tests {
             objective: Some(format!("Verify {id}")),
             instructions: format!("do {id}"),
             worker: Some(FleetTaskWorkerProfile {
+                agent_profile: None,
                 role: Some("reviewer".to_string()),
+                loadout: None,
+                model_class: None,
                 tool_profile: Some("read-only".to_string()),
                 tools: vec!["git".to_string()],
                 capabilities: vec!["rust".to_string()],
@@ -611,6 +649,68 @@ mod tests {
             Some("reviewer")
         );
         assert_eq!(parsed.tasks[1].tags, vec!["review"]);
+    }
+
+    #[test]
+    fn fleet_task_spec_document_parses_worker_profile_loadout_intent() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("fleet-profile-task.json");
+        let doc = json!({
+            "name": "profile loadout smoke",
+            "tasks": [{
+                "id": "review",
+                "name": "review",
+                "instructions": "review the patch",
+                "worker": {
+                    "profile": "adversarial_reviewer",
+                    "role": "reviewer",
+                    "loadout": "auto",
+                    "model_class": "balanced",
+                    "tool_profile": "read-only",
+                    "tools": ["read_file", "grep_files"],
+                    "capabilities": ["rust"]
+                }
+            }]
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+        let parsed = load_task_spec_document(&path).unwrap();
+        let worker = parsed.tasks[0].worker.as_ref().unwrap();
+
+        assert_eq!(
+            worker.agent_profile.as_deref(),
+            Some("adversarial_reviewer")
+        );
+        assert_eq!(worker.role.as_deref(), Some("reviewer"));
+        assert_eq!(worker.loadout.as_deref(), Some("auto"));
+        assert_eq!(worker.model_class.as_deref(), Some("balanced"));
+        assert_eq!(worker.tool_profile.as_deref(), Some("read-only"));
+    }
+
+    #[test]
+    fn fleet_task_spec_rejects_unsafe_worker_profile_intent_tokens() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("unsafe-profile-task.json");
+        let doc = json!({
+            "tasks": [{
+                "id": "review",
+                "name": "review",
+                "instructions": "review the patch",
+                "worker": {
+                    "profile": "../secrets",
+                    "loadout": "openrouter/deepseek",
+                    "model_class": ""
+                }
+            }]
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+        let err = load_task_spec_document(&path).unwrap_err().to_string();
+
+        assert!(
+            err.contains("worker.agent_profile must be a simple token"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
