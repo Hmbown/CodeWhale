@@ -2338,6 +2338,30 @@ pub(crate) fn slash_completion_hints(
     workspace: Option<&std::path::Path>,
     api_provider: ApiProvider,
 ) -> Vec<SlashMenuEntry> {
+    let model_candidates = model_completion_names_for_provider(api_provider)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    slash_completion_hints_with_model_candidates(
+        input,
+        limit,
+        cached_skills,
+        locale,
+        workspace,
+        api_provider,
+        &model_candidates,
+    )
+}
+
+pub(crate) fn slash_completion_hints_with_model_candidates(
+    input: &str,
+    limit: usize,
+    cached_skills: &[(String, String)],
+    locale: crate::localization::Locale,
+    workspace: Option<&std::path::Path>,
+    _api_provider: ApiProvider,
+    model_candidates: &[String],
+) -> Vec<SlashMenuEntry> {
     if !super::app::looks_like_slash_command_input(input) {
         return Vec::new();
     }
@@ -2547,7 +2571,7 @@ pub(crate) fn slash_completion_hints(
 
     // Special: /model <name> completions when only /model matches
     if entries.iter().any(|e| e.name == "/model") && prefix_lower.eq_ignore_ascii_case("model") {
-        for model_name in model_completion_names_for_provider(api_provider) {
+        for model_name in model_candidates {
             entries.push(SlashMenuEntry {
                 name: format!("/model {model_name}"),
                 description: String::from("Switch to this model"),

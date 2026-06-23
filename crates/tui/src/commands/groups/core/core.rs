@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::config::{
     ApiProvider, COMMON_DEEPSEEK_MODELS, normalize_custom_model_id,
-    normalize_model_name_for_provider, provider_passes_model_through,
+    normalize_model_name_for_provider,
 };
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
@@ -160,20 +160,8 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             model_id
         } else {
             let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
-                if let Some((provider, model_id)) = saved_provider_model_match(app, name) {
-                    return CommandResult::with_message_and_action(
-                        format!(
-                            "Switching provider to {} for model {model_id}.",
-                            provider.as_str()
-                        ),
-                        AppAction::SwitchProvider {
-                            provider,
-                            model: Some(model_id),
-                        },
-                    );
-                }
                 return CommandResult::error(format!(
-                    "Invalid model '{name}'. Expected auto, a model for the active provider, or a saved provider model. Common DeepSeek models: {}",
+                    "Invalid model '{name}'. Expected auto or a model for the active provider. Common DeepSeek models: {}",
                     COMMON_DEEPSEEK_MODELS.join(", ")
                 ));
             };
@@ -223,43 +211,6 @@ fn provider_model_selection_persist_warning(provider: ApiProvider, model: &str) 
     crate::settings::Settings::persist_provider_model_selection(provider, model)
         .err()
         .map(|err| format!(" (not persisted: {err})"))
-}
-
-fn saved_provider_model_match(app: &App, name: &str) -> Option<(ApiProvider, String)> {
-    let requested = normalize_custom_model_id(name)?;
-    let mut saved = app
-        .provider_models
-        .iter()
-        .filter_map(|(provider_name, model)| {
-            let provider = ApiProvider::parse(provider_name)?;
-            (provider != app.api_provider).then_some((provider, model.as_str()))
-        })
-        .collect::<Vec<_>>();
-    saved.sort_by_key(|(provider, _)| provider.as_str());
-
-    for (provider, saved_model) in saved {
-        let Some(saved_model) = normalize_model_for_provider_selection(provider, saved_model)
-        else {
-            continue;
-        };
-        let requested_model = normalize_model_for_provider_selection(provider, &requested)
-            .unwrap_or_else(|| requested.clone());
-        if saved_model.eq_ignore_ascii_case(&requested_model)
-            || saved_model.eq_ignore_ascii_case(&requested)
-        {
-            return Some((provider, saved_model));
-        }
-    }
-
-    None
-}
-
-fn normalize_model_for_provider_selection(provider: ApiProvider, model: &str) -> Option<String> {
-    if provider_passes_model_through(provider) {
-        normalize_custom_model_id(model)
-    } else {
-        normalize_model_name_for_provider(provider, model)
-    }
 }
 
 /// Fetch and list available models from the configured API endpoint.
@@ -1255,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn model_command_switches_to_saved_provider_model() {
+    fn model_command_rejects_saved_model_from_other_provider() {
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.provider_models
@@ -1263,13 +1214,10 @@ mod tests {
 
         let result = model(&mut app, Some("kimi-k2.6"));
 
-        match result.action {
-            Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, crate::config::ApiProvider::Moonshot);
-                assert_eq!(model.as_deref(), Some("kimi-k2.6"));
-            }
-            other => panic!("expected SwitchProvider action, got {other:?}"),
-        }
+        let message = result.message.expect("invalid model message");
+        assert!(message.contains("Invalid model"));
+        assert!(message.contains("active provider"));
+        assert!(result.action.is_none());
         assert_eq!(app.api_provider, crate::config::ApiProvider::Deepseek);
         assert_eq!(app.model, "deepseek-v4-pro");
     }

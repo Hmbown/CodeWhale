@@ -11,8 +11,9 @@
 use crate::commands;
 
 use super::app::{App, looks_like_slash_command_input};
+use super::model_picker::provider_scoped_model_completion_ids;
 use super::widgets::SlashMenuEntry;
-use super::widgets::slash_completion_hints;
+use super::widgets::slash_completion_hints_with_model_candidates;
 
 /// Return the slash-menu entries the composer should display, honouring
 /// `slash_menu_hidden` (set when the user dismisses the popup with Esc).
@@ -26,13 +27,15 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<SlashMenuEntry
         let trigger = app.input[byte_start..].chars().next().unwrap_or('/');
         return skill_mention_entries(&partial, trigger, limit, &app.cached_skills);
     }
-    slash_completion_hints(
+    let model_candidates = provider_scoped_model_completion_ids(app);
+    slash_completion_hints_with_model_candidates(
         &app.input,
         limit,
         &app.cached_skills,
         app.ui_locale,
         Some(&app.workspace),
         app.api_provider,
+        &model_candidates,
     )
 }
 
@@ -221,13 +224,15 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         return false;
     }
 
-    let candidates = slash_completion_hints(
+    let model_candidates = provider_scoped_model_completion_ids(app);
+    let candidates = slash_completion_hints_with_model_candidates(
         &app.input,
         128,
         &app.cached_skills,
         app.ui_locale,
         Some(&app.workspace),
         app.api_provider,
+        &model_candidates,
     )
     .into_iter()
     .map(|entry| entry.name)

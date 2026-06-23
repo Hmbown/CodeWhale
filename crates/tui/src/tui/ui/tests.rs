@@ -5707,6 +5707,32 @@ fn visible_slash_menu_entries_excludes_removed_commands() {
 }
 
 #[test]
+fn visible_slash_model_completions_are_provider_scoped() {
+    let mut app = create_test_app();
+    app.api_provider = crate::config::ApiProvider::Together;
+    app.model = crate::config::DEFAULT_TOGETHER_MODEL.to_string();
+    app.provider_models.insert(
+        "openrouter".to_string(),
+        crate::config::DEFAULT_OPENROUTER_MODEL.to_string(),
+    );
+    app.input = "/model".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+    let names = entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"/model deepseek-ai/DeepSeek-V4-Pro"));
+    let openrouter_completion = format!("/model {}", crate::config::DEFAULT_OPENROUTER_MODEL);
+    assert!(
+        !names.contains(&openrouter_completion.as_str()),
+        "OpenRouter saved rows must not appear as bare Together /model completions"
+    );
+}
+
+#[test]
 fn slash_menu_up_wraps_from_first_to_last() {
     let mut app = create_test_app();
     app.input = "/".to_string();

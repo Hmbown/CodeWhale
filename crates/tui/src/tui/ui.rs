@@ -6519,9 +6519,9 @@ async fn apply_model_picker_choice(
     }
 
     // Reject a model that does not belong to the active provider before we
-    // mutate session state or persist it (#3227). The picker can surface
-    // cross-provider saved models, so this is the in-session safety net for
-    // the same-provider path; cross-provider picks go through
+    // mutate session state or persist it (#3227/#3383). The provider-scoped
+    // picker should only emit active-provider rows; keep this guard as the
+    // in-session safety net. Explicit cross-provider route switches go through
     // `switch_provider`, which validates the route atomically. Skip the strict
     // check when the app accepts custom ids (pass-through provider or custom
     // DeepSeek-compatible base URL) — the upstream is the authority there.

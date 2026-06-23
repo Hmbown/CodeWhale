@@ -380,38 +380,34 @@ fn picker_model_ids_for_provider(provider: ApiProvider) -> Vec<&'static str> {
     models
 }
 
-fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
-    let mut rows = Vec::new();
-    push_model_row(
-        &mut rows,
-        "auto".to_string(),
-        None,
-        picker_model_hint("auto"),
-    );
+pub(crate) fn provider_scoped_model_completion_ids(app: &App) -> Vec<String> {
+    provider_scoped_model_ids_for_app(app, true)
+}
 
-    for id in model_completion_names_for_provider(app.api_provider) {
-        if id != "auto" {
+fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
+    let model_ids = provider_scoped_model_ids_for_app(app, false);
+    let mut rows = Vec::new();
+    for id in model_ids {
+        if id == "auto" {
+            push_model_row(&mut rows, id, None, picker_model_hint("auto"));
+        } else {
             push_model_row(
                 &mut rows,
-                id.to_string(),
+                id.clone(),
                 Some(app.api_provider),
-                picker_model_hint(id),
+                picker_model_hint(&id),
             );
         }
     }
 
-    if !app.model_ids_passthrough {
-        for id in model_registry::seeded_model_ids() {
-            if let Some(metadata) = model_registry::lookup(id) {
-                let provider = model_registry::serving_provider(metadata.provider);
-                push_model_row(
-                    &mut rows,
-                    id.to_string(),
-                    Some(provider),
-                    picker_model_hint(id),
-                );
-            }
-        }
+    rows
+}
+
+fn provider_scoped_model_ids_for_app(app: &App, include_current_model: bool) -> Vec<String> {
+    let mut models = Vec::new();
+    push_model_id(&mut models, "auto");
+    for id in model_completion_names_for_provider(app.api_provider) {
+        push_model_id(&mut models, id);
     }
 
     if let Some(model) = app
@@ -420,46 +416,27 @@ fn picker_model_rows_for_app(app: &App) -> Vec<ModelPickerRow> {
         .map(|model| model.trim())
         .filter(|model| !model.is_empty())
     {
-        push_model_row(
-            &mut rows,
-            model.to_string(),
-            Some(app.api_provider),
-            format!("{} saved", app.api_provider.display_name()),
-        );
+        push_model_id(&mut models, model);
     }
 
-    // Surface models saved under *other* providers in config (#2596). The
-    // active provider's list comes first; cross-provider saved models follow as
-    // a clearly labelled tail so a custom model that has never been selected on
-    // the current provider is still reachable. Selecting one switches provider
-    // on apply via `resolved_provider` / `build_event`. Rows are sorted by
-    // provider key so ordering stays deterministic regardless of map iteration.
-    // Parse each provider key once: drop unknown keys (cannot be applied) and
-    // the active provider (already listed above) in a single pass. `key` is
-    // kept only to keep ordering deterministic via the sort below.
-    let mut other_provider_models: Vec<(&String, ApiProvider, &String)> = app
-        .provider_models
+    if include_current_model && !app.auto_model {
+        push_model_id(&mut models, app.model.trim());
+    }
+
+    models
+}
+
+fn push_model_id(models: &mut Vec<String>, model: &str) {
+    let model = model.trim();
+    if model.is_empty() {
+        return;
+    }
+    if !models
         .iter()
-        .filter_map(|(key, model)| {
-            let provider = ApiProvider::parse(key)?;
-            (provider != app.api_provider).then_some((key, provider, model))
-        })
-        .collect();
-    other_provider_models.sort_by_key(|(a, ..)| *a);
-    for (_key, provider, model) in other_provider_models {
-        let model = model.trim();
-        if model.is_empty() {
-            continue;
-        }
-        push_model_row(
-            &mut rows,
-            model.to_string(),
-            Some(provider),
-            format!("{} saved", provider.display_name()),
-        );
+        .any(|existing| existing.eq_ignore_ascii_case(model))
+    {
+        models.push(model.to_string());
     }
-
-    rows
 }
 
 fn push_model_row(
@@ -824,29 +801,29 @@ mod tests {
     }
 
     #[test]
-    fn picker_lists_cross_provider_catalog_without_saved_entries() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+    fn picker_main_rows_are_scoped_to_active_provider() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Together;
+        app.model = crate::config::DEFAULT_TOGETHER_MODEL.to_string();
+        app.provider_models.insert(
+            "openrouter".to_string(),
+            crate::config::DEFAULT_OPENROUTER_MODEL.to_string(),
+        );
 
-        let kimi_idx = view
-            .visible_model_rows()
-            .iter()
-            .position(|row| {
-                row.id == "kimi-k2.7-code"
-                    && row.provider == Some(crate::config::ApiProvider::Moonshot)
-            })
-            .expect("Moonshot catalog model should be discoverable without saved config");
+        let view = ModelPickerView::new(&app);
 
-        view.selected_model_idx = kimi_idx;
-        match view.build_event() {
-            ViewEvent::ModelPickerApplied {
-                model, provider, ..
-            } => {
-                assert_eq!(model, "kimi-k2.7-code");
-                assert_eq!(provider, Some(crate::config::ApiProvider::Moonshot));
-            }
-            other => panic!("expected model picker event, got {other:?}"),
-        }
+        assert!(
+            view.visible_model_rows()
+                .iter()
+                .all(|row| row.provider.is_none()
+                    || row.provider == Some(crate::config::ApiProvider::Together))
+        );
+        assert!(
+            !view
+                .visible_model_ids()
+                .contains(&crate::config::DEFAULT_OPENROUTER_MODEL),
+            "OpenRouter saved rows must not appear as bare Together model choices"
+        );
     }
 
     #[test]
@@ -937,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_remaps_deepseek_off_when_highlighting_saved_codex_model() {
+    fn picker_excludes_saved_codex_model_from_deepseek_main_section() {
         let (mut app, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
@@ -946,34 +923,19 @@ mod tests {
         app.provider_models
             .insert("openai-codex".to_string(), "gpt-5.5".to_string());
 
-        let mut view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app);
         assert_eq!(view.resolved_effort(), ReasoningEffort::Off);
-
-        let effort = view.resolved_effort();
-        view.selected_model_idx = view
-            .visible_model_rows()
-            .iter()
-            .position(|row| {
-                row.id == "gpt-5.5" && row.provider == Some(crate::config::ApiProvider::OpenaiCodex)
-            })
-            .expect("saved Codex model row should be reachable");
-        view.select_effort_for_current_model(effort);
-
-        assert_eq!(view.resolved_model(), "gpt-5.5");
-        assert_eq!(view.resolved_effort(), ReasoningEffort::Low);
-        assert_eq!(view.selected_effort_idx, 0);
-        let labels = view
-            .current_efforts()
-            .iter()
-            .map(|effort| {
-                effort.display_label_for_provider(crate::config::ApiProvider::OpenaiCodex)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["low", "medium", "high", "xhigh"]);
+        assert!(
+            view.visible_model_rows()
+                .iter()
+                .all(|row| row.provider.is_none()
+                    || row.provider == Some(crate::config::ApiProvider::Deepseek))
+        );
+        assert!(!view.visible_model_ids().contains(&"gpt-5.5"));
     }
 
     #[test]
-    fn picker_remaps_deepseek_max_to_codex_xhigh_when_model_provider_changes() {
+    fn picker_does_not_switch_provider_when_moving_through_model_rows() {
         let (mut app, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
@@ -983,19 +945,14 @@ mod tests {
             .insert("openai-codex".to_string(), "gpt-5.5".to_string());
 
         let mut view = ModelPickerView::new(&app);
-        while view.resolved_provider() != Some(crate::config::ApiProvider::OpenaiCodex) {
-            assert!(
-                view.move_down(),
-                "saved Codex model row should be reachable"
+        while view.move_down() {
+            assert_ne!(
+                view.resolved_provider(),
+                Some(crate::config::ApiProvider::OpenaiCodex)
             );
         }
 
-        assert_eq!(view.resolved_effort(), ReasoningEffort::Max);
-        assert_eq!(
-            view.resolved_effort()
-                .display_label_for_provider(crate::config::ApiProvider::OpenaiCodex),
-            "xhigh"
-        );
+        assert_eq!(view.initial_provider, crate::config::ApiProvider::Deepseek);
     }
 
     #[test]
@@ -1160,9 +1117,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_lists_saved_models_from_other_providers() {
-        // #2596: custom models saved under a non-active provider must be
-        // reachable from the picker, after the active provider's own models.
+    fn picker_excludes_saved_models_from_other_providers() {
         let (mut app, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
         app.model = "mimo-v2.5-pro".to_string();
@@ -1183,55 +1138,17 @@ mod tests {
 
         // Active provider's own model stays present (and ahead of the tail).
         assert!(model_ids.contains(&"mimo-v2.5-pro"));
-        // Cross-provider saved models are now visible.
-        assert!(model_ids.contains(&"deepseek-v4-pro"));
-        assert!(model_ids.contains(&"kimi-k2.6"));
-        assert!(model_ids.contains(&"qwen-plus"));
-        assert!(model_ids.contains(&"custom-qianfan-service-id"));
+        // Cross-provider saved models are kept out of the provider-scoped list.
+        assert!(!model_ids.contains(&"deepseek-v4-pro"));
+        assert!(!model_ids.contains(&"kimi-k2.6"));
+        assert!(!model_ids.contains(&"qwen-plus"));
+        assert!(!model_ids.contains(&"custom-qianfan-service-id"));
         assert!(!view.show_custom_model_row);
-
-        // Each cross-provider row carries its own provider so applying it
-        // switches CodeWhale to that provider (verified via build_event below).
-        let deepseek_row = view
-            .visible_model_rows()
-            .iter()
-            .find(|row| row.id == "deepseek-v4-pro")
-            .expect("deepseek-v4-pro row present");
-        assert_eq!(
-            deepseek_row.provider,
-            Some(crate::config::ApiProvider::Deepseek)
-        );
-        let dashscope_row = view
-            .visible_model_rows()
-            .iter()
-            .find(|row| row.id == "qwen-plus")
-            .expect("qwen-plus row present");
-        assert_eq!(
-            dashscope_row.provider,
-            Some(crate::config::ApiProvider::Openai)
-        );
-        let qianfan_row = view
-            .visible_model_rows()
-            .iter()
-            .find(|row| row.id == "custom-qianfan-service-id")
-            .expect("custom Qianfan row present");
-        assert_eq!(
-            qianfan_row.provider,
-            Some(crate::config::ApiProvider::Qianfan)
-        );
-
-        // Active-provider model must appear before any cross-provider tail row.
-        let active_idx = model_ids
-            .iter()
-            .position(|id| *id == "mimo-v2.5-pro")
-            .expect("active model index");
-        let cross_idx = model_ids
-            .iter()
-            .position(|id| *id == "kimi-k2.6")
-            .expect("cross-provider model index");
         assert!(
-            active_idx < cross_idx,
-            "active provider models should precede cross-provider tail"
+            view.visible_model_rows()
+                .iter()
+                .all(|row| row.provider.is_none()
+                    || row.provider == Some(crate::config::ApiProvider::XiaomiMimo))
         );
     }
 
