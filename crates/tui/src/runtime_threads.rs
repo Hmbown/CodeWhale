@@ -2026,7 +2026,15 @@ impl RuntimeThreadManager {
             touch_lru(&mut active.lru, thread_id);
         }
 
-        let mode = parse_mode(req.mode.as_deref().unwrap_or(&thread.mode));
+        // A requested mode override only takes effect when it is an explicit,
+        // recognized mode token. An unrecognized override (e.g. a stray prompt
+        // fragment) must NOT silently change the mode: fall back to the
+        // thread's persisted mode rather than coercing to Agent (#3387).
+        let mode = req
+            .mode
+            .as_deref()
+            .and_then(parse_mode_opt)
+            .unwrap_or_else(|| parse_mode(&thread.mode));
         let requested_model = req.model.unwrap_or_else(|| thread.model.clone());
         let auto_model = requested_model.trim().eq_ignore_ascii_case("auto");
         let (provider, model, reasoning_effort) = if auto_model {
