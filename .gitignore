@@ -41,7 +41,6 @@ dist/
 outputs/
 tmp/
 backup/
-/web/lib/facts.generated.ts
 
 # Reference papers / large research blobs (keep locally if needed, don't ship)
 docs/DeepSeek_V4.pdf
