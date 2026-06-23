@@ -139,6 +139,7 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 font-mono text-[0.7rem] text-ink-mute uppercase tracking-widest">
             <span>© {new Date().getFullYear()} · CodeWhale · Hmbown</span>
+            <span>codewhale.net — {isZh ? "唯一官方站点" : "the only official site"}</span>
             <span className="font-cjk normal-case tracking-normal">
               {isZh ? "本网站由 DeepSeek V4-Flash 协助维护" : "Maintained with DeepSeek V4-Flash"}
             </span>

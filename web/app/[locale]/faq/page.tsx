@@ -269,6 +269,35 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
     sources: ["README.md", "#1914", "docs/CNB_MIRROR.md"],
   },
   {
+    q: "Is codewhale.net the official site? What about mirrors?",
+    a: (
+      <>
+        <p className="mb-2">
+          <strong>codewhale.net</strong> and <strong>www.codewhale.net</strong> are the
+          official CodeWhale sites, deployed on Cloudflare. The website source is open
+          and lives under <code className="inline">web/</code> in the{" "}
+          <code className="inline">Hmbown/CodeWhale</code> repository — anyone can
+          self-deploy it as a mirror.
+        </p>
+        <p className="mb-2">
+          All official releases and SHA-256 checksums are distributed exclusively through{" "}
+          <a href="https://github.com/Hmbown/CodeWhale/releases" className="body-link">GitHub Releases</a>.
+          The npm package downloads verified binaries from GitHub Releases.
+        </p>
+        <p className="mb-2">
+          A CNB mirror is maintained for users who cannot reliably reach GitHub
+          (<Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>).
+          Cargo users can use the TUNA mirror for faster downloads in China.
+        </p>
+        <p>
+          Self-deployed website copies, mirror sites, and third-party packages are not
+          controlled by the CodeWhale project. Verify download sources and checksums.
+        </p>
+      </>
+    ),
+    sources: ["#2624", "#3421", "docs/CNB_MIRROR.md"],
+  },
+  {
     q: "My API key was rejected or I get auth errors on first run.",
     a: (
       <>
@@ -581,6 +610,34 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
       </>
     ),
     sources: ["README.md", "#1914", "docs/CNB_MIRROR.md"],
+  },
+  {
+    q: "codewhale.net 是官方网站吗？镜像站点呢？",
+    a: (
+      <>
+        <p className="mb-2">
+          <strong>codewhale.net</strong> 和 <strong>www.codewhale.net</strong> 是
+          CodeWhale 的官方站点，部署在 Cloudflare 上。网站源码存放于{" "}
+          <code className="inline">Hmbown/CodeWhale</code> 仓库的{" "}
+          <code className="inline">web/</code> 目录下，任何人都可自行部署为镜像。
+        </p>
+        <p className="mb-2">
+          所有正式发布和 SHA-256 校验文件仅通过{" "}
+          <a href="https://github.com/Hmbown/CodeWhale/releases" className="body-link">GitHub Releases</a> 分发。
+          npm 包从 GitHub Releases 下载经校验的二进制。
+        </p>
+        <p className="mb-2">
+          面向无法稳定访问 GitHub 的用户，提供 CNB 镜像（
+          <Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>）。
+          Cargo 用户可使用 TUNA 镜像在国内加速下载。
+        </p>
+        <p>
+          自行部署的网站副本、镜像站和第三方包不受 CodeWhale 项目控制。
+          请验证下载来源和校验和。
+        </p>
+      </>
+    ),
+    sources: ["#2624", "#3421", "docs/CNB_MIRROR.md"],
   },
   {
     q: "首次运行时提示 API 密钥被拒绝或认证错误？",

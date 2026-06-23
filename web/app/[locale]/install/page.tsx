@@ -441,12 +441,88 @@ codewhale doctor`;
         </p>
       </section>
 
-      {/* ⑦ NEXT STEPS */}
+      {/* ⑦ PROVENANCE */}
+      <section className="mx-auto max-w-[1100px] px-6 py-12 hairline-t">
+        <div className="flex items-baseline gap-4 mb-5">
+          <Seal char="源" />
+          <div className="eyebrow">{isZh ? "07 · 来源与镜像" : "07 · Provenance & mirrors"}</div>
+        </div>
+
+        <div className="space-y-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
+          <p>
+            {isZh ? (
+              <>
+                <strong className="text-ink">codewhale.net</strong> 和{" "}
+                <strong className="text-ink">www.codewhale.net</strong> 是 CodeWhale 的官方站点，
+                部署在 Cloudflare 上。网站源码位于{" "}
+                <code className="inline">Hmbown/CodeWhale</code> 仓库的{" "}
+                <code className="inline">web/</code> 目录下，任何人都可自行部署为镜像。
+              </>
+            ) : (
+              <>
+                <strong className="text-ink">codewhale.net</strong> and{" "}
+                <strong className="text-ink">www.codewhale.net</strong> are the official CodeWhale
+                sites, deployed on Cloudflare. The website source lives under{" "}
+                <code className="inline">web/</code> in the{" "}
+                <code className="inline">Hmbown/CodeWhale</code> repository — anyone can
+                self-deploy it as a mirror.
+              </>
+            )}
+          </p>
+
+          <div className="grid sm:grid-cols-2 gap-4 mt-4">
+            <div>
+              <div className="eyebrow mb-1 text-indigo">{isZh ? "官方发布" : "Official releases"}</div>
+              <p>
+                {isZh
+                  ? "所有正式发布和 SHA-256 校验文件仅通过 GitHub Releases 分发。npm 包从 GitHub Releases 下载经校验的二进制。"
+                  : "All official releases and SHA-256 checksums are distributed exclusively through GitHub Releases. The npm package downloads verified binaries from GitHub Releases."}
+              </p>
+            </div>
+            <div>
+              <div className="eyebrow mb-1 text-indigo">{isZh ? "CNB 镜像" : "CNB mirror"}</div>
+              <p>
+                {isZh ? (
+                  <>
+                    面向无法稳定访问 GitHub 的用户，提供 CNB 镜像（
+                    <Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>
+                    ）。镜像仓库由社区成员维护，发布延迟可能为几小时。
+                  </>
+                ) : (
+                  <>
+                    A CNB mirror is available for users who cannot reliably reach GitHub (
+                    <Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>
+                    ). The mirror is maintained by community members; release latency may be a few hours.
+                  </>
+                )}
+              </p>
+            </div>
+            <div>
+              <div className="eyebrow mb-1 text-indigo">{isZh ? "TUNA / 包镜像" : "TUNA / package mirrors"}</div>
+              <p>
+                {isZh
+                  ? "Cargo 用户可通过 TUNA（清华大学开源镜像站）加速下载。这些镜像由第三方维护，CodeWhale 项目不控制镜像内容。"
+                  : "Cargo users can accelerate downloads via TUNA (Tsinghua University Open Source Mirror). These mirrors are maintained by third parties; the CodeWhale project does not control mirror content."}
+              </p>
+            </div>
+            <div>
+              <div className="eyebrow mb-1 text-indigo">{isZh ? "自行部署" : "Self-deployed"}</div>
+              <p>
+                {isZh
+                  ? "自行部署的网站副本、镜像站和第三方包不受 CodeWhale 项目控制。请验证下载来源和校验和。"
+                  : "Self-deployed website copies, mirror sites, and third-party packages are not controlled by the CodeWhale project. Verify download sources and checksums."}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ⑧ NEXT STEPS */}
       <section className="bg-paper-deep hairline-t hairline-b">
         <div className="mx-auto max-w-[1100px] px-6 py-12">
           <div className="flex items-baseline gap-4 mb-5">
             <Seal char="续" />
-            <div className="eyebrow">{isZh ? "07 · 下一步" : "07 · Next steps"}</div>
+            <div className="eyebrow">{isZh ? "08 · 下一步" : "08 · Next steps"}</div>
           </div>
           <div className="grid md:grid-cols-3 gap-0 col-rule hairline-t hairline-b">
             <Link
