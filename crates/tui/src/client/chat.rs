@@ -2652,6 +2652,7 @@ fn parse_sse_data_frame(
 
 /// Parse a single SSE chunk from the Chat Completions streaming API into
 /// our internal `StreamEvent` representation.
+#[cfg(test)]
 pub(super) fn parse_sse_chunk(
     chunk: &Value,
     content_index: &mut u32,
