@@ -3748,12 +3748,22 @@ fn enforce_lru_capacity(
     evicted
 }
 
-fn parse_mode(mode: &str) -> AppMode {
+/// Resolves only explicit mode tokens to an app mode. Free-form prompt text is
+/// never a valid mode token: `parse_mode_opt` returns `None` unless the input is
+/// exactly `agent`/`plan`/`yolo` or the numeric aliases `1`/`2`/`3`. Mode
+/// changes originate from the Tab cycle, `/mode`, the mode picker, or
+/// config/startup defaults, not from submitted natural-language prompt text.
+fn parse_mode_opt(mode: &str) -> Option<AppMode> {
     match mode.trim().to_ascii_lowercase().as_str() {
-        "plan" => AppMode::Plan,
-        "yolo" => AppMode::Yolo,
-        _ => AppMode::Agent,
+        "agent" | "1" => Some(AppMode::Agent),
+        "plan" | "2" => Some(AppMode::Plan),
+        "yolo" | "3" => Some(AppMode::Yolo),
+        _ => None,
     }
+}
+
+fn parse_mode(mode: &str) -> AppMode {
+    parse_mode_opt(mode).unwrap_or(AppMode::Agent)
 }
 
 fn tool_kind_for_name(name: &str) -> TurnItemKind {
