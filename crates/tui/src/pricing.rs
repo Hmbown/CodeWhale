@@ -8,6 +8,7 @@
 #[cfg(test)]
 use chrono::TimeZone;
 use chrono::{DateTime, Utc};
+use codewhale_config::pricing::TokenUsage;
 
 use crate::models::Usage;
 
@@ -296,20 +297,39 @@ pub fn calculate_turn_cost_estimate_from_usage(model: &str, usage: &Usage) -> Op
     })
 }
 
-fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: &Usage) -> f64 {
-    let hit_tokens = usage.prompt_cache_hit_tokens.unwrap_or(0);
-    let miss_tokens = usage
+/// Project provider-normalized turn usage into canonical billable token
+/// classes for the shared config pricing layer (#2961).
+///
+/// `Usage::prompt_cache_miss_tokens` is billed as ordinary non-cached input in
+/// current CodeWhale pricing rows. `cache_write` remains zero because the TUI
+/// `Usage` shape does not yet distinguish cache creation/write tokens from
+/// ordinary cache misses.
+#[must_use]
+pub fn token_usage_for_pricing(usage: &Usage) -> TokenUsage {
+    let cache_read = usage.prompt_cache_hit_tokens.unwrap_or(0);
+    let non_cached_reported = usage
         .prompt_cache_miss_tokens
-        .unwrap_or_else(|| usage.input_tokens.saturating_sub(hit_tokens));
-    let accounted_input = hit_tokens.saturating_add(miss_tokens);
+        .unwrap_or_else(|| usage.input_tokens.saturating_sub(cache_read));
+    let accounted_input = cache_read.saturating_add(non_cached_reported);
     let uncategorized_input = usage.input_tokens.saturating_sub(accounted_input);
+    let input = non_cached_reported.saturating_add(uncategorized_input);
+    let output = usage
+        .output_tokens
+        .saturating_add(usage.reasoning_tokens.unwrap_or(0));
 
-    let hit_cost = (hit_tokens as f64 / 1_000_000.0) * pricing.input_cache_hit_per_million;
-    let miss_cost = ((miss_tokens.saturating_add(uncategorized_input)) as f64 / 1_000_000.0)
-        * pricing.input_cache_miss_per_million;
-    let reasoning = usage.reasoning_tokens.unwrap_or(0);
-    let effective_output = usage.output_tokens.saturating_add(reasoning);
-    let output_cost = (effective_output as f64 / 1_000_000.0) * pricing.output_per_million;
+    TokenUsage {
+        input: u64::from(input),
+        output: u64::from(output),
+        cache_read: u64::from(cache_read),
+        cache_write: 0,
+    }
+}
+
+fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: &Usage) -> f64 {
+    let usage = token_usage_for_pricing(usage);
+    let hit_cost = (usage.cache_read as f64 / 1_000_000.0) * pricing.input_cache_hit_per_million;
+    let miss_cost = (usage.input as f64 / 1_000_000.0) * pricing.input_cache_miss_per_million;
+    let output_cost = (usage.output as f64 / 1_000_000.0) * pricing.output_per_million;
     hit_cost + miss_cost + output_cost
 }
 
@@ -426,6 +446,49 @@ mod tests {
             assert!(estimate.usd > 0.0, "expected positive USD for {model}");
             assert_eq!(estimate.cny, 0.0);
         }
+    }
+
+    #[test]
+    fn token_usage_for_pricing_maps_cache_and_reasoning_classes() {
+        let usage = Usage {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            prompt_cache_hit_tokens: Some(250),
+            prompt_cache_miss_tokens: Some(700),
+            reasoning_tokens: Some(50),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            token_usage_for_pricing(&usage),
+            TokenUsage {
+                input: 750,
+                output: 150,
+                cache_read: 250,
+                cache_write: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn token_usage_for_pricing_infers_missing_cache_miss_from_hit_source() {
+        let usage = Usage {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            prompt_cache_hit_tokens: Some(250),
+            prompt_cache_miss_tokens: None,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            token_usage_for_pricing(&usage),
+            TokenUsage {
+                input: 750,
+                output: 100,
+                cache_read: 250,
+                cache_write: 0,
+            }
+        );
     }
 
     #[test]
