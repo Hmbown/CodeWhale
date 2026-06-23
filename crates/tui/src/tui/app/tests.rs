@@ -1391,6 +1391,34 @@ fn clear_todos_resets_plan_state() {
 }
 
 #[test]
+fn app_mode_helpers_centralize_parse_labels_and_cycle_order() {
+    assert_eq!(AppMode::parse("agent"), Some(AppMode::Agent));
+    assert_eq!(AppMode::parse("2"), Some(AppMode::Plan));
+    assert_eq!(AppMode::parse("YOLO"), Some(AppMode::Yolo));
+    assert_eq!(AppMode::parse("fast"), None);
+
+    assert_eq!(AppMode::Agent.as_setting(), "agent");
+    assert_eq!(AppMode::Plan.display_name(), "Plan");
+    assert_eq!(AppMode::Yolo.label(), "YOLO");
+    assert_eq!(AppMode::Agent.number(), '1');
+    assert_eq!(
+        AppMode::CHOICES,
+        [AppMode::Agent, AppMode::Plan, AppMode::Yolo]
+    );
+    assert_eq!(
+        AppMode::CYCLE,
+        [AppMode::Plan, AppMode::Agent, AppMode::Yolo]
+    );
+
+    assert_eq!(AppMode::Plan.next(), AppMode::Agent);
+    assert_eq!(AppMode::Agent.next(), AppMode::Yolo);
+    assert_eq!(AppMode::Yolo.next(), AppMode::Plan);
+    assert_eq!(AppMode::Plan.previous(), AppMode::Yolo);
+    assert_eq!(AppMode::Agent.previous(), AppMode::Plan);
+    assert_eq!(AppMode::Yolo.previous(), AppMode::Agent);
+}
+
+#[test]
 fn test_cycle_mode_transitions() {
     let mut app = App::new(test_options(false), &Config::default());
     let initial_mode = app.mode;
@@ -1419,21 +1447,9 @@ fn test_cycle_mode_reverse_transitions() {
 #[test]
 fn test_mode_switch_toasts_replace_previous_mode_switch_toast() {
     let mut app = App::new(test_options(false), &Config::default());
-    let first_mode = match app.mode {
-        AppMode::Plan => AppMode::Agent,
-        AppMode::Agent => AppMode::Yolo,
-        AppMode::Yolo => AppMode::Plan,
-    };
-    let second_mode = match first_mode {
-        AppMode::Plan => AppMode::Agent,
-        AppMode::Agent => AppMode::Yolo,
-        AppMode::Yolo => AppMode::Plan,
-    };
-    let third_mode = match second_mode {
-        AppMode::Plan => AppMode::Agent,
-        AppMode::Agent => AppMode::Yolo,
-        AppMode::Yolo => AppMode::Plan,
-    };
+    let first_mode = app.mode.next();
+    let second_mode = first_mode.next();
+    let third_mode = second_mode.next();
 
     app.set_mode(first_mode);
     app.sync_status_message_to_toasts();

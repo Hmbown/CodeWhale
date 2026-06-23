@@ -901,13 +901,25 @@ const MAX_COMPOSER_DISPLAY_CHARS: usize = 4_000;
 const MAX_DRAFT_HISTORY: usize = 50;
 
 impl AppMode {
+    /// Keyboard cycle order: Plan -> Agent -> YOLO -> Plan.
+    pub const CYCLE: [Self; 3] = [Self::Plan, Self::Agent, Self::Yolo];
+
+    /// User-facing picker / numeric command order.
+    pub const CHOICES: [Self; 3] = [Self::Agent, Self::Plan, Self::Yolo];
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "agent" | "1" => Some(Self::Agent),
+            "plan" | "2" => Some(Self::Plan),
+            "yolo" | "3" => Some(Self::Yolo),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn from_setting(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "plan" => Self::Plan,
-            "yolo" => Self::Yolo,
-            _ => Self::Agent,
-        }
+        Self::parse(value).unwrap_or(Self::Agent)
     }
 
     #[must_use]
@@ -928,6 +940,33 @@ impl AppMode {
         }
     }
 
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            AppMode::Agent => "Agent",
+            AppMode::Yolo => "YOLO",
+            AppMode::Plan => "Plan",
+        }
+    }
+
+    #[must_use]
+    pub fn number(self) -> char {
+        match self {
+            AppMode::Agent => '1',
+            AppMode::Plan => '2',
+            AppMode::Yolo => '3',
+        }
+    }
+
+    #[must_use]
+    pub fn picker_hint(self) -> &'static str {
+        match self {
+            AppMode::Agent => "Normal execution with approvals",
+            AppMode::Plan => "Plan first before execution",
+            AppMode::Yolo => "Auto-approve; shell enabled",
+        }
+    }
+
     #[allow(dead_code)]
     /// Description shown in help or onboarding text.
     pub fn description(self) -> &'static str {
@@ -936,6 +975,24 @@ impl AppMode {
             AppMode::Yolo => "YOLO mode - full tool access without approvals",
             AppMode::Plan => "Plan mode - design before implementing",
         }
+    }
+
+    #[must_use]
+    pub fn next(self) -> Self {
+        let index = Self::CYCLE
+            .iter()
+            .position(|mode| *mode == self)
+            .unwrap_or(0);
+        Self::CYCLE[(index + 1) % Self::CYCLE.len()]
+    }
+
+    #[must_use]
+    pub fn previous(self) -> Self {
+        let index = Self::CYCLE
+            .iter()
+            .position(|mode| *mode == self)
+            .unwrap_or(0);
+        Self::CYCLE[(index + Self::CYCLE.len() - 1) % Self::CYCLE.len()]
     }
 }
 
@@ -2744,11 +2801,7 @@ impl App {
         if self.reject_setting_change_while_busy("Mode") {
             return;
         }
-        let next = match self.mode {
-            AppMode::Plan => AppMode::Agent,
-            AppMode::Agent => AppMode::Yolo,
-            AppMode::Yolo => AppMode::Plan,
-        };
+        let next = self.mode.next();
         let _ = self.set_mode(next);
     }
 
@@ -2758,11 +2811,7 @@ impl App {
         if self.reject_setting_change_while_busy("Mode") {
             return;
         }
-        let next = match self.mode {
-            AppMode::Agent => AppMode::Plan,
-            AppMode::Yolo => AppMode::Agent,
-            AppMode::Plan => AppMode::Yolo,
-        };
+        let next = self.mode.previous();
         let _ = self.set_mode(next);
     }
 

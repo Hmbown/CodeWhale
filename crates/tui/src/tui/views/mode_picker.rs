@@ -13,35 +13,6 @@ use crate::palette;
 use crate::tui::app::AppMode;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-#[derive(Debug, Clone, Copy)]
-struct ModeRow {
-    mode: AppMode,
-    number: char,
-    name: &'static str,
-    hint: &'static str,
-}
-
-const MODE_ROWS: &[ModeRow] = &[
-    ModeRow {
-        mode: AppMode::Agent,
-        number: '1',
-        name: "Agent",
-        hint: "Normal execution with approvals",
-    },
-    ModeRow {
-        mode: AppMode::Plan,
-        number: '2',
-        name: "Plan",
-        hint: "Plan first before execution",
-    },
-    ModeRow {
-        mode: AppMode::Yolo,
-        number: '3',
-        name: "YOLO",
-        hint: "Auto-approve; shell enabled",
-    },
-];
-
 pub struct ModePickerView {
     cursor: usize,
 }
@@ -49,17 +20,18 @@ pub struct ModePickerView {
 impl ModePickerView {
     #[must_use]
     pub fn new(current: AppMode) -> Self {
-        let cursor = MODE_ROWS
+        let cursor = AppMode::CHOICES
             .iter()
-            .position(|row| row.mode == current)
+            .position(|mode| *mode == current)
             .unwrap_or(0);
         Self { cursor }
     }
 
     fn selected_mode(&self) -> AppMode {
-        MODE_ROWS
+        AppMode::CHOICES
             .get(self.cursor)
-            .map_or(AppMode::Agent, |row| row.mode)
+            .copied()
+            .unwrap_or(AppMode::Agent)
     }
 
     fn move_up(&mut self) {
@@ -69,14 +41,16 @@ impl ModePickerView {
     }
 
     fn move_down(&mut self) {
-        let max = MODE_ROWS.len().saturating_sub(1);
+        let max = AppMode::CHOICES.len().saturating_sub(1);
         if self.cursor < max {
             self.cursor += 1;
         }
     }
 
     fn select_by_number(&mut self, number: char) -> Option<ViewAction> {
-        let idx = MODE_ROWS.iter().position(|row| row.number == number)?;
+        let idx = AppMode::CHOICES
+            .iter()
+            .position(|mode| mode.number() == number)?;
         self.cursor = idx;
         Some(ViewAction::EmitAndClose(ViewEvent::ModeSelected {
             mode: self.selected_mode(),
@@ -147,13 +121,13 @@ impl ModalView for ModePickerView {
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        let mut lines = Vec::with_capacity(MODE_ROWS.len() + 1);
+        let mut lines = Vec::with_capacity(AppMode::CHOICES.len() + 1);
         lines.push(Line::from(Span::styled(
             "Choose how CodeWhale should operate:",
             Style::default().fg(palette::TEXT_MUTED),
         )));
 
-        for (idx, row) in MODE_ROWS.iter().enumerate() {
+        for (idx, mode) in AppMode::CHOICES.iter().copied().enumerate() {
             let is_cursor = idx == self.cursor;
             let row_style = if is_cursor {
                 Style::default()
@@ -174,10 +148,10 @@ impl ModalView for ModePickerView {
 
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("{pointer} {}. {:<7}", row.number, row.name),
+                    format!("{pointer} {}. {:<7}", mode.number(), mode.display_name()),
                     row_style,
                 ),
-                Span::styled(row.hint, hint_style),
+                Span::styled(mode.picker_hint(), hint_style),
             ]));
         }
 

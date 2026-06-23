@@ -1591,7 +1591,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(arg) = arg.filter(|value| !value.trim().is_empty()) else {
         return CommandResult::action(AppAction::OpenModePicker);
     };
-    match parse_mode_arg(arg) {
+    match AppMode::parse(arg) {
         Some(mode) => {
             let (message, changed) = switch_mode_with_status(app, mode);
             if changed {
@@ -1610,32 +1610,9 @@ pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
 
 fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     if app.set_mode(mode) {
-        (
-            format!("Switched to {} mode.", mode_display_name(mode)),
-            true,
-        )
+        (format!("Switched to {} mode.", mode.display_name()), true)
     } else {
-        (
-            format!("Already in {} mode.", mode_display_name(mode)),
-            false,
-        )
-    }
-}
-
-fn parse_mode_arg(arg: &str) -> Option<AppMode> {
-    match arg.trim().to_ascii_lowercase().as_str() {
-        "agent" | "1" => Some(AppMode::Agent),
-        "plan" | "2" => Some(AppMode::Plan),
-        "yolo" | "3" => Some(AppMode::Yolo),
-        _ => None,
-    }
-}
-
-fn mode_display_name(mode: AppMode) -> &'static str {
-    match mode {
-        AppMode::Agent => "Agent",
-        AppMode::Plan => "Plan",
-        AppMode::Yolo => "YOLO",
+        (format!("Already in {} mode.", mode.display_name()), false)
     }
 }
 
