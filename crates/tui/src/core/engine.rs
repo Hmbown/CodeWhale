@@ -617,6 +617,29 @@ fn subagent_mailbox_message_is_best_effort(message: &MailboxMessage) -> bool {
     )
 }
 
+const SUBAGENT_MAILBOX_BEST_EFFORT_MIN_INTERVAL: Duration = Duration::from_millis(100);
+
+fn subagent_mailbox_best_effort_send_permitted(
+    last_sent_at: &mut HashMap<String, Instant>,
+    message: &MailboxMessage,
+    now: Instant,
+) -> bool {
+    if !subagent_mailbox_message_is_best_effort(message) {
+        return true;
+    }
+
+    let agent_id = message.agent_id().to_string();
+    if last_sent_at
+        .get(&agent_id)
+        .is_some_and(|last| now.duration_since(*last) < SUBAGENT_MAILBOX_BEST_EFFORT_MIN_INTERVAL)
+    {
+        return false;
+    }
+
+    last_sent_at.insert(agent_id, now);
+    true
+}
+
 impl Engine {
     pub(super) async fn emit_compaction_started(
         &mut self,
@@ -2210,6 +2233,7 @@ impl Engine {
                 "subagent-mailbox-drainer",
                 std::panic::Location::caller(),
                 async move {
+                    let mut best_effort_sent_at: HashMap<String, Instant> = HashMap::new();
                     while let Some(envelope) = receiver.recv().await {
                         let event = Event::SubAgentMailbox {
                             seq: envelope.seq,
@@ -2218,6 +2242,13 @@ impl Engine {
                         if let Event::SubAgentMailbox { message, .. } = &event
                             && subagent_mailbox_message_is_best_effort(message)
                         {
+                            if !subagent_mailbox_best_effort_send_permitted(
+                                &mut best_effort_sent_at,
+                                message,
+                                Instant::now(),
+                            ) {
+                                continue;
+                            }
                             match tx_event_clone.try_send(event) {
                                 Ok(()) => continue,
                                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => continue,

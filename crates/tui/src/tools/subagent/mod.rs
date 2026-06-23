@@ -7,7 +7,6 @@
 //! The model-facing surface is the single `agent` tool. Older lifecycle
 //! structs and manager helpers remain executable for persisted records and
 //! internal recovery while the durable runtime is reused by the new surface.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -107,8 +106,6 @@ const SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF: Duration = Duration::from_mil
 /// default; production runtimes set the field explicitly (#1806, #1808).
 const DEFAULT_STEP_API_TIMEOUT: Duration =
     Duration::from_secs(crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS);
-const DEFAULT_RESULT_TIMEOUT_MS: u64 = 30_000;
-const MAX_RESULT_TIMEOUT_MS: u64 = 3_600_000;
 const COMPLETED_AGENT_RETENTION: Duration = Duration::from_secs(60 * 60);
 const MAX_AGENT_WORKER_RECORDS: usize = 256;
 const MAX_AGENT_WORKER_EVENTS_PER_RECORD: usize = 128;
@@ -158,11 +155,6 @@ const SUBAGENT_TYPE_DESCRIPTION: &str = "Sub-agent type. Accepted vocabulary: ge
      explore (aliases: exploration, explorer), plan (aliases: planning, planner, awaiter), \
      review (aliases: code-review, code_review, reviewer), implementer (aliases: implement, implementation, builder), \
      verifier (aliases: verify, verification, validator, tester), custom.";
-const SUBAGENT_ROLE_DESCRIPTION: &str = "Role alias. Accepted vocabulary: default; worker (aliases: general, general-purpose, general_purpose); \
-     explorer (aliases: explore, exploration); awaiter (aliases: plan, planning, planner); \
-     reviewer (aliases: review, code-review, code_review); implementer (aliases: implement, implementation, builder); \
-     verifier (aliases: verify, verification, validator, tester); custom. \
-     Must match `type` if both are given.";
 /// Whale species used as friendly names for sub-agents in the UI. The full
 /// Cetacea infraorder — baleen whales (Mysticeti), toothed whales
 /// (Odontoceti), plus select dolphin species (family Delphinidae) that
@@ -322,71 +314,6 @@ pub fn assign_unique_whale_name(
     }
     // Fallback (should never reach here)
     format!("{base} ({})", id.get(..4).unwrap_or("?"))
-}
-
-/// Removal version for deprecated tool aliases.
-const DEPRECATION_REMOVAL_VERSION: &str = "0.8.0";
-
-#[must_use]
-pub fn whale_nickname_for_index(index: usize) -> String {
-    let base = WHALE_NICKNAMES[index % WHALE_NICKNAMES.len()];
-    if index < WHALE_NICKNAMES.len() {
-        base.to_string()
-    } else {
-        format!("{base} {}", index / WHALE_NICKNAMES.len() + 1)
-    }
-}
-
-// === Deprecation helpers ===
-
-/// Wrap a `ToolResult` with a `_deprecation` block in its metadata.
-///
-/// Applied exclusively on alias paths (not on canonical tool names) so the
-/// model can detect and migrate away from the old name before removal in
-/// v`DEPRECATION_REMOVAL_VERSION`.
-///
-/// The `_deprecation` key is merged into any existing metadata so other
-/// metadata (e.g. `status`, `timed_out`) is preserved unchanged.
-fn wrap_with_deprecation_notice(
-    mut result: ToolResult,
-    this_tool: &str,
-    use_instead: &str,
-) -> ToolResult {
-    tracing::warn!(
-        "Deprecated tool '{}' invoked — use '{}' instead (removal: v{})",
-        this_tool,
-        use_instead,
-        DEPRECATION_REMOVAL_VERSION,
-    );
-
-    let notice = json!({
-        "_deprecation": {
-            "this_tool": this_tool,
-            "use_instead": use_instead,
-            "removed_in": DEPRECATION_REMOVAL_VERSION,
-            "message": format!(
-                "Tool '{}' is deprecated; switch to '{}' before v{}.",
-                this_tool, use_instead, DEPRECATION_REMOVAL_VERSION
-            )
-        }
-    });
-
-    result.metadata = Some(match result.metadata.take() {
-        Some(Value::Object(mut map)) => {
-            if let Value::Object(notice_map) = notice {
-                map.extend(notice_map);
-            }
-            Value::Object(map)
-        }
-        Some(other) => {
-            // Existing metadata was not an object — keep it as-is and add
-            // the deprecation notice as a sibling under a wrapper.
-            json!({ "_deprecation": notice["_deprecation"].clone(), "_original_metadata": other })
-        }
-        None => notice,
-    });
-
-    result
 }
 
 // === Types ===
@@ -1110,15 +1037,6 @@ fn default_subagent_artifacts(run_id: &str) -> Vec<AgentRunArtifactRef> {
                 .to_string(),
         },
     ]
-}
-
-fn message_preview(text: &str) -> String {
-    const MAX_PREVIEW_CHARS: usize = 120;
-    let mut preview: String = text.chars().take(MAX_PREVIEW_CHARS).collect();
-    if text.chars().count() > MAX_PREVIEW_CHARS {
-        preview.push_str("...");
-    }
-    preview
 }
 
 fn normalize_worker_spec(mut spec: AgentWorkerSpec) -> AgentWorkerSpec {
@@ -2442,33 +2360,6 @@ impl SubAgentManager {
         }
     }
 
-    fn record_follow_up_delivery(
-        &mut self,
-        worker_id: &str,
-        delivered: bool,
-        message: Option<&str>,
-        reason: Option<&str>,
-        interrupt: bool,
-        continued_from_checkpoint: bool,
-    ) {
-        let Some(record) = self.worker_records.get_mut(worker_id) else {
-            return;
-        };
-        let now_ms = epoch_millis_now();
-        record.updated_at_ms = now_ms;
-        record.follow_up.latest_delivery = Some(AgentRunFollowUpDelivery {
-            delivered,
-            timestamp_ms: now_ms,
-            message_preview: message.map(message_preview),
-            reason: reason.map(str::to_string),
-            interrupt,
-            continued_from_checkpoint,
-        });
-        if delivered {
-            record.latest_message = Some("follow-up delivered".to_string());
-        }
-    }
-
     fn fail_worker(&mut self, worker_id: &str, error: String) {
         self.record_worker_event(
             worker_id,
@@ -3051,56 +2942,6 @@ impl SubAgentManager {
         self.persist_state_best_effort();
         Ok(snapshot)
     }
-
-    fn continue_checkpointed(
-        &mut self,
-        agent_id: &str,
-        message: Option<String>,
-        interrupt: bool,
-    ) -> Result<SubAgentResult> {
-        let snapshot = {
-            let agent = self
-                .agents
-                .get_mut(agent_id)
-                .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
-            if !matches!(agent.status, SubAgentStatus::Interrupted(_)) {
-                return Err(anyhow!(
-                    "Agent {agent_id} is not interrupted; checkpoint continuation is only available for interrupted sessions"
-                ));
-            }
-            let checkpoint = agent
-                .checkpoint
-                .as_ref()
-                .ok_or_else(|| anyhow!("Agent {agent_id} has no checkpoint to continue"))?;
-            if !checkpoint.continuable || checkpoint.messages.is_empty() {
-                return Err(anyhow!("Agent {agent_id} checkpoint is not continuable"));
-            }
-            let tx = agent.input_tx.as_ref().ok_or_else(|| {
-                anyhow!(
-                    "Agent {agent_id} checkpoint is persisted, but no live child task is available to continue"
-                )
-            })?;
-            tx.send(SubAgentInput {
-                text: message.unwrap_or_default(),
-                interrupt,
-            })
-            .map_err(|_| anyhow!("Failed to continue checkpointed agent {agent_id}"))?;
-
-            agent.status = SubAgentStatus::Running;
-            agent.result = None;
-            agent.last_activity_at = Instant::now();
-            agent.snapshot()
-        };
-        self.record_worker_event(
-            agent_id,
-            AgentWorkerStatus::Running,
-            Some("continued from checkpoint".to_string()),
-            Some(snapshot.steps_taken),
-            None,
-        );
-        self.persist_state_best_effort();
-        Ok(snapshot)
-    }
 }
 
 /// Thread-safe wrapper for `SubAgentManager`.
@@ -3475,6 +3316,7 @@ fn write_json_atomic<T: Serialize>(workspace: &Path, path: &Path, value: &T) -> 
 }
 
 /// Create a shared sub-agent manager with a configurable limit.
+#[cfg(test)]
 #[must_use]
 pub fn new_shared_subagent_manager(workspace: PathBuf, max_agents: usize) -> SharedSubAgentManager {
     new_shared_subagent_manager_with_timeout(
@@ -4192,12 +4034,17 @@ async fn record_queued_launch_progress(task: &SubAgentTask) {
     }
     emit_agent_progress(
         task.runtime.event_tx.as_ref(),
-        task.runtime.mailbox.as_ref(),
         &task.agent_id,
         SUBAGENT_QUEUED_LAUNCH_REASON.to_string(),
         task.runtime.parent_agent_id.clone(),
         task.runtime.spawn_depth,
     );
+    if let Some(mailbox) = task.runtime.mailbox.as_ref() {
+        let _ = mailbox.send(MailboxMessage::progress(
+            &task.agent_id,
+            SUBAGENT_QUEUED_LAUNCH_REASON,
+        ));
+    }
 }
 
 /// Notify this runtime's immediate parent that the child finished (issue
@@ -4510,7 +4357,6 @@ fn record_agent_progress(runtime: &SubAgentRuntime, agent_id: &str, message: imp
     }
     emit_agent_progress(
         runtime.event_tx.as_ref(),
-        runtime.mailbox.as_ref(),
         agent_id,
         message,
         runtime.parent_agent_id.clone(),
@@ -5567,6 +5413,7 @@ fn parse_optional_positive_u64(input: &Value, names: &[&str]) -> Result<Option<u
     Ok(None)
 }
 
+#[cfg(test)]
 fn with_default_fork_context(mut input: Value, default: bool) -> Value {
     let Some(object) = input.as_object_mut() else {
         return input;
@@ -5663,10 +5510,6 @@ impl SubAgentResolvedRoute {
             tuning,
         }
     }
-
-    fn refresh_tuning(&mut self) {
-        self.tuning = subagent_request_tuning(self.reasoning_effort.as_deref());
-    }
 }
 
 pub(crate) async fn resolve_subagent_assignment_route(
@@ -5714,6 +5557,7 @@ fn subagent_router_candidates(runtime: &SubAgentRuntime) -> crate::model_routing
     crate::model_routing::provider_router_candidates(runtime.client.api_provider(), &runtime.model)
 }
 
+#[cfg(test)]
 fn fallback_subagent_assignment_route(
     runtime: &SubAgentRuntime,
     configured_model: Option<String>,
@@ -6290,15 +6134,11 @@ fn subagent_progress_tool_display_name(name: &str) -> &str {
 
 fn emit_agent_progress(
     event_tx: Option<&mpsc::Sender<Event>>,
-    mailbox: Option<&Mailbox>,
     agent_id: &str,
     status: String,
     parent_run_id: Option<String>,
     spawn_depth: u32,
 ) {
-    if let Some(mb) = mailbox {
-        let _ = mb.send(MailboxMessage::progress(agent_id, status.clone()));
-    }
     if let Some(event_tx) = event_tx {
         let _ = event_tx.try_send(Event::AgentProgress {
             id: agent_id.to_string(),
@@ -6368,6 +6208,7 @@ struct SubAgentToolRegistry {
 }
 
 impl SubAgentToolRegistry {
+    #[cfg(test)]
     fn new(
         runtime: SubAgentRuntime,
         agent_type: SubAgentType,

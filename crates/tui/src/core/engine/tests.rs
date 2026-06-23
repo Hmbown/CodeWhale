@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 const WORKING_SET_SUMMARY_MARKER: &str = "## Repo Working Set";
@@ -63,6 +63,93 @@ fn subagent_mailbox_keeps_lifecycle_events_reliable() {
             model: "model".to_string(),
             usage: Usage::default(),
         }
+    ));
+}
+
+#[test]
+fn subagent_mailbox_samples_best_effort_events_per_agent() {
+    use crate::tools::subagent::MailboxMessage;
+
+    let mut last_sent_at = HashMap::new();
+    let start = Instant::now();
+    let first = MailboxMessage::ToolCallStarted {
+        agent_id: "agent_a".to_string(),
+        tool_name: "exec_shell".to_string(),
+        step: 1,
+    };
+    let second = MailboxMessage::ToolCallCompleted {
+        agent_id: "agent_a".to_string(),
+        tool_name: "exec_shell".to_string(),
+        step: 1,
+        ok: true,
+    };
+    let other_agent = MailboxMessage::ToolCallCompleted {
+        agent_id: "agent_b".to_string(),
+        tool_name: "exec_shell".to_string(),
+        step: 1,
+        ok: true,
+    };
+
+    assert!(subagent_mailbox_best_effort_send_permitted(
+        &mut last_sent_at,
+        &first,
+        start,
+    ));
+    assert!(
+        !subagent_mailbox_best_effort_send_permitted(
+            &mut last_sent_at,
+            &second,
+            start + Duration::from_millis(10),
+        ),
+        "same-agent telemetry inside the sampling window is dropped"
+    );
+    assert!(
+        subagent_mailbox_best_effort_send_permitted(
+            &mut last_sent_at,
+            &other_agent,
+            start + Duration::from_millis(10),
+        ),
+        "sampling is per agent, so one busy child cannot hide another"
+    );
+    assert!(
+        subagent_mailbox_best_effort_send_permitted(
+            &mut last_sent_at,
+            &second,
+            start + SUBAGENT_MAILBOX_BEST_EFFORT_MIN_INTERVAL,
+        ),
+        "the next same-agent update is allowed after the interval"
+    );
+}
+
+#[test]
+fn subagent_mailbox_never_samples_lifecycle_or_usage_events() {
+    use crate::models::Usage;
+    use crate::tools::subagent::{MailboxMessage, SubAgentType};
+
+    let mut last_sent_at = HashMap::new();
+    let start = Instant::now();
+
+    assert!(subagent_mailbox_best_effort_send_permitted(
+        &mut last_sent_at,
+        &MailboxMessage::started("agent_a", SubAgentType::Explore),
+        start,
+    ));
+    assert!(subagent_mailbox_best_effort_send_permitted(
+        &mut last_sent_at,
+        &MailboxMessage::Completed {
+            agent_id: "agent_a".to_string(),
+            summary: "done".to_string(),
+        },
+        start,
+    ));
+    assert!(subagent_mailbox_best_effort_send_permitted(
+        &mut last_sent_at,
+        &MailboxMessage::TokenUsage {
+            agent_id: "agent_a".to_string(),
+            model: "model".to_string(),
+            usage: Usage::default(),
+        },
+        start,
     ));
 }
 
