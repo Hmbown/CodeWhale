@@ -98,18 +98,26 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
           <div className="font-mono text-[0.7rem] text-ink-mute uppercase tracking-widest">
             {isZh ? "用心制作 · Made with care" : "Made with care · 用心制作"}
           </div>
-          {/* Mirror sources — prominent on zh */}
-          {isZh && (
-            <div className="pt-2 border-t border-paper-line/20">
-              <div className="eyebrow mb-2 text-ink-mute">镜像源 / Mirror</div>
-              <div className="flex flex-wrap gap-3 text-xs">
-                {GITEE_ENABLED && <a href="https://gitee.com/Hmbown/CodeWhale" className="text-indigo hover:underline" target="_blank" rel="noopener">Gitee 镜像</a>}
-                <a href="https://cnb.cool/codewhale.net/codewhale" className="text-indigo hover:underline" target="_blank" rel="noopener">CNB 镜像</a>
-                <a href="https://npmmirror.com/package/codewhale" className="text-indigo hover:underline" target="_blank" rel="noopener">npmmirror</a>
-                <a href="https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index.html" className="text-indigo hover:underline" target="_blank" rel="noopener">Tuna crates.io</a>
-              </div>
+          {/* Provenance / source-of-truth — shown on both locales */}
+          <div className="pt-2 border-t border-paper-line/20">
+            <div className="eyebrow mb-2 text-ink-mute">
+              {isZh ? "来源证明 · Provenance" : "Provenance · 来源证明"}
             </div>
-          )}
+            <p className="text-xs text-ink-soft leading-relaxed mb-2">
+              {isZh
+                ? "GitHub (github.com/Hmbown/CodeWhale) 为唯一官方源码与发布源。下方镜像仅为中国大陆网络加速，内容经自动同步校验，SHA256 清单一致。"
+                : "GitHub (github.com/Hmbown/CodeWhale) is the sole canonical source for code and releases. Mirrors below are China-network accelerators only — content is auto-synced and verified via SHA256 manifests."}
+            </p>
+            <div className="flex flex-wrap gap-3 text-xs">
+              <a href="https://github.com/Hmbown/CodeWhale" className="text-indigo hover:underline font-semibold" target="_blank" rel="noopener">
+                {isZh ? "★ 官方 GitHub" : "★ Official GitHub"}
+              </a>
+              {GITEE_ENABLED && <a href="https://gitee.com/Hmbown/CodeWhale" className="text-ink-soft hover:underline" target="_blank" rel="noopener">{isZh ? "Gitee 镜像" : "Gitee mirror"}</a>}
+              <a href="https://cnb.cool/codewhale.net/codewhale" className="text-ink-soft hover:underline" target="_blank" rel="noopener">{isZh ? "CNB 镜像" : "CNB mirror"}</a>
+              <a href="https://npmmirror.com/package/codewhale" className="text-ink-soft hover:underline" target="_blank" rel="noopener">npmmirror</a>
+              <a href="https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index.html" className="text-ink-soft hover:underline" target="_blank" rel="noopener">Tuna crates.io</a>
+            </div>
+          </div>
         </div>
 
         {cols.map((c) => (

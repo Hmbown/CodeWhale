@@ -6,6 +6,24 @@ GitHub repository for users on networks where GitHub is slow or blocked
 `fix/*`, `rebrand/*`, and `work/v*` branch used for first-party release work,
 and every `v*` release tag.
 
+## Provenance
+
+**GitHub is the sole canonical source.** All releases, tags, and source code
+originate at `github.com/Hmbown/CodeWhale`. The CNB mirror is a read-only
+replica maintained by the `Sync to CNB` workflow — it exists solely to serve
+users behind GFW-blocked or slow GitHub connections.
+
+Every CNB release includes `codewhale-artifacts-sha256.txt` — a SHA256 manifest
+of the CNB-built Linux x64 binaries, generated from the same source commit that
+is tagged on GitHub. (CNB builds from source, so these checksums cover the
+CNB-built artifacts, not GitHub's release assets.) Verify a downloaded binary
+against it:
+
+```bash
+# Verify a downloaded CNB binary against the CNB manifest
+sha256sum -c codewhale-artifacts-sha256.txt
+```
+
 ## How it works
 
 The mirror is maintained by the [`Sync to CNB`](../.github/workflows/sync-cnb.yml)

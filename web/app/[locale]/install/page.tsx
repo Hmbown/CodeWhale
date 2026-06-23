@@ -366,11 +366,13 @@ codewhale doctor`;
               <p className="text-sm text-ink-soft leading-relaxed max-w-2xl mb-3">
                 {isZh ? (
                   <>
-                    Cargo 经清华 Tuna 镜像——添加到 <code className="inline">~/.cargo/config.toml</code>：
+                    <strong className="text-indigo">官方源：</strong>
+                    GitHub Releases 为唯一官方发布源。Cargo 经清华 Tuna 镜像——添加到 <code className="inline">~/.cargo/config.toml</code>：
                   </>
                 ) : (
                   <>
-                    Cargo via Tsinghua Tuna mirror — add to{" "}
+                    <strong className="text-indigo">Official source:</strong>{" "}
+                    GitHub Releases is the sole canonical release source. Cargo via Tsinghua Tuna mirror — add to{" "}
                     <code className="inline">~/.cargo/config.toml</code>:
                   </>
                 )}
