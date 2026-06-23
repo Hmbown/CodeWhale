@@ -44,7 +44,9 @@ pub enum PricingProvenance {
     ModelsDevBundled,
     /// From a provider live `/models` (or pricing) refresh.
     ProviderLive,
-    /// From provider documentation / a hand-sourced seed.
+    /// From provider documentation / a hand-sourced seed. Set only by callers
+    /// constructing rows directly; `from_catalog_offering` never produces this
+    /// (Models.dev-sourced rows map to `ModelsDevBundled` / `ProviderLive`).
     ProviderDocs,
     /// User-supplied override (custom endpoint, enterprise terms, local route).
     UserOverride,
@@ -174,6 +176,8 @@ impl OfferingPricing {
         ] {
             if tokens > 0 {
                 let price = price?;
+                // Per-turn token counts are far below 2^53, so this cast is
+                // exact; revisit if TokenUsage ever aggregates across sessions.
                 total += (tokens as f64 / 1_000_000.0) * price;
             }
         }
@@ -181,8 +185,18 @@ impl OfferingPricing {
     }
 
     /// Project to the coarse route-facing meter shape.
+    ///
+    /// Returns [`PricingSku::Token`] only when an input or output rate is known.
+    /// The route-layer `Token` shape carries only input/output rates, so a row
+    /// priced *only* on cache classes would become a `Token` with no visible
+    /// rates — misleading at the route layer. Such rows degrade to
+    /// [`PricingSku::UnknownOrStale`] here while their cache rates remain usable
+    /// through [`OfferingPricing::estimate_cost`].
     #[must_use]
     pub fn to_route_sku(&self) -> PricingSku {
+        if self.input_per_million.is_none() && self.output_per_million.is_none() {
+            return PricingSku::UnknownOrStale;
+        }
         PricingSku::Token {
             input_per_mtok: self.input_per_million,
             output_per_mtok: self.output_per_million,
@@ -192,15 +206,15 @@ impl OfferingPricing {
 
 /// The honest route-facing pricing meter for a catalog offering.
 ///
-/// Priced offerings become [`PricingSku::Token`]; everything else (no cost, or a
-/// cost object with no concrete price) becomes [`PricingSku::UnknownOrStale`]
-/// rather than a fabricated zero price.
+/// An offering with a usable input/output rate becomes [`PricingSku::Token`];
+/// everything else — no cost, a cost object with no concrete price, or a
+/// cache-only price — becomes [`PricingSku::UnknownOrStale`] rather than a
+/// fabricated zero price. (`from_catalog_offering` collapses the unpriced case
+/// to `None`; `to_route_sku` collapses the cache-only case.)
 #[must_use]
 pub fn route_pricing_sku(offering: &CatalogOffering) -> PricingSku {
-    match OfferingPricing::from_catalog_offering(offering) {
-        Some(pricing) if pricing.has_any_price() => pricing.to_route_sku(),
-        _ => PricingSku::UnknownOrStale,
-    }
+    OfferingPricing::from_catalog_offering(offering)
+        .map_or(PricingSku::UnknownOrStale, |pricing| pricing.to_route_sku())
 }
 
 fn provenance_from_source(source: &CatalogSource) -> PricingProvenance {

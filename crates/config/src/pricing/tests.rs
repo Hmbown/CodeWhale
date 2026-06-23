@@ -201,3 +201,54 @@ fn pricing_flows_from_the_models_dev_parser() {
     assert_eq!(pricing.cache_read_per_million, Some(0.26));
     assert_eq!(pricing.provenance, PricingProvenance::ModelsDevBundled);
 }
+
+#[test]
+fn cache_only_offering_is_unknown_at_the_route_layer() {
+    // Priced only on cache classes (no input/output): the route Token badge
+    // would have no visible rates, so route_pricing_sku degrades to
+    // UnknownOrStale — yet the cache rate is still usable for estimate_cost.
+    let mut offering = priced(CatalogSource::Bundled);
+    offering.cost = Some(ModelsDevCost {
+        input: None,
+        output: None,
+        cache_read: Some(0.028),
+        cache_write: None,
+    });
+
+    assert!(matches!(
+        route_pricing_sku(&offering),
+        PricingSku::UnknownOrStale
+    ));
+
+    let pricing =
+        OfferingPricing::from_catalog_offering(&offering).expect("cache-only row is still priced");
+    assert!(pricing.has_any_price());
+    let usage = TokenUsage {
+        cache_read: 1_000_000,
+        ..Default::default()
+    };
+    assert_eq!(pricing.estimate_cost(&usage), Some(0.028));
+}
+
+#[test]
+fn user_override_source_maps_through_from_catalog_offering() {
+    // Exercises provenance_from_source / effective_at_from_source for the
+    // override arm via the hydration path (not direct construction).
+    let pricing = OfferingPricing::from_catalog_offering(&priced(CatalogSource::UserOverride))
+        .expect("priced");
+    assert_eq!(pricing.provenance, PricingProvenance::UserOverride);
+    assert_eq!(pricing.effective_at, None);
+}
+
+#[test]
+fn staleness_is_inclusive_at_the_ttl_boundary() {
+    let live = CatalogSource::Live {
+        base_url_fingerprint: "fp".into(),
+        fetched_at: 1_000,
+    };
+    let p = OfferingPricing::from_catalog_offering(&priced(live)).unwrap();
+    // age == max_age_secs counts as stale (`>=` semantics)...
+    assert!(p.is_stale(1_100, 100));
+    // ...one second younger is still fresh.
+    assert!(!p.is_stale(1_099, 100));
+}
