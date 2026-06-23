@@ -1692,6 +1692,28 @@ fn create_test_app() -> App {
 }
 
 #[test]
+fn app_system_prompt_includes_configured_instructions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let instructions = tmp.path().join("extra-instructions.md");
+    std::fs::write(&instructions, "CONFIGURED_INSTRUCTIONS_MARKER").expect("write instructions");
+
+    let mut app = create_test_app();
+    app.workspace = tmp.path().to_path_buf();
+    let config = Config {
+        instructions: Some(vec![instructions.display().to_string()]),
+        ..Config::default()
+    };
+
+    let prompt = match build_app_system_prompt(&app, &config) {
+        SystemPrompt::Text(text) => text,
+        SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+    };
+
+    assert!(prompt.contains("CONFIGURED_INSTRUCTIONS_MARKER"));
+    assert!(prompt.contains(&instructions.display().to_string()));
+}
+
+#[test]
 fn session_denied_cache_matches_only_approval_key() {
     let mut app = create_test_app();
     app.approval_session_denied.insert("edit_file".to_string());

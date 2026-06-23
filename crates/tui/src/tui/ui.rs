@@ -1123,11 +1123,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         mcp_config_path: config.mcp_config_path(),
         skills_dir: app.skills_dir.clone(),
         skills_scan_codewhale_only: app.skills_scan_codewhale_only,
-        instructions: config
-            .instructions_paths()
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        instructions: configured_instruction_sources(config),
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         show_thinking: app.show_thinking,
@@ -1202,6 +1198,38 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         workspace_follow_symlinks: app.workspace_follow_symlinks,
         exec_policy_engine: config.exec_policy_engine.clone(),
     }
+}
+
+fn configured_instruction_sources(config: &Config) -> Vec<prompts::InstructionSource> {
+    config
+        .instructions_paths()
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+fn build_app_system_prompt(app: &App, config: &Config) -> SystemPrompt {
+    let instructions = configured_instruction_sources(config);
+    prompts::system_prompt_for_mode_with_context_skills_and_session(
+        &app.workspace,
+        None,
+        None,
+        Some(&instructions),
+        prompts::PromptSessionContext {
+            user_memory_block: None,
+            goal_objective: app.hunt.quarry.as_deref(),
+            project_context_pack_enabled: config.project_context_pack_enabled(),
+            locale_tag: app.ui_locale.tag(),
+            translation_enabled: app.translation_enabled,
+            model_id: &app.model,
+            context_window_override: Some(
+                provider_capability(app.api_provider, &app.model).context_window,
+            ),
+            show_thinking: app.show_thinking,
+            verbosity: app.verbosity.as_deref(),
+            skills_scan_codewhale_only: app.skills_scan_codewhale_only,
+        },
+    )
 }
 
 /// How long after a task finishes it should still appear in the Work
@@ -6135,28 +6163,7 @@ async fn dispatch_user_message(
         .map(|selection| selection.provider)
         .unwrap_or(app.api_provider);
     let message_index = app.api_messages.len();
-    app.system_prompt = Some(
-        prompts::system_prompt_for_mode_with_context_skills_and_session(
-            &app.workspace,
-            None,
-            None,
-            None,
-            prompts::PromptSessionContext {
-                user_memory_block: None,
-                goal_objective: app.hunt.quarry.as_deref(),
-                project_context_pack_enabled: config.project_context_pack_enabled(),
-                locale_tag: app.ui_locale.tag(),
-                translation_enabled: app.translation_enabled,
-                model_id: &app.model,
-                context_window_override: Some(
-                    provider_capability(app.api_provider, &app.model).context_window,
-                ),
-                show_thinking: app.show_thinking,
-                verbosity: app.verbosity.as_deref(),
-                skills_scan_codewhale_only: app.skills_scan_codewhale_only,
-            },
-        ),
-    );
+    app.system_prompt = Some(build_app_system_prompt(app, config));
     app.add_message(HistoryCell::User {
         content: message.display.clone(),
     });
