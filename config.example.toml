@@ -517,25 +517,28 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
 # with Bing fallback — no API key needed. Bing remains selectable for users who
-# explicitly prefer it. Switch to Tavily, Bocha, Metaso, or Baidu for
-# API-backed search.
+# explicitly prefer it. Switch to Tavily, Bocha, Metaso, Baidu, Volcengine,
+# Sofya, or a trusted SearXNG instance for API-backed search.
 #
 # [search]
-# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine | sofya
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | searxng | baidu | volcengine | sofya
 #                            # duckduckgo: HTML scrape with Bing fallback
 #                            # bing:       HTML scrape, no API key
 #                            # tavily:     https://tavily.com — AI search, needs api_key
 #                            # bocha:      https://bochaai.com — 博查AI搜索，国内友好，需api_key
 #                            # metaso:     https://metaso.cn — 秘塔AI搜索，每天 100 次免费
 #                            #             设置 METASO_API_KEY 或 [search] api_key 可提升额度
+#                            # searxng:    https://docs.searxng.org — trusted/self-hosted JSON API,
+#                            #             set base_url; no public instance is used by default
 #                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
 #                            # volcengine: 火山引擎 Ark web_search (免费 2 万次/月), 需 api_key
 #                            #             也回退到 VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY 环境变量
 #                            # sofya:      https://sofya.co — AI search returning full page
 #                            #             content (not snippets), needs api_key (ay_live_...);
 #                            #             also falls back to the SOFYA_API_KEY env var
-# base_url = "https://search.example/html/" # optional DuckDuckGo-compatible HTML endpoint
-# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, baidu, volcengine, and sofya; optional for metaso
+# base_url = "https://search.example/" # optional DuckDuckGo-compatible HTML endpoint;
+#                                      # required SearXNG root or /search endpoint
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, baidu, volcengine, and sofya; optional for metaso; unused by searxng
 #                             # WARNING: treat config.toml like a secret file when
 #                             # storing API keys. Prefer env vars for local smoke tests.
 #

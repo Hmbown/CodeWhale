@@ -558,6 +558,46 @@ fn search_config_preserves_custom_base_url() {
 }
 
 #[test]
+fn explicit_searxng_search_provider_is_preserved() {
+    let config: Config = toml::from_str(
+        r#"
+        [search]
+        provider = "searxng"
+        base_url = "https://search.internal.example/"
+        "#,
+    )
+    .expect("search config");
+
+    let search = config.search.expect("search table");
+    assert_eq!(search.provider, Some(SearchProvider::Searxng));
+    assert_eq!(
+        search.base_url.as_deref(),
+        Some("https://search.internal.example/")
+    );
+}
+
+#[test]
+fn searxng_search_provider_aliases_parse_and_round_trip() {
+    assert_eq!(
+        SearchProvider::parse("searxng"),
+        Some(SearchProvider::Searxng)
+    );
+    assert_eq!(
+        SearchProvider::parse("searx-ng"),
+        Some(SearchProvider::Searxng)
+    );
+    assert_eq!(
+        SearchProvider::parse("searx_ng"),
+        Some(SearchProvider::Searxng)
+    );
+    assert_eq!(
+        SearchProvider::parse("searx"),
+        Some(SearchProvider::Searxng)
+    );
+    assert_eq!(SearchProvider::Searxng.as_str(), "searxng");
+}
+
+#[test]
 fn explicit_baidu_search_provider_is_preserved() {
     let config: Config = toml::from_str(
         r#"

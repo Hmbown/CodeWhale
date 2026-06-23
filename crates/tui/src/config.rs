@@ -1456,6 +1456,9 @@ pub enum SearchProvider {
     /// or `METASO_API_KEY` env var; configurable via `[search] api_key`.
     #[serde(alias = "metaso")]
     Metaso,
+    /// SearXNG JSON search API. Requires a trusted/self-hosted `base_url`.
+    #[serde(alias = "searx", alias = "searx-ng", alias = "searx_ng")]
+    Searxng,
     /// Baidu AI Search API (<https://qianfan.baidubce.com>). Requires api_key.
     #[serde(
         alias = "baidu-search",
@@ -1493,6 +1496,7 @@ impl SearchProvider {
             "tavily" => Some(Self::Tavily),
             "bocha" => Some(Self::Bocha),
             "metaso" => Some(Self::Metaso),
+            "searxng" | "searx" | "searx-ng" | "searx_ng" => Some(Self::Searxng),
             "baidu" | "baidu-search" | "baidu_search" | "baidu-ai-search" | "baidu_ai_search" => {
                 Some(Self::Baidu)
             }
@@ -1510,6 +1514,7 @@ impl SearchProvider {
             Self::Tavily => "tavily",
             Self::Bocha => "bocha",
             Self::Metaso => "metaso",
+            Self::Searxng => "searxng",
             Self::Baidu => "baidu",
             Self::Volcengine => "volcengine",
             Self::Sofya => "sofya",
@@ -1544,15 +1549,15 @@ pub struct SearchProviderResolution {
 /// Web search provider configuration (`[search]` table in config.toml).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SearchConfig {
-    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso` | `baidu` | `volcengine`. Default: `duckduckgo`.
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso` | `searxng` | `baidu` | `volcengine`. Default: `duckduckgo`.
     #[serde(default)]
     pub provider: Option<SearchProvider>,
-    /// Optional DuckDuckGo-compatible HTML endpoint. When set with the
-    /// DuckDuckGo provider, `web_search` appends the `q` query parameter to
-    /// this URL instead of using `https://html.duckduckgo.com/html/`.
+    /// Optional search endpoint. With `duckduckgo`, this is a
+    /// DuckDuckGo-compatible HTML endpoint. With `searxng`, this is the trusted
+    /// SearXNG instance root or `/search` endpoint.
     #[serde(default)]
     pub base_url: Option<String>,
-    /// API key for Tavily, Bocha, Metaso, Baidu, or Volcengine. Not required for Bing or DuckDuckGo.
+    /// API key for Tavily, Bocha, Metaso, Baidu, or Volcengine. Not required for Bing, DuckDuckGo, or SearXNG.
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in default.
     /// Baidu also falls back to `BAIDU_SEARCH_API_KEY` env var.
     /// Volcengine also falls back to `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY` env vars.
@@ -2100,8 +2105,10 @@ pub struct Config {
     pub snapshots: Option<SnapshotsConfig>,
 
     /// Web search provider configuration. When absent, defaults to DuckDuckGo.
-    /// Set `provider` to `bing`, `tavily`, or `bocha` to use those services
-    /// instead; Tavily and Bocha also require an `api_key`.
+    /// Set `provider` to another supported backend such as `bing`, `tavily`,
+    /// `bocha`, `metaso`, `searxng`, `baidu`, `volcengine`, or `sofya`.
+    /// API-backed services require provider-specific credentials; SearXNG
+    /// requires a trusted `base_url`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
 

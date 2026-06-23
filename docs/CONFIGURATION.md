@@ -1320,8 +1320,8 @@ graduate behind real gated flags.
 `web_search` uses DuckDuckGo by default and does not require an API key. The
 DuckDuckGo path keeps a Bing fallback when DDG returns a bot challenge or no
 parseable results. Bing remains selectable for users who explicitly want it,
-and Tavily, Bocha, Metaso, Baidu, Volcengine, or Sofya can be selected when an
-API-backed provider is preferred.
+and Tavily, Bocha, Metaso, SearXNG, Baidu, Volcengine, or Sofya can be selected
+when an API-backed provider is preferred.
 
 For a private/internal search service that serves DuckDuckGo-compatible HTML,
 keep `provider = "duckduckgo"` and set `base_url`; CodeWhale appends the `q`
@@ -1329,6 +1329,13 @@ query parameter to that endpoint and applies network policy to its host.
 Custom endpoints do not fall back to public Bing. `CODEWHALE_SEARCH_BASE_URL`
 can override this per process; `DEEPSEEK_SEARCH_BASE_URL` remains accepted as
 the legacy alias.
+
+**SearXNG** ([docs](https://docs.searxng.org/dev/search_api.html)) uses the
+configured instance's JSON API. Set `provider = "searxng"` and
+`base_url = "https://your-searxng.example"`; CodeWhale calls
+`/search?q=...&format=json`. CodeWhale does not use a public SearXNG instance
+by default because public instances often disable JSON output or rate-limit API
+traffic.
 
 **Metaso** ([metaso.cn](https://metaso.cn)) has a 100 searches/day free quota;
 set `METASO_API_KEY` or `[search] api_key` for a higher quota.
@@ -1345,9 +1352,9 @@ Sofya model provider.
 
 ```toml
 [search]
-provider = "baidu" # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine | sofya
-# base_url = "https://search.example/html/" # optional with provider = "duckduckgo"
-# api_key = "YOUR_KEY" # required for tavily, bocha, baidu, volcengine, and sofya; optional for metaso
+provider = "searxng" # duckduckgo | bing | tavily | bocha | metaso | searxng | baidu | volcengine | sofya
+# base_url = "https://search.example/" # optional with provider = "duckduckgo"; required with "searxng"
+# api_key = "YOUR_KEY" # required for tavily, bocha, baidu, volcengine, and sofya; optional for metaso; unused by searxng
 ```
 
 ## Local Media Attachments
