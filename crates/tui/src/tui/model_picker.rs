@@ -383,9 +383,9 @@ fn picker_row_spans<'a>(
     let label_width = width.saturating_sub(prefix_width);
     let label = fit_text(label, label_width);
     let mut spans = vec![
-        Span::raw(" "),
+        Span::styled(" ", label_style),
         Span::styled(marker, label_style),
-        Span::raw(" "),
+        Span::styled(" ", label_style),
         Span::styled(label, label_style),
     ];
 
@@ -974,6 +974,17 @@ mod tests {
                 crossterm::event::KeyModifiers::NONE,
             ));
         }
+    }
+
+    fn buffer_row_text(buf: &Buffer, area: Rect, y: u16) -> String {
+        (area.x..area.x.saturating_add(area.width))
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    }
+
+    fn row_containing(buf: &Buffer, area: Rect, needle: &str) -> Option<u16> {
+        (area.y..area.y.saturating_add(area.height))
+            .find(|&y| buffer_row_text(buf, area, y).contains(needle))
     }
 
     #[test]
@@ -1698,6 +1709,39 @@ mod tests {
         assert_eq!(view.focus, Pane::Model);
         assert_eq!(view.resolved_model(), "deepseek-v4-flash");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Max);
+    }
+
+    #[test]
+    fn model_picker_selected_row_renders_readable_selection_contrast() {
+        let (mut app, _lock) = create_test_app();
+        app.model = "deepseek-v4-flash".to_string();
+        app.auto_model = false;
+        let view = ModelPickerView::new(&app);
+        let area = Rect::new(0, 0, 100, 28);
+        let mut buf = Buffer::empty(area);
+
+        view.render(area, &mut buf);
+
+        let y = row_containing(&buf, area, "deepseek-v4-flash")
+            .expect("selected model row should render");
+        let highlighted_cells = (area.x..area.x.saturating_add(area.width))
+            .filter(|&x| {
+                let cell = &buf[(x, y)];
+                !cell.symbol().trim().is_empty()
+                    && cell.bg == palette::SELECTION_BG
+                    && cell.fg == palette::SELECTION_TEXT
+            })
+            .count();
+
+        assert!(
+            highlighted_cells >= "deepseek-v4-flash".len(),
+            "selected /model row should use readable selection text"
+        );
+        assert!(
+            !(area.x..area.x.saturating_add(area.width))
+                .any(|x| buf[(x, y)].bg == palette::WHALE_ACCENT_PRIMARY),
+            "selected /model row should not use the bright accent background"
+        );
     }
 
     #[test]

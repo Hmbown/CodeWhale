@@ -1013,6 +1013,17 @@ mod tests {
         view
     }
 
+    fn buffer_row_text(buf: &Buffer, area: Rect, y: u16) -> String {
+        (area.x..area.x.saturating_add(area.width))
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    }
+
+    fn row_containing(buf: &Buffer, area: Rect, needle: &str) -> Option<u16> {
+        (area.y..area.y.saturating_add(area.height))
+            .find(|&y| buffer_row_text(buf, area, y).contains(needle))
+    }
+
     #[test]
     fn workspace_scope_filters_sessions_to_current_project() {
         // #1395 reproduction: Ctrl+R in project B must not surface sessions
@@ -1112,6 +1123,46 @@ mod tests {
         assert_eq!(span.style.bg, Some(palette::SELECTION_BG));
         assert_ne!(span.style.bg, Some(palette::WHALE_ACCENT_PRIMARY));
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn session_picker_selected_row_renders_readable_selection_contrast() {
+        let mut first = test_session(1, "first contrast fixture");
+        first.id = "alpha-contrast-fixture".to_string();
+        let mut second = test_session(2, "second contrast fixture");
+        second.id = "bravo-contrast-fixture".to_string();
+        let sessions = vec![first, second];
+        let mut view = picker_with(sessions, None);
+        view.selected = 1;
+        view.ensure_selected_visible();
+        view.current_preview = vec!["preview".to_string()];
+        let selected_id = crate::session_manager::truncate_id(&view.filtered[view.selected].id);
+        let area = Rect::new(0, 0, 120, 28);
+        let mut buf = Buffer::empty(area);
+
+        view.render(area, &mut buf);
+
+        let y =
+            row_containing(&buf, area, &selected_id).expect("selected session row should render");
+        let rendered_row = buffer_row_text(&buf, area, y);
+        let highlighted_cells = (area.x..area.x.saturating_add(area.width))
+            .filter(|&x| {
+                let cell = &buf[(x, y)];
+                !cell.symbol().trim().is_empty()
+                    && cell.bg == palette::SELECTION_BG
+                    && cell.fg == palette::SELECTION_TEXT
+            })
+            .count();
+
+        assert!(
+            highlighted_cells >= 4,
+            "selected /sessions row should use readable selection text; got {highlighted_cells} highlighted cells on {rendered_row:?}"
+        );
+        assert!(
+            !(area.x..area.x.saturating_add(area.width))
+                .any(|x| buf[(x, y)].bg == palette::WHALE_ACCENT_PRIMARY),
+            "selected /sessions row should not use the bright accent background"
+        );
     }
 
     #[test]
