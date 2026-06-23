@@ -80,6 +80,8 @@ struct SettingsHomeGuard {
     previous_userprofile: Option<OsString>,
     previous_codewhale_home: Option<OsString>,
     previous_deepseek_config_path: Option<OsString>,
+    previous_codewhale_provider: Option<OsString>,
+    previous_deepseek_provider: Option<OsString>,
     previous_xdg_config_home: Option<OsString>,
     previous_appdata: Option<OsString>,
     previous_localappdata: Option<OsString>,
@@ -94,6 +96,8 @@ impl SettingsHomeGuard {
         let previous_userprofile = std::env::var_os("USERPROFILE");
         let previous_codewhale_home = std::env::var_os("CODEWHALE_HOME");
         let previous_deepseek_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        let previous_codewhale_provider = std::env::var_os("CODEWHALE_PROVIDER");
+        let previous_deepseek_provider = std::env::var_os("DEEPSEEK_PROVIDER");
         let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
         let previous_appdata = std::env::var_os("APPDATA");
         let previous_localappdata = std::env::var_os("LOCALAPPDATA");
@@ -104,6 +108,8 @@ impl SettingsHomeGuard {
             std::env::set_var("USERPROFILE", tmp.path());
             std::env::set_var("CODEWHALE_HOME", &codewhale_home);
             std::env::set_var("DEEPSEEK_CONFIG_PATH", codewhale_home.join("config.toml"));
+            std::env::remove_var("CODEWHALE_PROVIDER");
+            std::env::remove_var("DEEPSEEK_PROVIDER");
             std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg-config"));
             std::env::set_var("APPDATA", tmp.path().join("appdata"));
             std::env::set_var("LOCALAPPDATA", tmp.path().join("localappdata"));
@@ -114,6 +120,8 @@ impl SettingsHomeGuard {
             previous_userprofile,
             previous_codewhale_home,
             previous_deepseek_config_path,
+            previous_codewhale_provider,
+            previous_deepseek_provider,
             previous_xdg_config_home,
             previous_appdata,
             previous_localappdata,
@@ -141,6 +149,11 @@ impl Drop for SettingsHomeGuard {
             "DEEPSEEK_CONFIG_PATH",
             self.previous_deepseek_config_path.take(),
         );
+        restore(
+            "CODEWHALE_PROVIDER",
+            self.previous_codewhale_provider.take(),
+        );
+        restore("DEEPSEEK_PROVIDER", self.previous_deepseek_provider.take());
         restore("XDG_CONFIG_HOME", self.previous_xdg_config_home.take());
         restore("APPDATA", self.previous_appdata.take());
         restore("LOCALAPPDATA", self.previous_localappdata.take());
