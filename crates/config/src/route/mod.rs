@@ -43,4 +43,6 @@ pub use offering::{ProviderModelOffering, bundled_offerings};
 pub use resolver::{RouteRequest, RouteResolver};
 
 #[cfg(test)]
+mod conformance_tests;
+#[cfg(test)]
 mod tests;
