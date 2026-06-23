@@ -1,103 +1,94 @@
 # Repository Agent Guidance
 
-## Where to work right now (read this first)
+## Start With Live Truth
 
-- **Repo:** `Hmbown/CodeWhale`. This repo lives on multiple devices, so do
-  **not** hard-code a device-specific checkout path here — work in whichever
-  local checkout you have and always **confirm with
-  `git branch --show-current` before editing.**
-- **Active branch:** `codex/v0.8.63-integration` (also at
-  `origin/codex/v0.8.63-integration`) for the current fix/integration lane.
-  If a newer handoff or objective file names a different branch, verify with
-  `git branch --show-current` and follow the live branch.
-- **Workspace version is `0.8.63`** in `Cargo.toml`. Do not bump versions
-  opportunistically; version bumps, tags, release artifacts, publishing, and
-  GitHub Releases require Hunter's explicit approval.
-- **Milestone guidepost:** GitHub milestone `v0.8.63`. Check live state with
-  `gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.63" --state open`.
-- **Default branch is `main`.** Never commit directly to `main`; work on the
-  active integration branch or a fresh `codex/...` branch/worktree off it for
-  an isolated change. Open a PR into `main` only when a unit of work is
-  reviewable.
-- **Always run before pushing a change:** `cargo fmt`, then the targeted tests
-  for the area (`cargo test -p codewhale-tui --bin codewhale-tui --locked <filter>`,
-  `cargo test -p codewhale-config`, `cargo test -p codewhale-protocol`, …). Full
-  gate: `cargo test --workspace`. Release build:
-  `cargo build --release -p codewhale-cli -p codewhale-tui`.
-- **Known suite papercuts (pre-existing, not regressions):**
-  `config_command_allow_shell_*` fail on machines whose `~/.codewhale/settings.toml`
-  sets `default_mode = "yolo"` (the tests aren't hermetic); `run_verifiers_background_*`
-  is flaky under full-suite parallelism but passes in isolation. Don't treat
-  these as caused by your change.
+This repo moves through release and integration lanes quickly. Do not rely on a
+hard-coded branch, milestone, or version in this file. Before editing, establish
+the current lane from live state:
 
-## Continuous agent work conventions
+```sh
+git status --short --branch
+git branch --show-current
+git fetch origin main --prune --no-tags
+gh issue list --repo Hmbown/CodeWhale --state open --limit 100 --json number,title,labels,milestone,updatedAt,url
+gh pr list --repo Hmbown/CodeWhale --state open --limit 100 --json number,title,headRefName,baseRefName,isDraft,url
+```
 
-- One concern per commit; write a real commit body. Don't squash unrelated
-  changes.
-- Commit as **WIP** unless you have actually verified the behavior (built the
-  binary, ran the test, reproduced the fix). Stating "fixed" without evidence is
-  worse than an honest WIP.
-- Don't reintroduce removed machinery: the model-facing sub-agent surface is
-  **`agent` only** (no `agent_open`/`agent_eval`/`agent_close`/`delegate_to_agent`
-  /etc.); no capacity/coherence/runtime-tag systems; no lifecycle tools; no
-  runtime prompt/tag injection. `constitution.md` is the sole base prompt.
-- Configurable sub-agent depth stays. No arbitrary new limits unless clearly
-  needed and explained.
-- The sub-agent **TUI freeze reported in older handoffs is resolved** by the
-  v0.8.61 cutover (cap-20, persist-debounce, AgentProgress redraw throttle,
-  ListSubAgents coalescing, input-pump-off-render-thread). The leading
-  "blocking I/O starves the worker pool" theory was measured and **disproven**
-  (`git rev-parse` ~10ms, 18-core machine). Do not commit a speculative
-  `spawn_blocking` fix for the freeze.
+Use the user's current goal, live GitHub milestones, open PRs, and the current
+branch as the source of truth. If local notes or old handoffs disagree with live
+state, trust live state and mention the mismatch in your handoff.
 
-## CodeWhale Stewardship
+## Branch And Release Safety
 
-- Treat community contributors as partners. Good-faith PRs, issue reports,
-  repros, logs, reviews, and verification comments are maintainer evidence,
-  not queue noise.
-- Keep gates warm and dry-run unless Hunter explicitly approves enforcement.
-  Gate copy should guide contributors clearly and respectfully.
-- Credit every harvested PR, issue report, or comment that materially shaped a
-  fix. Preserve authorship when possible; otherwise use mappable GitHub
-  noreply `Co-authored-by` trailers from `.github/AUTHOR_MAP`.
-- Do not tag, publish, create a GitHub Release, or push release artifacts
-  without Hunter approval.
-- Use CodeWhale branding while keeping DeepSeek support first-class. Retiring
-  legacy `deepseek-tui` names must never read as deprecating DeepSeek models or
+- Never commit directly to `main`.
+- Work on the active integration branch or create a focused branch such as
+  `issue/<number>-short-slug` from the correct live base.
+- Keep each branch scoped to one issue or one reviewable concern unless issues
+  are genuinely inseparable.
+- Do not bump versions, tag, publish, create GitHub Releases, push release
+  artifacts, or merge to `main` without Hunter's explicit approval.
+- Preserve unrelated dirty or untracked files. Do not revert work you did not
+  make.
+
+## Working A GitHub Issue
+
+1. Refresh live issue and PR state.
+2. Check whether an open PR already covers the issue.
+3. Inspect the issue body, linked PRs, comments, code, docs, and tests before
+   deciding what to change.
+4. Implement the smallest coherent slice that moves the issue toward done.
+5. Format, run targeted tests, commit, push, and open a draft PR.
+6. In the PR body include goal, changes, verification commands/results, risks,
+   and the linked issue.
+
+If the issue is already fixed, verify it from current code or CI before
+commenting or closing. If blocked, leave a precise comment with the blocker,
+attempted work, branch or commit if any, and next action.
+
+## Verification Defaults
+
+Run `cargo fmt` before pushing Rust changes. Then run the targeted tests for the
+area you touched, for example:
+
+```sh
+cargo test -p codewhale-tui --bin codewhale-tui --locked <filter>
+cargo test -p codewhale-config --locked <filter>
+cargo test -p codewhale-protocol --locked <filter>
+```
+
+Use broader gates when the change crosses crate boundaries:
+
+```sh
+cargo test --workspace
+cargo build --release -p codewhale-cli -p codewhale-tui
+```
+
+Known local-suite papercuts should be verified before blaming a new change.
+Historically, config command tests can be affected by non-hermetic user config,
+and some verifier background tests have been flaky under full-suite parallelism
+while passing in isolation.
+
+## Architecture And Product Guardrails
+
+- Keep CodeWhale branding while preserving first-class DeepSeek model and
   provider support.
-- Review PRs from code, tests, linked issues, comments, and check results.
-  Never merge, close, harvest, or defer community work from title or labels
-  alone.
-- Respect concurrent work in the tree. Do not revert or rewrite unrelated
-  edits by other people or agents.
+- Do not reintroduce removed model-facing sub-agent tool names. The current
+  model-facing sub-agent surface is `agent`.
+- Avoid speculative runtime systems such as capacity/coherence tags, lifecycle
+  tools, or prompt/tag injection unless the current issue explicitly calls for a
+  reviewed design.
+- Prefer provider/model/Fleet changes that separate provider facts, model facts,
+  offerings, route resolution, and runtime readiness.
+- Treat provider docs and hosted model catalogs as time-sensitive. When current
+  provider behavior matters, check the actual provider docs or API and add tests
+  or drift checks where practical.
 
-## Release PR Integration
+## Stewardship
 
-- Use scratch integration branches when triaging a crowded release queue. A
-  branch such as `scratch/v0.8.59-pr-train-YYYYMMDD` may merge or cherry-pick
-  many PR heads to expose conflicts, missing tests, duplicate work, and hidden
-  coupling quickly.
-- Treat scratch branches as evidence, not as the artifact to ship. Do not tag,
-  release, or fast-forward a release branch from a scratch train. Harvest the
-  safe resolved hunks or commits back into the release branch in narrow,
-  reviewable commits.
-- Prefer direct GitHub merge only when the PR is clean against the real landing
-  branch, has acceptable checks, and does not cross trust-boundary surfaces. A
-  PR that is clean against `main` can still conflict with a release branch; test
-  against the actual release head before calling it merge-ready.
-- For already approved PRs, start with a scratch merge against the release
-  branch, then decide between direct merge, cherry-pick with conflict
-  resolution, or credited harvest. Maintainer approval is a priority signal,
-  not permission to skip review or tests.
-- When harvesting, preserve or add machine-readable credit: keep the original
-  author where possible, add `Co-authored-by` using `.github/AUTHOR_MAP` or
-  GitHub numeric noreply identity, and include `Harvested from PR #N by
-  @handle` in the commit body so the auto-close workflow can close the PR with
-  credit after it reaches `main`.
-- Close or update issues and PRs only after verifying the landed commit on the
-  relevant branch. If the release branch already contains equivalent behavior,
-  leave a clear note linking the commit and describing any remaining delta.
-- For the active release queue, start from the GitHub `v0.8.63` milestone
-  (`gh issue list --repo Hmbown/CodeWhale --milestone "v0.8.63"`) and refresh
-  state before acting. Older per-version triage docs under `docs/` are
-  historical reference only.
+- Treat community reports and PRs as maintainer evidence. Review code, tests,
+  linked issues, comments, and check results before merging, harvesting,
+  closing, or deferring.
+- Preserve contributor credit for harvested work with authorship when possible,
+  `Co-authored-by` trailers where appropriate, and clear PR/issue references.
+- Keep gates helpful and dry-run unless Hunter approves enforcement.
+- Keep public wording neutral for local hardening and internal reliability work.
