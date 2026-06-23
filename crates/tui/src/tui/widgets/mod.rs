@@ -1182,8 +1182,20 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(""));
 
         let options = approval_options_for(risk, locale);
+        let separator = locale_separator(locale);
 
         for (i, opt) in options.iter().enumerate() {
+            // Insert a visual separator between the approve group (0-1)
+            // and the deny/abort group (2-3) so the decision surface
+            // reads as two distinct choice clusters rather than a flat
+            // list.
+            if i == 2 {
+                lines.push(Line::from(vec![Span::styled(
+                    separator,
+                    Style::default().fg(palette::TEXT_MUTED),
+                )]));
+            }
+
             let is_selected = i == self.view.selected();
             let label_color = if opt.dangerous {
                 palette_colors.accent
@@ -1194,15 +1206,41 @@ impl Renderable for ApprovalWidget<'_> {
             let option_style = approval_option_style(is_selected, label_color);
             let shortcut_style = approval_option_style(is_selected, palette_colors.shortcut);
 
-            let spans = vec![
-                Span::raw("  "),
-                Span::styled(
-                    format!("[{}] ", opt.key_hint),
-                    shortcut_style.add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(opt.label.to_string(), option_style),
-            ];
-            lines.push(Line::from(spans));
+            if is_selected {
+                // Selected option: render as a solid button row with a
+                // distinct background strip so the user can instantly see
+                // which action will fire on Enter.
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(palette::SELECTION_BG)),
+                    Span::styled(
+                        format!("[{}] ", opt.key_hint),
+                        shortcut_style.add_modifier(Modifier::BOLD).bg(palette::SELECTION_BG),
+                    ),
+                    Span::styled(
+                        opt.label.to_string(),
+                        option_style.add_modifier(Modifier::BOLD).bg(palette::SELECTION_BG),
+                    ),
+                    Span::styled("  ", Style::default().bg(palette::SELECTION_BG)),
+                    Span::styled(
+                        selected_indicator(locale),
+                        Style::default()
+                            .fg(palette::SELECTION_TEXT)
+                            .bg(palette::SELECTION_BG)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                // Unselected option: plain row with subtle shortcut emphasis.
+                let spans = vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}] ", opt.key_hint),
+                        shortcut_style.add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(opt.label.to_string(), option_style),
+                ];
+                lines.push(Line::from(spans));
+            }
         }
 
         // Footer: Enter commits the highlighted row; y/a/d remain direct
@@ -1478,6 +1516,20 @@ fn option_abort(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "终止本轮",
         _ => "Abort the turn",
+    }
+}
+
+fn locale_separator(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  ────────────────────────────────────────",
+        _ => "  ────────────────────────────────────────",
+    }
+}
+
+fn selected_indicator(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => " ◄ 执行",
+        _ => " ◄ EXECUTE",
     }
 }
 
