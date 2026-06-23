@@ -4277,6 +4277,46 @@ model = "custom-qianfan-service-id"
     Ok(())
 }
 
+#[test]
+fn provider_config_loads_reasoning_stream_style() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-reasoning-style-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    ensure_parent_dir(&config_path)?;
+    fs::write(
+        &config_path,
+        r#"provider = "openai"
+
+[providers.openai]
+api_key = "openai-table-key"
+base_url = "https://openai-compatible.example/v1"
+model = "custom-reasoner"
+reasoning_stream_style = "inline_tags"
+"#,
+    )?;
+
+    let config = Config::load(None, None)?;
+    let openai = config
+        .provider_config_for(ApiProvider::Openai)
+        .expect("openai provider config");
+    assert_eq!(
+        openai.reasoning_stream_style.as_deref(),
+        Some("inline_tags")
+    );
+    Ok(())
+}
+
 // Regression for issue #1714: `codewhale --provider openai --model
 // MiniMax-M2.7` forwards the choice via DEEPSEEK_MODEL (never
 // OPENAI_MODEL) and uses the DEFAULT base_url. The explicit custom model

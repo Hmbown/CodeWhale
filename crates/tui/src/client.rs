@@ -161,6 +161,7 @@ pub struct DeepSeekClient {
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
     path_suffix: Option<String>,
+    pub(super) reasoning_stream_style: Option<String>,
     pub(super) stream_idle_timeout: Duration,
 }
 
@@ -329,6 +330,7 @@ impl Clone for DeepSeekClient {
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
             path_suffix: self.path_suffix.clone(),
+            reasoning_stream_style: self.reasoning_stream_style.clone(),
             stream_idle_timeout: self.stream_idle_timeout,
         }
     }
@@ -648,6 +650,9 @@ impl DeepSeekClient {
         let path_suffix = config
             .provider_config_for(api_provider)
             .and_then(|p| p.path_suffix.clone());
+        let reasoning_stream_style = config
+            .provider_config_for(api_provider)
+            .and_then(|p| p.reasoning_stream_style.clone());
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!(
@@ -691,6 +696,7 @@ impl DeepSeekClient {
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
             path_suffix,
+            reasoning_stream_style,
             stream_idle_timeout,
         })
     }

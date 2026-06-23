@@ -319,6 +319,7 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 # path_suffix = "/chat/completions" # override the API path; skips /v1 versioning when set
+# reasoning_stream_style = "inline_tags" # route <think>...</think> content into Thinking cells
 # [providers.deepseek.auth] # provider-scoped auth source metadata; command execution lands in a follow-up slice
 # source = "command"
 # command = ["secret-tool", "lookup", "service", "codewhale-deepseek"]

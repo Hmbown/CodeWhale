@@ -2624,6 +2624,8 @@ pub struct ProviderConfig {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(alias = "pathSuffix")]
     pub path_suffix: Option<String>,
+    #[serde(alias = "reasoningStyle", alias = "reasoningStreamStyle")]
+    pub reasoning_stream_style: Option<String>,
     pub auth: Option<codewhale_config::ProviderAuthSourceToml>,
 }
 
@@ -5619,6 +5621,9 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
             .or(base.insecure_skip_tls_verify),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         path_suffix: override_cfg.path_suffix.or(base.path_suffix),
+        reasoning_stream_style: override_cfg
+            .reasoning_stream_style
+            .or(base.reasoning_stream_style),
         auth: override_cfg.auth.or(base.auth),
     }
 }
