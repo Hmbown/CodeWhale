@@ -25,6 +25,8 @@ pub use renderable::Renderable;
 use std::collections::HashSet;
 use std::time::Duration;
 
+#[cfg(test)]
+use crate::config::model_completion_names_for_provider;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
@@ -33,10 +35,7 @@ use crate::tui::approval::{
 };
 use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus};
 use crate::tui::scrolling::TranscriptLineMeta;
-use crate::{
-    commands,
-    config::{ApiProvider, model_completion_names_for_provider},
-};
+use crate::{commands, config::ApiProvider};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -2330,6 +2329,7 @@ fn fuzzy_chars_in_order(needle: &str, haystack: &str) -> bool {
     false
 }
 
+#[cfg(test)]
 pub(crate) fn slash_completion_hints(
     input: &str,
     limit: usize,
