@@ -1777,6 +1777,178 @@ esac
         assert_eq!(status.running, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn fleet_smoke_runs_three_roles_ten_tasks_with_receipts_and_failure() {
+        let tmp = TempDir::new().unwrap();
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        let fake = fake_codewhale(
+            &tmp,
+            r#"#!/bin/sh
+case "$*" in
+  *intentional-failure*)
+    printf '{"type":"tool_use","name":"exec_shell","id":"fail","input":{}}\n'
+    printf '{"type":"error","error":"intentional failure"}\n'
+    exit 7
+    ;;
+  *)
+    printf '{"type":"tool_use","name":"read_file","id":"ok","input":{}}\n'
+    printf '{"type":"content","delta":"ok"}\n'
+    printf '{"type":"done"}\n'
+    exit 0
+    ;;
+esac
+"#,
+        );
+        let smoke_task = |id: &str, role: &str, tools: Vec<&str>, marker: &str| {
+            let mut task = task(id);
+            task.name = format!("{role} {id}");
+            task.objective = Some(format!("{role} smoke task {id}"));
+            task.instructions = format!("run deterministic fleet smoke lane {marker}");
+            task.worker = Some(FleetTaskWorkerProfile {
+                role: Some(role.to_string()),
+                tool_profile: Some("explicit".to_string()),
+                tools: tools.into_iter().map(str::to_string).collect(),
+                capabilities: vec!["local-smoke".to_string()],
+            });
+            task.expected_artifacts = vec![FleetArtifactKind::Log, FleetArtifactKind::Receipt];
+            task.scorer = Some(FleetScorerSpec::ExitCode);
+            task.retry_policy = Some(FleetRetryPolicy {
+                max_attempts: 1,
+                ..Default::default()
+            });
+            task
+        };
+        let tasks = vec![
+            smoke_task("scout-1", "scout", vec!["read_file", "grep_files"], "ok"),
+            smoke_task(
+                "builder-1",
+                "builder",
+                vec!["read_file", "apply_patch"],
+                "ok",
+            ),
+            smoke_task(
+                "verifier-1",
+                "verifier",
+                vec!["exec_shell", "read_file"],
+                "ok",
+            ),
+            smoke_task("scout-2", "scout", vec!["read_file", "grep_files"], "ok"),
+            smoke_task(
+                "builder-2",
+                "builder",
+                vec!["read_file", "apply_patch"],
+                "ok",
+            ),
+            smoke_task(
+                "verifier-2",
+                "verifier",
+                vec!["exec_shell", "read_file"],
+                "ok",
+            ),
+            smoke_task("scout-3", "scout", vec!["read_file", "grep_files"], "ok"),
+            smoke_task(
+                "builder-3",
+                "builder",
+                vec!["read_file", "apply_patch"],
+                "ok",
+            ),
+            smoke_task(
+                "verifier-3",
+                "verifier",
+                vec!["exec_shell", "read_file"],
+                "ok",
+            ),
+            smoke_task(
+                "verifier-4-fail",
+                "verifier",
+                vec!["exec_shell", "read_file"],
+                "intentional-failure",
+            ),
+        ];
+
+        let report = manager
+            .create_run(
+                FleetTaskSpecDocument {
+                    name: Some("fleet route parity smoke".to_string()),
+                    labels: BTreeMap::from([("issue".to_string(), "3166".to_string())]),
+                    security_policy: Some(FleetSecurityPolicy {
+                        default_trust_level: FleetTrustLevel::Local,
+                        ..Default::default()
+                    }),
+                    workers: vec![],
+                    tasks,
+                },
+                3,
+            )
+            .unwrap();
+
+        assert_eq!(report.task_count, 10);
+        assert_eq!(report.worker_ids.len(), 3);
+        assert_eq!(report.leased, 3);
+        assert_eq!(report.queued, 7);
+
+        let status = complete_with_fake_codewhale(&manager, &report.run_id, 3, &fake);
+        assert_eq!(status.completed, 9);
+        assert_eq!(status.failed, 1);
+        assert_eq!(status.task_failed, 1);
+        assert_eq!(status.partial, 0);
+        assert_eq!(status.running, 0);
+        assert_eq!(status.queued, 0);
+
+        let state = manager.ledger.rebuild_state().unwrap();
+        let run = &state.runs[&report.run_id.0];
+        let roles = run
+            .task_specs
+            .iter()
+            .filter_map(|task| task.worker.as_ref()?.role.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            roles,
+            BTreeSet::from([
+                "builder".to_string(),
+                "scout".to_string(),
+                "verifier".to_string()
+            ])
+        );
+        assert_eq!(state.receipts.len(), 10);
+
+        let failed_receipt = &state.receipts[&format!("{}:verifier-4-fail", report.run_id.0)];
+        assert_eq!(failed_receipt.result, FleetTaskResult::Fail);
+        assert_eq!(
+            failed_receipt.failure_kind,
+            Some(FleetTaskFailureKind::Task)
+        );
+        assert!(failed_receipt.artifacts.iter().any(|artifact| {
+            matches!(artifact.kind, FleetArtifactKind::Log)
+                && artifact.mime_type.as_deref() == Some("application/x-ndjson")
+                && artifact.size_bytes.unwrap_or_default() > 0
+        }));
+        assert!(
+            failed_receipt
+                .artifacts
+                .iter()
+                .any(|artifact| matches!(artifact.kind, FleetArtifactKind::Receipt))
+        );
+
+        for worker_id in &report.worker_ids {
+            let inspection = manager.inspect_worker(worker_id).unwrap();
+            assert_eq!(inspection.status, FleetWorkerStatus::Online);
+            assert!(inspection.latest_heartbeat_at.is_some());
+            assert!(
+                inspection.receipt_summary.is_some(),
+                "{worker_id} should expose latest receipt summary"
+            );
+            assert!(
+                inspection.artifacts.iter().any(|artifact| matches!(
+                    artifact.kind,
+                    FleetArtifactKind::Log | FleetArtifactKind::Receipt
+                )),
+                "{worker_id} should expose artifact refs"
+            );
+        }
+    }
+
     #[test]
     fn fleet_status_counts_restarted_and_escalated_events() {
         let tmp = TempDir::new().unwrap();
