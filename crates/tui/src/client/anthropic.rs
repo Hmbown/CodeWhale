@@ -954,5 +954,9 @@ mod tests {
             anthropic_messages_url("https://gateway.example/v1"),
             "https://gateway.example/v1/messages"
         );
+        assert_eq!(
+            anthropic_messages_url("https://api.deepseek.com/anthropic"),
+            "https://api.deepseek.com/anthropic/v1/messages"
+        );
     }
 }

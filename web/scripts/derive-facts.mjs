@@ -66,6 +66,7 @@ function deriveProviders() {
   // shared ProviderKind, so we exclude it until that lands. Issue #1104.
   const labelMap = {
     Deepseek: { id: "deepseek", label: "DeepSeek", env: "DEEPSEEK_API_KEY" },
+    DeepseekAnthropic: { id: "deepseek-anthropic", label: "DeepSeek Anthropic", env: "DEEPSEEK_API_KEY / ANTHROPIC_API_KEY" },
     NvidiaNim: { id: "nvidia-nim", label: "NVIDIA NIM", env: "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY" },
     Openai: { id: "openai", label: "OpenAI-compatible", env: "OPENAI_API_KEY" },
     Atlascloud: { id: "atlascloud", label: "AtlasCloud", env: "ATLASCLOUD_API_KEY" },

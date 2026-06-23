@@ -28,11 +28,11 @@ Sources to keep in sync:
 
 The canonical provider IDs are:
 
-`deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
-`openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `arcee`,
-`siliconflow-CN`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface`,
-`together`, `qianfan`, `openai-codex`, `anthropic`, `zai`, `stepfun`,
-`minimax`, and `deepinfra`.
+`deepseek`, `deepseek-anthropic`, `nvidia-nim`, `openai`, `atlascloud`,
+`wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`,
+`siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`,
+`ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`,
+`zai`, `stepfun`, `minimax`, and `deepinfra`.
 
 Use any of these surfaces to select a provider:
 
@@ -44,6 +44,12 @@ Use any of these surfaces to select a provider:
 `deepseek-cn`, `deepseek_china`, `deepseekcn`, and `deepseek-china` are accepted
 as legacy aliases for `deepseek`. They do not select a different official host;
 DeepSeek uses the same official API host worldwide.
+
+`deepseek_anthropic`, `deepseek-claude`, and `deepseek_claude` select
+`deepseek-anthropic`, the opt-in DeepSeek route that speaks the Anthropic
+Messages API at `https://api.deepseek.com/anthropic`. It keeps the normal
+DeepSeek API key path but uses `x-api-key` plus `anthropic-version: 2023-06-01`
+instead of Bearer auth.
 
 `huggingface`, `hugging-face`, `hugging_face`, and `hf` all select the
 Hugging Face Inference Providers route. This is the OpenAI-compatible router
@@ -72,6 +78,7 @@ the listed provider env vars.
 | Provider ID | TOML table | Wire protocol | Auth env vars |
 | --- | --- | --- | --- |
 | `deepseek` | `[providers.deepseek]` | OpenAI Chat Completions | `DEEPSEEK_API_KEY` |
+| `deepseek-anthropic` | `[providers.deepseek_anthropic]` | Anthropic Messages | `DEEPSEEK_API_KEY` |
 | `nvidia-nim` | `[providers.nvidia_nim]` | OpenAI Chat Completions | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
 | `openai` | `[providers.openai]` | OpenAI Chat Completions | `OPENAI_API_KEY` |
 | `atlascloud` | `[providers.atlascloud]` | OpenAI Chat Completions | `ATLASCLOUD_API_KEY` |
@@ -101,8 +108,8 @@ the listed provider env vars.
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
 `crates/config/src/provider.rs`: `ChatCompletions` is the default,
-`openai-codex` overrides to `Responses`, and `anthropic` overrides to
-`AnthropicMessages`.
+`openai-codex` overrides to `Responses`, and `deepseek-anthropic` plus
+`anthropic` override to `AnthropicMessages`.
 
 ## Auth And Env Rules
 
@@ -227,6 +234,7 @@ the same links where possible.
 | Provider ID | TOML table | Auth env | Base URL env and default | Default or static models | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `deepseek` | `[providers.deepseek]` | `DEEPSEEK_API_KEY` | `CODEWHALE_BASE_URL` / `DEEPSEEK_BASE_URL`; default `https://api.deepseek.com/beta` | `deepseek-v4-pro`, `deepseek-v4-flash`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | First-class default. Beta URL enables strict tool mode, chat prefix completion, and FIM completion. Set `https://api.deepseek.com` or `/v1` explicitly to opt out of beta-only features. |
+| `deepseek-anthropic` | `[providers.deepseek_anthropic]` | `DEEPSEEK_API_KEY` | `DEEPSEEK_ANTHROPIC_BASE_URL`; default `https://api.deepseek.com/anthropic` | `deepseek-v4-pro`, `deepseek-v4-flash`; compatibility aliases `deepseek-chat`, `deepseek-reasoner` | Opt-in DeepSeek route for the Anthropic Messages wire protocol. Uses `/v1/messages`, `x-api-key`, and `anthropic-version: 2023-06-01`. Keep `provider = "deepseek"` for the default Chat Completions path. |
 | `nvidia-nim` | `[providers.nvidia_nim]` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, fallback `DEEPSEEK_API_KEY` | `NVIDIA_NIM_BASE_URL`, `NIM_BASE_URL`, `NVIDIA_BASE_URL`; default `https://integrate.api.nvidia.com/v1` | `deepseek-ai/deepseek-v4-pro`, `deepseek-ai/deepseek-v4-flash` | Hosted DeepSeek V4 through NVIDIA NIM. `NVIDIA_NIM_MODEL` is accepted by the TUI config path. |
 | `openai` | `[providers.openai]` | `OPENAI_API_KEY` | `OPENAI_BASE_URL`; default `https://api.openai.com/v1` | Registry entries: `deepseek-v4-pro`, `deepseek-v4-flash`; default config model `deepseek-v4-pro` | Generic OpenAI-compatible route for gateways and custom endpoints, including Alibaba Bailian / Model Studio DashScope when configured with that endpoint. Use this for explicit third-party OpenAI-compatible routes instead of inventing a new provider ID. `OPENAI_MODEL` is accepted. |
 | `atlascloud` | `[providers.atlascloud]` | `ATLASCLOUD_API_KEY` | `ATLASCLOUD_BASE_URL`; default `https://api.atlascloud.ai/v1` | Default `deepseek-ai/deepseek-v4-flash`; explicit `vendor/model-id` values pass through when AtlasCloud is selected | OpenAI-compatible hosted route. `ATLASCLOUD_MODEL` is accepted by the TUI config path, the static `ModelRegistry` keeps DeepSeek V4 fallback rows, and provider-hinted CLI model IDs are sent to AtlasCloud exactly as requested. Use Atlas Cloud's own catalog or Coding Plan page for the current provider-owned model list and pricing. |

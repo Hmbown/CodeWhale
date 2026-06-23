@@ -26,10 +26,12 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub const PERMISSIONS_FILE_NAME: &str = "permissions.toml";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
+const DEFAULT_DEEPSEEK_ANTHROPIC_MODEL: &str = DEFAULT_DEEPSEEK_MODEL;
 const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
+const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/anthropic";
 const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_OPENAI_CODEX_MODEL: &str = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
@@ -151,6 +153,13 @@ pub enum ProviderKind {
         alias = "deepseek-china"
     )]
     Deepseek,
+    #[serde(
+        alias = "deepseek-anthropic",
+        alias = "deepseek_anthropic",
+        alias = "deepseek-claude",
+        alias = "deepseek_claude"
+    )]
+    DeepseekAnthropic,
     NvidiaNim,
     #[serde(alias = "open-ai")]
     Openai,
@@ -216,8 +225,9 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Deepseek,
+        Self::DeepseekAnthropic,
         Self::NvidiaNim,
         Self::Openai,
         Self::Atlascloud,
@@ -310,6 +320,14 @@ pub struct ProviderConfigToml {
 pub struct ProvidersToml {
     #[serde(default)]
     pub deepseek: ProviderConfigToml,
+    #[serde(
+        default,
+        alias = "deepseek-anthropic",
+        alias = "deepseekAnthropic",
+        alias = "deepseek-claude",
+        alias = "deepseek_claude"
+    )]
+    pub deepseek_anthropic: ProviderConfigToml,
     #[serde(default)]
     pub nvidia_nim: ProviderConfigToml,
     #[serde(default)]
@@ -411,6 +429,7 @@ impl ProvidersToml {
     pub fn for_provider(&self, provider: ProviderKind) -> &ProviderConfigToml {
         match provider {
             ProviderKind::Deepseek => &self.deepseek,
+            ProviderKind::DeepseekAnthropic => &self.deepseek_anthropic,
             ProviderKind::NvidiaNim => &self.nvidia_nim,
             ProviderKind::Openai => &self.openai,
             ProviderKind::Atlascloud => &self.atlascloud,
@@ -442,6 +461,7 @@ impl ProvidersToml {
     pub fn for_provider_mut(&mut self, provider: ProviderKind) -> &mut ProviderConfigToml {
         match provider {
             ProviderKind::Deepseek => &mut self.deepseek,
+            ProviderKind::DeepseekAnthropic => &mut self.deepseek_anthropic,
             ProviderKind::NvidiaNim => &mut self.nvidia_nim,
             ProviderKind::Openai => &mut self.openai,
             ProviderKind::Atlascloud => &mut self.atlascloud,
@@ -2227,6 +2247,7 @@ impl ConfigToml {
         } else {
             configured_base_url.unwrap_or_else(|| match provider {
                 ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
+                ProviderKind::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL.to_string(),
                 ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
                 ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
                 ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
@@ -2803,6 +2824,7 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
 fn default_model_for_provider(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Deepseek => DEFAULT_DEEPSEEK_MODEL,
+        ProviderKind::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
         ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
@@ -2833,6 +2855,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
 fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
+        ProviderKind::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
@@ -4281,6 +4304,7 @@ struct EnvRuntimeOverrides {
     verbosity: Option<String>,
     http_headers: Option<BTreeMap<String, String>>,
     deepseek_base_url: Option<String>,
+    deepseek_anthropic_base_url: Option<String>,
     nvidia_base_url: Option<String>,
     openai_base_url: Option<String>,
     atlascloud_base_url: Option<String>,
@@ -4400,6 +4424,10 @@ impl EnvRuntimeOverrides {
                 .filter(|headers| !headers.is_empty()),
             deepseek_base_url: std::env::var("CODEWHALE_BASE_URL")
                 .or_else(|_| std::env::var("DEEPSEEK_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            deepseek_anthropic_base_url: std::env::var("DEEPSEEK_ANTHROPIC_BASE_URL")
+                .or_else(|_| std::env::var("DEEPSEEK_CLAUDE_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             nvidia_base_url: std::env::var("NVIDIA_NIM_BASE_URL")
@@ -4552,6 +4580,7 @@ impl EnvRuntimeOverrides {
         // values (`providers.<name>.base_url`) still win when env is unset.
         match provider {
             ProviderKind::Deepseek => self.deepseek_base_url.clone(),
+            ProviderKind::DeepseekAnthropic => self.deepseek_anthropic_base_url.clone(),
             ProviderKind::NvidiaNim => self.nvidia_base_url.clone(),
             ProviderKind::Openai => self.openai_base_url.clone(),
             ProviderKind::Atlascloud => self.atlascloud_base_url.clone(),

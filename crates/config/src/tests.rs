@@ -536,6 +536,8 @@ fn config_store_secures_persisted_permissions_file() {
 struct EnvGuard {
     deepseek_api_key: Option<OsString>,
     deepseek_base_url: Option<OsString>,
+    deepseek_anthropic_base_url: Option<OsString>,
+    deepseek_claude_base_url: Option<OsString>,
     deepseek_http_headers: Option<OsString>,
     deepseek_model: Option<OsString>,
     deepseek_default_text_model: Option<OsString>,
@@ -627,6 +629,8 @@ impl EnvGuard {
         let guard = Self {
             deepseek_api_key: env::var_os("DEEPSEEK_API_KEY"),
             deepseek_base_url: env::var_os("DEEPSEEK_BASE_URL"),
+            deepseek_anthropic_base_url: env::var_os("DEEPSEEK_ANTHROPIC_BASE_URL"),
+            deepseek_claude_base_url: env::var_os("DEEPSEEK_CLAUDE_BASE_URL"),
             deepseek_http_headers: env::var_os("DEEPSEEK_HTTP_HEADERS"),
             deepseek_model: env::var_os("DEEPSEEK_MODEL"),
             deepseek_default_text_model: env::var_os("DEEPSEEK_DEFAULT_TEXT_MODEL"),
@@ -716,6 +720,8 @@ impl EnvGuard {
         unsafe {
             env::remove_var("DEEPSEEK_API_KEY");
             env::remove_var("DEEPSEEK_BASE_URL");
+            env::remove_var("DEEPSEEK_ANTHROPIC_BASE_URL");
+            env::remove_var("DEEPSEEK_CLAUDE_BASE_URL");
             env::remove_var("DEEPSEEK_HTTP_HEADERS");
             env::remove_var("DEEPSEEK_MODEL");
             env::remove_var("DEEPSEEK_DEFAULT_TEXT_MODEL");
@@ -819,6 +825,14 @@ impl Drop for EnvGuard {
         unsafe {
             Self::restore_var("DEEPSEEK_API_KEY", self.deepseek_api_key.take());
             Self::restore_var("DEEPSEEK_BASE_URL", self.deepseek_base_url.take());
+            Self::restore_var(
+                "DEEPSEEK_ANTHROPIC_BASE_URL",
+                self.deepseek_anthropic_base_url.take(),
+            );
+            Self::restore_var(
+                "DEEPSEEK_CLAUDE_BASE_URL",
+                self.deepseek_claude_base_url.take(),
+            );
             Self::restore_var("DEEPSEEK_HTTP_HEADERS", self.deepseek_http_headers.take());
             Self::restore_var("DEEPSEEK_MODEL", self.deepseek_model.take());
             Self::restore_var(
@@ -2792,6 +2806,61 @@ fn provider_kind_accepts_legacy_deepseek_cn_aliases() {
 }
 
 #[test]
+fn deepseek_anthropic_route_defaults_to_anthropic_endpoint() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    for alias in [
+        "deepseek-anthropic",
+        "deepseek_anthropic",
+        "deepseek-claude",
+        "deepseek_claude",
+    ] {
+        assert_eq!(
+            ProviderKind::parse(alias),
+            Some(ProviderKind::DeepseekAnthropic)
+        );
+
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("deepseek anthropic alias");
+        assert_eq!(parsed.provider, ProviderKind::DeepseekAnthropic);
+    }
+
+    let provider = provider::resolve_provider("deepseek-anthropic")
+        .expect("deepseek anthropic metadata resolves");
+    assert_eq!(provider.kind(), ProviderKind::DeepseekAnthropic);
+    assert_eq!(provider.provider_config_key(), "deepseek_anthropic");
+    assert_eq!(provider.default_model(), DEFAULT_DEEPSEEK_ANTHROPIC_MODEL);
+    assert_eq!(
+        provider.default_base_url(),
+        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
+    );
+    assert_eq!(provider.env_vars(), &["DEEPSEEK_API_KEY"]);
+    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+
+    let config = ConfigToml {
+        provider: ProviderKind::DeepseekAnthropic,
+        ..ConfigToml::default()
+    };
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::DeepseekAnthropic);
+    assert_eq!(resolved.base_url, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL);
+    assert_eq!(resolved.model, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL);
+
+    unsafe {
+        std::env::set_var(
+            "DEEPSEEK_ANTHROPIC_BASE_URL",
+            "https://gateway.example.test/anthropic",
+        );
+    }
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, "https://gateway.example.test/anthropic");
+    unsafe {
+        std::env::remove_var("DEEPSEEK_ANTHROPIC_BASE_URL");
+    }
+}
+
+#[test]
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     assert_eq!(providers.len(), ProviderKind::ALL.len());
@@ -2878,7 +2947,9 @@ fn provider_metadata_defaults_match_runtime_helpers() {
         // is OpenAI-compatible Chat Completions.
         let expected_wire = match kind {
             ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
-            ProviderKind::Anthropic => provider::WireFormat::AnthropicMessages,
+            ProviderKind::Anthropic | ProviderKind::DeepseekAnthropic => {
+                provider::WireFormat::AnthropicMessages
+            }
             _ => provider::WireFormat::ChatCompletions,
         };
         assert_eq!(provider.wire(), expected_wire);

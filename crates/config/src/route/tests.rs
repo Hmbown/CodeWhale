@@ -122,7 +122,9 @@ fn descriptor_protocol_matches_provider_wire() {
         );
         let expected = match kind {
             ProviderKind::OpenaiCodex => RequestProtocol::Responses,
-            ProviderKind::Anthropic => RequestProtocol::AnthropicMessages,
+            ProviderKind::DeepseekAnthropic | ProviderKind::Anthropic => {
+                RequestProtocol::AnthropicMessages
+            }
             _ => RequestProtocol::ChatCompletions,
         };
         assert_eq!(d.protocol(), expected, "{kind:?} protocol mismatch");

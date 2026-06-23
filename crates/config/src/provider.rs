@@ -7,6 +7,7 @@
 use super::{
     DEFAULT_ARCEE_BASE_URL, DEFAULT_ARCEE_MODEL, DEFAULT_ATLASCLOUD_BASE_URL,
     DEFAULT_ATLASCLOUD_MODEL, DEFAULT_DEEPINFRA_BASE_URL, DEFAULT_DEEPINFRA_MODEL,
+    DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
     DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_FIREWORKS_BASE_URL,
     DEFAULT_FIREWORKS_MODEL, DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL,
     DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL, DEFAULT_MOONSHOT_BASE_URL,
@@ -134,6 +135,47 @@ provider!(
     "deepseek",
     aliases: ["deep-seek", "deepseek-cn", "deepseek_china", "deepseekcn", "deepseek-china"]
 );
+
+/// Opt-in DeepSeek route that speaks the Anthropic Messages wire protocol.
+pub struct DeepseekAnthropic;
+
+impl Provider for DeepseekAnthropic {
+    fn id(&self) -> &'static str {
+        "deepseek-anthropic"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::DeepseekAnthropic
+    }
+
+    fn display_name(&self) -> &'static str {
+        "DeepSeek (Anthropic-compatible)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_DEEPSEEK_ANTHROPIC_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["DEEPSEEK_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "deepseek_anthropic"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["deepseek_anthropic", "deepseek-claude", "deepseek_claude"]
+    }
+
+    fn wire(&self) -> WireFormat {
+        WireFormat::AnthropicMessages
+    }
+}
 provider!(
     NvidiaNim,
     NvidiaNim,
@@ -499,6 +541,7 @@ provider!(
 );
 
 static DEEPSEEK: Deepseek = Deepseek;
+static DEEPSEEK_ANTHROPIC: DeepseekAnthropic = DeepseekAnthropic;
 static NVIDIA_NIM: NvidiaNim = NvidiaNim;
 static OPENAI: Openai = Openai;
 static ATLASCLOUD: Atlascloud = Atlascloud;
@@ -525,8 +568,9 @@ static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
 static DEEPINFRA: Deepinfra = Deepinfra;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 26] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 27] = [
     &DEEPSEEK,
+    &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
     &OPENAI,
     &ATLASCLOUD,

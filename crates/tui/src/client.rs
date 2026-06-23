@@ -20,7 +20,9 @@ use crate::llm_client::{
     sanitize_http_error_body, with_retry,
 };
 use crate::logging;
-use crate::models::{MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage};
+use crate::models::{
+    ContentBlock, Message, MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage,
+};
 
 pub(super) fn to_api_tool_name(name: &str) -> String {
     let mut out = String::new();
@@ -777,7 +779,7 @@ fn build_default_headers(
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     let api_key = api_key.trim();
-    if api_provider == ApiProvider::Anthropic {
+    if api_provider_uses_anthropic_messages(api_provider) {
         // #3014: the Messages API authenticates with `x-api-key` (never
         // `Authorization: Bearer`) and pins the wire contract via
         // `anthropic-version`.
@@ -786,19 +788,20 @@ fn build_default_headers(
             HeaderValue::from_static("2023-06-01"),
         );
     }
-    let auth_header_name = if !api_key.is_empty() && api_provider == ApiProvider::Anthropic {
-        Some(HeaderName::from_static("x-api-key"))
-    } else if !api_key.is_empty()
-        && api_provider == ApiProvider::XiaomiMimo
-        && (xiaomi_mimo_base_url_uses_token_plan(base_url)
-            || xiaomi_mimo_api_key_uses_token_plan(api_key))
-    {
-        Some(HeaderName::from_static("api-key"))
-    } else if !api_key.is_empty() {
-        Some(AUTHORIZATION)
-    } else {
-        None
-    };
+    let auth_header_name =
+        if !api_key.is_empty() && api_provider_uses_anthropic_messages(api_provider) {
+            Some(HeaderName::from_static("x-api-key"))
+        } else if !api_key.is_empty()
+            && api_provider == ApiProvider::XiaomiMimo
+            && (xiaomi_mimo_base_url_uses_token_plan(base_url)
+                || xiaomi_mimo_api_key_uses_token_plan(api_key))
+        {
+            Some(HeaderName::from_static("api-key"))
+        } else if !api_key.is_empty() {
+            Some(AUTHORIZATION)
+        } else {
+            None
+        };
     if let Some(header_name) = auth_header_name.as_ref() {
         let header_value = if *header_name == AUTHORIZATION {
             HeaderValue::from_str(&format!("Bearer {api_key}"))?
@@ -830,6 +833,75 @@ fn is_auth_dialect_header(header_name: &HeaderName) -> bool {
     header_name == AUTHORIZATION
         || header_name == HeaderName::from_static("api-key")
         || header_name == HeaderName::from_static("x-api-key")
+}
+
+fn api_provider_uses_anthropic_messages(api_provider: ApiProvider) -> bool {
+    matches!(
+        api_provider,
+        ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic
+    )
+}
+
+fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
+    matches!(api_provider, ApiProvider::DeepseekAnthropic)
+}
+
+fn translation_system_prompt(target_language: &str) -> String {
+    format!(
+        "You are a professional translator. Your ONLY task is to translate text to {target_language}. \
+         Rules:\n\
+         1. Output ONLY the translation, nothing else — no explanations, no notes, no quotes.\n\
+         2. Preserve all code blocks (```...```), URLs, file paths, command names, \
+         and technical terms like API names, function names, and library names untranslated.\n\
+         3. Keep Markdown formatting (headings, lists, bold, italics, links) intact.\n\
+         4. Translate all natural-language prose naturally and professionally.\n\
+         5. Do NOT add any prefix, suffix, or commentary.\n\
+         6. If the input is already in {target_language} or contains no prose to translate, \
+         return it as-is."
+    )
+}
+
+fn translation_message_request(text: &str, model: String, target_language: &str) -> MessageRequest {
+    MessageRequest {
+        model,
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 4096,
+        system: Some(SystemPrompt::Text(translation_system_prompt(
+            target_language,
+        ))),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: Some("off".to_string()),
+        stream: Some(false),
+        temperature: Some(0.1),
+        top_p: None,
+    }
+}
+
+fn translation_text_from_response(response: &MessageResponse) -> Result<String> {
+    let translated = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_string();
+    if translated.is_empty() {
+        bail!("translate: Anthropic Messages response did not contain text content");
+    }
+    Ok(translated)
 }
 
 fn xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
@@ -873,29 +945,25 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
+        let model = wire_model_for_provider(self.api_provider, model);
+        if api_provider_uses_anthropic_messages(self.api_provider) {
+            let response = self
+                .handle_anthropic_message(translation_message_request(text, model, target_language))
+                .await?;
+            return translation_text_from_response(&response);
+        }
+
         let url = api_url_with_suffix(
             &self.base_url,
             "chat/completions",
             self.path_suffix.as_deref(),
         );
-        let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": format!(
-                        "You are a professional translator. Your ONLY task is to translate text to {target_language}. \
-                         Rules:\n\
-                         1. Output ONLY the translation, nothing else — no explanations, no notes, no quotes.\n\
-                         2. Preserve all code blocks (```...```), URLs, file paths, command names, \
-                         and technical terms like API names, function names, and library names untranslated.\n\
-                         3. Keep Markdown formatting (headings, lists, bold, italics, links) intact.\n\
-                         4. Translate all natural-language prose naturally and professionally.\n\
-                         5. Do NOT add any prefix, suffix, or commentary.\n\
-                         6. If the input is already in {target_language} or contains no prose to translate, \
-                         return it as-is."
-                    )
+                    "content": translation_system_prompt(target_language)
                 },
                 {
                     "role": "user",
@@ -1072,6 +1140,11 @@ impl DeepSeekClient {
         if !should_probe {
             return;
         }
+        if api_provider_skips_models_probe(self.api_provider) {
+            self.mark_request_success().await;
+            logging::info("Skipping /models recovery probe for provider without a models endpoint");
+            return;
+        }
         let health_url = api_url(&self.base_url, "models");
         let probe = self.http_client.get(health_url).send().await;
         match probe {
@@ -1202,6 +1275,10 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
+        if api_provider_skips_models_probe(self.api_provider) {
+            self.mark_request_success().await;
+            return Ok(true);
+        }
         let health_url = api_url(&self.base_url, "models");
         self.wait_for_rate_limit().await;
         let response = self.http_client.get(health_url).send().await;
@@ -1229,7 +1306,7 @@ impl LlmClient for DeepSeekClient {
         if self.api_provider == ApiProvider::OpenaiCodex {
             return self.handle_responses_message(request).await;
         }
-        if self.api_provider == ApiProvider::Anthropic {
+        if api_provider_uses_anthropic_messages(self.api_provider) {
             return self.handle_anthropic_message(request).await;
         }
         self.create_message_chat(&request).await
@@ -1242,7 +1319,7 @@ impl LlmClient for DeepSeekClient {
         if self.api_provider == ApiProvider::OpenaiCodex {
             return self.handle_responses_stream(request).await;
         }
-        if self.api_provider == ApiProvider::Anthropic {
+        if api_provider_uses_anthropic_messages(self.api_provider) {
             return self.handle_anthropic_stream(request).await;
         }
         self.handle_chat_completion_stream(request).await
@@ -1364,7 +1441,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama OpenAI-compat endpoint accepts think param.
                 body["think"] = json!(false);
             }
-            ApiProvider::Anthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -1444,7 +1521,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -1511,7 +1588,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -1616,6 +1693,12 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
+        if api_provider_uses_anthropic_messages(self.api_provider) {
+            bail!(
+                "FIM completion is not supported for {} because it uses the Anthropic Messages protocol",
+                self.api_provider.display_name()
+            );
+        }
         let url = api_url_with_suffix(&self.base_url, "beta/completions", None);
         let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
@@ -1679,10 +1762,13 @@ mod tests {
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
         tool_to_chat_for_base_url,
     };
+    use crate::config::{ProviderConfig, ProvidersConfig};
     use crate::models::{
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool,
     };
     use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_tool(name: &str) -> Tool {
         Tool {
@@ -1699,6 +1785,22 @@ mod tests {
             strict: Some(true),
             cache_control: None,
         }
+    }
+
+    fn deepseek_anthropic_client(server: &MockServer) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut providers = ProvidersConfig::default();
+        providers.deepseek_anthropic = ProviderConfig {
+            api_key: Some("ds-test".to_string()),
+            base_url: Some(server.uri()),
+            ..ProviderConfig::default()
+        };
+        DeepSeekClient::new(&Config {
+            provider: Some("deepseek-anthropic".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        })
+        .expect("deepseek anthropic client")
     }
 
     #[test]
@@ -2080,6 +2182,126 @@ mod tests {
         );
         assert!(headers.get("api-key").is_none());
         assert!(headers.get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn deepseek_anthropic_uses_anthropic_header_dialect() {
+        let mut extra = HashMap::new();
+        extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
+        extra.insert("api-key".to_string(), "wrong".to_string());
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "ds-test",
+            &extra,
+            ApiProvider::DeepseekAnthropic,
+            crate::config::DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("ds-test")
+        );
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert!(
+            headers.get(AUTHORIZATION).is_none(),
+            "Anthropic-compatible DeepSeek route must not use Bearer auth"
+        );
+        assert!(
+            headers.get("api-key").is_none(),
+            "Anthropic-compatible DeepSeek route must not inherit MiMo auth headers"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_anthropic_translate_uses_messages_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hola"}],
+                "model": "deepseek-chat",
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {"input_tokens": 3, "output_tokens": 1}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = deepseek_anthropic_client(&server);
+        let translated = client
+            .translate("Hello", "deepseek-chat", "Spanish")
+            .await
+            .expect("translation succeeds");
+
+        assert_eq!(translated, "Hola");
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_slice(&requests[0].body).expect("json body");
+        assert_eq!(
+            body.pointer("/messages/0/role").and_then(Value::as_str),
+            Some("user")
+        );
+        assert_eq!(
+            body.pointer("/messages/0/content/0/text")
+                .and_then(Value::as_str),
+            Some("Hello")
+        );
+        assert!(
+            body.get("thinking").is_none(),
+            "translation disables thinking: {body}"
+        );
+        assert!(
+            body.get("system")
+                .and_then(Value::as_str)
+                .is_some_and(|system| system.contains("Spanish")),
+            "target language should be in system prompt: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_anthropic_health_check_skips_models_probe() {
+        let server = MockServer::start().await;
+        let client = deepseek_anthropic_client(&server);
+
+        assert!(client.health_check().await.expect("health check"));
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert!(
+            requests.is_empty(),
+            "DeepSeek Anthropic-compatible route must not probe /models"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_anthropic_fim_fails_without_http_request() {
+        let server = MockServer::start().await;
+        let client = deepseek_anthropic_client(&server);
+
+        let err = client
+            .fim_completion("deepseek-chat", "fn main() {", "}", 16)
+            .await
+            .expect_err("FIM is unsupported");
+        let message = err.to_string();
+        assert!(
+            message.contains("FIM completion is not supported"),
+            "{message}"
+        );
+        assert!(message.contains("Anthropic Messages protocol"), "{message}");
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert!(
+            requests.is_empty(),
+            "unsupported FIM should fail locally before any HTTP call"
+        );
     }
 
     #[test]

@@ -79,6 +79,8 @@ fn resolve_subagent_heartbeat_timeout_secs(raw: Option<u64>, api_timeout_secs: u
 
 pub const DEFAULT_TEXT_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
+pub const DEFAULT_DEEPSEEK_ANTHROPIC_MODEL: &str = DEFAULT_TEXT_MODEL;
+pub const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/anthropic";
 pub const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 pub const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
@@ -234,6 +236,7 @@ pub const DEFAULT_MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
 pub enum ApiProvider {
     Deepseek,
     DeepseekCN,
+    DeepseekAnthropic,
     NvidiaNim,
     Openai,
     Atlascloud,
@@ -359,7 +362,9 @@ impl ApiProvider {
     #[must_use]
     pub fn credential_url(self) -> Option<&'static str> {
         Some(match self {
-            Self::Deepseek | Self::DeepseekCN => "https://platform.deepseek.com/api_keys",
+            Self::Deepseek | Self::DeepseekCN | Self::DeepseekAnthropic => {
+                "https://platform.deepseek.com/api_keys"
+            }
             Self::NvidiaNim => "https://build.nvidia.com/settings/api-keys",
             Self::Openai => "https://platform.openai.com/api-keys",
             Self::Atlascloud => "https://atlascloud.ai/docs/en/api-keys",
@@ -392,9 +397,10 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 27] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 28] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
+        Some(codewhale_config::ProviderKind::DeepseekAnthropic),
         Some(codewhale_config::ProviderKind::NvidiaNim),
         Some(codewhale_config::ProviderKind::Openai),
         Some(codewhale_config::ProviderKind::Atlascloud),
@@ -423,8 +429,9 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 26] = [
+    const FROM_KIND_LOOKUP: [Self; 27] = [
         Self::Deepseek,
+        Self::DeepseekAnthropic,
         Self::NvidiaNim,
         Self::Openai,
         Self::Atlascloud,
@@ -496,6 +503,10 @@ fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
         ApiProvider::DeepseekCN => matches!(
             normalized.as_str(),
             "deepseek_cn" | "deepseek_china" | "deepseekcn"
+        ),
+        ApiProvider::DeepseekAnthropic => matches!(
+            normalized.as_str(),
+            "deepseek_anthropic" | "deepseek_claude" | "deepseek_anthropic_api"
         ),
         ApiProvider::Openrouter => matches!(normalized.as_str(), "openrouter" | "open_router"),
         ApiProvider::OpenaiCodex => matches!(
@@ -645,7 +656,10 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     }
 
     let model_lower = resolved_model.to_ascii_lowercase();
-    let alias_deprecation = if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+    let alias_deprecation = if matches!(
+        provider,
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic
+    ) {
         deepseek_alias_deprecation(&model_lower)
     } else {
         None
@@ -695,8 +709,11 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             | ApiProvider::Volcengine
     );
 
-    // Request payload mode: all current providers use chat completions.
-    let request_payload_mode = RequestPayloadMode::ChatCompletions;
+    let request_payload_mode = if matches!(provider, ApiProvider::DeepseekAnthropic) {
+        RequestPayloadMode::AnthropicMessages
+    } else {
+        RequestPayloadMode::ChatCompletions
+    };
 
     ProviderCapability {
         provider,
@@ -787,7 +804,9 @@ pub(crate) fn normalize_custom_model_id(model: &str) -> Option<String> {
 #[must_use]
 pub fn requested_model_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     match provider {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => normalize_model_name(model),
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic => {
+            normalize_model_name(model)
+        }
         _ => normalize_custom_model_id(model),
     }
 }
@@ -1155,8 +1174,10 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
             return Some(provider_model);
         }
     }
-    if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-        && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)
+    if matches!(
+        provider,
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic
+    ) && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)
     {
         // When the user's input already matches a known model id
         // case-insensitively, keep their original casing; only rewrite
@@ -1202,7 +1223,9 @@ pub fn wire_model_for_provider(provider: ApiProvider, model: &str) -> String {
 #[must_use]
 pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'static str> {
     match provider {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic => {
+            OFFICIAL_DEEPSEEK_MODELS.to_vec()
+        }
         ApiProvider::NvidiaNim => vec![DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_NVIDIA_NIM_FLASH_MODEL],
         ApiProvider::Openrouter => {
             let mut models = vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL];
@@ -2635,6 +2658,14 @@ pub struct ProvidersConfig {
     pub deepseek: ProviderConfig,
     #[serde(default, alias = "deepseekCn")]
     pub deepseek_cn: ProviderConfig,
+    #[serde(
+        default,
+        alias = "deepseek-anthropic",
+        alias = "deepseekAnthropic",
+        alias = "deepseek-claude",
+        alias = "deepseek_claude"
+    )]
+    pub deepseek_anthropic: ProviderConfig,
     #[serde(default, alias = "nvidiaNim")]
     pub nvidia_nim: ProviderConfig,
     #[serde(default)]
@@ -2973,6 +3004,7 @@ impl Config {
         Some(match provider {
             ApiProvider::Deepseek => &providers.deepseek,
             ApiProvider::DeepseekCN => &providers.deepseek_cn,
+            ApiProvider::DeepseekAnthropic => &providers.deepseek_anthropic,
             ApiProvider::NvidiaNim => &providers.nvidia_nim,
             ApiProvider::Openai => &providers.openai,
             ApiProvider::Atlascloud => &providers.atlascloud,
@@ -3016,6 +3048,7 @@ impl Config {
         match provider {
             ApiProvider::Deepseek => &mut providers.deepseek,
             ApiProvider::DeepseekCN => &mut providers.deepseek_cn,
+            ApiProvider::DeepseekAnthropic => &mut providers.deepseek_anthropic,
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Atlascloud => &mut providers.atlascloud,
@@ -3165,6 +3198,7 @@ impl Config {
 
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => DEFAULT_TEXT_MODEL,
+            ApiProvider::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
             ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
             ApiProvider::Openai => DEFAULT_OPENAI_MODEL,
             ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
@@ -3205,6 +3239,7 @@ impl Config {
         // entries or the corresponding `*_BASE_URL` env var.
         let root_base = match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => self.base_url.clone(),
+            ApiProvider::DeepseekAnthropic => None,
             ApiProvider::NvidiaNim => self
                 .base_url
                 .as_ref()
@@ -3254,6 +3289,7 @@ impl Config {
                     match provider {
                         ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
                         ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
+                        ApiProvider::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
                         ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
                         ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
                         ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
@@ -4348,6 +4384,13 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
                 config.base_url = Some(value);
             }
+            ApiProvider::DeepseekAnthropic => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .deepseek_anthropic
+                    .base_url = Some(value);
+            }
             ApiProvider::NvidiaNim => {
                 config
                     .providers
@@ -4710,6 +4753,7 @@ fn apply_env_overrides(config: &mut Config) {
         let entry = match provider {
             ApiProvider::Deepseek => &mut providers.deepseek,
             ApiProvider::DeepseekCN => &mut providers.deepseek_cn,
+            ApiProvider::DeepseekAnthropic => &mut providers.deepseek_anthropic,
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Atlascloud => &mut providers.atlascloud,
@@ -4900,14 +4944,19 @@ fn apply_env_overrides(config: &mut Config) {
         // (issue #1714). Mirror the OPENAI_MODEL branch above for every
         // non-DeepSeek provider.
         let provider = config.api_provider();
-        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+        if matches!(
+            provider,
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic
+        ) {
             config.default_text_model = Some(value);
         } else {
             let providers = config
                 .providers
                 .get_or_insert_with(ProvidersConfig::default);
             let entry = match provider {
-                ApiProvider::Deepseek | ApiProvider::DeepseekCN => unreachable!(
+                ApiProvider::Deepseek
+                | ApiProvider::DeepseekCN
+                | ApiProvider::DeepseekAnthropic => unreachable!(
                     "DeepSeek providers are handled in the if branch above (issue #1714)"
                 ),
                 ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
@@ -5639,6 +5688,10 @@ fn merge_providers(
         (Some(base), Some(override_cfg)) => Some(ProvidersConfig {
             deepseek: merge_provider_config(base.deepseek, override_cfg.deepseek),
             deepseek_cn: merge_provider_config(base.deepseek_cn, override_cfg.deepseek_cn),
+            deepseek_anthropic: merge_provider_config(
+                base.deepseek_anthropic,
+                override_cfg.deepseek_anthropic,
+            ),
             nvidia_nim: merge_provider_config(base.nvidia_nim, override_cfg.nvidia_nim),
             openai: merge_provider_config(base.openai, override_cfg.openai),
             anthropic: merge_provider_config(base.anthropic, override_cfg.anthropic),

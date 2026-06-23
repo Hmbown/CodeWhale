@@ -290,6 +290,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
             anyhow::bail!("DeepSeek uses the root base_url setting")
         }
+        ApiProvider::DeepseekAnthropic => Ok("deepseek_anthropic"),
         ApiProvider::NvidiaNim => Ok("nvidia_nim"),
         ApiProvider::Openai => Ok("openai"),
         ApiProvider::Anthropic => Ok("anthropic"),
