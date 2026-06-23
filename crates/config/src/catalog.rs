@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::models_dev::{ModelsDevCatalog, ModelsDevCost, ModelsDevLimit};
-use crate::route::{ModelId, ProviderId, ProviderModelOffering, WireModelId};
+use crate::route::{ModelId, ProviderId, ProviderModelOffering, RouteLimits, WireModelId};
 
 /// Provenance of a catalog row. Drives layer precedence and UI provenance.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +121,11 @@ impl CatalogOffering {
             wire_model_id: self.wire_id(),
             endpoint_key: self.endpoint_key.clone(),
             default_for_provider: self.default_for_provider,
+            limits: self
+                .limit
+                .as_ref()
+                .map(RouteLimits::from)
+                .unwrap_or_default(),
         }
     }
 

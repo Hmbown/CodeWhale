@@ -11,7 +11,35 @@
 //! prefixes such as `deepseek-ai/DeepSeek-V4-Pro`. It exists to exercise the
 //! seam, not to be the eventual catalog.
 
+use serde::{Deserialize, Serialize};
+
 use super::ids::{ModelId, ProviderId, WireModelId};
+
+/// Token limits for one resolved route/offering.
+///
+/// These are optional because hosted catalogs, local runtimes, and custom
+/// endpoints can legitimately omit some or all limit facts. Callers should
+/// treat `None` as unknown, not zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteLimits {
+    /// Total context window (input + output), in tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Input-token limit, when the provider reports it separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Output-token cap for the route/offering, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+impl RouteLimits {
+    /// Whether at least one limit fact is known.
+    #[must_use]
+    pub const fn has_known_limit(self) -> bool {
+        self.context_tokens.is_some() || self.input_tokens.is_some() || self.output_tokens.is_some()
+    }
+}
 
 /// One provider's way of serving a (possibly canonical) model.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +54,8 @@ pub struct ProviderModelOffering {
     pub endpoint_key: String,
     /// Whether this is the provider's default offering.
     pub default_for_provider: bool,
+    /// Provider/offering-scoped token limits, when known.
+    pub limits: RouteLimits,
 }
 
 /// A static, lazily-materialized seam catalog.
@@ -88,6 +118,7 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
             wire_model_id: WireModelId::from(seed.wire_model_id),
             endpoint_key: seed.endpoint_key.to_string(),
             default_for_provider: seed.default_for_provider,
+            limits: RouteLimits::default(),
         })
         .collect()
 }

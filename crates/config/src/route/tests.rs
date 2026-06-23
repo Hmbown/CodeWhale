@@ -27,7 +27,8 @@ fn models_dev_route_resolver() -> RouteResolver {
               "id": "glm-5.2",
               "base_model": "zhipuai/glm-5.2",
               "default": true,
-              "modalities": { "input": ["text"], "output": ["text"] }
+              "modalities": { "input": ["text"], "output": ["text"] },
+              "limit": { "context": 1000000, "input": 900000, "output": 131072 }
             }
           }
         },
@@ -36,7 +37,8 @@ fn models_dev_route_resolver() -> RouteResolver {
             "z-ai/glm-5.2": {
               "id": "z-ai/glm-5.2",
               "base_model": "zhipuai/glm-5.2",
-              "modalities": { "input": ["text"], "output": ["text"] }
+              "modalities": { "input": ["text"], "output": ["text"] },
+              "limit": { "context": 128000, "output": 32768 }
             }
           }
         }
@@ -348,6 +350,38 @@ fn resolver_models_dev_prefixed_wire_id_stays_inside_provider_scope() {
 }
 
 #[test]
+fn resolver_carries_models_dev_limits_into_ready_candidate() {
+    let r = models_dev_route_resolver();
+    let out = r
+        .resolve(&req(Some(ProviderKind::Zai), Some("glm-5.2")))
+        .expect("Z.AI Models.dev row should resolve");
+
+    assert_eq!(out.limits.context_tokens, Some(1_000_000));
+    assert_eq!(out.limits.input_tokens, Some(900_000));
+    assert_eq!(out.limits.output_tokens, Some(131_072));
+    assert!(out.limits.has_known_limit());
+}
+
+#[test]
+fn resolver_keeps_limits_provider_scoped_for_same_canonical_model() {
+    let r = models_dev_route_resolver();
+    let direct = r
+        .resolve(&req(Some(ProviderKind::Zai), Some("glm-5.2")))
+        .expect("direct Z.AI route should resolve");
+    let hosted = r
+        .resolve(&req(Some(ProviderKind::Openrouter), Some("z-ai/glm-5.2")))
+        .expect("hosted OpenRouter route should resolve");
+
+    assert_eq!(
+        direct.canonical_model.as_ref().map(ModelId::as_str),
+        hosted.canonical_model.as_ref().map(ModelId::as_str)
+    );
+    assert_eq!(direct.limits.context_tokens, Some(1_000_000));
+    assert_eq!(hosted.limits.context_tokens, Some(128_000));
+    assert_eq!(hosted.limits.output_tokens, Some(32_768));
+}
+
+#[test]
 fn resolver_strict_direct_rejects_clearly_foreign_selector() {
     let r = RouteResolver::new();
     let out = r.resolve(&req(Some(ProviderKind::Zai), Some("anthropic/claude-foo")));
@@ -425,6 +459,7 @@ fn resolver_passthrough_provider_preserves_custom_id_verbatim() {
         .expect("local passthrough should resolve");
     assert_eq!(out.provider_kind, ProviderKind::Ollama);
     assert_eq!(out.wire_model_id.as_str(), "my-local:7b");
+    assert_eq!(out.limits, Default::default());
     assert!(out.validation.ok);
 }
 

@@ -99,17 +99,16 @@ fn hosted_offering_keeps_prefixed_wire_id_and_explicit_canonical_join() {
 }
 
 #[test]
-fn to_offering_projects_minimal_routing_identity() {
+fn to_offering_projects_routing_identity_and_limits() {
     let rows = bundled_offerings_from_models_dev(&fixture());
-    let hosted = find(&rows, "together", "deepseek-ai/DeepSeek-V4-Pro").to_offering();
+    let glm = find(&rows, "zhipuai", "glm-5.2").to_offering();
 
-    assert_eq!(hosted.provider.as_str(), "together");
-    assert_eq!(hosted.wire_model_id.as_str(), "deepseek-ai/DeepSeek-V4-Pro");
-    assert_eq!(
-        hosted.canonical_model.as_ref().map(ModelId::as_str),
-        Some("deepseek-v4-pro")
-    );
-    assert_eq!(hosted.endpoint_key, "chat");
+    assert_eq!(glm.provider.as_str(), "zhipuai");
+    assert_eq!(glm.wire_model_id.as_str(), "glm-5.2");
+    assert_eq!(glm.canonical_model, None);
+    assert_eq!(glm.endpoint_key, "chat");
+    assert_eq!(glm.limits.context_tokens, Some(1_000_000));
+    assert_eq!(glm.limits.output_tokens, Some(131_072));
 }
 
 #[test]
@@ -507,11 +506,12 @@ fn snapshot_feeds_route_resolver_offerings() {
     let snapshot = CatalogCompiler::new().with_models_dev(&fixture()).compile();
     let offerings = snapshot.to_offerings();
 
-    assert!(
-        offerings
-            .iter()
-            .any(|o| o.provider.as_str() == "zhipuai" && o.wire_model_id.as_str() == "glm-5.2")
-    );
+    let glm = offerings
+        .iter()
+        .find(|o| o.provider.as_str() == "zhipuai" && o.wire_model_id.as_str() == "glm-5.2")
+        .expect("GLM offering reaches the route resolver seam");
+    assert_eq!(glm.limits.context_tokens, Some(1_000_000));
+    assert_eq!(glm.limits.output_tokens, Some(131_072));
     // Audio-only row never becomes a routing offering.
     assert!(
         !offerings

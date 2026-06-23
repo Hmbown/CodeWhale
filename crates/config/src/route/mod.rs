@@ -39,7 +39,7 @@ pub use candidate::{
 pub use descriptor::{EndpointDescriptor, ProviderDescriptor};
 pub use errors::RouteError;
 pub use ids::{LogicalModelRef, ModelId, NamespaceHint, ProviderId, WireModelId};
-pub use offering::{ProviderModelOffering, bundled_offerings};
+pub use offering::{ProviderModelOffering, RouteLimits, bundled_offerings};
 pub use resolver::{RouteRequest, RouteResolver};
 
 #[cfg(test)]

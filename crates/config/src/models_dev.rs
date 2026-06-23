@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::route::{ModelId, ProviderId, ProviderModelOffering, WireModelId};
+use crate::route::{ModelId, ProviderId, ProviderModelOffering, RouteLimits, WireModelId};
 
 /// Provider catalog endpoint used by Models.dev.
 pub const MODELS_DEV_API_URL: &str = "https://models.dev/api.json";
@@ -89,6 +89,11 @@ impl ModelsDevCatalog {
             wire_model_id: WireModelId::from(model.id.clone()),
             endpoint_key: "chat".to_string(),
             default_for_provider: model.default_for_provider,
+            limits: model
+                .limit
+                .as_ref()
+                .map(RouteLimits::from)
+                .unwrap_or_default(),
         })
     }
 
@@ -113,6 +118,11 @@ impl ModelsDevCatalog {
                     wire_model_id: WireModelId::from(model.id.clone()),
                     endpoint_key: "chat".to_string(),
                     default_for_provider: model.default_for_provider,
+                    limits: model
+                        .limit
+                        .as_ref()
+                        .map(RouteLimits::from)
+                        .unwrap_or_default(),
                 })
                 .collect(),
         )
@@ -279,6 +289,16 @@ pub struct ModelsDevLimit {
     pub output: Option<u64>,
 }
 
+impl From<&ModelsDevLimit> for RouteLimits {
+    fn from(limit: &ModelsDevLimit) -> Self {
+        Self {
+            context_tokens: limit.context,
+            input_tokens: limit.input,
+            output_tokens: limit.output,
+        }
+    }
+}
+
 /// Input/output modalities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ModelsDevModalities {
@@ -427,6 +447,12 @@ mod tests {
             offering.base_model, None,
             "generated JSON does not prove a canonical join"
         );
+
+        let route_offering = catalog
+            .provider_offering("zhipuai", "glm-5.2")
+            .expect("route offering");
+        assert_eq!(route_offering.limits.context_tokens, Some(1_000_000));
+        assert_eq!(route_offering.limits.output_tokens, Some(131_072));
     }
 
     #[test]

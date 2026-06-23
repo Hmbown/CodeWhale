@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::RequestProtocol;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
+use super::offering::RouteLimits;
 use crate::ProviderKind;
 
 /// A concrete, resolved endpoint the route will talk to.
@@ -123,6 +124,8 @@ pub struct ReadyRouteCandidate {
     pub auth: ResolvedAuthSource,
     /// Selected wire protocol.
     pub protocol: RequestProtocol,
+    /// Route/offering-scoped token limits, when known.
+    pub limits: RouteLimits,
     /// Pricing/quota class, if known.
     pub pricing: Option<PricingSku>,
     /// Validation outcome.
@@ -142,6 +145,7 @@ impl ReadyRouteCandidate {
         endpoint: ResolvedEndpoint,
         auth: ResolvedAuthSource,
         protocol: RequestProtocol,
+        limits: RouteLimits,
         pricing: Option<PricingSku>,
         validation: ValidationReport,
     ) -> Self {
@@ -154,6 +158,7 @@ impl ReadyRouteCandidate {
             endpoint,
             auth,
             protocol,
+            limits,
             pricing,
             validation,
         }

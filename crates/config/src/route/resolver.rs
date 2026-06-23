@@ -33,7 +33,7 @@ use super::candidate::{
 use super::descriptor::ProviderDescriptor;
 use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
-use super::offering::{ProviderModelOffering, bundled_offerings};
+use super::offering::{ProviderModelOffering, RouteLimits, bundled_offerings};
 use crate::ProviderKind;
 
 /// A request to resolve into an executable route.
@@ -128,14 +128,22 @@ impl RouteResolver {
         // 4. Map the selector to a wire id within provider scope.
         //    Prefixed selectors are preserved VERBATIM as the wire id.
         let class = classify(provider_kind);
-        let (wire_model_id, canonical_model, endpoint_key) = if is_auto {
+        let (wire_model_id, canonical_model, endpoint_key, limits) = if is_auto {
             default_offering.map_or_else(
-                || (descriptor.default_wire_model(), None, "chat".to_string()),
+                || {
+                    (
+                        descriptor.default_wire_model(),
+                        None,
+                        "chat".to_string(),
+                        RouteLimits::default(),
+                    )
+                },
                 |offering| {
                     (
                         offering.wire_model_id.clone(),
                         offering.canonical_model.clone(),
                         offering.endpoint_key.clone(),
+                        offering.limits,
                     )
                 },
             )
@@ -166,6 +174,7 @@ impl RouteResolver {
             endpoint,
             ResolvedAuthSource::Missing,
             descriptor.protocol(),
+            limits,
             Some(PricingSku::UnknownOrStale),
             validation,
         ))
@@ -178,7 +187,7 @@ impl RouteResolver {
         provider_id: &ProviderId,
         logical_model: &LogicalModelRef,
         class: ProviderClass,
-    ) -> Result<(WireModelId, Option<ModelId>, String), RouteError> {
+    ) -> Result<(WireModelId, Option<ModelId>, String, RouteLimits), RouteError> {
         let raw = logical_model.raw();
 
         // Try to match a catalog offering owned by THIS provider, either by
@@ -198,6 +207,7 @@ impl RouteResolver {
                     offering.wire_model_id.clone(),
                     offering.canonical_model.clone(),
                     offering.endpoint_key.clone(),
+                    offering.limits,
                 ));
             }
         }
@@ -222,13 +232,23 @@ impl RouteResolver {
                 }
                 // A bare, unknown model on a strict direct provider is passed
                 // through verbatim (the provider validates it server-side).
-                Ok((WireModelId::from(raw), None, "chat".to_string()))
+                Ok((
+                    WireModelId::from(raw),
+                    None,
+                    "chat".to_string(),
+                    RouteLimits::default(),
+                ))
             }
             // Aggregators, local runtimes, and custom OpenAI-compatible
             // endpoints legitimately accept arbitrary / prefixed ids verbatim.
             ProviderClass::Aggregator | ProviderClass::LocalOrCustom => {
                 let _ = provider_kind;
-                Ok((WireModelId::from(raw), None, "chat".to_string()))
+                Ok((
+                    WireModelId::from(raw),
+                    None,
+                    "chat".to_string(),
+                    RouteLimits::default(),
+                ))
             }
         }
     }
