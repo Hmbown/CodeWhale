@@ -75,6 +75,7 @@ mod request_tuning;
 mod resource_telemetry;
 mod retry_status;
 pub mod rlm;
+mod route_resolver;
 mod runtime_api;
 mod runtime_log;
 mod runtime_threads;
