@@ -127,7 +127,11 @@ impl RouteResolver {
 
         // 4. Map the selector to a wire id within provider scope.
         //    Prefixed selectors are preserved VERBATIM as the wire id.
-        let class = classify(provider_kind);
+        let class = if request_uses_custom_endpoint(&descriptor, req.base_url_override.as_deref()) {
+            ProviderClass::LocalOrCustom
+        } else {
+            classify(provider_kind)
+        };
         let (wire_model_id, canonical_model, endpoint_key, limits) = if is_auto {
             default_offering.map_or_else(
                 || {
@@ -313,4 +317,36 @@ fn classify(kind: ProviderKind) -> ProviderClass {
         // Everything else is treated as an aggregator-style pass-through.
         _ => ProviderClass::Aggregator,
     }
+}
+
+fn request_uses_custom_endpoint(
+    descriptor: &ProviderDescriptor,
+    base_url_override: Option<&str>,
+) -> bool {
+    base_url_override.is_some_and(|base_url| {
+        normalize_route_base_url(base_url)
+            != normalize_route_base_url(descriptor.default_base_url())
+    })
+}
+
+fn normalize_route_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let deepseek_domains = ["api.deepseek.com", "api.deepseeki.com"];
+    if deepseek_domains
+        .iter()
+        .any(|domain| trimmed.to_ascii_lowercase().contains(domain))
+    {
+        return trimmed.trim_end_matches("/v1").to_string();
+    }
+    if let Some(idx) = trimmed.find("://") {
+        let (scheme, rest) = trimmed.split_at(idx);
+        let scheme = scheme.to_ascii_lowercase();
+        let rest = &rest[3..];
+        let (authority, path) = match rest.find('/') {
+            Some(p) => (&rest[..p], &rest[p..]),
+            None => (rest, ""),
+        };
+        return format!("{scheme}://{}{path}", authority.to_ascii_lowercase());
+    }
+    trimmed.to_ascii_lowercase()
 }

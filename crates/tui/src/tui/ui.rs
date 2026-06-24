@@ -49,8 +49,8 @@ use crate::client::{
 use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::config::{
-    ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig, StatusItem,
-    UpdateConfig, provider_capability, save_provider_auth_mode_for,
+    ApiProvider, Config, ProviderConfig, ProvidersConfig, StatusItem, UpdateConfig,
+    provider_capability, save_provider_auth_mode_for,
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
@@ -62,6 +62,7 @@ use crate::localization::{MessageId, tr};
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Usage};
 use crate::palette;
 use crate::prompts;
+use crate::route_runtime::{resolve_route_candidate, resolve_runtime_route};
 use crate::session_manager::{
     OfflineQueueState, QueuedSessionMessage, SavedSession, SessionManager,
     create_saved_session_with_id_and_mode, create_saved_session_with_mode, update_session,
@@ -6518,25 +6519,33 @@ async fn apply_model_picker_choice(
         return;
     }
 
-    // Reject a model that does not belong to the active provider before we
-    // mutate session state or persist it (#3227/#3383). The provider-scoped
-    // picker should only emit active-provider rows; keep this guard as the
-    // in-session safety net. Explicit cross-provider route switches go through
-    // `switch_provider`, which validates the route atomically. Skip the strict
-    // check when the app accepts custom ids (pass-through provider or custom
-    // DeepSeek-compatible base URL) — the upstream is the authority there.
-    if model_changed
-        && !app.accepts_custom_model_ids()
-        && let Err(reason) = crate::config::validate_route(app.api_provider, &model)
-    {
-        app.status_message = Some(reason);
-        return;
+    let mut resolved_model = model.clone();
+    if model_changed && !model_is_auto {
+        let saved_provider_model = config
+            .provider_config_for(app.api_provider)
+            .and_then(|provider| provider.model.as_deref());
+        match resolve_route_candidate(
+            app.api_provider,
+            Some(&model),
+            saved_provider_model,
+            Some(config.deepseek_base_url()),
+        ) {
+            Ok(candidate) => {
+                resolved_model = candidate.wire_model_id.as_str().to_string();
+            }
+            Err(reason) => {
+                app.status_message = Some(reason);
+                return;
+            }
+        }
     }
 
     if model_changed {
-        app.set_model_selection(model.clone());
-        app.provider_models
-            .insert(app.api_provider.as_str().to_string(), model.clone());
+        app.set_model_selection(resolved_model.clone());
+        app.provider_models.insert(
+            app.api_provider.as_str().to_string(),
+            resolved_model.clone(),
+        );
         app.clear_model_scoped_telemetry();
     }
     if effort_changed {
@@ -6557,9 +6566,9 @@ async fn apply_model_picker_choice(
                 app.api_provider,
                 ApiProvider::Deepseek | ApiProvider::DeepseekCN
             ) {
-                settings.set("default_model", &model)?;
+                settings.set("default_model", &resolved_model)?;
             }
-            settings.set_model_for_provider(app.api_provider.as_str(), &model);
+            settings.set_model_for_provider(app.api_provider.as_str(), &resolved_model);
         }
         if effort_changed {
             settings.set(
@@ -6580,7 +6589,7 @@ async fn apply_model_picker_choice(
     let model_summary = if model_is_auto {
         "auto (per-turn model)".to_string()
     } else {
-        model.clone()
+        resolved_model.clone()
     };
     let previous_effort_summary = previous_effort.display_label_for_provider(app.api_provider);
     let effort_summary = if effort == ReasoningEffort::Auto {
@@ -6650,11 +6659,10 @@ async fn apply_picker_effort_choice(
     app.status_message = Some(summary);
 }
 
-/// Apply a `/provider` switch by mutating the in-memory config, validating
-/// that credentials exist for the new provider, then respawning the engine
-/// so the API client picks up the new base URL/key. When `model_override`
-/// is set, it replaces the active model post-switch (already normalized,
-/// will be provider-prefixed by `Config::default_model`).
+/// Apply a `/provider` switch by resolving a complete route candidate before
+/// mutating state, then respawning the engine so the API client picks up the
+/// new base URL/key. When `model_override` is set, it replaces the active
+/// model post-switch after provider-scoped normalization.
 async fn switch_provider(
     app: &mut App,
     engine_handle: &mut EngineHandle,
@@ -6676,32 +6684,30 @@ async fn switch_provider(
         previous_api_key_env_only: app.api_key_env_only,
     });
 
-    config.provider = Some(target.as_str().to_string());
-    if matches!(target, ApiProvider::NvidiaNim)
-        && config
-            .base_url
-            .as_deref()
-            .map(|base| !base.contains("integrate.api.nvidia.com"))
-            .unwrap_or(true)
-    {
-        config.base_url = Some(DEFAULT_NVIDIA_NIM_BASE_URL.to_string());
-    }
-    if matches!(target, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-        && config
-            .base_url
-            .as_deref()
-            .map(root_base_url_belongs_to_non_deepseek_provider)
-            .unwrap_or(false)
-    {
-        config.base_url = None;
-    }
-    if let Some(ref model) = model_override {
-        config.provider_config_for_mut(target).model = Some(model.clone());
-    }
+    let resolved_route = match resolve_runtime_route(config, target, model_override.as_deref()) {
+        Ok(route) => route,
+        Err(reason) => {
+            app.pending_provider_switch = None;
+            app.add_message(HistoryCell::System {
+                content: format!(
+                    "Cannot switch to {}: {reason}\nProvider unchanged ({}).",
+                    target.as_str(),
+                    previous_provider.as_str()
+                ),
+            });
+            app.status_message = Some(format!(
+                "Route rejected before provider switch: {}.",
+                target.as_str()
+            ));
+            return;
+        }
+    };
+    let resolved_endpoint = resolved_route.candidate.endpoint.base_url.clone();
+    let next_config = resolved_route.config;
+    let new_model = resolved_route.model;
 
-    if let Err(err) = DeepSeekClient::new(config) {
+    if let Err(err) = DeepSeekClient::new(&next_config) {
         app.pending_provider_switch = None;
-        *config = previous_config;
         app.add_message(HistoryCell::System {
             content: format!(
                 "Failed to switch provider to {}: {err}\nProvider unchanged ({}).",
@@ -6711,35 +6717,9 @@ async fn switch_provider(
         });
         return;
     }
+    *config = next_config;
 
-    let new_model = config.default_model();
-    // Validate the resolved (provider, model) tuple as one atomic unit before
-    // we tear down the engine or persist anything (#3227). This catches a
-    // contaminated route — e.g. provider `zai` paired with `deepseek-v4-pro` —
-    // locally with a precise diagnostic instead of a `400 Unknown Model`. On
-    // failure we leave the provider, model, and config exactly as they were.
-    // Pass-through routes (OpenAI-compatible, custom DeepSeek base URLs, …)
-    // skip the strict check; the upstream service is the authority there.
-    if !config.model_ids_pass_through()
-        && let Err(reason) = crate::config::validate_route(target, &new_model)
-    {
-        app.pending_provider_switch = None;
-        *config = previous_config;
-        app.add_message(HistoryCell::System {
-            content: format!(
-                "Cannot switch to {}: {reason}\nProvider unchanged ({}).",
-                target.as_str(),
-                previous_provider.as_str()
-            ),
-        });
-        app.status_message = Some(format!(
-            "Route rejected: {} is not compatible with {}.",
-            new_model,
-            target.as_str()
-        ));
-        return;
-    }
-    let new_base_url = config.deepseek_base_url();
+    let new_base_url = resolved_endpoint;
     let new_endpoint = display_base_url_host(&new_base_url);
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
@@ -6841,31 +6821,29 @@ async fn apply_provider_fallback_switch(
     previous_provider: ApiProvider,
 ) {
     let target = app.api_provider;
-    let previous_config = config.clone();
     let previous_model = app.model.clone();
 
-    config.provider = Some(target.as_str().to_string());
-    if matches!(target, ApiProvider::NvidiaNim)
-        && config
-            .base_url
-            .as_deref()
-            .map(|base| !base.contains("integrate.api.nvidia.com"))
-            .unwrap_or(true)
-    {
-        config.base_url = Some(DEFAULT_NVIDIA_NIM_BASE_URL.to_string());
-    }
-    if matches!(target, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-        && config
-            .base_url
-            .as_deref()
-            .map(root_base_url_belongs_to_non_deepseek_provider)
-            .unwrap_or(false)
-    {
-        config.base_url = None;
-    }
+    let resolved_route = match resolve_runtime_route(config, target, None) {
+        Ok(route) => route,
+        Err(reason) => {
+            app.api_provider = previous_provider;
+            app.last_fallback_reason = Some(format!(
+                "Fallback provider {} route was rejected: {reason}",
+                target.as_str()
+            ));
+            app.status_message = Some(format!(
+                "Fallback provider {} rejected; provider remains {}.",
+                target.as_str(),
+                previous_provider.as_str()
+            ));
+            return;
+        }
+    };
+    let resolved_endpoint = resolved_route.candidate.endpoint.base_url.clone();
+    let next_config = resolved_route.config;
+    let new_model = resolved_route.model;
 
-    if let Err(err) = DeepSeekClient::new(config) {
-        *config = previous_config;
+    if let Err(err) = DeepSeekClient::new(&next_config) {
         app.api_provider = previous_provider;
         app.last_fallback_reason = Some(format!(
             "Fallback provider {} was unavailable: {err}",
@@ -6878,9 +6856,9 @@ async fn apply_provider_fallback_switch(
         ));
         return;
     }
+    *config = next_config;
 
-    let new_model = config.default_model();
-    let new_base_url = config.deepseek_base_url();
+    let new_base_url = resolved_endpoint;
     let new_endpoint = display_base_url_host(&new_base_url);
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.model_ids_passthrough = config.model_ids_pass_through();
@@ -6932,27 +6910,6 @@ async fn apply_provider_fallback_switch(
         target.as_str(),
         new_endpoint
     ));
-}
-
-fn root_base_url_belongs_to_non_deepseek_provider(base_url: &str) -> bool {
-    let lower = base_url.to_ascii_lowercase();
-    [
-        "integrate.api.nvidia.com",
-        "api.openai.com",
-        "api.atlascloud.ai",
-        "maas-openapi.wanjiedata.com",
-        "volces.com",
-        "openrouter.ai",
-        "xiaomimimo.com",
-        "novita.ai",
-        "fireworks.ai",
-        "siliconflow",
-        "arcee.ai",
-        "moonshot.ai",
-        "api.kimi.com",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
 }
 
 fn display_base_url_host(base_url: &str) -> String {

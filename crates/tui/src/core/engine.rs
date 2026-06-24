@@ -40,6 +40,7 @@ use crate::models::{
 };
 use crate::prompts;
 use crate::purge::{emit_purge_completed, emit_purge_failed, emit_purge_started, run_purge};
+use crate::route_runtime::resolve_runtime_route;
 use crate::seam_manager::{SeamConfig, SeamManager};
 use crate::tools::goal::{GoalSnapshot, GoalStatus, SharedGoalState, new_shared_goal_state};
 use crate::tools::plan::{PlanSnapshot, SharedPlanState, new_shared_plan_state};
@@ -738,16 +739,6 @@ impl Engine {
         format!("{message}\n\n{hint}")
     }
 
-    fn config_for_runtime_route(&self, provider: ApiProvider, model: &str) -> Config {
-        let mut config = self.api_config.clone();
-        config.provider = Some(provider.as_str().to_string());
-        config.provider_config_for_mut(provider).model = Some(model.to_string());
-        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
-            config.default_text_model = Some(model.to_string());
-        }
-        config
-    }
-
     fn activate_runtime_route(&mut self, provider: ApiProvider, model: &str) -> Result<(), String> {
         if self.api_provider == provider
             && self
@@ -758,7 +749,15 @@ impl Engine {
             return Ok(());
         }
 
-        let route_config = self.config_for_runtime_route(provider, model);
+        let route =
+            resolve_runtime_route(&self.api_config, provider, Some(model)).map_err(|reason| {
+                format!(
+                    "Failed to resolve provider route {} / {}: {reason}",
+                    provider.as_str(),
+                    model
+                )
+            })?;
+        let route_config = route.config;
         match DeepSeekClient::new(&route_config) {
             Ok(client) => {
                 self.api_provider = provider;

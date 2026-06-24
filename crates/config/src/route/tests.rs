@@ -408,6 +408,23 @@ fn resolver_strict_direct_rejects_other_provider_known_bare_offering() {
 }
 
 #[test]
+fn resolver_custom_endpoint_allows_namespaced_selector_for_strict_provider() {
+    let r = RouteResolver::new();
+    let request = RouteRequest {
+        explicit_provider: Some(ProviderKind::Deepseek),
+        model_selector: Some(LogicalModelRef::from("vendor/custom-coder")),
+        saved_provider_model: None,
+        base_url_override: Some("https://example.local/v1".to_string()),
+    };
+    let out = r
+        .resolve(&request)
+        .expect("custom endpoint should defer model validation upstream");
+    assert_eq!(out.provider_kind, ProviderKind::Deepseek);
+    assert_eq!(out.wire_model_id.as_str(), "vendor/custom-coder");
+    assert_eq!(out.endpoint.base_url, "https://example.local/v1");
+}
+
+#[test]
 fn resolver_strict_direct_rejects_models_dev_offering_from_another_provider() {
     let r = models_dev_route_resolver();
     let out = r.resolve(&req(Some(ProviderKind::Deepseek), Some("glm-5.2")));

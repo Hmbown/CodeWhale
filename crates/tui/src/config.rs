@@ -833,6 +833,7 @@ pub fn requested_model_for_provider(provider: ApiProvider, model: &str) -> Optio
 ///
 /// Returns `Ok(())` for any tuple we cannot confidently reject (the provider
 /// API remains the final authority for those).
+#[cfg(test)]
 pub fn validate_route(provider: ApiProvider, model: &str) -> Result<(), String> {
     let trimmed = model.trim();
     if trimmed.is_empty() {

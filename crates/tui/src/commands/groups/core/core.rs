@@ -8,6 +8,7 @@ use crate::config::{
     normalize_model_name_for_provider,
 };
 use crate::localization::{MessageId, tr};
+use crate::route_runtime::resolve_route_candidate;
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
 
@@ -167,14 +168,14 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             };
             model_id
         };
-        // Reject a model that is incompatible with the active provider locally,
-        // before it can be persisted or sent and bounced as `400 Unknown Model`
-        // (#3227). The route stays atomic: provider unchanged, model unchanged.
-        // Skip the strict check when the app accepts custom model ids (a
-        // pass-through provider or a custom DeepSeek-compatible base URL), where
-        // any id is a deliberate choice and the upstream is the authority.
-        if !app.accepts_custom_model_ids()
-            && let Err(reason) = crate::config::validate_route(app.api_provider, &model_id)
+        let strict_direct_custom_endpoint = app.accepts_custom_model_ids()
+            && matches!(
+                app.api_provider,
+                ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Zai
+            );
+        if !strict_direct_custom_endpoint
+            && let Err(reason) =
+                resolve_route_candidate(app.api_provider, Some(&model_id), None, None)
         {
             return CommandResult::error(reason);
         }
