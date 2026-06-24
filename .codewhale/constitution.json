@@ -14,7 +14,7 @@
     "Stable Rust only (edition 2024); no nightly features.",
     "Keep the codewhale CLI dispatcher and the codewhale-tui binary in sync when crates/tui changes."
   ],
-  "branch_policy": "v0.8.53 work targets the codex/v0.8.53 integration branch, not main. One PR per logical workstream; do not mix unrelated fixes.",
+  "branch_policy": "Default branch is main. Never commit directly to main; work on the active integration branch named by the current task or a fresh codex/... branch/worktree off it. One PR per logical workstream; do not mix unrelated fixes.",
   "verification_policy": {
     "before_claiming_done": [
       "run the focused tests for the changed crate (cargo test -p <crate>), then cargo check/clippy as appropriate",

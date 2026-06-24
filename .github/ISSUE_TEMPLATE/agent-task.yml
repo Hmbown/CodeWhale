@@ -1,20 +1,25 @@
 name: Agent task
-description: Create a self-contained task that a headless agent (DeepSeek V4, remote droplet) can execute end-to-end without human context.
-title: "v0.8.58: "
-labels: ["agent-ready", "v0.8.58"]
+description: Create a self-contained task that an autonomous agent can execute end-to-end without human context.
+title: ""
+labels: ["agent-ready"]
 body:
   - type: markdown
     attributes:
       value: |
         ## Instructions for authors
 
-        This issue will be executed by an autonomous agent running `codewhale exec --auto`
-        on a headless VM.  The body must be **self-sufficient** — every file path, command,
-        and acceptance criterion must be explicit.  The agent has:
+        This issue may be executed by an autonomous agent running CodeWhale locally
+        or on a remote worker. The body must be **self-sufficient**: every file
+        path, command, dependency, and acceptance criterion must be explicit. The
+        default operating contract is:
 
-        - A fresh clone of `Hmbown/CodeWhale` at `main`
-        - Shell, read, write, and git tools with auto-approvals
-        - No conversation context — this issue body is all it knows
+        - Branch from current `origin/main` as `codex/issue-N-short-slug`.
+        - Solve this issue on that branch and open a PR against `main`.
+        - Include `Closes #N` or `Fixes #N` in the PR body.
+        - Multiple agents may work concurrently when their file sets do not conflict.
+        - Use scratch branches only to test batch merge order/conflicts, not as
+          the final shipping PR.
+        - Assume no conversation context: this issue body is all the agent knows.
 
         Fill every section.  Sections marked * are required.
 
@@ -34,7 +39,7 @@ body:
     id: scope
     attributes:
       label: "Scope / Plan"
-      description: "Numbered steps with file paths.  Each step is one concrete action."
+      description: "Numbered steps with file paths. Each step is one concrete action."
       placeholder: |
         1. crates/tui/src/tui/ui.rs — add throttle in AgentProgress handler (line ~2308)
         2. crates/tui/src/tui/app.rs — add `last_agent_progress_redraw` field
@@ -46,11 +51,22 @@ body:
     id: key-files
     attributes:
       label: "Key files"
-      description: "One file path per line.  The agent will read these first."
+      description: "One file path per line. The agent will read these first and use them to detect conflicts with parallel work."
       placeholder: |
         crates/tui/src/tui/ui.rs
         crates/tui/src/tui/sidebar.rs
         crates/tui/src/tui/app.rs
+    validations:
+      required: true
+
+  - type: textarea
+    id: parallelism
+    attributes:
+      label: "Parallelism / conflict notes"
+      description: "Name files, issues, or PRs that should not run concurrently with this task. Say 'none known' if isolated."
+      placeholder: |
+        Avoid running in parallel with #1234 because both touch crates/tui/src/tui/ui.rs.
+        Safe to run alongside docs-only or provider-catalog tasks.
     validations:
       required: true
 
