@@ -2,7 +2,7 @@ use super::headers::{MCP_HTTP_ACCEPT, is_safe_custom_header, with_default_mcp_ht
 use super::*;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 fn test_http_client() -> reqwest::Client {
@@ -927,6 +927,27 @@ impl McpTransport for HangingValueTransport {
     }
 }
 
+struct DropCountingTransport {
+    drops: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl McpTransport for DropCountingTransport {
+    async fn send(&mut self, _msg: Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn recv(&mut self) -> Result<Vec<u8>> {
+        std::future::pending().await
+    }
+}
+
+impl Drop for DropCountingTransport {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, AtomicOrdering::SeqCst);
+    }
+}
+
 fn test_server_config() -> McpServerConfig {
     McpServerConfig {
         command: Some("mock".to_string()),
@@ -1128,6 +1149,48 @@ async fn reload_if_config_changed_swaps_config_on_content_change() {
     assert!(
         names.contains(&"new"),
         "expected new server in pool after reload, got {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn reload_if_config_changed_drops_live_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(
+        &path,
+        r#"{"servers":{"local":{"command":"node","args":["server.js"]}}}"#,
+    )
+    .unwrap();
+    let mut pool = McpPool::from_config_path(&path).unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut conn = test_connection(Box::new(DropCountingTransport {
+        drops: Arc::clone(&drops),
+    }));
+    conn.name = "local".to_string();
+    conn.config = pool.config.servers.get("local").unwrap().clone();
+    pool.connections.insert("local".to_string(), conn);
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(
+        &path,
+        r#"{"servers":{"local":{"command":"node","args":["server-v2.js"]}}}"#,
+    )
+    .unwrap();
+
+    let reloaded = pool.reload_if_config_changed().await.unwrap();
+    assert!(reloaded, "content-changed config must trigger reload");
+    assert_eq!(
+        drops.load(AtomicOrdering::SeqCst),
+        1,
+        "reload must drop the stale live transport"
+    );
+    assert!(
+        !pool.connections.contains_key("local"),
+        "stale connection must not survive config reload"
+    );
+    assert_eq!(
+        pool.config.servers.get("local").unwrap().args,
+        vec!["server-v2.js".to_string()]
     );
 }
 
