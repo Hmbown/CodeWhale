@@ -14,7 +14,9 @@ for Claude-based agents working in this repository.
   support and legacy migration care.
 - Preserve contributor credit for harvested work with authorship,
   `Co-authored-by`, `Harvested from PR #N by @handle`, and changelog/release
-  notes where applicable.
+  notes where applicable. Use canonical GitHub-noreply identities from
+  `.github/AUTHOR_MAP`; never add bot/tool `Co-authored-by` trailers (Claude,
+  codex, cursor) — the `check-coauthor-trailers.py` CI gate rejects them.
 
 ## Scratch Integration Branches
 

@@ -361,6 +361,24 @@ in the changelog. Restoring them with thanks — every one shipped real code.
 - **[nightfallsad](https://github.com/nightfallsad)** — clearer `/continue` hint copy
 - **[zxyasfas](https://github.com/zxyasfas)** — align Rust MSRV references with the workspace (#739)
 
+_A follow-up audit of harvested commits (work reimplemented onto a maintainer
+branch rather than merged) surfaced contributors whose machine-readable credit
+was dropped. Restoring them here — every one shipped real code:_
+
+- **[CrepuscularIRIS](https://github.com/CrepuscularIRIS)** — OpenHarmony→Linux npm binary mapping, O(1) job-panel refresh, file-mention UTF-8 boundary safety, Kitty keyboard protocol on Windows, and auto low-motion under Termius/SSH (#1479, #1483, #1494, #1495, #1499, #1475)
+- **[MMMarcinho](https://github.com/MMMarcinho)** — `image_analyze` vision tool (#1467)
+- **[MeAiRobot](https://github.com/MeAiRobot)** — toast-stack overlay z-order fix (#1485)
+- **[NorethSea](https://github.com/NorethSea)** — `update` refreshing the sibling TUI binary (#1492)
+- **[SamhandsomeLee](https://github.com/SamhandsomeLee)** — bundled v4-best-practices skill (#1448)
+- **[YaYII](https://github.com/YaYII)** — opt-in `/translate` command (#1462)
+- **[sandofree](https://github.com/sandofree)** — Tavily and Bocha `web_search` backends (#1294)
+- **[tiger-dog](https://github.com/tiger-dog)** — approval one-line banner and Markdown underscore handling (#1455)
+- **[Jianfengwu2024](https://github.com/Jianfengwu2024)** — preserving MSVC toolchain vars in the child environment (#1487)
+- **[wplll](https://github.com/wplll)** — prompt-cache warmup keys, tool-catalog handling, a dedup test, and pack ordering (#2390, #2391, #2392, #2393)
+
+Additional harvested PRs from the same audit, credited to contributors already
+listed above: **[axobase001](https://github.com/axobase001)** (#2400, #2405, #2406, #2407, #2408, #2415), **[cyq1017](https://github.com/cyq1017)** (#2516, #2534, #2540), **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** (#1451, #1456), **[reidliu41](https://github.com/reidliu41)** (#1444, #1493), **[lucaszhu-hue](https://github.com/lucaszhu-hue)** (#1436, #2343), **[h3c-hexin](https://github.com/h3c-hexin)** (#1480), **[Duducoco](https://github.com/Duducoco)** (#1345), **[zhuangbiaowei](https://github.com/zhuangbiaowei)** (#1416), **[wdw8276](https://github.com/wdw8276)** (#1498), and **[buko](https://github.com/buko)** (#2377).
+
 </details>
 
 ---

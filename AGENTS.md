@@ -94,6 +94,11 @@
   GitHub numeric noreply identity, and include `Harvested from PR #N by
   @handle` in the commit body so the auto-close workflow can close the PR with
   credit after it reaches `main`.
+- Never add bot/tool `Co-authored-by` trailers (Claude, codex, cursor,
+  `noreply@anthropic.com`): `scripts/check-coauthor-trailers.py` rejects them on
+  harvest commits — contributor trailers are for humans. Also refresh the manual
+  credit surfaces that do not auto-populate from trailers: `docs/CONTRIBUTORS.md`
+  and `CHANGELOG.md`.
 - Close or update issues and PRs only after verifying the landed commit on the
   relevant branch. If the release branch already contains equivalent behavior,
   leave a clear note linking the commit and describing any remaining delta.
