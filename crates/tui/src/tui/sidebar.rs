@@ -31,7 +31,6 @@ use super::app::{
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::subagent_routing::active_fanout_counts;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
-use crate::config::provider_capability;
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
 /// Must be large enough that accumulated f64 error across hundreds of turns
@@ -2775,7 +2774,11 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
 
     // ── Token usage ──────────────────────────────────────────────
     let total_tokens = app.session.total_conversation_tokens;
-    let window = provider_capability(app.api_provider, &app.model).context_window;
+    let window = crate::route_budget::route_context_window_tokens(
+        app.api_provider,
+        app.effective_model_for_budget(),
+        app.active_route_limits,
+    );
     let pct = if window > 0 {
         ((total_tokens as f64 / window as f64) * 100.0).clamp(0.0, 100.0)
     } else {

@@ -241,6 +241,9 @@ fn append_plan_list(out: &mut String, label: &str, values: &[String]) {
 pub struct EngineConfig {
     /// Model identifier to use for responses.
     pub model: String,
+    /// Route/offering limits for the active provider+model, when the runtime
+    /// route resolver had concrete catalog facts.
+    pub active_route_limits: Option<codewhale_config::route::RouteLimits>,
     /// Workspace root for tool execution and file operations.
     pub workspace: PathBuf,
     /// Allow shell tool execution when true.
@@ -401,6 +404,7 @@ impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             model: DEFAULT_TEXT_MODEL.to_string(),
+            active_route_limits: None,
             workspace: PathBuf::from("."),
             allow_shell: true,
             trust_mode: false,
@@ -546,6 +550,7 @@ pub struct Engine {
     shell_manager: SharedShellManager,
     mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
     api_provider: ApiProvider,
+    active_route_limits: Option<codewhale_config::route::RouteLimits>,
     rx_op: mpsc::Receiver<Op>,
     /// Clone of the op-channel sender, so the engine can self-dispatch ops
     /// (e.g. a goal-continuation `SendMessage` after a turn completes).
@@ -843,8 +848,11 @@ impl Engine {
                     translation_enabled: config.translation_enabled,
                     model_id: &config.model,
                     context_window_override: Some(
-                        crate::config::provider_capability(api_provider, &config.model)
-                            .context_window,
+                        crate::route_budget::route_context_window_tokens(
+                            api_provider,
+                            &config.model,
+                            config.active_route_limits,
+                        ),
                     ),
                     show_thinking: config.show_thinking,
                     verbosity: config.verbosity.as_deref(),
@@ -941,6 +949,7 @@ impl Engine {
             })
             .map(std::sync::Arc::from);
 
+        let active_route_limits = config.active_route_limits;
         let engine = Engine {
             config,
             api_config: api_config.clone(),
@@ -952,6 +961,7 @@ impl Engine {
             shell_manager,
             mcp_pool: None,
             api_provider,
+            active_route_limits,
             rx_op,
             tx_op: tx_op.clone(),
             rx_approval,
@@ -1467,10 +1477,15 @@ impl Engine {
                             )))
                             .await;
                     }
-                    Op::SetModel { model, mode: _ } => {
+                    Op::SetModel {
+                        model,
+                        mode: _,
+                        route_limits,
+                    } => {
                         self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
                         self.session.model = model;
                         self.config.model.clone_from(&self.session.model);
+                        self.active_route_limits = route_limits;
                         self.refresh_system_prompt();
                         self.emit_session_updated().await;
                         let _ = self
@@ -2634,7 +2649,7 @@ impl Engine {
             &self.session.messages,
             &self.session.model,
             self.session.reasoning_effort.clone(),
-            effective_max_output_tokens(&self.session.model),
+            effective_max_output_tokens_for_route(&self.session.model, self.active_route_limits),
         )
         .await
         {
@@ -2702,9 +2717,12 @@ impl Engine {
     }
 
     async fn recover_context_overflow(&mut self, client: &DeepSeekClient, reason: &str) -> bool {
-        let Some(target_budget) =
-            context_input_budget_for_provider(self.api_provider, &self.session.model)
-        else {
+        let Some(target_budget) = context_input_budget_for_route(
+            self.api_provider,
+            &self.session.model,
+            self.active_route_limits,
+            0,
+        ) else {
             return false;
         };
 
@@ -3051,10 +3069,11 @@ impl Engine {
                 locale_tag: &self.config.locale_tag,
                 translation_enabled: self.config.translation_enabled,
                 model_id: &self.config.model,
-                context_window_override: Some(
-                    crate::config::provider_capability(self.api_provider, &self.config.model)
-                        .context_window,
-                ),
+                context_window_override: Some(crate::route_budget::route_context_window_tokens(
+                    self.api_provider,
+                    &self.config.model,
+                    self.active_route_limits,
+                )),
                 show_thinking: self.config.show_thinking,
                 verbosity: self.config.verbosity.as_deref(),
                 skills_scan_codewhale_only: self.config.skills_scan_codewhale_only,
@@ -3633,13 +3652,15 @@ mod approval;
 mod context;
 mod handle;
 pub(crate) use context::compact_tool_result_for_context;
-#[cfg(test)]
-use context::route_context_budget_for_provider;
 use context::{
-    MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP, context_input_budget_for_provider,
-    effective_max_output_tokens, extract_compaction_summary_prompt,
+    MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP, context_input_budget_for_route,
+    effective_max_output_tokens_for_route, extract_compaction_summary_prompt,
     is_context_length_error_message, summarize_text,
 };
+#[cfg(test)]
+use context::{context_input_budget_for_provider, effective_max_output_tokens};
+#[cfg(test)]
+use context::{route_context_budget_for_provider, route_context_budget_for_route};
 mod dispatch;
 mod lsp_hooks;
 mod streaming;

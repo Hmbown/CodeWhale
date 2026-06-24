@@ -154,7 +154,11 @@ pub enum Op {
 
     /// Update the model being used and refresh stable prompt context.
     #[allow(dead_code)]
-    SetModel { model: String, mode: AppMode },
+    SetModel {
+        model: String,
+        mode: AppMode,
+        route_limits: Option<codewhale_config::route::RouteLimits>,
+    },
 
     /// Update auto-compaction settings
     SetCompaction { config: CompactionConfig },

@@ -129,6 +129,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             app.last_effective_model = None;
             app.reasoning_effort = ReasoningEffort::Auto;
             app.last_effective_reasoning_effort = None;
+            app.active_route_limits = None;
             app.update_model_compaction_budget();
             if model_changed {
                 app.clear_model_scoped_telemetry();
@@ -173,15 +174,22 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 app.api_provider,
                 ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Zai
             );
-        if !strict_direct_custom_endpoint
-            && let Err(reason) =
-                resolve_route_candidate(app.api_provider, Some(&model_id), None, None)
-        {
-            return CommandResult::error(reason);
-        }
+        let route_limits = if strict_direct_custom_endpoint {
+            None
+        } else {
+            match resolve_route_candidate(app.api_provider, Some(&model_id), None, None) {
+                Ok(candidate) => Some(candidate.limits),
+                Err(reason) => return CommandResult::error(reason),
+            }
+        };
         let old_model = app.model_display_label();
         let model_changed = app.auto_model || app.model != model_id;
         app.set_model_selection(model_id.clone());
+        if let Some(limits) = route_limits {
+            app.set_active_route_limits(limits);
+        } else {
+            app.active_route_limits = None;
+        }
         app.update_model_compaction_budget();
         if model_changed {
             app.clear_model_scoped_telemetry();

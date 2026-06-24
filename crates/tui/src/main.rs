@@ -75,6 +75,7 @@ mod request_tuning;
 mod resource_telemetry;
 mod retry_status;
 pub mod rlm;
+mod route_budget;
 mod route_runtime;
 mod runtime_api;
 mod runtime_log;
@@ -6326,6 +6327,7 @@ async fn run_exec_agent(
         .map(crate::config::LspConfigToml::into_runtime);
     let engine_config = EngineConfig {
         model: effective_model.clone(),
+        active_route_limits: None,
         workspace: workspace.clone(),
         allow_shell: auto_approve || execution_config.allow_shell(),
         trust_mode,

@@ -5,11 +5,12 @@
 //! engine module from accumulating unrelated context-policy details.
 
 use crate::compaction::estimate_tokens;
-use crate::config::{ApiProvider, provider_capability};
+use crate::config::ApiProvider;
 use crate::context_budget::ContextBudget;
 use crate::error_taxonomy::ErrorCategory;
 use crate::models::{Message, SystemPrompt, context_window_for_model};
 use crate::tools::spec::ToolResult;
+use codewhale_config::route::RouteLimits;
 use serde_json::Value;
 
 /// Max output tokens requested for normal agent turns. Generous on purpose:
@@ -56,6 +57,15 @@ pub(super) fn effective_max_output_tokens(model: &str) -> u32 {
         let capped = window / 2;
         capped.min(API_MAX_OUTPUT_TOKENS)
     }
+}
+
+pub(super) fn effective_max_output_tokens_for_route(
+    model: &str,
+    route_limits: Option<RouteLimits>,
+) -> u32 {
+    let cap = effective_max_output_tokens(model);
+    crate::route_budget::route_output_limit_tokens(route_limits)
+        .map_or(cap, |route_cap| cap.min(route_cap))
 }
 /// Keep this many most recent messages when emergency trimming is required.
 pub(super) const MIN_RECENT_MESSAGES_TO_KEEP: usize = 4;
@@ -569,31 +579,58 @@ const INTERNAL_BUDGET_LARGE_WINDOW_THRESHOLD: u32 = 500_000;
 ///     `256K - 262K - 1K`, which underflows `checked_sub` to `None` and
 ///     *silently disables every preflight and emergency recovery path* — the
 ///     session then runs until the provider hard-rejects on context length.
+#[cfg(test)]
 pub(super) fn context_input_budget_for_provider(
     provider: ApiProvider,
     model: &str,
 ) -> Option<usize> {
-    route_context_budget_for_provider(provider, model, 0)
+    context_input_budget_for_route(provider, model, None, 0)
+}
+
+pub(super) fn context_input_budget_for_route(
+    provider: ApiProvider,
+    model: &str,
+    route_limits: Option<RouteLimits>,
+    input_tokens: usize,
+) -> Option<usize> {
+    route_context_budget_for_route(provider, model, route_limits, input_tokens)
         .and_then(|budget| usize::try_from(budget.available_input_tokens).ok())
 }
 
+#[cfg(test)]
 pub(super) fn route_context_budget_for_provider(
     provider: ApiProvider,
     model: &str,
     input_tokens: usize,
 ) -> Option<ContextBudget> {
-    let capability = provider_capability(provider, model);
-    Some(ContextBudget::new(
-        u64::from(capability.context_window),
-        u64::try_from(input_tokens).ok()?,
-        u64::from(route_output_reservation_for_window(
-            model,
-            capability.context_window,
-        )),
-    ))
+    route_context_budget_for_route(provider, model, None, input_tokens)
 }
 
-fn route_output_reservation_for_window(model: &str, window_tokens: u32) -> u32 {
+pub(super) fn route_context_budget_for_route(
+    provider: ApiProvider,
+    model: &str,
+    route_limits: Option<RouteLimits>,
+    input_tokens: usize,
+) -> Option<ContextBudget> {
+    let window = crate::route_budget::route_context_window_tokens(provider, model, route_limits);
+    let output_cap = route_output_reservation_for_window(model, window, route_limits);
+    crate::route_budget::route_context_budget(
+        provider,
+        model,
+        route_limits,
+        input_tokens,
+        output_cap,
+    )
+}
+
+fn route_output_reservation_for_window(
+    model: &str,
+    window_tokens: u32,
+    route_limits: Option<RouteLimits>,
+) -> u32 {
+    if let Some(route_cap) = crate::route_budget::route_output_limit_tokens(route_limits) {
+        return route_cap.min(TURN_MAX_OUTPUT_TOKENS);
+    }
     if window_tokens >= INTERNAL_BUDGET_LARGE_WINDOW_THRESHOLD {
         TURN_MAX_OUTPUT_TOKENS
     } else {

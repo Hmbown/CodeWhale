@@ -2407,6 +2407,7 @@ impl RuntimeThreadManager {
             .clamp(1, MAX_SUBAGENTS);
         let engine_cfg = EngineConfig {
             model: thread.model.clone(),
+            active_route_limits: None,
             workspace: thread.workspace.clone(),
             allow_shell: thread.allow_shell,
             trust_mode: thread.trust_mode,

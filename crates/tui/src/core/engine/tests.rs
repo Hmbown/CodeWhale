@@ -2560,6 +2560,7 @@ async fn set_model_reloads_instruction_sources_and_updates_session_prompt() {
         .send(Op::SetModel {
             model: "deepseek-v4-pro".to_string(),
             mode: AppMode::Agent,
+            route_limits: None,
         })
         .await
         .expect("send set model");
@@ -2797,6 +2798,42 @@ fn route_context_budget_uses_shared_budget_service() {
         crate::context_budget::PressureLevel::Critical
     );
     assert!(!budget.fits_additional(1));
+}
+
+#[test]
+fn route_context_budget_prefers_resolved_route_limits() {
+    let _lock = lock_test_env();
+    let limits = codewhale_config::route::RouteLimits {
+        context_tokens: Some(128_000),
+        input_tokens: None,
+        output_tokens: Some(32_768),
+    };
+    let budget = route_context_budget_for_route(
+        ApiProvider::Openrouter,
+        "deepseek/deepseek-v4-pro",
+        Some(limits),
+        60_000,
+    )
+    .expect("route limits should produce a budget");
+
+    assert_eq!(budget.window_tokens, 128_000);
+    assert_eq!(budget.output_cap_tokens, 32_768);
+    assert_eq!(budget.available_input_tokens, 34_208);
+}
+
+#[test]
+fn effective_max_output_tokens_for_route_caps_to_route_output_limit() {
+    let _lock = lock_test_env();
+    let limits = codewhale_config::route::RouteLimits {
+        context_tokens: Some(1_000_000),
+        input_tokens: None,
+        output_tokens: Some(8_192),
+    };
+
+    assert_eq!(
+        effective_max_output_tokens_for_route("deepseek-v4-pro", Some(limits)),
+        8_192
+    );
 }
 
 #[test]

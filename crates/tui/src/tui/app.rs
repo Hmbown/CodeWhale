@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use codewhale_config::ProviderChain;
+use codewhale_config::{ProviderChain, route::RouteLimits};
 
 use crate::artifacts::ArtifactRecord;
 use crate::client::{CacheWarmupKey, PromptInspection};
@@ -1430,6 +1430,7 @@ pub(crate) struct PendingProviderSwitch {
     pub previous_provider: ApiProvider,
     pub previous_model: String,
     pub previous_model_ids_passthrough: bool,
+    pub previous_route_limits: Option<RouteLimits>,
     pub previous_config: Config,
     pub previous_onboarding: OnboardingState,
     pub previous_onboarding_needs_api_key: bool,
@@ -1515,6 +1516,8 @@ pub struct App {
     /// True when the active provider/base URL accepts arbitrary model IDs
     /// verbatim rather than DeepSeek-only aliases.
     pub model_ids_passthrough: bool,
+    /// Resolved provider/model route limits for the active runtime route.
+    pub active_route_limits: Option<RouteLimits>,
     /// Pending provider transition for transactional rollback when the next
     /// auth failure indicates the new provider cannot be used.
     pub pending_provider_switch: Option<PendingProviderSwitch>,
@@ -2425,6 +2428,7 @@ impl App {
             provider_chain,
             last_fallback_reason: None,
             model_ids_passthrough,
+            active_route_limits: None,
             pending_provider_switch: None,
             reasoning_effort,
             last_effective_reasoning_effort: None,
@@ -5415,11 +5419,23 @@ impl App {
 
     pub fn update_model_compaction_budget(&mut self) {
         let model = self.effective_model_for_budget().to_string();
-        self.compact_threshold =
-            compaction_threshold_for_model_at_percent(&model, self.auto_compact_threshold_percent);
+        self.compact_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            self.api_provider,
+            &model,
+            self.active_route_limits,
+            self.auto_compact_threshold_percent,
+        );
         if !self.auto_compact_user_configured {
-            self.auto_compact = auto_compact_default_for_model(&model);
+            self.auto_compact = crate::route_budget::auto_compact_default_for_route(
+                self.api_provider,
+                &model,
+                self.active_route_limits,
+            );
         }
+    }
+
+    pub fn set_active_route_limits(&mut self, limits: RouteLimits) {
+        self.active_route_limits = crate::route_budget::known_route_limits(limits);
     }
 
     pub fn set_model_selection(&mut self, model: String) {

@@ -276,9 +276,12 @@ impl Engine {
                 }
             }
 
-            if let Some(input_budget) =
-                context_input_budget_for_provider(self.api_provider, &self.session.model)
-            {
+            if let Some(input_budget) = context_input_budget_for_route(
+                self.api_provider,
+                &self.session.model,
+                self.active_route_limits,
+                0,
+            ) {
                 let estimated_input = self.estimated_input_tokens();
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
@@ -438,7 +441,10 @@ impl Engine {
             let request = MessageRequest {
                 model: self.session.model.clone(),
                 messages: self.messages_with_turn_metadata(),
-                max_tokens: effective_max_output_tokens(&self.session.model),
+                max_tokens: effective_max_output_tokens_for_route(
+                    &self.session.model,
+                    self.active_route_limits,
+                ),
                 system: self.session.system_prompt.clone(),
                 tools: active_tools.clone(),
                 tool_choice: if active_tools.is_some() {

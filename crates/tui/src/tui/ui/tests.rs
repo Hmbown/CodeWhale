@@ -2506,10 +2506,20 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
     let compaction = app.compaction_config();
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    apply_model_and_compaction_update(&engine.handle, compaction, app.mode).await;
+    apply_model_and_compaction_update(
+        &engine.handle,
+        compaction,
+        app.mode,
+        app.active_route_limits,
+    )
+    .await;
 
     match engine.rx_op.recv().await.expect("set model op") {
-        crate::core::ops::Op::SetModel { model, mode } => {
+        crate::core::ops::Op::SetModel {
+            model,
+            mode,
+            route_limits: _,
+        } => {
             assert_eq!(model, "deepseek-v4-flash");
             assert_eq!(mode, app.mode);
         }
