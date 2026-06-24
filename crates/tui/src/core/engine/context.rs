@@ -67,6 +67,7 @@ pub(super) fn effective_max_output_tokens_for_route(
     crate::route_budget::route_output_limit_tokens(route_limits)
         .map_or(cap, |route_cap| cap.min(route_cap))
 }
+
 /// Keep this many most recent messages when emergency trimming is required.
 pub(super) const MIN_RECENT_MESSAGES_TO_KEEP: usize = 4;
 /// Allow a few emergency recovery attempts before failing the turn.
@@ -614,13 +615,7 @@ pub(super) fn route_context_budget_for_route(
 ) -> Option<ContextBudget> {
     let window = crate::route_budget::route_context_window_tokens(provider, model, route_limits);
     let output_cap = route_output_reservation_for_window(model, window, route_limits);
-    crate::route_budget::route_context_budget(
-        provider,
-        model,
-        route_limits,
-        input_tokens,
-        output_cap,
-    )
+    crate::route_budget::route_context_budget(window, input_tokens, output_cap)
 }
 
 fn route_output_reservation_for_window(
@@ -628,8 +623,16 @@ fn route_output_reservation_for_window(
     window_tokens: u32,
     route_limits: Option<RouteLimits>,
 ) -> u32 {
+    // Clamp the route output cap to both the model's native effective max and
+    // the per-turn ceiling, so the budget reservation matches what the API
+    // request will actually carry (`effective_max_output_tokens_for_route`
+    // takes the same min against the route cap). Without this, a small-window
+    // model whose route advertises a generous output cap would over-reserve
+    // output and report an unnecessarily tight `available_input_tokens`.
     if let Some(route_cap) = crate::route_budget::route_output_limit_tokens(route_limits) {
-        return route_cap.min(TURN_MAX_OUTPUT_TOKENS);
+        return route_cap
+            .min(effective_max_output_tokens(model))
+            .min(TURN_MAX_OUTPUT_TOKENS);
     }
     if window_tokens >= INTERNAL_BUDGET_LARGE_WINDOW_THRESHOLD {
         TURN_MAX_OUTPUT_TOKENS

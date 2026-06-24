@@ -2810,6 +2810,9 @@ fn route_context_budget_prefers_resolved_route_limits() {
     };
     let budget = route_context_budget_for_route(
         ApiProvider::Openrouter,
+        // The provider-prefixed string is the Openrouter wire model id; the
+        // limits below are taken verbatim from `RouteLimits`, not inferred
+        // from the prefix.
         "deepseek/deepseek-v4-pro",
         Some(limits),
         60_000,
