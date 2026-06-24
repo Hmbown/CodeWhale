@@ -472,6 +472,31 @@ async fn spawn_test_server_with_root_token_mobile_workspace(
         tokio::task::JoinHandle<()>,
     )>,
 > {
+    spawn_test_server_with_root_token_mobile_workspace_and_subagents(
+        root,
+        sessions_dir,
+        runtime_token,
+        mobile_enabled,
+        workspace,
+        None,
+    )
+    .await
+}
+
+async fn spawn_test_server_with_root_token_mobile_workspace_and_subagents(
+    root: PathBuf,
+    sessions_dir: PathBuf,
+    runtime_token: Option<String>,
+    mobile_enabled: bool,
+    workspace: PathBuf,
+    sub_agent_manager: Option<SharedSubAgentManager>,
+) -> Result<
+    Option<(
+        SocketAddr,
+        SharedRuntimeThreadManager,
+        tokio::task::JoinHandle<()>,
+    )>,
+> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
@@ -501,6 +526,8 @@ async fn spawn_test_server_with_root_token_mobile_workspace(
     runtime_threads.attach_automation_manager(automations.clone());
 
     let auth_required = runtime_token.is_some();
+    let sub_agent_manager =
+        sub_agent_manager.unwrap_or_else(|| runtime_api_sub_agent_manager(&workspace, 2));
     let state = RuntimeApiState {
         config: Config::default(),
         workspace,
@@ -510,6 +537,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace(
         sessions_dir,
         mcp_config_path: root.join("mcp.json"),
         automations,
+        sub_agent_manager,
         runtime_token,
         skill_state: Arc::new(Mutex::new(
             SkillStateStore::load_from(root.join("skills_state.toml")).unwrap_or_default(),
@@ -1013,6 +1041,9 @@ async fn workspace_and_automation_endpoints_work() -> Result<()> {
 
 #[tokio::test]
 async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
+    use crate::tools::subagent::{AgentWorkerSpec, AgentWorkerToolProfile, SubAgentType};
+    use crate::worker_profile::WorkerRuntimeProfile;
+
     let root = std::env::temp_dir().join(format!("codewhale-fleet-api-{}", Uuid::new_v4()));
     let workspace = root.join("workspace");
     fs::create_dir_all(&workspace)?;
@@ -1056,13 +1087,37 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     )?;
     let worker_id = report.worker_ids[0].clone();
     let sessions_dir = root.join("sessions");
+    let sub_agent_manager = runtime_api_sub_agent_manager(&workspace, 2);
+    {
+        let mut guard = sub_agent_manager.write().await;
+        guard.register_worker(AgentWorkerSpec {
+            worker_id: worker_id.clone(),
+            run_id: report.run_id.0.clone(),
+            parent_run_id: None,
+            session_name: Some("runtime-api-fleet-worker".to_string()),
+            objective: "Inspect fleet status through Runtime API".to_string(),
+            role: Some("status-reviewer".to_string()),
+            agent_type: SubAgentType::Review,
+            model: "auto".to_string(),
+            workspace: workspace.clone(),
+            git_branch: None,
+            context_mode: "fresh".to_string(),
+            fork_context: false,
+            tool_profile: AgentWorkerToolProfile::Explicit(vec!["rg".to_string()]),
+            runtime_profile: WorkerRuntimeProfile::for_role(SubAgentType::Review),
+            max_steps: 8,
+            spawn_depth: 0,
+            max_spawn_depth: codewhale_config::DEFAULT_SPAWN_DEPTH,
+        });
+    }
     let Some((addr, _runtime_threads, handle)) =
-        spawn_test_server_with_root_token_mobile_workspace(
+        spawn_test_server_with_root_token_mobile_workspace_and_subagents(
             root.clone(),
             sessions_dir,
             None,
             false,
             workspace,
+            Some(sub_agent_manager),
         )
         .await?
     else {
@@ -1094,6 +1149,9 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     assert_eq!(worker["role"], "status-reviewer");
     assert_eq!(worker["host"], "local");
     assert_eq!(worker["artifacts"][0]["kind"], "log");
+    assert_eq!(worker["runtime_state"]["agent_status"], "starting");
+    assert_eq!(worker["runtime_state"]["steps_taken"], 0);
+    assert_eq!(worker["runtime_state"]["has_session"], true);
 
     let interrupted: serde_json::Value = client
         .post(format!(
@@ -1135,6 +1193,40 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
 
     handle.abort();
     Ok(())
+}
+
+#[test]
+fn fleet_worker_json_includes_runtime_state_projection() {
+    let inspection = FleetWorkerInspection {
+        worker_id: "fleet-worker-1".to_string(),
+        status: FleetWorkerStatus::Busy,
+        current_run_id: Some(FleetRunId::from("fleet-run-1")),
+        current_task_id: Some("task-a".to_string()),
+        objective: Some("Inspect runtime projection".to_string()),
+        role: Some("reviewer".to_string()),
+        host: Some("local".to_string()),
+        latest_heartbeat_at: None,
+        latest_event: None,
+        artifacts: Vec::new(),
+        receipt_summary: None,
+        last_error: None,
+        alert_state: None,
+        runtime_state: Some(FleetWorkerRuntimeProjection {
+            agent_status: "running".to_string(),
+            steps_taken: 3,
+            latest_message: Some("reading files".to_string()),
+            error: None,
+            result_summary: None,
+            has_session: true,
+        }),
+    };
+
+    let worker = fleet_worker_json(&inspection);
+
+    assert_eq!(worker["runtime_state"]["agent_status"], "running");
+    assert_eq!(worker["runtime_state"]["steps_taken"], 3);
+    assert_eq!(worker["runtime_state"]["latest_message"], "reading files");
+    assert_eq!(worker["runtime_state"]["has_session"], true);
 }
 
 #[tokio::test]
@@ -3037,6 +3129,7 @@ async fn runtime_info_reports_bind_state() -> Result<()> {
     assert_eq!(info["transports"], json!(["http", "sse"]));
     assert_eq!(info["capabilities"]["threads"], true);
     assert_eq!(info["capabilities"]["external_tools"], true);
+    assert_eq!(info["capabilities"]["worker_runtime"], true);
     assert!(info["experimental"].is_object());
 
     handle.abort();

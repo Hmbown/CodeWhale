@@ -38,7 +38,9 @@ use crate::automation_manager::{
 };
 use crate::config::{Config, DEFAULT_TEXT_MODEL};
 use crate::fleet::ledger::{FleetLedgerState, FleetTaskLedgerStatus};
-use crate::fleet::manager::{FleetManager, FleetStatusSnapshot, FleetWorkerInspection};
+use crate::fleet::manager::{
+    FleetManager, FleetStatusSnapshot, FleetWorkerInspection, FleetWorkerRuntimeProjection,
+};
 use crate::mcp::McpPool;
 use crate::models::{ContentBlock, Message};
 use crate::runtime_threads::{
@@ -55,7 +57,10 @@ use crate::skill_state::SkillStateStore;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskRecord, TaskSummary,
 };
-use crate::tools::subagent::{AgentWorkerRecord, load_persisted_agent_worker_records};
+use crate::tools::subagent::{
+    AgentWorkerRecord, SharedSubAgentManager, load_persisted_agent_worker_records,
+    new_shared_subagent_manager_with_timeout,
+};
 use codewhale_protocol::fleet::{
     FleetArtifactKind, FleetRun, FleetRunId, FleetWorkerEventPayload, FleetWorkerStatus,
 };
@@ -70,6 +75,7 @@ pub struct RuntimeApiState {
     sessions_dir: PathBuf,
     mcp_config_path: PathBuf,
     automations: SharedAutomationManager,
+    sub_agent_manager: SharedSubAgentManager,
     runtime_token: Option<String>,
     skill_state: Arc<Mutex<SkillStateStore>>,
     auth_required: bool,
@@ -410,8 +416,20 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         event_replay: true,
         external_tools: true,
         environments: false,
-        worker_runtime: false,
+        worker_runtime: true,
     }
+}
+
+fn runtime_api_sub_agent_manager(workspace: &FsPath, workers: usize) -> SharedSubAgentManager {
+    let max_agents = workers.max(1);
+    new_shared_subagent_manager_with_timeout(
+        workspace.to_path_buf(),
+        max_agents,
+        max_agents,
+        Duration::from_secs(crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS),
+        max_agents,
+        None,
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -523,6 +541,7 @@ pub async fn run_http_server(
         );
         SkillStateStore::default()
     });
+    let sub_agent_manager = runtime_api_sub_agent_manager(&workspace, options.workers);
     let state = RuntimeApiState {
         config: config.clone(),
         workspace,
@@ -532,6 +551,7 @@ pub async fn run_http_server(
         sessions_dir,
         mcp_config_path: config.mcp_config_path(),
         automations,
+        sub_agent_manager,
         runtime_token: runtime_token.clone(),
         skill_state: Arc::new(Mutex::new(skill_state)),
         auth_required: auth_enabled,
@@ -1781,7 +1801,18 @@ async fn stop_fleet_run(
 }
 
 fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError> {
+    let exec_config = state
+        .config
+        .fleet
+        .as_ref()
+        .map(|fleet| fleet.exec.clone())
+        .unwrap_or_default();
     FleetManager::open(&state.workspace)
+        .map(|manager| {
+            manager
+                .with_exec_config(exec_config)
+                .with_sub_agent_manager(state.sub_agent_manager.clone())
+        })
         .map_err(|err| ApiError::internal(format!("Failed to open fleet manager: {err}")))
 }
 
@@ -1875,6 +1906,18 @@ fn fleet_worker_json(inspection: &FleetWorkerInspection) -> Value {
         "artifacts": inspection.artifacts.iter().map(fleet_artifact_json).collect::<Vec<_>>(),
         "last_error": inspection.last_error.clone(),
         "alert_state": inspection.alert_state.clone(),
+        "runtime_state": inspection.runtime_state.as_ref().map(fleet_worker_runtime_json),
+    })
+}
+
+fn fleet_worker_runtime_json(runtime: &FleetWorkerRuntimeProjection) -> Value {
+    json!({
+        "agent_status": runtime.agent_status.clone(),
+        "steps_taken": runtime.steps_taken,
+        "latest_message": runtime.latest_message.clone(),
+        "error": runtime.error.clone(),
+        "result_summary": runtime.result_summary.clone(),
+        "has_session": runtime.has_session,
     })
 }
 
