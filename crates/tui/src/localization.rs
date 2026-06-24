@@ -363,6 +363,7 @@ pub enum MessageId {
     CmdStashDescription,
     CmdStatusDescription,
     CmdStatuslineDescription,
+    CmdFleetDescription,
     CmdSubagentsDescription,
     CmdSwarmDescription,
     CmdSystemDescription,
@@ -801,6 +802,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdStashDescription,
     MessageId::CmdStatusDescription,
     MessageId::CmdStatuslineDescription,
+    MessageId::CmdFleetDescription,
     MessageId::CmdSubagentsDescription,
     MessageId::CmdSwarmDescription,
     MessageId::CmdSystemDescription,
@@ -1463,6 +1465,7 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdStatusDescription => "Show runtime session status",
         MessageId::CmdStatuslineDescription => "Configure which items appear in the footer",
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "List sub-agent status",
         MessageId::CmdSwarmDescription => {
             "Run a multi-agent fanout turn (sequential | mixture | distill | deliberate)"
@@ -2091,6 +2094,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdStatuslineDescription => {
             "Cấu hình các mục hiển thị ở thanh trạng thái dưới cùng"
         }
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "Liệt kê trạng thái của các sub-agent",
         MessageId::CmdSwarmDescription => {
             "Khởi chạy chế độ đa agent (sequential | mixture | distill | deliberate)"
@@ -2895,6 +2899,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdStatusDescription => "実行中のセッション状態を表示",
         MessageId::CmdStatuslineDescription => "フッターに表示する項目を設定",
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "サブエージェントの状態を一覧表示",
         MessageId::CmdSwarmDescription => {
             "マルチエージェントのファンアウトターンを実行（sequential | mixture | distill | deliberate）"
@@ -3472,6 +3477,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdStashDescription => "暂存或恢复输入草稿（Ctrl+S 暂存，/stash list|pop）",
         MessageId::CmdStatusDescription => "显示当前运行状态",
         MessageId::CmdStatuslineDescription => "配置底栏要显示哪些条目",
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "列出子代理状态",
         MessageId::CmdSwarmDescription => {
             "运行多代理扇出轮次（sequential | mixture | distill | deliberate）"
@@ -4037,6 +4043,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdStatusDescription => "Exibir o status da sessão em execução",
         MessageId::CmdStatuslineDescription => "Configurar quais itens aparecem no rodapé",
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "Listar o status dos sub-agentes",
         MessageId::CmdSwarmDescription => {
             "Executar turno fanout multi-agente (sequential | mixture | distill | deliberate)"
@@ -4672,6 +4679,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdStatuslineDescription => {
             "Configurar qué elementos aparecen en el pie de página"
         }
+        MessageId::CmdFleetDescription => "Open Fleet setup and loadout planner",
         MessageId::CmdSubagentsDescription => "Listar el estado de los sub-agentes",
         MessageId::CmdSwarmDescription => {
             "Ejecutar turno fanout multi-agente (sequential | mixture | distill | deliberate)"

@@ -13,6 +13,7 @@ mod clear;
 mod core;
 mod exit;
 mod feedback;
+mod fleet;
 mod help;
 mod hf;
 mod home;
@@ -85,6 +86,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 subagents::SubagentsCmd::info(),
                 subagents::SubagentsCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                fleet::FleetCmd::info(),
+                fleet::FleetCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 agent::AgentCmd::info(),

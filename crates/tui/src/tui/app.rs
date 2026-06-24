@@ -5597,6 +5597,8 @@ pub enum AppAction {
     OpenFeedbackPicker,
     /// Open the `/theme` picker modal with live preview of every preset.
     OpenThemePicker,
+    /// Open the `/fleet` setup and loadout planner.
+    OpenFleetSetup,
     /// Open an external URL in the system browser.
     OpenExternalUrl {
         url: String,

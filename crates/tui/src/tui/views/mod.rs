@@ -15,6 +15,7 @@ use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod fleet_setup;
 pub mod mode_picker;
 pub mod status_picker;
 
@@ -34,6 +35,7 @@ pub enum ModalKind {
     ModelPicker,
     ProviderPicker,
     ModePicker,
+    FleetSetup,
     FilePicker,
     StatusPicker,
     FeedbackPicker,
