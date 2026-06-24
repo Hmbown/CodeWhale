@@ -1949,6 +1949,31 @@ impl McpPool {
         self
     }
 
+    fn drop_connection(&mut self, server_name: &str, reason: &str) {
+        if self.connections.remove(server_name).is_some() {
+            tracing::debug!(
+                target: "mcp",
+                server = %server_name,
+                reason = %reason,
+                "dropped MCP connection"
+            );
+        }
+    }
+
+    fn drop_all_connections(&mut self, reason: &str) {
+        if self.connections.is_empty() {
+            return;
+        }
+        let count = self.connections.len();
+        tracing::debug!(
+            target: "mcp",
+            count,
+            reason = %reason,
+            "dropping MCP connections"
+        );
+        self.connections.clear();
+    }
+
     /// If the source config file's mtime has changed since the last check,
     /// re-read it and (only when the content hash also changed) drop all
     /// existing connections so the next `get_or_connect` reattaches under
@@ -1993,7 +2018,7 @@ impl McpPool {
         }
         // Real content change — drop all live connections so the next
         // get_or_connect picks up the new config (sandbox flags, env, args).
-        self.connections.clear();
+        self.drop_all_connections("config reload");
         self.config = new_config;
         self.config_hash = new_hash;
         Ok(true)
@@ -2020,7 +2045,7 @@ impl McpPool {
                 .ok_or_else(|| anyhow::anyhow!("MCP connection disappeared for {server_name}"));
         }
 
-        self.connections.remove(server_name);
+        self.drop_connection(server_name, "reconnect");
 
         let server_config = self
             .config
@@ -2491,7 +2516,7 @@ impl McpPool {
                     error = %err,
                     "retrying MCP tool call after stale session"
                 );
-                self.connections.remove(server_name);
+                self.drop_connection(server_name, "stale session retry");
                 let conn = self.get_or_connect(server_name).await?;
                 if !conn.config().is_tool_enabled(tool_name) {
                     anyhow::bail!("MCP tool '{tool_name}' is disabled for server '{server_name}'");
@@ -2525,7 +2550,7 @@ impl McpPool {
     /// Disconnect all connections
     #[allow(dead_code)] // Public API for MCP lifecycle management
     pub fn disconnect_all(&mut self) {
-        self.connections.clear();
+        self.drop_all_connections("disconnect all");
     }
 
     /// Graceful shutdown of every connection in the pool: send SIGTERM to
