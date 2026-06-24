@@ -17,7 +17,7 @@
 //! Pressing Esc backs out: from key entry returns to the list; from the
 //! list closes the modal without changes.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -468,6 +468,28 @@ impl ProviderPickerView {
         }
     }
 
+    /// Type-ahead: move the selection to the next provider whose display name
+    /// starts with the given character (case-insensitive), wrapping so repeated
+    /// presses cycle through matches — e.g. pressing `z` jumps to "Z.ai".
+    fn jump_to_letter(&mut self, c: char) {
+        let count = self.rows.len();
+        if count == 0 {
+            return;
+        }
+        let target = c.to_ascii_lowercase();
+        for offset in 1..=count {
+            let idx = (self.selected_idx + offset) % count;
+            if self.rows[idx]
+                .display_name
+                .to_ascii_lowercase()
+                .starts_with(target)
+            {
+                self.selected_idx = idx;
+                return;
+            }
+        }
+    }
+
     fn selected_provider(&self) -> ApiProvider {
         self.rows[self.selected_idx].provider
     }
@@ -523,6 +545,8 @@ impl ProviderPickerView {
             .title_bottom(Line::from(vec![
                 Span::styled(" ↑↓ ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("move "),
+                Span::styled(" a-z ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw("jump "),
                 Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw(format!("{enter_action} ")),
                 Span::styled(" R ", Style::default().fg(palette::TEXT_MUTED)),
@@ -727,6 +751,12 @@ impl ModalView for ProviderPickerView {
                     self.enter_key_entry();
                     ViewAction::None
                 }
+                // Type-ahead: any other letter jumps to the next provider whose
+                // name starts with it (e.g. `z` -> "Z.ai").
+                KeyCode::Char(c) if key.modifiers.is_empty() && c.is_ascii_alphabetic() => {
+                    self.jump_to_letter(c);
+                    ViewAction::None
+                }
                 _ => ViewAction::None,
             },
             Stage::KeyEntry => match key.code {
@@ -768,6 +798,17 @@ impl ModalView for ProviderPickerView {
                 _ => ViewAction::None,
             },
         }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        if self.stage == Stage::List {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.move_up(),
+                MouseEventKind::ScrollDown => self.move_down(),
+                _ => {}
+            }
+        }
+        ViewAction::None
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -858,6 +899,32 @@ mod tests {
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn type_ahead_jumps_to_provider_by_first_letter() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        // `z` is unique to Z.ai among provider display names.
+        picker.handle_key(key(KeyCode::Char('z')));
+        assert_eq!(picker.selected_provider(), ApiProvider::Zai);
+    }
+
+    #[test]
+    fn mouse_scroll_moves_selection_in_list_stage() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let before = picker.selected_idx;
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_ne!(
+            picker.selected_idx, before,
+            "scroll down should advance the selection"
+        );
     }
 
     #[test]

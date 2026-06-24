@@ -9,7 +9,7 @@
 //!   `ConfigUpdated{persist:false}` to restore the original theme name
 //!   that was active when the picker opened.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -105,6 +105,15 @@ impl ModalView for ThemePickerView {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.move_up(),
+            MouseEventKind::ScrollDown => self.move_down(),
+            _ => {}
+        }
+        ViewAction::None
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
