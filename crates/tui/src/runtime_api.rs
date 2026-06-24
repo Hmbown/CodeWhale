@@ -1,6 +1,6 @@
 //! Runtime HTTP/SSE API for local CodeWhale automation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
 use std::net::{SocketAddr, UdpSocket};
@@ -76,6 +76,11 @@ pub struct RuntimeApiState {
     bind_host: String,
     bind_port: u16,
     mobile_enabled: bool,
+    /// Shared McpPool reused across HTTP API calls so each call does not
+    /// spawn a duplicate set of MCP server processes. The engine maintains
+    /// its own separate pool; this one is for read-only tool discovery via
+    /// the API.
+    mcp_pool: Arc<Mutex<Option<McpPool>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -525,6 +530,7 @@ pub async fn run_http_server(
         bind_host: options.host.clone(),
         bind_port: options.port,
         mobile_enabled: options.mobile,
+        mcp_pool: Arc::new(Mutex::new(None)),
     };
     let app = build_router(state);
 
@@ -1989,13 +1995,6 @@ async fn list_mcp_servers(
 ) -> Result<Json<McpServersResponse>, ApiError> {
     let config = crate::mcp::load_config_with_workspace(&state.mcp_config_path, &state.workspace)
         .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
-    let mut pool = McpPool::new(config.clone());
-    let _errors = pool.connect_all().await;
-    let connected: HashSet<String> = pool
-        .connected_servers()
-        .into_iter()
-        .map(str::to_string)
-        .collect();
 
     let mut servers = Vec::new();
     for (name, server_cfg) in config.servers {
@@ -2005,7 +2004,7 @@ async fn list_mcp_servers(
             required: server_cfg.required,
             command: server_cfg.command.clone(),
             url: server_cfg.url.clone(),
-            connected: connected.contains(&name),
+            connected: false,
             enabled_tools: server_cfg.enabled_tools.clone(),
             disabled_tools: server_cfg.disabled_tools.clone(),
         });
@@ -2019,9 +2018,16 @@ async fn list_mcp_tools(
     State(state): State<RuntimeApiState>,
     Query(query): Query<McpToolsQuery>,
 ) -> Result<Json<McpToolsResponse>, ApiError> {
-    let mut pool =
-        McpPool::from_config_path_with_workspace(&state.mcp_config_path, &state.workspace)
-            .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
+    let mut pool_guard = state.mcp_pool.lock().await;
+    if pool_guard.is_none() {
+        let new_pool = McpPool::from_config_path_with_workspace(
+            &state.mcp_config_path,
+            &state.workspace,
+        )
+        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
+        pool_guard.replace(new_pool);
+    }
+    let pool = pool_guard.as_mut().unwrap();
     let _errors = pool.connect_all().await;
 
     let mut tools = Vec::new();
