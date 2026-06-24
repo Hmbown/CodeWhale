@@ -4695,6 +4695,14 @@ concurrency = 3
 }
 
 #[test]
+fn fleet_loadout_accepts_default_model_classes() {
+    assert_eq!(FleetLoadout::from_name("strong"), FleetLoadout::Strong);
+    assert_eq!(FleetLoadout::from_name("balanced"), FleetLoadout::Balanced);
+    assert_eq!(FleetLoadout::from_name("fast"), FleetLoadout::Fast);
+    assert_eq!(FleetLoadout::Strong.as_str(), "strong");
+}
+
+#[test]
 fn fallback_providers_do_not_change_runtime_resolution() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();

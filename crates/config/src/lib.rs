@@ -1217,6 +1217,7 @@ impl<'de> Deserialize<'de> for FleetSlot {
 pub enum FleetLoadout {
     #[default]
     Inherit,
+    Strong,
     Fast,
     Balanced,
     DeepReasoning,
@@ -1231,6 +1232,7 @@ impl FleetLoadout {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Inherit => "inherit",
+            Self::Strong => "strong",
             Self::Fast => "fast",
             Self::Balanced => "balanced",
             Self::DeepReasoning => "deep-reasoning",
@@ -1245,6 +1247,7 @@ impl FleetLoadout {
     pub fn from_name(value: &str) -> Self {
         match value.trim() {
             "inherit" | "default" | "auto" | "" => Self::Inherit,
+            "strong" => Self::Strong,
             "fast" => Self::Fast,
             "balanced" => Self::Balanced,
             "deep-reasoning" | "deep_reasoning" | "reasoning" => Self::DeepReasoning,

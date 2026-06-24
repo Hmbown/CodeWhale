@@ -13,11 +13,13 @@
 
 #![allow(dead_code)]
 
+use anyhow::{Result, bail};
 use codewhale_protocol::fleet::{
     FleetHostSpec, FleetTaskSpec, FleetTaskWorkerProfile, FleetWorkerEventPayload, FleetWorkerSpec,
 };
 
 use super::host::FleetHostKind;
+use super::profile::AgentProfile;
 use crate::tools::subagent::{
     AgentWorkerSpec, AgentWorkerStatus, AgentWorkerToolProfile, SubAgentType,
 };
@@ -88,7 +90,103 @@ pub fn fleet_task_to_worker_spec(
     }
 }
 
+/// Validate that every task referencing a workspace agent profile can resolve it.
+///
+/// This is intended to run at Fleet run creation time, before leasing any
+/// worker or appending lifecycle events.
+pub fn validate_task_agent_profiles(
+    tasks: &[FleetTaskSpec],
+    agent_profiles: &[AgentProfile],
+) -> Result<()> {
+    for task in tasks {
+        resolve_task_agent_profile(task, agent_profiles)?;
+    }
+    Ok(())
+}
+
+/// Build a sub-agent worker spec after resolving workspace Fleet profile input.
+///
+/// This keeps Fleet and sub-agents on the same runtime substrate: profile files
+/// and task-level role/loadout intent are composed into the existing
+/// `AgentWorkerSpec` / `WorkerRuntimeProfile` pair, then optionally intersected
+/// with a parent profile when the caller has one.
+#[allow(clippy::too_many_arguments)]
+pub fn fleet_task_to_worker_spec_with_profiles(
+    worker_id: &str,
+    run_id: &str,
+    task_spec: &FleetTaskSpec,
+    _worker_spec: &FleetWorkerSpec,
+    model: &str,
+    workspace: &std::path::Path,
+    agent_profiles: &[AgentProfile],
+    parent_runtime_profile: Option<&WorkerRuntimeProfile>,
+) -> Result<AgentWorkerSpec> {
+    let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)?;
+    let worker_profile = task_spec.worker.as_ref();
+    let role = effective_fleet_role(worker_profile, agent_profile);
+    let agent_type = fleet_role_to_agent_type(role.as_deref());
+    let tool_profile = fleet_tool_profile(worker_profile);
+    let objective = fleet_task_prompt_with_profile(task_spec, agent_profile);
+    let max_spawn_depth = codewhale_config::FleetExecConfig::default().max_spawn_depth;
+    let loadout = effective_fleet_loadout(worker_profile, agent_profile);
+    let mut requested_runtime = fleet_worker_runtime_profile_for_loadout(
+        &agent_type,
+        &tool_profile,
+        model,
+        0,
+        max_spawn_depth,
+        &loadout,
+    );
+    if let Some(agent_profile) = agent_profile
+        && let Some(profile_depth) = agent_profile.profile.delegation.max_spawn_depth
+    {
+        requested_runtime.max_spawn_depth = requested_runtime.max_spawn_depth.min(profile_depth);
+    }
+    let runtime_profile = parent_runtime_profile
+        .map(|parent| parent.derive_child(&requested_runtime))
+        .unwrap_or(requested_runtime);
+
+    Ok(AgentWorkerSpec {
+        worker_id: worker_id.to_string(),
+        run_id: run_id.to_string(),
+        parent_run_id: None,
+        session_name: Some(format!("fleet-{}-{}", worker_id, task_spec.id)),
+        objective,
+        role,
+        agent_type,
+        model: model.to_string(),
+        workspace: workspace.to_path_buf(),
+        git_branch: None,
+        context_mode: "fresh".to_string(),
+        fork_context: false,
+        tool_profile,
+        runtime_profile: runtime_profile.clone(),
+        max_steps: task_spec
+            .budget
+            .as_ref()
+            .and_then(|b| b.max_tool_calls)
+            .unwrap_or(u32::MAX),
+        spawn_depth: 0,
+        max_spawn_depth: runtime_profile.max_spawn_depth,
+    })
+}
+
 pub(crate) fn fleet_task_prompt(task_spec: &FleetTaskSpec) -> String {
+    fleet_task_prompt_with_profile(task_spec, None)
+}
+
+pub(crate) fn fleet_task_prompt_with_profiles(
+    task_spec: &FleetTaskSpec,
+    agent_profiles: &[AgentProfile],
+) -> Result<String> {
+    let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)?;
+    Ok(fleet_task_prompt_with_profile(task_spec, agent_profile))
+}
+
+fn fleet_task_prompt_with_profile(
+    task_spec: &FleetTaskSpec,
+    agent_profile: Option<&AgentProfile>,
+) -> String {
     let mut prompt = String::new();
     prompt.push_str("Fleet task: ");
     prompt.push_str(&task_spec.name);
@@ -122,7 +220,77 @@ pub(crate) fn fleet_task_prompt(task_spec: &FleetTaskSpec) -> String {
         }
     }
 
+    if let Some(agent_profile) = agent_profile {
+        prompt.push_str("\nFleet profile: ");
+        prompt.push_str(&agent_profile.id);
+        if let Some(display_name) = agent_profile.display_name.as_deref() {
+            prompt.push_str(" (");
+            prompt.push_str(display_name);
+            prompt.push(')');
+        }
+        if let Some(description) = agent_profile.description.as_deref() {
+            prompt.push_str("\nProfile description:\n");
+            prompt.push_str(description);
+        }
+        if let Some(instructions) = agent_profile.profile.role.instructions.as_deref() {
+            prompt.push_str("\nProfile instructions:\n");
+            prompt.push_str(instructions);
+        }
+    }
+
     prompt
+}
+
+fn resolve_task_agent_profile<'a>(
+    task_spec: &FleetTaskSpec,
+    agent_profiles: &'a [AgentProfile],
+) -> Result<Option<&'a AgentProfile>> {
+    let Some(profile_id) = task_spec
+        .worker
+        .as_ref()
+        .and_then(|worker| worker.agent_profile.as_deref())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(profile) = agent_profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+    else {
+        bail!(
+            "fleet task {} references unknown agent profile {profile_id:?}",
+            task_spec.id
+        );
+    };
+    Ok(Some(profile))
+}
+
+fn effective_fleet_role(
+    worker_profile: Option<&FleetTaskWorkerProfile>,
+    agent_profile: Option<&AgentProfile>,
+) -> Option<String> {
+    worker_profile
+        .and_then(|worker| worker.role.as_deref())
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .map(str::to_string)
+        .or_else(|| agent_profile.map(|profile| profile.profile.role.name.clone()))
+}
+
+fn effective_fleet_loadout(
+    worker_profile: Option<&FleetTaskWorkerProfile>,
+    agent_profile: Option<&AgentProfile>,
+) -> codewhale_config::FleetLoadout {
+    worker_profile
+        .and_then(|worker| worker.model_class.as_deref().or(worker.loadout.as_deref()))
+        .map(codewhale_config::FleetLoadout::from_name)
+        .or_else(|| {
+            agent_profile
+                .map(|profile| profile.profile.loadout.clone())
+                .filter(|loadout| *loadout != codewhale_config::FleetLoadout::Inherit)
+        })
+        .unwrap_or_default()
 }
 
 /// Map a fleet role name to a `SubAgentType`. Unknown roles default to `General`.
@@ -172,6 +340,46 @@ fn fleet_worker_runtime_profile(
     profile.max_spawn_depth = max_spawn_depth.saturating_sub(spawn_depth);
     profile.background = true;
     profile
+}
+
+fn fleet_worker_runtime_profile_for_loadout(
+    agent_type: &SubAgentType,
+    tool_profile: &AgentWorkerToolProfile,
+    model: &str,
+    spawn_depth: u32,
+    max_spawn_depth: u32,
+    loadout: &codewhale_config::FleetLoadout,
+) -> WorkerRuntimeProfile {
+    let mut profile = fleet_worker_runtime_profile(
+        agent_type,
+        tool_profile,
+        model,
+        spawn_depth,
+        max_spawn_depth,
+    );
+    profile.model = fleet_model_route_for_loadout(model, loadout);
+    profile
+}
+
+fn fleet_model_route_for_loadout(
+    model: &str,
+    loadout: &codewhale_config::FleetLoadout,
+) -> ModelRoute {
+    let model = model.trim();
+    if !model.is_empty() && !model.eq_ignore_ascii_case("auto") {
+        return ModelRoute::Fixed(model.to_string());
+    }
+    match loadout {
+        codewhale_config::FleetLoadout::Inherit => ModelRoute::Inherit,
+        codewhale_config::FleetLoadout::Fast => ModelRoute::Faster,
+        codewhale_config::FleetLoadout::Strong
+        | codewhale_config::FleetLoadout::Balanced
+        | codewhale_config::FleetLoadout::DeepReasoning
+        | codewhale_config::FleetLoadout::Code
+        | codewhale_config::FleetLoadout::Review
+        | codewhale_config::FleetLoadout::ToolHeavy
+        | codewhale_config::FleetLoadout::Custom(_) => ModelRoute::Auto,
+    }
 }
 
 /// Create a fleet artifact ref from a worker output.
@@ -320,6 +528,71 @@ pub fn is_parallel_safe_read_only_tool(tool_name: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn fleet_task(id: &str, worker: Option<FleetTaskWorkerProfile>) -> FleetTaskSpec {
+        FleetTaskSpec {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            objective: Some(format!("Complete {id}")),
+            instructions: format!("do {id}"),
+            worker,
+            workspace: None,
+            input_files: Vec::new(),
+            context: Vec::new(),
+            budget: None,
+            tags: Vec::new(),
+            expected_artifacts: Vec::new(),
+            scorer: None,
+            retry_policy: None,
+            alert_policy: None,
+            timeout_seconds: None,
+            metadata: Default::default(),
+        }
+    }
+
+    fn worker_profile(
+        agent_profile: Option<&str>,
+        role: Option<&str>,
+        loadout: Option<&str>,
+        model_class: Option<&str>,
+        tools: Vec<&str>,
+    ) -> FleetTaskWorkerProfile {
+        FleetTaskWorkerProfile {
+            agent_profile: agent_profile.map(str::to_string),
+            role: role.map(str::to_string),
+            loadout: loadout.map(str::to_string),
+            model_class: model_class.map(str::to_string),
+            tool_profile: None,
+            tools: tools.into_iter().map(str::to_string).collect(),
+            capabilities: Vec::new(),
+        }
+    }
+
+    fn agent_profile(
+        id: &str,
+        role: &str,
+        instructions: Option<&str>,
+        loadout: codewhale_config::FleetLoadout,
+    ) -> AgentProfile {
+        AgentProfile {
+            id: id.to_string(),
+            display_name: Some(format!("{role} profile")),
+            description: Some(format!("{role} description")),
+            profile: codewhale_config::FleetProfile {
+                slot: codewhale_config::FleetSlot::from_name(role),
+                role: codewhale_config::FleetRole {
+                    name: role.to_string(),
+                    description: Some(format!("{role} role")),
+                    instructions: instructions.map(str::to_string),
+                },
+                loadout,
+                permissions: codewhale_config::FleetProfilePermissions::default(),
+                delegation: codewhale_config::FleetDelegationHints::default(),
+            },
+            source: std::path::PathBuf::from(format!("{id}.toml")),
+        }
+    }
+
     #[test]
     fn fleet_role_smoke_runner_maps_to_verifier() {
         assert_eq!(
@@ -428,6 +701,119 @@ mod tests {
         assert!(prompt.contains("Read the fleet protocol and report issues."));
         assert!(prompt.contains("Keep the report concise."));
         assert!(prompt.contains("crates/protocol/src/fleet.rs"));
+    }
+
+    #[test]
+    fn fleet_worker_spec_resolves_agent_profile_role_prompt_and_loadout() {
+        let profile = agent_profile(
+            "reviewer",
+            "reviewer",
+            Some("Focus on regressions and missing tests."),
+            codewhale_config::FleetLoadout::Balanced,
+        );
+        let task = fleet_task(
+            "review",
+            Some(worker_profile(Some("reviewer"), None, None, None, vec![])),
+        );
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+
+        let spec = fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            &task,
+            &worker,
+            "auto",
+            std::path::Path::new("/tmp"),
+            &[profile],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(spec.role.as_deref(), Some("reviewer"));
+        assert_eq!(spec.agent_type, SubAgentType::Review);
+        assert!(spec.objective.contains("Fleet profile: reviewer"));
+        assert!(
+            spec.objective
+                .contains("Focus on regressions and missing tests.")
+        );
+        assert_eq!(spec.runtime_profile.role, SubAgentType::Review);
+        assert_eq!(spec.runtime_profile.model, ModelRoute::Auto);
+    }
+
+    #[test]
+    fn fleet_worker_spec_rejects_unknown_agent_profile_before_spawn() {
+        let task = fleet_task(
+            "review",
+            Some(worker_profile(Some("missing"), None, None, None, vec![])),
+        );
+
+        let err = validate_task_agent_profiles(&[task], &[])
+            .expect_err("unknown agent profile must fail validation");
+
+        assert!(
+            err.to_string()
+                .contains("references unknown agent profile \"missing\"")
+        );
+    }
+
+    #[test]
+    fn fleet_worker_spec_intersects_task_tools_with_parent_runtime_profile() {
+        let task = fleet_task(
+            "build",
+            Some(worker_profile(
+                None,
+                Some("builder"),
+                None,
+                Some("fast"),
+                vec!["read_file", "apply_patch"],
+            )),
+        );
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::Explore);
+        parent.tools = ToolScope::Explicit(vec!["read_file".to_string()]);
+        parent.max_spawn_depth = 2;
+
+        let spec = fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            &task,
+            &worker,
+            "auto",
+            std::path::Path::new("/tmp"),
+            &[],
+            Some(&parent),
+        )
+        .unwrap();
+
+        assert_eq!(spec.agent_type, SubAgentType::Implementer);
+        assert!(!spec.runtime_profile.permissions.write);
+        assert!(!spec.runtime_profile.permissions.network);
+        assert_eq!(
+            spec.runtime_profile.shell,
+            crate::worker_profile::ShellPolicy::ReadOnly
+        );
+        assert_eq!(
+            spec.runtime_profile.tools,
+            ToolScope::Explicit(vec!["read_file".to_string()])
+        );
+        assert_eq!(spec.runtime_profile.model, ModelRoute::Faster);
+        assert_eq!(spec.max_spawn_depth, 1);
     }
 
     #[test]

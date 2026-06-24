@@ -16,7 +16,9 @@ use codewhale_protocol::fleet::*;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::executor::{FleetExecutor, FleetWorkerTerminalEvent, build_worker_exec_command};
+use super::executor::{
+    FleetExecutor, FleetWorkerTerminalEvent, build_worker_exec_command_with_profiles,
+};
 use super::host::FleetHostErrorKind;
 use super::ledger::{FleetLedger, FleetLedgerState, FleetTaskLedgerStatus, FleetTaskState};
 use super::task_spec::{
@@ -205,6 +207,8 @@ impl FleetManager {
         max_workers: usize,
     ) -> Result<FleetRunReport> {
         validate_task_spec_document(&doc)?;
+        let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
+        worker_runtime::validate_task_agent_profiles(&doc.tasks, &agent_profiles)?;
         let max_workers = max_workers.clamp(1, 128);
         let run_id = FleetRunId::from(format!(
             "fleet-{}",
@@ -621,6 +625,42 @@ impl FleetManager {
         entry: &FleetInboxEntry,
         task_spec: &FleetTaskSpec,
     ) -> Result<()> {
+        let sub_agent_worker = if self.sub_agent_manager.is_some() {
+            let run = self
+                .ledger
+                .rebuild_state()
+                .ok()
+                .and_then(|state| state.runs.get(&entry.run_id.0).cloned());
+            let worker_spec = run
+                .as_ref()
+                .and_then(|r| r.worker_specs.iter().find(|w| w.id == worker_id).cloned())
+                .unwrap_or_else(|| FleetWorkerSpec {
+                    id: worker_id.to_string(),
+                    name: worker_id.to_string(),
+                    host: FleetHostSpec::Local,
+                    trust_level: Some(FleetTrustLevel::Local),
+                    labels: BTreeMap::new(),
+                    capabilities: vec![],
+                    max_concurrent_tasks: Some(1),
+                });
+            let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
+            let worker = worker_runtime::fleet_task_to_worker_spec_with_profiles(
+                worker_id,
+                &entry.run_id.0,
+                task_spec,
+                &worker_spec,
+                "auto",
+                &self.workspace,
+                &agent_profiles,
+                None,
+            )?;
+            Some(worker_runtime::apply_exec_hardening(
+                worker,
+                &self.exec_config,
+            ))
+        } else {
+            None
+        };
         let now = timestamp();
         self.ledger
             .lease_task(&entry.run_id, &entry.task_id, worker_id, &now, None)?;
@@ -656,39 +696,10 @@ impl FleetManager {
         // Register with the sub-agent manager for headless worker tracking.
         // The engine's agent path handles actual sub-agent spawning.
         if let Some(ref mgr) = self.sub_agent_manager
-            && let Ok(guard) = mgr.try_write()
+            && let Some(worker) = sub_agent_worker
+            && let Ok(mut guard) = mgr.try_write()
         {
-            let run = self
-                .ledger
-                .rebuild_state()
-                .ok()
-                .and_then(|state| state.runs.get(&entry.run_id.0).cloned());
-            let worker_spec = run
-                .as_ref()
-                .and_then(|r| r.worker_specs.iter().find(|w| w.id == worker_id).cloned())
-                .unwrap_or_else(|| FleetWorkerSpec {
-                    id: worker_id.to_string(),
-                    name: worker_id.to_string(),
-                    host: FleetHostSpec::Local,
-                    trust_level: Some(FleetTrustLevel::Local),
-                    labels: BTreeMap::new(),
-                    capabilities: vec![],
-                    max_concurrent_tasks: Some(1),
-                });
-            let worker = worker_runtime::fleet_task_to_worker_spec(
-                worker_id,
-                &entry.run_id.0,
-                task_spec,
-                &worker_spec,
-                "auto",
-                &self.workspace,
-            );
-            let worker = worker_runtime::apply_exec_hardening(worker, &self.exec_config);
-            // drop guard after registering so we don't hold the write lock
-            drop(guard);
-            if let Ok(mut guard) = mgr.try_write() {
-                guard.register_worker(worker);
-            }
+            guard.register_worker(worker);
         }
 
         Ok(())
@@ -707,6 +718,7 @@ impl FleetManager {
             .get(&run_id.0)
             .cloned()
             .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+        let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
         let mut started = 0usize;
         for task in active_tasks_for_run(&state, run_id) {
             let Some(worker_id) = task.leased_to.as_deref() else {
@@ -729,8 +741,13 @@ impl FleetManager {
                 .find(|worker| worker.id == worker_id)
                 .cloned()
                 .unwrap_or_else(|| default_local_worker(worker_id));
-            let command =
-                build_worker_exec_command(codewhale_binary, &task_spec, &self.exec_config, model);
+            let command = build_worker_exec_command_with_profiles(
+                codewhale_binary,
+                &task_spec,
+                &self.exec_config,
+                model,
+                &agent_profiles,
+            )?;
             let cwd = resolve_task_cwd(&self.workspace, &task_spec);
             match executor.start_worker_on_host(worker_id, &worker_spec.host, command, Some(cwd)) {
                 Ok(handle) => {
@@ -1495,6 +1512,39 @@ mod tests {
         assert_eq!(status.queued, 1);
         assert_eq!(status.running, 2);
         assert_eq!(status.completed, 0);
+    }
+
+    #[test]
+    fn fleet_manager_rejects_unknown_agent_profile_before_run_creation() {
+        let tmp = TempDir::new().unwrap();
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        let mut task = task("task-a");
+        task.worker = Some(FleetTaskWorkerProfile {
+            role: None,
+            agent_profile: Some("missing".to_string()),
+            loadout: None,
+            model_class: None,
+            tool_profile: None,
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        });
+        let doc = FleetTaskSpecDocument {
+            name: Some("profile guard".to_string()),
+            labels: BTreeMap::new(),
+            security_policy: None,
+            workers: Vec::new(),
+            tasks: vec![task],
+        };
+
+        let err = manager
+            .create_run(doc, 1)
+            .expect_err("unknown agent profile must reject the run");
+
+        assert!(
+            err.to_string()
+                .contains("references unknown agent profile \"missing\"")
+        );
+        assert!(manager.ledger.rebuild_state().unwrap().runs.is_empty());
     }
 
     #[test]
