@@ -742,6 +742,9 @@ struct EnvGuard {
     openrouter_api_key: Option<OsString>,
     openrouter_base_url: Option<OsString>,
     openrouter_model: Option<OsString>,
+    openmodel_api_key: Option<OsString>,
+    openmodel_base_url: Option<OsString>,
+    openmodel_model: Option<OsString>,
     xiaomi_mimo_token_plan_api_key: Option<OsString>,
     mimo_token_plan_api_key: Option<OsString>,
     xiaomi_mimo_api_key: Option<OsString>,
@@ -849,6 +852,9 @@ impl EnvGuard {
             openrouter_api_key: env::var_os("OPENROUTER_API_KEY"),
             openrouter_base_url: env::var_os("OPENROUTER_BASE_URL"),
             openrouter_model: env::var_os("OPENROUTER_MODEL"),
+            openmodel_api_key: env::var_os("OPENMODEL_API_KEY"),
+            openmodel_base_url: env::var_os("OPENMODEL_BASE_URL"),
+            openmodel_model: env::var_os("OPENMODEL_MODEL"),
             xiaomi_mimo_token_plan_api_key: env::var_os("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"),
             mimo_token_plan_api_key: env::var_os("MIMO_TOKEN_PLAN_API_KEY"),
             xiaomi_mimo_api_key: env::var_os("XIAOMI_MIMO_API_KEY"),
@@ -951,6 +957,9 @@ impl EnvGuard {
             env::remove_var("OPENROUTER_API_KEY");
             env::remove_var("OPENROUTER_BASE_URL");
             env::remove_var("OPENROUTER_MODEL");
+            env::remove_var("OPENMODEL_API_KEY");
+            env::remove_var("OPENMODEL_BASE_URL");
+            env::remove_var("OPENMODEL_MODEL");
             env::remove_var("XIAOMI_MIMO_TOKEN_PLAN_API_KEY");
             env::remove_var("MIMO_TOKEN_PLAN_API_KEY");
             env::remove_var("XIAOMI_MIMO_API_KEY");
@@ -1076,6 +1085,9 @@ impl Drop for EnvGuard {
             Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
             Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
             Self::restore_var("OPENROUTER_MODEL", self.openrouter_model.take());
+            Self::restore_var("OPENMODEL_API_KEY", self.openmodel_api_key.take());
+            Self::restore_var("OPENMODEL_BASE_URL", self.openmodel_base_url.take());
+            Self::restore_var("OPENMODEL_MODEL", self.openmodel_model.take());
             Self::restore_var(
                 "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
                 self.xiaomi_mimo_token_plan_api_key.take(),
@@ -3149,6 +3161,49 @@ fn deepseek_anthropic_route_defaults_to_anthropic_endpoint() {
 }
 
 #[test]
+fn openmodel_route_defaults_to_messages_endpoint() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    for alias in ["openmodel", "open-model", "open_model"] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Openmodel));
+
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("openmodel alias");
+        assert_eq!(parsed.provider, ProviderKind::Openmodel);
+    }
+
+    let provider = provider::resolve_provider("openmodel").expect("openmodel metadata resolves");
+    assert_eq!(provider.kind(), ProviderKind::Openmodel);
+    assert_eq!(provider.provider_config_key(), "openmodel");
+    assert_eq!(provider.default_model(), DEFAULT_OPENMODEL_MODEL);
+    assert_eq!(provider.default_base_url(), DEFAULT_OPENMODEL_BASE_URL);
+    assert_eq!(provider.env_vars(), &["OPENMODEL_API_KEY"]);
+    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+
+    let config = ConfigToml {
+        provider: ProviderKind::Openmodel,
+        ..ConfigToml::default()
+    };
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Openmodel);
+    assert_eq!(resolved.base_url, DEFAULT_OPENMODEL_BASE_URL);
+    assert_eq!(resolved.model, DEFAULT_OPENMODEL_MODEL);
+
+    unsafe {
+        std::env::set_var("OPENMODEL_BASE_URL", "https://gateway.example.test");
+        std::env::set_var("OPENMODEL_MODEL", "claude-sonnet-4-20250514");
+    }
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, "https://gateway.example.test");
+    assert_eq!(resolved.model, "claude-sonnet-4-20250514");
+    unsafe {
+        std::env::remove_var("OPENMODEL_BASE_URL");
+        std::env::remove_var("OPENMODEL_MODEL");
+    }
+}
+
+#[test]
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     assert_eq!(providers.len(), ProviderKind::ALL.len());
@@ -3241,7 +3296,7 @@ fn provider_metadata_defaults_match_runtime_helpers() {
         // is OpenAI-compatible Chat Completions.
         let expected_wire = match kind {
             ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
-            ProviderKind::Anthropic | ProviderKind::DeepseekAnthropic => {
+            ProviderKind::Anthropic | ProviderKind::DeepseekAnthropic | ProviderKind::Openmodel => {
                 provider::WireFormat::AnthropicMessages
             }
             _ => provider::WireFormat::ChatCompletions,

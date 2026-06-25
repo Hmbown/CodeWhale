@@ -73,6 +73,8 @@ pub enum ProviderKind {
     OpenaiCodex,
     #[serde(alias = "claude")]
     Anthropic,
+    #[serde(alias = "open-model", alias = "open_model")]
+    Openmodel,
     #[serde(
         alias = "z-ai",
         alias = "z_ai",
@@ -107,7 +109,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -131,6 +133,7 @@ impl ProviderKind {
         Self::Qianfan,
         Self::OpenaiCodex,
         Self::Anthropic,
+        Self::Openmodel,
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,

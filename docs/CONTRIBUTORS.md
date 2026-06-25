@@ -33,6 +33,9 @@ notes, and relevant issue/PR comments.
 - **[noaft](https://github.com/noaft)** — `/links` provider docs fallback
   update, including the current CodeWhale docs URL and a Baidu Qianfan docs
   link (#3621, harvested)
+- **[noaft](https://github.com/noaft)** — OpenModel provider support across
+  config, CLI, TUI provider picker, docs, and registry checks (#3585,
+  harvested)
 
 </details>
 

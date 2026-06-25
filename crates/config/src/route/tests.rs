@@ -161,7 +161,7 @@ fn descriptor_protocol_matches_provider_wire() {
         );
         let expected = match kind {
             ProviderKind::OpenaiCodex => RequestProtocol::Responses,
-            ProviderKind::DeepseekAnthropic | ProviderKind::Anthropic => {
+            ProviderKind::DeepseekAnthropic | ProviderKind::Anthropic | ProviderKind::Openmodel => {
                 RequestProtocol::AnthropicMessages
             }
             _ => RequestProtocol::ChatCompletions,

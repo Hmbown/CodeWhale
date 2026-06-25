@@ -868,28 +868,31 @@ fn build_default_headers(
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     let api_key = api_key.trim();
     if api_provider_uses_anthropic_messages(api_provider) {
-        // #3014: the Messages API authenticates with `x-api-key` (never
-        // `Authorization: Bearer`) and pins the wire contract via
-        // `anthropic-version`.
+        // #3014: most Messages API routes authenticate with `x-api-key`.
+        // OpenModel also supports Bearer auth for Messages, and its `/models`
+        // endpoint requires it, so the header chooser below keeps OpenModel on
+        // Bearer while still pinning the Anthropic wire contract here.
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),
         );
     }
-    let auth_header_name =
-        if !api_key.is_empty() && api_provider_uses_anthropic_messages(api_provider) {
-            Some(HeaderName::from_static("x-api-key"))
-        } else if !api_key.is_empty()
-            && api_provider == ApiProvider::XiaomiMimo
-            && (xiaomi_mimo_base_url_uses_token_plan(base_url)
-                || xiaomi_mimo_api_key_uses_token_plan(api_key))
-        {
-            Some(HeaderName::from_static("api-key"))
-        } else if !api_key.is_empty() {
-            Some(AUTHORIZATION)
-        } else {
-            None
-        };
+    let auth_header_name = if !api_key.is_empty()
+        && api_provider_uses_anthropic_messages(api_provider)
+        && api_provider != ApiProvider::Openmodel
+    {
+        Some(HeaderName::from_static("x-api-key"))
+    } else if !api_key.is_empty()
+        && api_provider == ApiProvider::XiaomiMimo
+        && (xiaomi_mimo_base_url_uses_token_plan(base_url)
+            || xiaomi_mimo_api_key_uses_token_plan(api_key))
+    {
+        Some(HeaderName::from_static("api-key"))
+    } else if !api_key.is_empty() {
+        Some(AUTHORIZATION)
+    } else {
+        None
+    };
     if let Some(header_name) = auth_header_name.as_ref() {
         let header_value = if *header_name == AUTHORIZATION {
             HeaderValue::from_str(&format!("Bearer {api_key}"))?
@@ -926,7 +929,7 @@ fn is_auth_dialect_header(header_name: &HeaderName) -> bool {
 fn api_provider_uses_anthropic_messages(api_provider: ApiProvider) -> bool {
     matches!(
         api_provider,
-        ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic
+        ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel
     )
 }
 
@@ -1700,7 +1703,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama OpenAI-compat endpoint accepts think param.
                 body["think"] = json!(false);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -1781,7 +1784,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -1849,7 +1852,7 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic => {
+            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
                 // #3014: thinking/effort shaping happens natively inside
                 // client/anthropic.rs (adaptive thinking + output_config),
                 // not via OpenAI-dialect fields.
@@ -2540,6 +2543,42 @@ mod tests {
         assert!(
             headers.get("api-key").is_none(),
             "Anthropic-compatible DeepSeek route must not inherit MiMo auth headers"
+        );
+    }
+
+    #[test]
+    fn openmodel_uses_bearer_auth_with_anthropic_version() {
+        let mut extra = HashMap::new();
+        extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
+        extra.insert("api-key".to_string(), "wrong".to_string());
+        extra.insert("x-api-key".to_string(), "wrong".to_string());
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "om-test",
+            &extra,
+            ApiProvider::Openmodel,
+            crate::config::DEFAULT_OPENMODEL_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer om-test")
+        );
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert!(
+            headers.get("x-api-key").is_none(),
+            "OpenModel uses Bearer auth so /v1/models and /v1/messages share one client"
+        );
+        assert!(
+            headers.get("api-key").is_none(),
+            "OpenModel Messages route must not inherit MiMo auth headers"
         );
     }
 

@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the native `codew` shim to release archives, Windows installer inputs,
   local release-asset preparation, and checksum verification so manual installs
   receive the same short command that Cargo installs build.
+- Added OpenModel as a first-class Anthropic Messages provider, with config,
+  CLI, provider picker, docs, and registry coverage. Harvested from #3585 by
+  @noaft.
 
 ### Changed
 

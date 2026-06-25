@@ -697,6 +697,14 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: false,
             },
+            // OpenModel Anthropic-compatible Messages route
+            ModelInfo {
+                id: "deepseek-v4-flash".to_string(),
+                provider: ProviderKind::Openmodel,
+                aliases: vec!["openmodel".to_string(), "openmodel-deepseek".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
             // MiniMax 2.7 (OpenRouter)
             ModelInfo {
                 id: "minimax/minimax-m2.7".to_string(),
@@ -1447,6 +1455,7 @@ mod tests {
             (ProviderKind::Zai, "GLM-5.2"),
             (ProviderKind::Stepfun, "step-3.7-flash"),
             (ProviderKind::Minimax, "MiniMax-M2.1"),
+            (ProviderKind::Openmodel, "deepseek-v4-flash"),
         ] {
             assert!(
                 models

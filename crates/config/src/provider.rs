@@ -14,12 +14,12 @@ use super::{
     DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL, DEFAULT_NOVITA_MODEL,
     DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL,
-    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_BASE_URL,
-    DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL,
-    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
-    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
-    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
-    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
+    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENMODEL_BASE_URL,
+    DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL,
+    DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL,
+    DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL,
+    DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
     DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
     DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
     DEFAULT_ZAI_MODEL, ProviderKind,
@@ -492,6 +492,47 @@ impl Provider for Anthropic {
     }
 }
 
+/// OpenModel Anthropic-compatible Messages API provider.
+pub struct Openmodel;
+
+impl Provider for Openmodel {
+    fn id(&self) -> &'static str {
+        "openmodel"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Openmodel
+    }
+
+    fn display_name(&self) -> &'static str {
+        "OpenModel"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_OPENMODEL_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_OPENMODEL_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["OPENMODEL_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "openmodel"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["open-model", "open_model"]
+    }
+
+    fn wire(&self) -> WireFormat {
+        WireFormat::AnthropicMessages
+    }
+}
+
 provider!(
     Zai,
     Zai,
@@ -616,13 +657,14 @@ static TOGETHER: Together = Together;
 static QIANFAN: Qianfan = Qianfan;
 static OPENAI_CODEX: OpenaiCodex = OpenaiCodex;
 static ANTHROPIC: Anthropic = Anthropic;
+static OPENMODEL: Openmodel = Openmodel;
 static ZAI: Zai = Zai;
 static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
 static DEEPINFRA: Deepinfra = Deepinfra;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 28] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 29] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -646,6 +688,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 28] = [
     &QIANFAN,
     &OPENAI_CODEX,
     &ANTHROPIC,
+    &OPENMODEL,
     &ZAI,
     &STEPFUN,
     &MINIMAX,

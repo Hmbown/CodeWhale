@@ -65,6 +65,7 @@ pub enum ApiProvider {
     Qianfan,
     OpenaiCodex,
     Anthropic,
+    Openmodel,
     Zai,
     Stepfun,
     Minimax,
@@ -196,6 +197,7 @@ impl ApiProvider {
             Self::Together => "https://api.together.ai/settings/api-keys",
             Self::Qianfan => "https://console.bce.baidu.com/iam/#/iam/accesslist",
             Self::Anthropic => "https://console.anthropic.com/settings/keys",
+            Self::Openmodel => "https://docs.openmodel.ai/en/docs/guides/api-key",
             Self::Zai => "https://z.ai/model-api",
             Self::Stepfun => "https://platform.stepfun.ai/",
             Self::Minimax => "https://platform.minimax.io/docs/guides/quickstart-preparation",
@@ -215,7 +217,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 29] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 30] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -240,6 +242,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Qianfan),
         Some(codewhale_config::ProviderKind::OpenaiCodex),
         Some(codewhale_config::ProviderKind::Anthropic),
+        Some(codewhale_config::ProviderKind::Openmodel),
         Some(codewhale_config::ProviderKind::Zai),
         Some(codewhale_config::ProviderKind::Stepfun),
         Some(codewhale_config::ProviderKind::Minimax),
@@ -248,7 +251,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 28] = [
+    const FROM_KIND_LOOKUP: [Self; 29] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -272,6 +275,7 @@ impl ApiProvider {
         Self::Qianfan,
         Self::OpenaiCodex,
         Self::Anthropic,
+        Self::Openmodel,
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
@@ -434,7 +438,7 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Anthropic) {
+    if matches!(provider, ApiProvider::Anthropic | ApiProvider::Openmodel) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
@@ -445,7 +449,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             max_output: crate::models::max_output_tokens_for_model(resolved_model)
                 .unwrap_or(64_000),
             thinking_supported: crate::models::model_supports_reasoning(resolved_model),
-            cache_telemetry_supported: true,
+            cache_telemetry_supported: matches!(provider, ApiProvider::Anthropic),
             request_payload_mode: RequestPayloadMode::AnthropicMessages,
             alias_deprecation: None,
         };
@@ -551,7 +555,10 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             | ApiProvider::Volcengine
     );
 
-    let request_payload_mode = if matches!(provider, ApiProvider::DeepseekAnthropic) {
+    let request_payload_mode = if matches!(
+        provider,
+        ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel
+    ) {
         RequestPayloadMode::AnthropicMessages
     } else {
         RequestPayloadMode::ChatCompletions
@@ -1127,6 +1134,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL],
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
+        ApiProvider::Openmodel => vec![DEFAULT_OPENMODEL_MODEL],
         ApiProvider::Zai => vec![DEFAULT_ZAI_MODEL, ZAI_GLM_5_1_MODEL, ZAI_GLM_5_TURBO_MODEL],
         ApiProvider::Stepfun => vec![DEFAULT_STEPFUN_MODEL],
         ApiProvider::Anthropic => vec![
@@ -2528,6 +2536,8 @@ pub struct ProvidersConfig {
     pub openai_codex: ProviderConfig,
     #[serde(default, alias = "claude")]
     pub anthropic: ProviderConfig,
+    #[serde(default, alias = "open-model", alias = "open_model")]
+    pub openmodel: ProviderConfig,
     #[serde(
         default,
         alias = "zhipu",
@@ -2585,6 +2595,7 @@ impl ProvidersConfig {
             ("providers.qianfan", &self.qianfan),
             ("providers.openai_codex", &self.openai_codex),
             ("providers.anthropic", &self.anthropic),
+            ("providers.openmodel", &self.openmodel),
             ("providers.zai", &self.zai),
             ("providers.stepfun", &self.stepfun),
             ("providers.minimax", &self.minimax),
@@ -2917,6 +2928,7 @@ impl Config {
             ApiProvider::Qianfan => &providers.qianfan,
             ApiProvider::OpenaiCodex => &providers.openai_codex,
             ApiProvider::Anthropic => &providers.anthropic,
+            ApiProvider::Openmodel => &providers.openmodel,
             ApiProvider::Zai => &providers.zai,
             ApiProvider::Stepfun => &providers.stepfun,
             ApiProvider::Minimax => &providers.minimax,
@@ -2975,6 +2987,7 @@ impl Config {
             ApiProvider::Qianfan => &mut providers.qianfan,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
             ApiProvider::Anthropic => &mut providers.anthropic,
+            ApiProvider::Openmodel => &mut providers.openmodel,
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
@@ -3164,6 +3177,7 @@ impl Config {
             ApiProvider::Together => DEFAULT_TOGETHER_MODEL,
             ApiProvider::Qianfan => DEFAULT_QIANFAN_MODEL,
             ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
+            ApiProvider::Openmodel => DEFAULT_OPENMODEL_MODEL,
             ApiProvider::Zai => DEFAULT_ZAI_MODEL,
             ApiProvider::Stepfun => DEFAULT_STEPFUN_MODEL,
             ApiProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
@@ -3197,6 +3211,7 @@ impl Config {
                 .cloned(),
             ApiProvider::Openai
             | ApiProvider::Anthropic
+            | ApiProvider::Openmodel
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Openrouter
@@ -3273,6 +3288,7 @@ impl Config {
                         ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
                         ApiProvider::Qianfan => DEFAULT_QIANFAN_BASE_URL,
                         ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+                        ApiProvider::Openmodel => DEFAULT_OPENMODEL_BASE_URL,
                         ApiProvider::Zai => DEFAULT_ZAI_BASE_URL,
                         ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
                         ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
@@ -3436,7 +3452,7 @@ impl Config {
                 provider.env_vars_label(),
                 provider_config_table_name(provider)?
             ),
-            ApiProvider::Anthropic => {
+            ApiProvider::Anthropic | ApiProvider::Openmodel => {
                 anyhow::bail!("{}", missing_provider_api_key_message(provider)?)
             }
             ApiProvider::OpenaiCodex => anyhow::bail!(
@@ -4234,6 +4250,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .anthropic
                     .base_url = Some(value);
             }
+            ApiProvider::Openmodel => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .openmodel
+                    .base_url = Some(value);
+            }
             ApiProvider::Openrouter => {
                 config
                     .providers
@@ -4611,6 +4634,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Qianfan => &mut providers.qianfan,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
             ApiProvider::Anthropic => &mut providers.anthropic,
+            ApiProvider::Openmodel => &mut providers.openmodel,
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
@@ -4831,6 +4855,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Qianfan => &mut providers.qianfan,
                 ApiProvider::OpenaiCodex => &mut providers.openai_codex,
                 ApiProvider::Anthropic => &mut providers.anthropic,
+                ApiProvider::Openmodel => &mut providers.openmodel,
                 ApiProvider::Zai => &mut providers.zai,
                 ApiProvider::Stepfun => &mut providers.stepfun,
                 ApiProvider::Minimax => &mut providers.minimax,
@@ -5032,6 +5057,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::XiaomiMimo
             | ApiProvider::Moonshot
             | ApiProvider::Qianfan
+            | ApiProvider::Openmodel
             | ApiProvider::Ollama
             | ApiProvider::Huggingface
             // Custom OpenAI-compatible endpoints preserve user-supplied model
@@ -5575,6 +5601,7 @@ fn merge_providers(
             nvidia_nim: merge_provider_config(base.nvidia_nim, override_cfg.nvidia_nim),
             openai: merge_provider_config(base.openai, override_cfg.openai),
             anthropic: merge_provider_config(base.anthropic, override_cfg.anthropic),
+            openmodel: merge_provider_config(base.openmodel, override_cfg.openmodel),
             atlascloud: merge_provider_config(base.atlascloud, override_cfg.atlascloud),
             wanjie_ark: merge_provider_config(base.wanjie_ark, override_cfg.wanjie_ark),
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
