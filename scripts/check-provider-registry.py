@@ -149,6 +149,7 @@ def provider_kind_ids(config_rs: str) -> dict[str, str]:
         ("DeepseekAnthropic", "deepseek-anthropic"),
         ("OpenaiCodex", "openai-codex"),
         ("Anthropic", "anthropic"),
+        ("Openmodel", "openmodel"),
     ]:
         match = re.search(
             rf'impl\s+Provider\s+for\s+{variant_name}.*?fn\s+id.*?\"({id_literal})\"',

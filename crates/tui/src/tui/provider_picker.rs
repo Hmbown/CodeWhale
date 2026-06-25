@@ -1986,6 +1986,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_dashboard_row_surfaces_openmodel_messages_route() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _openmodel_key = EnvVarGuard::remove("OPENMODEL_API_KEY");
+        let config = Config::default();
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::Openmodel,
+            ApiProvider::Deepseek,
+            &config,
+        );
+
+        assert_eq!(row.provider_id, "openmodel");
+        assert_eq!(row.display_name, "OpenModel");
+        assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
+        assert_eq!(row.readiness, ProviderReadiness::NeedsAuth);
+        assert_eq!(row.supported_protocols, vec!["anthropic".to_string()]);
+        assert_eq!(row.base_url, crate::config::DEFAULT_OPENMODEL_BASE_URL);
+        assert_eq!(row.default_route.logical_model, "deepseek-v4-flash");
+        assert_eq!(row.default_route.wire_model, "deepseek-v4-flash");
+        assert!(
+            row.messages
+                .iter()
+                .any(|message| message.contains("missing OPENMODEL_API_KEY"))
+        );
+    }
+
+    #[test]
     fn provider_dashboard_row_marks_missing_hosted_auth_as_needs_auth() {
         let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");

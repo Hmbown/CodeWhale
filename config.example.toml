@@ -16,11 +16,11 @@
 # `--provider volcengine`, `--provider openrouter`, `--provider xiaomi-mimo`,
 # `--provider fireworks`, `--provider siliconflow`, `--provider siliconflow-CN`,
 # `/provider arcee`, `/provider moonshot`, `/provider qianfan`, `/provider sglang`, `/provider vllm`,
-# `/provider ollama`, `/provider huggingface`, `/provider stepfun`) toggle without having to re-enter keys. Top-level
+# `/provider ollama`, `/provider huggingface`, `/provider stepfun`, `/provider openmodel`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | deepinfra
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -542,6 +542,15 @@ max_subagents = 10 # optional (1-20)
 # api_key = "sk-ant-..."
 # base_url = "https://api.anthropic.com"
 # model = "claude-sonnet-4-6"
+
+# OpenModel Provider (Anthropic-compatible Messages API)
+# Talks to https://api.openmodel.ai/v1/messages with x-api-key auth. OpenModel
+# routes DeepSeek, DashScope, Xiaomi, Claude, and other models by model id.
+# Env vars: OPENMODEL_API_KEY, OPENMODEL_BASE_URL, OPENMODEL_MODEL.
+[providers.openmodel]
+# api_key = "om-..."
+# base_url = "https://api.openmodel.ai"
+# model = "deepseek-chat"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider

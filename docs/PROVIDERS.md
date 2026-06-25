@@ -32,7 +32,7 @@ The canonical provider IDs are:
 `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`,
 `siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`,
 `ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`,
-`zai`, `stepfun`, `minimax`, and `deepinfra`.
+`openmodel`, `zai`, `stepfun`, `minimax`, and `deepinfra`.
 
 Use any of these surfaces to select a provider:
 
@@ -100,6 +100,7 @@ the listed provider env vars.
 | `qianfan` | `[providers.qianfan]` | OpenAI Chat Completions | `QIANFAN_API_KEY`, `BAIDU_QIANFAN_API_KEY` |
 | `openai-codex` | `[providers.openai_codex]` | OpenAI Responses | `OPENAI_CODEX_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN` |
 | `anthropic` | `[providers.anthropic]` | Anthropic Messages | `ANTHROPIC_API_KEY` |
+| `openmodel` | `[providers.openmodel]` | Anthropic Messages | `OPENMODEL_API_KEY` |
 | `zai` | `[providers.zai]` | OpenAI Chat Completions | `ZAI_API_KEY`, `Z_AI_API_KEY` |
 | `stepfun` | `[providers.stepfun]` | OpenAI Chat Completions | `STEPFUN_API_KEY`, `STEP_API_KEY` |
 | `minimax` | `[providers.minimax]` | OpenAI Chat Completions | `MINIMAX_API_KEY` |
@@ -108,8 +109,8 @@ the listed provider env vars.
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
 `crates/config/src/provider.rs`: `ChatCompletions` is the default,
-`openai-codex` overrides to `Responses`, and `deepseek-anthropic` plus
-`anthropic` override to `AnthropicMessages`.
+`openai-codex` overrides to `Responses`, and `deepseek-anthropic`,
+`anthropic`, plus `openmodel` override to `AnthropicMessages`.
 
 ## Auth And Env Rules
 
@@ -229,6 +230,7 @@ the same links where possible.
 | `deepinfra` | [DeepInfra API keys](https://deepinfra.com/dash/api_keys) |
 | `together` | [Together API keys](https://api.together.ai/settings/api-keys) |
 | `anthropic` | [Anthropic API keys](https://console.anthropic.com/settings/keys) |
+| `openmodel` | [OpenModel API key guide](https://docs.openmodel.ai/en/docs/guides/api-key) |
 | `openai-codex` | Reuses `codex login`; no CodeWhale API key is stored. |
 | `sglang`, `vllm`, `ollama` | Local OpenAI-compatible endpoints can run without an API key on localhost. |
 
@@ -263,6 +265,7 @@ the same links where possible.
 | `qianfan` | `[providers.qianfan]` | `QIANFAN_API_KEY`, `BAIDU_QIANFAN_API_KEY` | `QIANFAN_BASE_URL`, `BAIDU_QIANFAN_BASE_URL`; default `https://api.baiduqianfan.ai/v1` | `ernie-4.0-turbo-8k`; provider-scoped custom Qianfan service/model IDs pass through | Baidu Qianfan OpenAI-compatible route. Requests use Bearer auth and Chat Completions payloads. `QIANFAN_MODEL` and `BAIDU_QIANFAN_MODEL` are accepted; aliases `baidu-qianfan`, `baidu_qianfan`, and `baidu` resolve to this provider. Tool/function calling is model-scoped in Qianfan docs, so CodeWhale preserves the selected wire model and leaves live capability proof to follow-up route/capability work. |
 | `openai-codex` | `[providers.openai_codex]` | OAuth via `codex login` (`~/.codex/auth.json`); env override `OPENAI_CODEX_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN` | `OPENAI_CODEX_BASE_URL`/`CODEX_BASE_URL`; default `https://chatgpt.com/backend-api` | `gpt-5.5` | **Experimental.** Reuses your existing ChatGPT/Codex CLI OAuth login and talks to the OpenAI Responses API at `/codex/responses`. The access token is read and refreshed from `~/.codex/auth.json`; no API key is stored. `OPENAI_CODEX_MODEL`/`CODEX_MODEL` and `OPENAI_CODEX_ACCOUNT_ID`/`CODEX_ACCOUNT_ID` are accepted. CodeWhale budgets this route with the 400K Codex-family effective context window even when the public API model table lists a larger native `gpt-5.5` window. |
 | `anthropic` | `[providers.anthropic]` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`; default `https://api.anthropic.com` | `claude-opus-4-8`, `claude-sonnet-4-6` (default), `claude-haiku-4-5` | Native Anthropic Messages API route (`/v1/messages`, `x-api-key` + `anthropic-version: 2023-06-01`) — not OpenAI-compatible. Prompt caching via `cache_control` breakpoints, adaptive thinking + `output_config.effort`, signed thinking blocks replayed verbatim, cache telemetry normalized per #2961. `ANTHROPIC_MODEL` is accepted. |
+| `openmodel` | `[providers.openmodel]` | `OPENMODEL_API_KEY` | `OPENMODEL_BASE_URL`; default `https://api.openmodel.ai` | `deepseek-v4-flash`; provider-scoped custom model IDs pass through | OpenModel Anthropic-compatible Messages route. Uses `/v1/messages`, Bearer auth, and `anthropic-version: 2023-06-01`; OpenModel selects DeepSeek, DashScope, Xiaomi, Claude, and other routes by model id. `OPENMODEL_MODEL` is accepted. |
 
 ### Hugging Face Provider vs MCP vs Hub
 
@@ -386,6 +389,7 @@ endpoint when the endpoint supports model listing.
 | `together` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `openai-codex` | `gpt-5.5` | yes | yes |
 | `anthropic` | `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5` | yes | yes for `claude-opus-4-8` and `claude-sonnet-4-6`; no for `claude-haiku-4-5` |
+| `openmodel` | `deepseek-v4-flash`; provider-scoped custom model IDs pass through | yes | model-dependent |
 
 AtlasCloud keeps the same default model as the config layer and adds
 provider-scoped aliases for the Pro and Flash rows. Other AtlasCloud model IDs
@@ -401,7 +405,7 @@ metadata, not a live API probe. Current fields are:
 `thinking_supported`, `cache_telemetry_supported`, and `request_payload_mode`.
 
 Most shipped providers use the Chat Completions request payload mode. Native
-Anthropic uses Messages, and `openai-codex` uses Responses.
+Anthropic and OpenModel use Messages, and `openai-codex` uses Responses.
 
 For OpenAI-compatible gateways or self-hosted runtimes whose real window
 differs from the static table, set `[providers.<name>] context_window = N`.
@@ -421,6 +425,7 @@ context-pressure checks, compaction, and output-cap budgeting.
 | OpenRouter Qwen 3.6 Max Preview | 262,144 | 65,536 | yes | no | not documented in code |
 | OpenAI API `gpt-5.5` | 1,050,000 | 128,000 | yes | no | not documented in code |
 | OpenAI Codex / ChatGPT route (`openai-codex`) | 400,000 effective | 128,000 | yes | no | route uses Responses payload at `/codex/responses` |
+| OpenModel default/custom model IDs | 200,000 fallback unless model metadata or config overrides it | 64,000 fallback | model-dependent | no | route uses Messages payload at `/v1/messages` |
 | Wanjie Ark `reasoner` / `r1` model IDs | 128,000 | 4,096 | yes | no | not documented in code |
 | Direct Arcee API `trinity-large-thinking` | 262,144 | 262,144 | yes | no | not documented in code |
 | Direct Arcee API `trinity-large-preview` | 262,144 | 4,096 | no in doctor capability metadata | no | not documented in code |
@@ -496,6 +501,7 @@ receive no reasoning fields at all for that tier.
 | `arcee`, `huggingface` | omitted | `reasoning_effort` pass-through | `reasoning_effort: "high"` |
 | `fireworks` | omitted | `reasoning_effort: "high"` | `reasoning_effort: "max"` |
 | `openai`, `wanjie-ark` | omitted | omitted | omitted |
+| `openmodel` | Anthropic Messages adapter handles thinking/output configuration | Anthropic Messages adapter handles thinking/output configuration | Anthropic Messages adapter handles thinking/output configuration |
 | `openai-codex` | Responses API `reasoning` field (handled by the Responses bridge) | Responses API `reasoning` field | Responses API `reasoning` field |
 
 AtlasCloud serves DeepSeek models, so it speaks the DeepSeek reasoning dialect,

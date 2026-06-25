@@ -6198,6 +6198,26 @@ fn provider_capability_deepseek_anthropic_uses_messages_payload() {
 }
 
 #[test]
+fn provider_capability_openmodel_uses_messages_payload() {
+    let cap = provider_capability(ApiProvider::Openmodel, DEFAULT_OPENMODEL_MODEL);
+    assert_eq!(cap.resolved_model, DEFAULT_OPENMODEL_MODEL);
+    assert_eq!(
+        cap.context_window,
+        crate::models::context_window_for_model(DEFAULT_OPENMODEL_MODEL).unwrap_or(200_000)
+    );
+    assert_eq!(
+        cap.max_output,
+        crate::models::max_output_tokens_for_model(DEFAULT_OPENMODEL_MODEL).unwrap_or(64_000)
+    );
+    assert!(!cap.cache_telemetry_supported);
+    assert_eq!(
+        cap.request_payload_mode,
+        RequestPayloadMode::AnthropicMessages
+    );
+    assert!(provider_passes_model_through(ApiProvider::Openmodel));
+}
+
+#[test]
 fn provider_capability_deepseek_v4_flash_has_1m_window_and_thinking() {
     let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-flash");
     assert_eq!(

@@ -54,6 +54,8 @@ enum ProviderArg {
     Together,
     OpenaiCodex,
     Anthropic,
+    #[value(alias = "open-model", alias = "open_model")]
+    Openmodel,
     Zai,
     Stepfun,
     Minimax,
@@ -85,6 +87,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Together => ProviderKind::Together,
             ProviderArg::OpenaiCodex => ProviderKind::OpenaiCodex,
             ProviderArg::Anthropic => ProviderKind::Anthropic,
+            ProviderArg::Openmodel => ProviderKind::Openmodel,
             ProviderArg::Zai => ProviderKind::Zai,
             ProviderArg::Stepfun => ProviderKind::Stepfun,
             ProviderArg::Minimax => ProviderKind::Minimax,
@@ -3125,6 +3128,8 @@ mod tests {
 
         for (provider, expected) in [
             ("anthropic", ProviderArg::Anthropic),
+            ("openmodel", ProviderArg::Openmodel),
+            ("open-model", ProviderArg::Openmodel),
             ("zai", ProviderArg::Zai),
             ("stepfun", ProviderArg::Stepfun),
             ("minimax", ProviderArg::Minimax),

@@ -89,7 +89,7 @@ codewhale
 ```
 
 Every provider is the same one-line shape: `--provider openrouter`,
-`--provider moonshot`, or point `vllm`, `sglang`, or `ollama` at your own
+`--provider moonshot`, `--provider openmodel`, or point `vllm`, `sglang`, or `ollama` at your own
 localhost runtime with no key at all. Have a Claude key instead? Run
 `codewhale auth set --provider anthropic` — or just export
 `ANTHROPIC_API_KEY` — and the native Messages adapter takes it from there.
@@ -153,7 +153,7 @@ you want isn't here, that's a good issue to open.
   `huggingface` (Inference Providers), `moonshot` (Kimi), `zai` (GLM),
   `minimax`, `volcengine` (Ark), `nvidia-nim`, `together`, `fireworks`,
   `novita`, `siliconflow` / `siliconflow-CN`, `arcee`, `xiaomi-mimo`,
-  `deepinfra`, `stepfun`, `atlascloud`, `qianfan`, `wanjie-ark`, plus a generic
+  `openmodel`, `deepinfra`, `stepfun`, `atlascloud`, `qianfan`, `wanjie-ark`, plus a generic
   `openai`-compatible route for any gateway.
 - **Open models, self-hosted:** `vllm`, `sglang`, and `ollama` against your own
   localhost endpoints — no key required.

@@ -130,6 +130,8 @@ pub struct ProvidersToml {
     pub openai_codex: ProviderConfigToml,
     #[serde(default)]
     pub anthropic: ProviderConfigToml,
+    #[serde(default, alias = "open-model", alias = "open_model")]
+    pub openmodel: ProviderConfigToml,
     #[serde(
         default,
         alias = "z-ai",
@@ -215,6 +217,7 @@ impl ProvidersToml {
             ProviderKind::Qianfan => &self.qianfan,
             ProviderKind::OpenaiCodex => &self.openai_codex,
             ProviderKind::Anthropic => &self.anthropic,
+            ProviderKind::Openmodel => &self.openmodel,
             ProviderKind::Zai => &self.zai,
             ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Minimax => &self.minimax,
@@ -248,6 +251,7 @@ impl ProvidersToml {
             ProviderKind::Qianfan => &mut self.qianfan,
             ProviderKind::OpenaiCodex => &mut self.openai_codex,
             ProviderKind::Anthropic => &mut self.anthropic,
+            ProviderKind::Openmodel => &mut self.openmodel,
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Stepfun => &mut self.stepfun,
             ProviderKind::Minimax => &mut self.minimax,
@@ -1844,6 +1848,7 @@ impl ConfigToml {
                 ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL.to_string(),
                 ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
                 ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
+                ProviderKind::Openmodel => DEFAULT_OPENMODEL_BASE_URL.to_string(),
                 ProviderKind::Zai => DEFAULT_ZAI_BASE_URL.to_string(),
                 ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
                 ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
@@ -2418,6 +2423,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Qianfan => DEFAULT_QIANFAN_MODEL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_MODEL,
+        ProviderKind::Openmodel => DEFAULT_OPENMODEL_MODEL,
         ProviderKind::Zai => DEFAULT_ZAI_MODEL,
         ProviderKind::Stepfun => DEFAULT_STEPFUN_MODEL,
         ProviderKind::Minimax => DEFAULT_MINIMAX_MODEL,
@@ -2452,6 +2458,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL,
         ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
         ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
+        ProviderKind::Openmodel => DEFAULT_OPENMODEL_BASE_URL,
         ProviderKind::Zai => DEFAULT_ZAI_BASE_URL,
         ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL,
         ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL,
@@ -3908,6 +3915,8 @@ struct EnvRuntimeOverrides {
     openai_codex_model: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_model: Option<String>,
+    openmodel_base_url: Option<String>,
+    openmodel_model: Option<String>,
     zai_base_url: Option<String>,
     zai_model: Option<String>,
     stepfun_base_url: Option<String>,
@@ -4107,6 +4116,12 @@ impl EnvRuntimeOverrides {
             anthropic_model: std::env::var("ANTHROPIC_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            openmodel_base_url: std::env::var("OPENMODEL_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            openmodel_model: std::env::var("OPENMODEL_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             zai_base_url: std::env::var("ZAI_BASE_URL")
                 .or_else(|_| std::env::var("Z_AI_BASE_URL"))
                 .or_else(|_| std::env::var("ZHIPU_BASE_URL"))
@@ -4187,6 +4202,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Qianfan => self.qianfan_base_url.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_base_url.clone(),
             ProviderKind::Anthropic => self.anthropic_base_url.clone(),
+            ProviderKind::Openmodel => self.openmodel_base_url.clone(),
             ProviderKind::Zai => self.zai_base_url.clone(),
             ProviderKind::Stepfun => self.stepfun_base_url.clone(),
             ProviderKind::Minimax => self.minimax_base_url.clone(),
@@ -4215,6 +4231,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Qianfan => self.qianfan_model.clone(),
             ProviderKind::OpenaiCodex => self.openai_codex_model.clone(),
             ProviderKind::Anthropic => self.anthropic_model.clone(),
+            ProviderKind::Openmodel => self.openmodel_model.clone(),
             ProviderKind::Zai => self.zai_model.clone(),
             ProviderKind::Stepfun => self.stepfun_model.clone(),
             ProviderKind::Minimax => self.minimax_model.clone(),
