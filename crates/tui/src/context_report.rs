@@ -202,8 +202,11 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
     let mut builder = base_source_entries(&model, workspace, Some(&selected_skills_dir));
     let memory_path = config.memory_path();
 
-    if let Some(memory_block) = crate::memory::compose_block(config.memory_enabled() && !config.moraine_fallback(), &memory_path)
-    {
+    // TODO(v0.8.71): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
+    if let Some(memory_block) = crate::memory::compose_block(
+        config.memory_enabled() && !config.moraine_fallback(),
+        &memory_path,
+    ) {
         builder.push(SourceEntry::text(
             SourceKind::UserMemory,
             "User memory",
@@ -374,6 +377,7 @@ fn add_app_runtime_entries(builder: &mut ReportBuilder, app: &App) {
         Some(4),
     ));
 
+    // TODO(v0.8.71): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
     if let Some(memory_block) = crate::memory::compose_block(app.use_memory, &app.memory_path) {
         builder.push(SourceEntry::text(
             SourceKind::UserMemory,

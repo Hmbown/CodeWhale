@@ -33,3 +33,18 @@ You have access to Moraine MCP tools for recalling past sessions:
 Prefer these MCP tools over injected `<user_memory>` blocks. The legacy
 memory push/inject path (`[memory] enabled`) is deprecated; new
 deployments should use Moraine pull/recall instead.
+
+
+## Inventory (v0.8.71)
+
+This file, together with the moraine_fallback config gate in memory.rs,
+engine.rs, context_report.rs, tool_setup.rs, and ui.rs, implements Items 6 & 7
+of the Moraine adoption plan.
+
+Tracked by:
+- [#3495](https://github.com/Hmbown/CodeWhale/issues/3495) — Moraine adoption
+- [#3490](https://github.com/Hmbown/CodeWhale/issues/3490) — v0.8.71 legacy inventory
+
+When Moraine is the default memory backend, this file should be replaced by a
+Moraine-specific guidance document, and the legacy <user_memory> block removed
+from the system prompt.

@@ -2,15 +2,15 @@
 //!
 //! ## Deprecation
 //!
-//! v0.8.66 adopts **Moraine** ([moraine](https://github.com/eric-tramel/moraine)) as
-//! CodeWhale's long-term agent-memory backend. Moraine ingests persisted sessions
-//! losslessly and exposes them as searchable MCP recall tools (`search`,
-//! `search_conversations`, `list_sessions`, `get_session`, `open`).
+//! DEPRECATED(v0.8.66–v0.8.71): Superseded by Moraine MCP recall.
+//! The legacy push/inject path is gated behind `MemoryConfig.moraine_fallback`.
+//! When Moraine lands (v0.8.66/67), this module can be deleted entirely.
 //!
-//! This module (`memory.rs`) is the **legacy push/inject** path that prepends
-//! a `<user_memory>` block into the system prompt. It is **superseded** by
-//! Moraine's pull/recall via MCP. New deployments should use Moraine; existing
-//! users can keep using the legacy path with no changes.
+//! Migration guide: use Moraine MCP tools (`search_sessions`, `open`,
+//! `list_sessions`, `file_attention`) instead of `<user_memory>` injection.
+//!
+//! Ref: https://github.com/Hmbown/CodeWhale/issues/3495 (Moraine adoption)
+//! Ref: https://github.com/Hmbown/CodeWhale/issues/3490 (v0.8.71 dead-code inventory)
 //!
 //! ### Migration
 //!

@@ -4607,7 +4607,11 @@ async fn run_event_loop(
                         // appended to the user memory file and the input
                         // is consumed without firing a turn. Disabled
                         // behaviour falls through to normal turn submit.
-                        if config.memory_enabled() && !config.moraine_fallback() && is_memory_quick_add(&input) {
+                        // TODO(v0.8.71): remove legacy quick-add when Moraine recall stable; see #3490, #3495
+                        if config.memory_enabled()
+                            && !config.moraine_fallback()
+                            && is_memory_quick_add(&input)
+                        {
                             handle_memory_quick_add(app, &input, config);
                             continue;
                         }

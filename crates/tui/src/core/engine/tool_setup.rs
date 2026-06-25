@@ -122,6 +122,7 @@ impl Engine {
         // Register the `remember` tool only when the user has opted in to
         // user-memory (#489). Without that opt-in the tool would always
         // fail; surfacing it would just waste catalog slots.
+        // TODO(v0.8.71): remove when Moraine recall stable; see #3490, #3495
         if self.config.memory_enabled && !self.config.moraine_fallback {
             builder = builder.with_remember_tool();
         }
