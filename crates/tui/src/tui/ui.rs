@@ -10317,7 +10317,7 @@ pub(crate) fn terminal_pause_has_live_owner(app: &App) -> bool {
     })
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Transcript scroll percentage; reserved for status bar integration (see #3490)
 fn transcript_scroll_percent(top: usize, visible: usize, total: usize) -> Option<u16> {
     if total <= visible {
         return None;
@@ -10436,7 +10436,7 @@ pub(crate) fn context_usage_snapshot(app: &App) -> Option<(i64, u32, f64)> {
 /// it directly (#115 makes the estimate the primary signal), but tests in
 /// `ui/tests.rs` still exercise it and a future heuristic may want to
 /// distinguish "obviously inflated reported tokens" from healthy reports.
-#[allow(dead_code)]
+#[allow(dead_code)] // Token inflation detection helper; reserved for diagnostic overlay (see #3490)
 fn is_reported_context_inflated(reported: i64, estimated: i64) -> bool {
     const MIN_ABSOLUTE_GAP: i64 = 4_096;
     if estimated <= 0 || reported <= estimated {

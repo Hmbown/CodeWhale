@@ -450,7 +450,7 @@ pub fn plan_compaction(
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Internal compaction correctness helper; kept for tool-call pair enforcement (see #3490)
 fn enforce_tool_call_pairs(messages: &[Message], pinned_indices: &mut BTreeSet<usize>) {
     if pinned_indices.is_empty() {
         return;

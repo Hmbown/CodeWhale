@@ -146,7 +146,7 @@ pub struct ProjectContext {
     /// Path to the repo constitution file that produced `constitution_block`.
     pub constitution_source_path: Option<PathBuf>,
     /// Project root directory
-    #[allow(dead_code)] // Part of ProjectContext public interface
+    #[allow(dead_code)] // Part of ProjectContext public interface (see #3490) // Part of ProjectContext public interface
     pub project_root: PathBuf,
     /// Whether this is a trusted project
     pub is_trusted: bool,
@@ -1153,7 +1153,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore
 }
 
 /// Merge multiple project contexts (e.g., from nested directories)
-#[allow(dead_code)] // Public API for monorepo context merging
+#[allow(dead_code)] // Public API for monorepo context merging (see #3490) // Public API for monorepo context merging
 pub fn merge_contexts(contexts: &[ProjectContext]) -> Option<String> {
     let non_empty: Vec<_> = contexts
         .iter()

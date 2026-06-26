@@ -133,7 +133,7 @@ impl LiveTranscriptOverlay {
 
     /// Return the overlay to live-tail mode (used when backtrack is
     /// confirmed or canceled). Re-arms sticky-tail so streaming resumes.
-    #[allow(dead_code)] // exposed for callers that retain an overlay across a backtrack cancel; current UI just pops the view.
+    #[allow(dead_code)] // exposed for callers that retain an overlay across a backtrack cancel (see #3490) // exposed for callers that retain an overlay across a backtrack cancel; current UI just pops the view.
     pub fn set_tail_mode(&mut self) {
         self.mode = Mode::Tail;
         self.sticky_to_bottom.set(true);
@@ -141,7 +141,7 @@ impl LiveTranscriptOverlay {
     }
 
     /// For tests + UI: current mode.
-    #[allow(dead_code)] // currently consumed only by tests; kept public for symmetry with `set_*` setters.
+    #[allow(dead_code)] // currently consumed only by tests; kept public for symmetry (see #3490) // currently consumed only by tests; kept public for symmetry with `set_*` setters.
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode

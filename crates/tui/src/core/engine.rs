@@ -388,7 +388,7 @@ pub struct EngineConfig {
     pub tools_always_load: HashSet<String>,
     /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
     /// through bubblewrap instead of relying solely on Landlock (#2184).
-    #[allow(dead_code)] // Wired through ShellManager in follow-up PR
+    #[allow(dead_code)] // Wired through ShellManager in follow-up PR (see #3490) // Wired through ShellManager in follow-up PR
     pub prefer_bwrap: bool,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
@@ -487,7 +487,7 @@ impl Default for EngineConfig {
 /// `External`, `Preempted`, and `Internal` are reserved for the
 /// remaining direct cancellation paths tracked in #1541.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // CancelReason enum; wired in follow-up for user-facing cancel diagnostics (see #3490)
 pub enum CancelReason {
     /// User-initiated cancel (Esc, `/cancel`, click cancel on modal).
     User,

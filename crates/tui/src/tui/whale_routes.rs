@@ -95,7 +95,7 @@ impl WhaleRoute {
     /// Look up the whale route for a given model id and reasoning effort.
     /// Returns `None` for non-DeepSeek models or unrecognized combinations.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // WhaleRoute lookup by model+effort; used by dynamic routing tests (see #3490)
     pub fn for_model_effort(model: &str, effort: ReasoningEffort) -> Option<&'static WhaleRoute> {
         WHALE_ROUTES
             .iter()
@@ -104,7 +104,7 @@ impl WhaleRoute {
 
     /// Look up a whale route by its sort-order index.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // WhaleRoute lookup by sort order; used by config-driven routing (see #3490)
     pub fn by_sort_order(index: usize) -> Option<&'static WhaleRoute> {
         WHALE_ROUTES.iter().find(|r| r.sort_order == index)
     }

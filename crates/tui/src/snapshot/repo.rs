@@ -726,13 +726,13 @@ impl SnapshotRepo {
     }
 
     /// Return the side-repo's `.git` directory (for diagnostics).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Side-repo git_dir diagnostics accessor (see #3490)
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
 
     /// Return the work tree path (for diagnostics).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Side-repo work_tree diagnostics accessor (see #3490)
     pub fn work_tree(&self) -> &Path {
         &self.work_tree
     }

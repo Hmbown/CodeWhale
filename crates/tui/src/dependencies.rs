@@ -299,7 +299,7 @@ pub trait ExternalTool {
     fn resolve() -> Option<String>;
 
     /// Quick availability check — true when the tool was found on PATH.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Dependency availability check; used in diagnostics/reporting (see #3490)
     fn available() -> bool {
         Self::resolve().is_some()
     }
@@ -334,7 +334,7 @@ pub trait ExternalTool {
 
     /// Convenience: run the tool with arguments and return only the
     /// exit status (discards stdout/stderr).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Dependency exit status check; used in diagnostics (see #3490)
     fn status(args: &[&str], cwd: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
         let mut cmd = Self::command().ok_or_else(|| {
             std::io::Error::new(
