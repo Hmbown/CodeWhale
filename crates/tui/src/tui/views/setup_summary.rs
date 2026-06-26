@@ -229,3 +229,78 @@ impl ModalView for SetupSummaryView {
         paragraph.render(inner, buf);
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_setup_summary() {
+        let data = SetupSummaryData {
+            mcp_servers: vec![],
+            mcp_config_path: None,
+            skills_dirs: vec![],
+            skills_installed: 0,
+            plugin_dir: None,
+            plugin_available: false,
+        };
+        assert!(data.mcp_servers.is_empty());
+        assert_eq!(data.skills_installed, 0);
+        assert!(!data.plugin_available);
+    }
+
+    #[test]
+    fn mcp_server_info_construction() {
+        let info = McpServerInfo {
+            name: "test-server".into(),
+            enabled: true,
+            state: "connected".into(),
+        };
+        assert_eq!(info.name, "test-server");
+        assert!(info.enabled);
+        assert_eq!(info.state, "connected");
+    }
+
+    #[test]
+    fn mcp_server_disabled() {
+        let info = McpServerInfo {
+            name: "disabled-server".into(),
+            enabled: false,
+            state: "disconnected".into(),
+        };
+        assert!(!info.enabled);
+    }
+
+    #[test]
+    fn setup_summary_data_with_mcp() {
+        let data = SetupSummaryData {
+            mcp_servers: vec![
+                McpServerInfo { name: "srv-a".into(), enabled: true, state: "connected".into() },
+                McpServerInfo { name: "srv-b".into(), enabled: false, state: "disconnected".into() },
+            ],
+            mcp_config_path: Some("/tmp/mcp.json".into()),
+            skills_dirs: vec!["/tmp/skills".into()],
+            skills_installed: 5,
+            plugin_dir: Some("/tmp/plugins".into()),
+            plugin_available: true,
+        };
+        assert_eq!(data.mcp_servers.len(), 2);
+        assert_eq!(data.skills_installed, 5);
+        assert!(data.plugin_available);
+    }
+
+    #[test]
+    fn setup_summary_view_new() {
+        let data = SetupSummaryData {
+            mcp_servers: vec![],
+            mcp_config_path: None,
+            skills_dirs: vec![],
+            skills_installed: 0,
+            plugin_dir: None,
+            plugin_available: false,
+        };
+        let _view = SetupSummaryView::new(data);
+        // View should construct without panicking
+    }
+}
