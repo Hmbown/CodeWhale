@@ -1996,8 +1996,16 @@ mod tests {
             .and_then(|detail| detail.shell_lines)
             .expect("localized write preview");
         assert!(write_preview.iter().any(|line| line == "拟写入内容"));
-        assert!(write_preview.iter().any(|line| line == "+ proposed content"));
-        assert!(write_preview.iter().any(|line| line == "+ replacement content"));
+        assert!(
+            write_preview
+                .iter()
+                .any(|line| line == "+ proposed content")
+        );
+        assert!(
+            write_preview
+                .iter()
+                .any(|line| line == "+ replacement content")
+        );
 
         let edit = ApprovalRequest::new(
             "test-id",
