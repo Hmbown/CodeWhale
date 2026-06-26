@@ -384,6 +384,43 @@ Be respectful and inclusive. We welcome contributors of all backgrounds and
 experience levels. See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the full
 code of conduct.
 
+
+## Developer Certificate of Origin (DCO)
+
+This project uses the **Developer Certificate of Origin** — a lightweight
+mechanism confirming that you have the right to submit your contribution
+under the MIT license.
+
+To accept the DCO, add a `Signed-off-by` line to your commit messages:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+Use `git commit -s` to append it automatically:
+
+```bash
+git commit -s -m "feat: your change description"
+```
+
+If you forget, amend the most recent commit:
+
+```bash
+git commit --amend -s
+```
+
+For older commits in an open PR, use interactive rebase:
+
+```bash
+git rebase -i HEAD~N
+# replace "pick" with "edit" for each commit
+git commit --amend -s
+git rebase --continue
+```
+
+All commits in a pull request must include `Signed-off-by` or the DCO
+check will fail. The check runs automatically when you open or update a PR.
+
 ## License
 
 By contributing to codewhale, you agree that your contributions will be licensed under the MIT License.

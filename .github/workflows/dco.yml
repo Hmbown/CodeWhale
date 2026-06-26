@@ -1,0 +1,46 @@
+name: DCO
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  statuses: write
+
+jobs:
+  dco:
+    name: Check Signed-off-by
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commits for Signed-off-by
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=()
+          while IFS= read -r commit; do
+            msg=$(git log --format=%B -n1 "$commit")
+            if ! echo "$msg" | grep -qi "^Signed-off-by:"; then
+              bad+=("$commit")
+            fi
+          done < <(git rev-list origin/main..HEAD 2>/dev/null || git rev-list HEAD~0..HEAD)
+
+          if [ ${#bad[@]} -gt 0 ]; then
+            echo "❌ The following commit(s) are missing Signed-off-by:"
+            for c in "${bad[@]}"; do
+              echo "  • $c $(git log --format=%s -n1 "$c")"
+            done
+            echo ""
+            echo "Please amend each commit with:"
+            echo "  git commit --amend -s   (for the most recent commit)"
+            echo "or use git rebase to add -s to older commits."
+            echo ""
+            echo "See CONTRIBUTING.md for details."
+            exit 1
+          fi
+
+          echo "✅ All commits have Signed-off-by."
