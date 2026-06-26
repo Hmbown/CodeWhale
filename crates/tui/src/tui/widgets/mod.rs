@@ -774,25 +774,23 @@ impl Renderable for ComposerWidget<'_> {
 
         let mut input_lines = Vec::new();
         if input_text.is_empty() {
-            if let Some(ref suggestion) = self.app.prompt_suggestion
-                && !self.app.is_history_search_active()
-            {
-                input_lines.push(Line::from(Span::styled(
-                    suggestion.as_str(),
-                    Style::default().fg(palette::TEXT_HINT),
-                )));
-            } else {
-                let placeholder = if self.app.is_history_search_active() {
-                    self.app
-                        .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+            input_lines.push(Line::from(""));
+            if input_rows_budget > 1 {
+                let (placeholder, style): (Cow<'_, str>, Style) = if let Some(ref suggestion) =
+                    self.app.prompt_suggestion
+                    && !self.app.is_history_search_active()
+                {
+                    (
+                        Cow::Borrowed(suggestion.as_str()),
+                        Style::default().fg(palette::TEXT_HINT),
+                    )
                 } else {
-                    self.app
-                        .tr(crate::localization::MessageId::ComposerPlaceholder)
+                    (
+                        composer_empty_hint_text(self.app),
+                        Style::default().fg(palette::TEXT_MUTED).italic(),
+                    )
                 };
-                input_lines.push(Line::from(Span::styled(
-                    placeholder,
-                    Style::default().fg(palette::TEXT_MUTED).italic(),
-                )));
+                input_lines.push(Line::from(Span::styled(placeholder, style)));
             }
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
             let line_ranges: Vec<(usize, usize)> =
@@ -824,22 +822,18 @@ impl Renderable for ComposerWidget<'_> {
         }
 
         // For non-empty input, input_lines.len() already reflects wrapping via
-        // layout_input.  For the empty-input placeholder, Paragraph::wrap will
-        // wrap the single Line at render time, so we must estimate the wrapped
-        // row count ourselves to keep padding accurate on narrow widths.
+        // layout_input. For empty input, keep the first row reserved for the
+        // real terminal cursor so IME preedit text has a clean surface.
         let visual_rows = if input_text.is_empty() {
-            let placeholder: &str = if let Some(ref suggestion) = self.app.prompt_suggestion {
-                suggestion.as_str()
-            } else if self.app.is_history_search_active() {
-                &self
-                    .app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+            let hint: Option<Cow<'_, str>> = if let Some(ref suggestion) =
+                self.app.prompt_suggestion
+                && !self.app.is_history_search_active()
+            {
+                Some(Cow::Borrowed(suggestion.as_str()))
             } else {
-                &self
-                    .app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
+                Some(composer_empty_hint_text(self.app))
             };
-            placeholder_visual_lines_for(placeholder, content_width)
+            empty_composer_visual_rows(hint.as_deref(), content_width, input_rows_budget)
         } else {
             input_lines.len()
         };
@@ -1137,18 +1131,15 @@ impl Renderable for ComposerWidget<'_> {
         let (visible_lines, cursor_row, cursor_col) =
             layout_input(input_text, input_cursor, content_width, input_rows_budget);
         let visual_rows = if input_text.is_empty() {
-            let placeholder: &str = if let Some(ref suggestion) = self.app.prompt_suggestion {
-                suggestion.as_str()
-            } else if self.app.is_history_search_active() {
-                &self
-                    .app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+            let hint: Option<Cow<'_, str>> = if let Some(ref suggestion) =
+                self.app.prompt_suggestion
+                && !self.app.is_history_search_active()
+            {
+                Some(Cow::Borrowed(suggestion.as_str()))
             } else {
-                &self
-                    .app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
+                Some(composer_empty_hint_text(self.app))
             };
-            placeholder_visual_lines_for(placeholder, content_width)
+            empty_composer_visual_rows(hint.as_deref(), content_width, input_rows_budget)
         } else {
             visible_lines.len()
         };
@@ -2425,6 +2416,28 @@ fn placeholder_visual_lines_for(placeholder: &str, content_width: usize) -> usiz
     wrap_text(placeholder, content_width).len().max(1)
 }
 
+pub(crate) fn composer_empty_hint_text(app: &App) -> Cow<'static, str> {
+    if app.is_history_search_active() {
+        app.tr(crate::localization::MessageId::HistorySearchPlaceholder)
+    } else {
+        app.tr(crate::localization::MessageId::ComposerPlaceholder)
+    }
+}
+
+pub(crate) fn empty_composer_visual_rows(
+    hint: Option<&str>,
+    content_width: usize,
+    rows_budget: usize,
+) -> usize {
+    if rows_budget <= 1 {
+        1
+    } else {
+        1 + hint
+            .map(|text| placeholder_visual_lines_for(text, content_width))
+            .unwrap_or(0)
+    }
+}
+
 fn composer_min_input_rows(density: ComposerDensity) -> usize {
     match density {
         ComposerDensity::Compact => 2,
@@ -3179,12 +3192,13 @@ fn line_spans_with_selection<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovalWidget, COMPOSER_PANEL_HEIGHT, ChatWidget, ComposerWidget, Renderable,
-        SlashMenuEntry, apply_detail_target_highlight, apply_selection_to_line, apply_send_flash,
-        build_empty_state_lines, composer_height, composer_max_height, composer_min_input_rows,
-        composer_top_padding, compute_takeover_area, cursor_row_col, layout_input,
-        pad_lines_to_bottom, placeholder_visual_lines, push_command_entry,
-        should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
+        ApprovalWidget, COMPOSER_PANEL_HEIGHT, COMPOSER_PLACEHOLDER, ChatWidget, ComposerWidget,
+        Renderable, SlashMenuEntry, apply_detail_target_highlight, apply_selection_to_line,
+        apply_send_flash, build_empty_state_lines, composer_height, composer_max_height,
+        composer_min_input_rows, composer_top_padding, compute_takeover_area, cursor_row_col,
+        empty_composer_visual_rows, layout_input, pad_lines_to_bottom, placeholder_visual_lines,
+        push_command_entry, should_render_empty_state, slash_completion_hints, wrap_input_lines,
+        wrap_text,
     };
     use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
@@ -3237,6 +3251,14 @@ mod tests {
                 text.push_str(buf[(x, y)].symbol());
             }
             text.push('\n');
+        }
+        text
+    }
+
+    fn row_text(buf: &Buffer, area: Rect, row: u16) -> String {
+        let mut text = String::new();
+        for x in area.x..area.x.saturating_add(area.width) {
+            text.push_str(buf[(x, row)].symbol());
         }
         text
     }
@@ -4045,7 +4067,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_composer_cursor_matches_placeholder_padding() {
+    fn empty_composer_cursor_sits_above_placeholder_hint() {
         let mut app = create_test_app();
         // Pin density so the test is independent of any loaded user settings.
         app.composer_density = ComposerDensity::Comfortable;
@@ -4063,15 +4085,19 @@ mod tests {
 
         // inner_area: {x:1, y:1, w:38, h:3}  (borders shrink by 1 each side)
         // input_rows_budget = 3
-        // placeholder_visual_lines(38) = 1  (placeholder is 22 chars, fits in 38)
-        // top_padding = 3 - clamp(1, 1, 3) = 2
+        // empty_composer_visual_rows = cursor row + one hint row = 2
+        // top_padding = 3 - clamp(2, 1, 3) = 1
         // cursor_x = 0 + (1-0) + 0 = 1
-        // cursor_y = 0 + (1-0) + (2+0) = 3
-        assert_eq!(widget.cursor_pos(area), Some((1, 3)));
+        // cursor_y = 0 + (1-0) + (1+0) = 2
+        assert_eq!(
+            empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 38, 3),
+            2
+        );
+        assert_eq!(widget.cursor_pos(area), Some((1, 2)));
     }
 
     #[test]
-    fn empty_composer_cursor_accounts_for_placeholder_wrapping() {
+    fn empty_composer_cursor_accounts_for_wrapped_placeholder_hint() {
         let mut app = create_test_app();
         app.composer_density = ComposerDensity::Comfortable;
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -4089,11 +4115,48 @@ mod tests {
         // inner_area: {x:1, y:1, w:12, h:3}
         // input_rows_budget = 3
         // placeholder_visual_lines(12) = 2  ("Write a task" / " or use /.")
-        // top_padding = 3 - clamp(2, 1, 3) = 1
+        // empty_composer_visual_rows = cursor row + two hint rows = 3
+        // top_padding = 3 - clamp(3, 1, 3) = 0
         // cursor_x = 0 + (1-0) + 0 = 1
-        // cursor_y = 0 + (1-0) + (1+0) = 2
+        // cursor_y = 0 + (1-0) + (0+0) = 1
         assert_eq!(placeholder_visual_lines(12), 2);
-        assert_eq!(widget.cursor_pos(area), Some((1, 2)));
+        assert_eq!(
+            empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 12, 3),
+            3
+        );
+        assert_eq!(widget.cursor_pos(area), Some((1, 1)));
+    }
+
+    #[test]
+    fn empty_composer_keeps_cursor_row_clear_for_ime_preedit() {
+        let mut app = create_test_app();
+        app.composer_density = ComposerDensity::Comfortable;
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+        let Some((cursor_x, cursor_y)) = widget.cursor_pos(area) else {
+            panic!("empty composer should expose cursor position");
+        };
+        let rendered = buffer_text(&buf, area);
+
+        assert_eq!(buf[(cursor_x, cursor_y)].symbol(), " ");
+        assert!(
+            rendered.contains(COMPOSER_PLACEHOLDER),
+            "placeholder hint should still render below the cursor row: {rendered}"
+        );
+        assert!(
+            !row_text(&buf, area, cursor_y).contains(COMPOSER_PLACEHOLDER),
+            "cursor row must remain clear for terminal IME preedit text: {rendered}"
+        );
     }
 
     #[test]
@@ -4257,7 +4320,7 @@ mod tests {
             height: 3,
         };
 
-        assert_eq!(widget.cursor_pos(area), Some((0, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((0, 1)));
     }
 
     #[test]
