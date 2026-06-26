@@ -121,7 +121,7 @@ pub struct PrefixChange {
     pub tools_changed: bool,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // PrefixChange impl; observability + future cache reporting (see #3490)
 impl PrefixChange {
     /// Returns a human-readable description of what changed.
     pub fn description(&self) -> String {
@@ -218,7 +218,7 @@ pub struct CachedCatalog {
     /// multiple cache consumers can hold the same allocation. Exposed for
     /// observability (debug builds, `/status` chip) and for tests that
     /// need to assert byte-stability of the joined catalog.
-    #[allow(dead_code)] // observability + tests; not consumed on the hot path
+    #[allow(dead_code)] // observability + tests; not consumed on the hot path (see #3490)
     pub joined: Arc<String>,
     /// SHA-256 hex digest of `joined`, computed once on cache miss.
     pub sha256_hex: String,
@@ -278,7 +278,7 @@ impl ToolCatalogCache {
     /// Drop every cached entry. Used by tool-registry mutation paths
     /// (e.g. plugin hot-reload, MCP attach) when the caller cannot
     /// easily prove the tool set is unchanged.
-    #[allow(dead_code)] // observability; called by /cache flush and tests
+    #[allow(dead_code)] // observability; called by /cache flush and tests (see #3490)
     pub fn invalidate(&mut self) {
         self.by_identity.clear();
         self.insertion_order.clear();
@@ -291,7 +291,7 @@ impl ToolCatalogCache {
     }
 
     /// Returns `true` if the cache has no entries.
-    #[allow(dead_code)] // observability; surfaced via /status
+    #[allow(dead_code)] // observability; surfaced via /status (see #3490)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_identity.is_empty()
@@ -299,7 +299,7 @@ impl ToolCatalogCache {
 
     /// Returns `(current_entries, capacity)` for observability. Surfaced via
     /// the `/status` chip in a follow-up; tests exercise the path.
-    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it
+    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it (see #3490)
     #[must_use]
     pub fn stats(&self) -> (usize, usize) {
         (self.len(), self.capacity)
@@ -385,7 +385,7 @@ fn hash_json_value<H: Hasher>(value: &serde_json::Value, state: &mut H) {
 /// [`PrefixFingerprint::compute_with_tool_cache`] and pass the cache in
 /// directly, both to share state and to avoid the thread-local lookup
 /// on the hot path.
-#[allow(dead_code)]
+#[allow(dead_code)] // PrefixStabilityManager; reserved for stability tracking (see #3490)
 impl PrefixStabilityManager {
     /// Create a new manager and immediately pin the first fingerprint.
     pub fn new(system_text: &str, tools: Option<&[Tool]>) -> Self {
