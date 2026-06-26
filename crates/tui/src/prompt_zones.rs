@@ -26,14 +26,14 @@ use sha2::{Digest, Sha256};
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
+#[allow(dead_code)] // prompt_zones sha256_hex utility (see #3490)
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // prompt_zones system_text utility (see #3490)
 fn system_text(system: Option<&SystemPrompt>) -> String {
     match system {
         Some(SystemPrompt::Text(text)) => text.clone(),
@@ -50,7 +50,7 @@ fn system_text(system: Option<&SystemPrompt>) -> String {
 }
 
 /// Serialize tools to a deterministic, sorted JSON string for hashing.
-#[allow(dead_code)]
+#[allow(dead_code)] // prompt_zones tool_catalog_digest (see #3490)
 fn tool_catalog_digest(tools: &[Tool]) -> String {
     let mut serialized: Vec<String> = tools
         .iter()
@@ -60,7 +60,7 @@ fn tool_catalog_digest(tools: &[Tool]) -> String {
     serialized.join("\n")
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // prompt_zones combined_hash (see #3490)
 fn combined_hash(system_text: &str, tools: &[Tool]) -> String {
     let system_sha = sha256_hex(system_text.as_bytes());
     let tools_digest = tool_catalog_digest(tools);
@@ -77,14 +77,14 @@ fn combined_hash(system_text: &str, tools: &[Tool]) -> String {
 ///
 /// Use [`PinnedPrefix::freeze`] to produce one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // FrozenPrefix struct; part of prefix API (see #3490)
 pub struct FrozenPrefix {
     pub(crate) system_text: String,
     pub(crate) tool_catalog: String,
     pub(crate) combined_sha256: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // FrozenPrefix impl (see #3490)
 impl FrozenPrefix {
     /// Verify that `current_system_text` and `current_tools` match the frozen
     /// prefix. Returns `Ok(())` when stable, `Err(PrefixDrift)` on mismatch.
@@ -134,13 +134,13 @@ impl FrozenPrefix {
 /// A mutable prefix builder. Construct from the system prompt and tool
 /// catalog, then call [`freeze`](Self::freeze) to produce a [`FrozenPrefix`].
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // PinnedPrefix struct (see #3490)
 pub struct PinnedPrefix {
     system_text: String,
     tools: Vec<Tool>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // PinnedPrefix impl (see #3490)
 impl PinnedPrefix {
     #[must_use]
     pub fn new(system: Option<&SystemPrompt>, tools: Vec<Tool>) -> Self {
@@ -168,7 +168,7 @@ impl PinnedPrefix {
 
 /// Describes how the current prefix differs from the frozen baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // PrefixDrift struct (see #3490)
 pub struct PrefixDrift {
     pub system_changed: bool,
     pub tools_changed: bool,
@@ -298,14 +298,14 @@ impl std::ops::Deref for AppendLog {
 /// Per-turn ephemeral data. Cleared at every turn boundary.
 ///
 /// **Phase 1 scaffolding** — not yet wired into the engine request path.
-#[allow(dead_code)]
+#[allow(dead_code)] // TurnScratch struct; prefix cache (see #3490)
 #[derive(Debug, Clone, Default)]
 pub struct TurnScratch {
     pub working_set: Vec<String>,
     pub user_message: Option<Message>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // TurnScratch impl (see #3490)
 impl TurnScratch {
     pub fn new() -> Self {
         Self::default()
@@ -328,7 +328,7 @@ impl TurnScratch {
 ///
 /// **Phase 1 scaffolding** — not yet wired into the engine request path.
 /// Currently the engine continues to use [`MessageRequest`] directly.
-#[allow(dead_code)]
+#[allow(dead_code)] // ThreeZoneRequest struct (see #3490)
 #[derive(Debug, Clone)]
 pub struct ThreeZoneRequest<'a> {
     pub prefix: &'a FrozenPrefix,
@@ -347,7 +347,7 @@ pub struct ThreeZoneRequest<'a> {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ThreeZoneRequest impl (see #3490)
 impl<'a> ThreeZoneRequest<'a> {
     /// Build the full message list from system prompt, append-log messages,
     /// and scratch user message. The returned vector is serialized as the

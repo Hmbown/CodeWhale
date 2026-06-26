@@ -1358,7 +1358,7 @@ pub struct SubAgentCompletion {
     /// The completing child's agent id. Held for routing/logging — the
     /// engine's turn loop does not currently key on it (it just injects
     /// the payload), but downstream tooling and tests need the field.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SubAgentContext agent_id; part of public API (see #3490)
     pub agent_id: String,
     /// Human summary on line 1, sentinel on line 2. Same payload shape as
     /// `Event::AgentComplete::result`.
@@ -1555,7 +1555,7 @@ impl SubAgentRuntime {
     /// stream. Pair with [`Self::with_cancel_token`] when the mailbox close
     /// token should match this runtime's cancellation token.
     #[must_use]
-    #[allow(dead_code)] // wired by #128 (in-transcript cards) when it lands.
+    #[allow(dead_code)] // wired by #128 (in-transcript cards) when it lands. (see #3490)
     pub fn with_mailbox(mut self, mailbox: Mailbox) -> Self {
         self.mailbox = Some(mailbox);
         self
@@ -1564,7 +1564,7 @@ impl SubAgentRuntime {
     /// Replace the cancellation token (e.g. when the engine constructs the
     /// runtime alongside a mailbox bound to the same token).
     #[must_use]
-    #[allow(dead_code)] // wired by #128 alongside `with_mailbox`.
+    #[allow(dead_code)] // wired by #128 alongside `with_mailbox`. (see #3490)
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
         self.cancel_token = token;
         self
@@ -1573,7 +1573,7 @@ impl SubAgentRuntime {
     /// Override the maximum spawn depth (default `DEFAULT_MAX_SPAWN_DEPTH`).
     /// Used by config wiring (`[subagents] max_depth = N`) and tests.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // with_max_spawn_depth; reserved for depth-limited spawn (see #3490)
     pub fn with_max_spawn_depth(mut self, max: u32) -> Self {
         self.max_spawn_depth = max;
         self
@@ -1776,7 +1776,7 @@ pub struct SubAgentManager {
     agents: HashMap<String, SubAgent>,
     worker_records: HashMap<String, AgentWorkerRecord>,
     worker_event_seq: u64,
-    #[allow(dead_code)] // Stored for future workspace-scoped operations
+    #[allow(dead_code)] // Stored for future workspace-scoped operations (see #3490)
     workspace: PathBuf,
     state_path: Option<PathBuf>,
     max_steps: u32,

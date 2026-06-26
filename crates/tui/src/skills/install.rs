@@ -199,7 +199,7 @@ pub struct InstalledSkill {
     /// SHA-256 over the downloaded tarball bytes. Used by [`update`] to detect
     /// upstream changes without re-extracting; also surfaced for telemetry /
     /// future signature-verification work.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SkillMeta source_checksum (see #3490)
     pub source_checksum: String,
 }
 
@@ -269,7 +269,7 @@ pub enum InstallError {
 /// [`DEFAULT_REGISTRY_URL`]. Public for downstream consumers (tests, runtime
 /// API) even though the slash-command path always goes through
 /// [`install_with_registry`] so the user's configured registry wins.
-#[allow(dead_code)]
+#[allow(dead_code)] // Skill install function; public API (see #3490)
 pub async fn install(
     source: InstallSource,
     skills_dir: &Path,
@@ -388,7 +388,7 @@ pub async fn install_with_registry(
 /// `/skill update bar` without the user re-typing the spec.
 ///
 /// Convenience wrapper over [`update_with_registry`].
-#[allow(dead_code)]
+#[allow(dead_code)] // Skill update function; public API (see #3490)
 pub async fn update(
     name: &str,
     skills_dir: &Path,

@@ -547,7 +547,7 @@ pub fn auto_compact_default_for_model(model: &str) -> bool {
 
 // === Streaming Structures ===
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ModelFeature struct; part of model capabilities API (see #3490)
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 /// Streaming event types for SSE responses.
@@ -577,7 +577,7 @@ pub enum StreamEvent {
     Error { error: serde_json::Value },
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ProviderModel struct; part of model catalog API (see #3490)
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 /// Content block types used in streaming starts.
@@ -620,7 +620,7 @@ pub enum Delta {
     SignatureDelta { signature: String },
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ModelRoute struct; part of routing API (see #3490)
 #[derive(Debug, Deserialize, Clone)]
 /// Delta payload for message-level updates.
 pub struct MessageDelta {

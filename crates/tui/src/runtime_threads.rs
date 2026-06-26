@@ -886,7 +886,7 @@ impl RuntimeThreadManager {
         }
     }
 
-    #[allow(dead_code)] // Public API for external callers (runtime API, task manager)
+    #[allow(dead_code)] // Public API for external callers (runtime API, task manager) (see #3490)
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
         if let Ok(mut map) = self.pending_approvals.lock() {
@@ -897,7 +897,7 @@ impl RuntimeThreadManager {
         }
     }
 
-    #[allow(dead_code)] // Public API for external callers
+    #[allow(dead_code)] // Public API for external callers (see #3490)
     pub fn is_shutdown(&self) -> bool {
         self.cancel_token.is_cancelled()
     }
@@ -986,7 +986,7 @@ impl RuntimeThreadManager {
         Ok(true)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // RuntimeThreads cancel_user_input (see #3490)
     pub async fn cancel_user_input(&self, thread_id: &str, input_id: &str) -> Result<bool> {
         let active = self.active.lock().await;
         let Some(state) = active.engines.get(thread_id) else {
@@ -996,7 +996,7 @@ impl RuntimeThreadManager {
         Ok(true)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // RuntimeThreads pending_approvals_count (see #3490)
     pub fn pending_approvals_count(&self) -> usize {
         self.pending_approvals
             .lock()
@@ -1004,7 +1004,7 @@ impl RuntimeThreadManager {
             .unwrap_or(0)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // RuntimeThreads pending_dynamic_tools_count (see #3490)
     pub fn pending_dynamic_tools_count(&self) -> usize {
         self.pending_dynamic_tools
             .lock()
@@ -1439,7 +1439,7 @@ impl RuntimeThreadManager {
     /// status per `agent_id` — the UI consumes this to seed empty
     /// `DelegateCard` / `FanoutCard` placeholders so subsequent live
     /// mailbox envelopes mutate them in place.
-    #[allow(dead_code)] // exposed for the runtime API resume flow; consumed by #128 follow-up.
+    #[allow(dead_code)] // exposed for the runtime API resume flow; consumed by #128 follow-up. (see #3490)
     pub async fn resume_thread_with_agent_rebind(
         &self,
         id: &str,
@@ -1524,7 +1524,7 @@ impl RuntimeThreadManager {
     /// Errors:
     /// - `depth_from_tail` exceeds the number of user turns
     /// - source thread not found
-    #[allow(dead_code)] // exposed for the runtime/HTTP fork-on-backtrack path; the in-TUI Esc-Esc flow trims `App` state directly. Issue #133.
+    #[allow(dead_code)] // exposed for the runtime/HTTP fork-on-backtrack path; the in-TUI Esc-Esc flow trims App state directly. Issue #133. (see #3490)
     pub async fn fork_at_user_message(
         &self,
         id: &str,
@@ -3789,14 +3789,14 @@ fn tool_kind_for_name(name: &str) -> TurnItemKind {
 /// resume flow is a follow-up; the runtime API consumer (`runtime_api.rs`)
 /// can already call `resume_thread_with_agent_rebind` to drive it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // consumed by #128 follow-up TUI resume wiring; tested here.
+#[allow(dead_code)] // consumed by #128 follow-up TUI resume wiring; tested here. (see #3490)
 pub struct AgentRebindHint {
     pub agent_id: String,
     pub status: AgentRebindStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // AgentRebindStatus enum; follow-up API (see #3490)
 pub enum AgentRebindStatus {
     Spawned,
     InProgress,
@@ -3809,7 +3809,7 @@ pub enum AgentRebindStatus {
 /// open to mutation by subsequent live mailbox envelopes (each envelope's
 /// `agent_id` matches one already in the rebind map).
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // collect_agent_rebind_hints; follow-up API (see #3490)
 pub fn collect_agent_rebind_hints(events: &[RuntimeEventRecord]) -> Vec<AgentRebindHint> {
     use std::collections::BTreeMap;
     let mut latest: BTreeMap<String, AgentRebindStatus> = BTreeMap::new();

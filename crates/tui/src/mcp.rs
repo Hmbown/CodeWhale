@@ -562,7 +562,7 @@ pub struct SseTransport {
     endpoint_url: Option<String>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<SseInbound>,
     pending_messages: VecDeque<Vec<u8>>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // McpHost sse_task handle; kept for server lifecycle (see #3490)
     sse_task: tokio::task::JoinHandle<()>,
 }
 
@@ -1899,7 +1899,7 @@ impl McpConnection {
     }
 
     /// Get server name
-    #[allow(dead_code)] // Public API for MCP consumers
+    #[allow(dead_code)] // Public API for MCP consumers (see #3490)
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -1915,7 +1915,7 @@ impl McpConnection {
     }
 
     /// Get connection state
-    #[allow(dead_code)] // Public API for MCP consumers
+    #[allow(dead_code)] // Public API for MCP consumers (see #3490)
     pub fn state(&self) -> ConnectionState {
         self.state
     }
@@ -1980,7 +1980,7 @@ impl McpConnection {
     }
 
     /// Gracefully close the connection
-    #[allow(dead_code)] // Public API for MCP consumers
+    #[allow(dead_code)] // Public API for MCP consumers (see #3490)
     pub fn close(&mut self) {
         self.cancel_token.cancel();
         self.state = ConnectionState::Disconnected;
@@ -2262,7 +2262,7 @@ impl McpPool {
     }
 
     /// Get all discovered resource templates with server-prefixed names
-    #[allow(dead_code)] // Public API for MCP resource discovery
+    #[allow(dead_code)] // Public API for MCP resource discovery (see #3490)
     pub fn all_resource_templates(&self) -> Vec<(String, &McpResourceTemplate)> {
         let mut templates = Vec::new();
         for (server, conn) in &self.connections {
@@ -2651,7 +2651,7 @@ impl McpPool {
     }
 
     /// Get list of configured server names
-    #[allow(dead_code)] // Public API for MCP consumers
+    #[allow(dead_code)] // Public API for MCP consumers (see #3490)
     pub fn server_names(&self) -> Vec<&str> {
         self.config
             .servers
@@ -2661,7 +2661,7 @@ impl McpPool {
     }
 
     /// Get list of connected server names
-    #[allow(dead_code)] // Public API; the HTTP list endpoint no longer spawns a pool to call it (#3532)
+    #[allow(dead_code)] // Public API; the HTTP list endpoint no longer spawns a pool to call it (#3532) (see #3490)
     pub fn connected_servers(&self) -> Vec<&str> {
         self.connections
             .iter()
@@ -2671,7 +2671,7 @@ impl McpPool {
     }
 
     /// Disconnect all connections
-    #[allow(dead_code)] // Public API for MCP lifecycle management
+    #[allow(dead_code)] // Public API for MCP lifecycle management (see #3490)
     pub fn disconnect_all(&mut self) {
         self.drop_all_connections("disconnect all");
     }
@@ -2684,7 +2684,7 @@ impl McpPool {
     /// MCP servers a chance to flush state. The fallback Drop on
     /// `StdioTransport` still sends SIGTERM if this never runs, so even
     /// abnormal exits avoid leaking PIDs without a signal.
-    #[allow(dead_code)] // Wired in by callers that want graceful shutdown
+    #[allow(dead_code)] // Wired in by callers that want graceful shutdown (see #3490)
     pub async fn shutdown_all(&mut self) {
         let names: Vec<String> = self.connections.keys().cloned().collect();
         for name in names {
@@ -2696,7 +2696,7 @@ impl McpPool {
     }
 
     /// Get the underlying configuration
-    #[allow(dead_code)] // Public API for MCP consumers
+    #[allow(dead_code)] // Public API for MCP consumers (see #3490)
     pub fn config(&self) -> &McpConfig {
         &self.config
     }
