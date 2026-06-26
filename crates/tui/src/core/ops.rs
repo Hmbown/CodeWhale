@@ -40,7 +40,7 @@ pub struct ProviderRuntimeStatus {
 ///
 /// Chat providers force several runtime/control-plane signals through
 /// `role = "user"` for compatibility, so role alone is not authority.
-#[allow(dead_code)] // Some origins are reserved for ingestion sites landing after the first gate.
+#[allow(dead_code)] // Some origins are reserved for ingestion sites landing after the first gate. (see #3490)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserInputProvenance {
     /// Text typed or submitted through the active UI/API input boundary.
@@ -139,7 +139,7 @@ pub enum Op {
     },
 
     /// Cancel the current request
-    #[allow(dead_code)]
+    #[allow(dead_code)] // CancelRequest user operation; wired in follow-up (see #3490)
     CancelRequest,
 
     /// Approve a tool call that requires permission

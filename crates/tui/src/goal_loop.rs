@@ -26,7 +26,7 @@ pub enum GoalRunStatus {
     /// verifier confirmed — see `GoalGate`).
     Completed,
     /// The model reported it is blocked and needs the user.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // GoalLoop StopReason::Blocked variant (see #3490)
     Blocked,
 }
 
@@ -36,7 +36,7 @@ pub enum StopReason {
     /// Objective achieved.
     Completed,
     /// Model reported blocked.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TokenBudget StopReason::Blocked variant (see #3490)
     Blocked,
     /// Token budget exhausted.
     TokenBudget,
@@ -46,7 +46,7 @@ pub enum StopReason {
     /// terminal signal). Retained for API completeness; the current loop has no
     /// continuation cap, so this variant is not constructed by
     /// `decide_continuation`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // GoalLoop StopReason::ContinuationLimit (see #3490)
     ContinuationLimit,
 }
 
@@ -73,7 +73,7 @@ pub struct GoalBudget {
 impl GoalBudget {
     /// Fully unbounded — no token or time cap. The only stops are a terminal
     /// model status (complete/blocked) or an explicit user pause/clear.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // GoalBudget unbounded constructor (see #3490)
     pub const fn unbounded() -> Self {
         Self {
             token_budget: None,
@@ -83,7 +83,7 @@ impl GoalBudget {
 
     /// A token budget only — the loop runs until the model is done or the
     /// token budget is exhausted.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // GoalBudget with_token_budget constructor (see #3490)
     pub const fn with_token_budget(token_budget: u64) -> Self {
         Self {
             token_budget: Some(token_budget),
@@ -142,7 +142,7 @@ pub fn decide_continuation(
 /// Whether a stop reason represents success (Completed) vs. an early/forced exit.
 /// Useful for the UI/status projection (#2666 token/time visibility).
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // StopReason is_success check (see #3490)
 pub fn is_success(reason: StopReason) -> bool {
     matches!(reason, StopReason::Completed)
 }

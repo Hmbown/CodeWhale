@@ -159,12 +159,12 @@ pub struct ToolContext {
     /// Whether to allow paths outside workspace
     pub trust_mode: bool,
     /// Current sandbox policy
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolContext sandbox_policy field (see #3490)
     pub sandbox_policy: SandboxPolicy,
     /// Path for notes file
     pub notes_path: PathBuf,
     /// MCP configuration path
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolContext mcp_config_path field (see #3490)
     pub mcp_config_path: PathBuf,
     /// Explicit skills directory used for model-visible skill discovery.
     pub skills_dir: Option<PathBuf>,
@@ -298,7 +298,7 @@ impl ToolContext {
     }
 
     /// Create a `ToolContext` with all settings specified.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolBuilder with_options (see #3490)
     pub fn with_options(
         workspace: impl Into<PathBuf>,
         trust_mode: bool,
@@ -451,7 +451,7 @@ impl ToolContext {
 
     /// Attach an external sandbox backend for remote shell execution.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolBuilder with_sandbox_backend (see #3490)
     pub fn with_sandbox_backend(mut self, backend: std::sync::Arc<dyn SandboxBackend>) -> Self {
         self.sandbox_backend = Some(backend);
         self
@@ -479,7 +479,7 @@ impl ToolContext {
     /// Attach an LSP manager so that edit tools can auto-inject diagnostics
     /// into their results after a successful file modification (#428).
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolBuilder with_lsp_manager (see #3490)
     pub fn with_lsp_manager(mut self, manager: Arc<LspManager>) -> Self {
         self.lsp_manager = Some(manager);
         self
@@ -720,14 +720,14 @@ impl ToolContext {
     }
 
     /// Set the trust mode.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolBuilder with_trust_mode (see #3490)
     pub fn with_trust_mode(mut self, trust: bool) -> Self {
         self.trust_mode = trust;
         self
     }
 
     /// Set the sandbox policy.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolBuilder with_sandbox_policy (see #3490)
     pub fn with_sandbox_policy(mut self, policy: SandboxPolicy) -> Self {
         self.sandbox_policy = policy;
         self
@@ -889,7 +889,7 @@ pub trait ToolSpec: Send + Sync {
     }
 
     /// Returns whether this tool is sandboxable.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolCapability sandboxable check (see #3490)
     fn is_sandboxable(&self) -> bool {
         self.capabilities().contains(&ToolCapability::Sandboxable)
     }
