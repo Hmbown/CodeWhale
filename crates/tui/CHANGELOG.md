@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added OpenModel as a first-class Anthropic Messages provider, with config,
   CLI, provider picker, docs, and registry coverage. Harvested from #3585 by
   @noaft.
+- Added WeCom Bridge deployment and security documentation, with shipped
+  runtime/bridge commands and approval-timeout environment guidance. Harvested
+  from #3640 by @pkeging.
 
 ### Changed
 

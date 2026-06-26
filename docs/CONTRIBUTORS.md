@@ -36,6 +36,9 @@ notes, and relevant issue/PR comments.
 - **[noaft](https://github.com/noaft)** — OpenModel provider support across
   config, CLI, TUI provider picker, docs, and registry checks (#3585,
   harvested)
+- **[pkeging](https://github.com/pkeging)** — WeCom Bridge deployment and
+  security documentation, including the approval-timeout configuration surface
+  (#3640, harvested)
 
 </details>
 
