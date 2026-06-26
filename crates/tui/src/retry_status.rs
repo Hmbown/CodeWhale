@@ -43,7 +43,7 @@ pub enum RetryState {
     /// `TurnStarted`.
     Failed {
         reason: String,
-        #[allow(dead_code)]
+        #[allow(dead_code)] // Retry framework; kept for future adaptive retry policy (see #3490)
         since: Instant,
     },
 }

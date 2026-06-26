@@ -1626,7 +1626,7 @@ pub struct RetryPolicy {
 impl RetryPolicy {
     /// Compute the backoff delay for a retry attempt.
     #[must_use]
-    #[allow(dead_code)] // used by runtime_api; will be wired into client retry loop
+    #[allow(dead_code)] // used by runtime_api; will be wired into client retry loop (see #3490)
     pub fn delay_for_attempt(&self, attempt: u32) -> std::time::Duration {
         let exponent = i32::try_from(attempt).unwrap_or(i32::MAX);
         let delay = self.initial_delay * self.exponential_base.powi(exponent);

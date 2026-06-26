@@ -254,7 +254,7 @@ impl LspManager {
 
     /// Best-effort shutdown of every spawned transport. Called when the
     /// session ends.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Wired in engine.rs:1734 (see #3490)
     pub async fn shutdown_all(&self) {
         let transports: Vec<Arc<dyn LspTransport>> =
             self.transports.lock().await.values().cloned().collect();

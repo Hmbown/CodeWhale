@@ -86,7 +86,7 @@ impl SkillStateStore {
         self.persist()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Getter exposed for settings UI integration (see #3490)
     pub fn disabled(&self) -> Vec<String> {
         self.disabled.iter().cloned().collect()
     }

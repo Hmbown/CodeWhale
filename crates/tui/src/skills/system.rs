@@ -165,7 +165,7 @@ pub fn install_system_skills(skills_dir: &Path) -> std::io::Result<()> {
 /// Remove all system skills and the version marker.
 ///
 /// Intended for tests and `deepseek setup --clean`.  Ignores missing files.
-#[allow(dead_code)]
+#[allow(dead_code)] // Setup --clean / test utility; not wired into CLI yet (see #3490)
 pub fn uninstall_system_skills(skills_dir: &Path) -> std::io::Result<()> {
     let marker = skills_dir.join(".system-installed-version");
 

@@ -23,7 +23,7 @@ pub enum TodoStatus {
 }
 
 impl TodoStatus {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TodoStatus display helper (see #3490)
     pub fn as_str(self) -> &'static str {
         match self {
             TodoStatus::Pending => "pending",

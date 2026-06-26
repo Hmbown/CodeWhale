@@ -43,7 +43,7 @@ impl EngineHandle {
 
     /// Check if a request is currently cancelled
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by engine tests; wrapper around CancellationToken (see #3490)
     pub fn is_cancelled(&self) -> bool {
         match self.cancel_token.lock() {
             Ok(token) => token.is_cancelled(),

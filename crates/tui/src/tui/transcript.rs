@@ -120,7 +120,7 @@ impl TranscriptViewCache {
     /// Retained for tests and external use; the live render path uses the
     /// `ensure_split` variant to avoid concatenating history + active-cell
     /// entries every frame.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Resume layout helper; used by HistoryCell rendering (see #3490)
     pub fn ensure(
         &mut self,
         cells: &[HistoryCell],

@@ -2372,7 +2372,7 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
 // === Streaming Helpers ===
 
 /// Build synthetic stream events from a non-streaming response (used as fallback).
-#[allow(dead_code)]
+#[allow(dead_code)] // Fallback for non-streaming responses; not yet wired (see #3490)
 fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
     let mut events = Vec::new();
     let mut index = 0u32;

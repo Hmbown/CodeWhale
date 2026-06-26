@@ -177,7 +177,7 @@ impl Session {
     /// compaction. Bumps `messages_revision` exactly once even when the new
     /// history has a different length, so downstream caches invalidate
     /// atomically.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Session resume/compaction API; kept for future callers (see #3490)
     pub fn replace_messages(&mut self, messages: Vec<Message>) {
         self.messages = messages.into();
         self.messages_revision = self.messages_revision.saturating_add(1);

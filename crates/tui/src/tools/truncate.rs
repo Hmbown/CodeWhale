@@ -277,7 +277,7 @@ pub const SPILLOVER_HEAD_BYTES: usize = 32 * 1024;
 /// Error results (`success == false`) are skipped: error messages
 /// are typically short, and turning them into a "see file" pointer
 /// would just hide the error from the model's reasoning.
-#[allow(dead_code)]
+#[allow(dead_code)] // Public wrapper around apply_spillover_inner; used by tests (see #3490)
 pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf> {
     apply_spillover_inner(result, tool_id, None)
 }

@@ -14,7 +14,7 @@ use super::spec::{
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Multi-tool parallel tool spec; reserved for Anthropic parallel tool use (see #3490)
 pub struct MultiToolUseParallelTool;
 
 #[async_trait]
