@@ -102,7 +102,7 @@ pub async fn translate_text(
 
 /// Status of a translation operation for a single message.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Translation status enum; reserved for follow-up integration (see #3490)
 pub enum TranslationStatus {
     /// No translation needed (already Chinese or not enough text).
     NotNeeded,

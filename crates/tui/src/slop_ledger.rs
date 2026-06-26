@@ -81,7 +81,7 @@ impl SlopBucket {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SlopBucket all_buckets; part of slop ledger API (see #3490)
     pub fn all_buckets() -> &'static [SlopBucket] {
         &[
             Self::RetainedCompatibility,
@@ -317,7 +317,7 @@ impl SlopLedger {
 
     /// Return the total number of entries.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SlopLedger len; part of public API (see #3490)
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -981,7 +981,7 @@ impl SlopLedger {
     ///
     /// Tools and engine hooks can call this on claim-of-done to surface
     /// architectural residue the agent may have overlooked.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserve for future slop reporting API (see #3490)
     #[must_use]
     pub fn has_open_entries(&self) -> bool {
         self.entries.iter().any(|e| {
@@ -995,7 +995,7 @@ impl SlopLedger {
     /// Return a concise completion-gate summary suitable for a verifier
     /// sub-agent or the claim-of-done prompt. Returns `None` when all
     /// entries are resolved — the caller can then treat the gate as "pass".
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserve for future slop reporting API (see #3490)
     #[must_use]
     pub fn completion_gate_summary(&self) -> Option<String> {
         let open: Vec<&SlopEntry> = self

@@ -322,7 +322,7 @@ impl HistoryCell {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Rendered line helper; used by transcript (see #3490)
     pub(crate) fn lines_with_copy_metadata(
         &self,
         width: u16,

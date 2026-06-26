@@ -177,7 +177,7 @@ impl FileTreeState {
     }
 
     /// Adjust scroll for a given visible height.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Scroll adjustment helper; used by file_picker (see #3490)
     pub fn adjust_scroll(&mut self, visible: usize) {
         if self.cursor < self.scroll_offset {
             self.scroll_offset = self.cursor;

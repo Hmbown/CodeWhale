@@ -77,21 +77,21 @@ impl ToolRegistry {
 
     /// Get all registered tool names.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry names; public API (see #3490)
     pub fn names(&self) -> Vec<&str> {
         self.tools.keys().map(std::string::String::as_str).collect()
     }
 
     /// Get the number of registered tools.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry len; public API (see #3490)
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
     /// Check if the registry is empty.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry is_empty; public API (see #3490)
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
@@ -103,7 +103,7 @@ impl ToolRegistry {
     }
 
     /// Execute a tool by name with the given input.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry execute; public API (see #3490)
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, ToolError> {
         let tool = self
             .get(name)
@@ -262,7 +262,7 @@ impl ToolRegistry {
 
     /// Filter tools by capability.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry filter_by_capability (see #3490)
     pub fn filter_by_capability(&self, capability: ToolCapability) -> Vec<Arc<dyn ToolSpec>> {
         self.tools
             .values()
@@ -273,7 +273,7 @@ impl ToolRegistry {
 
     /// Get read-only tools.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry read_only_tools (see #3490)
     pub fn read_only_tools(&self) -> Vec<Arc<dyn ToolSpec>> {
         self.tools
             .values()
@@ -284,7 +284,7 @@ impl ToolRegistry {
 
     /// Get tools that require approval.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry approval_required_tools (see #3490)
     pub fn approval_required_tools(&self) -> Vec<Arc<dyn ToolSpec>> {
         self.tools
             .values()
@@ -295,7 +295,7 @@ impl ToolRegistry {
 
     /// Get tools that suggest approval.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry approval_suggested_tools (see #3490)
     pub fn approval_suggested_tools(&self) -> Vec<Arc<dyn ToolSpec>> {
         self.tools
             .values()
@@ -310,21 +310,21 @@ impl ToolRegistry {
     }
 
     /// Update the context (e.g., when workspace changes).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry set_context (see #3490)
     pub fn set_context(&mut self, context: ToolContext) {
         self.context = context;
     }
 
     /// Get a mutable reference to the current context.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry context_mut (see #3490)
     pub fn context_mut(&mut self) -> &mut ToolContext {
         &mut self.context
     }
 
     /// Remove a tool by name.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry remove (see #3490)
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn ToolSpec>> {
         let removed = self.tools.remove(name);
         if removed.is_some() {
@@ -390,7 +390,7 @@ impl ToolRegistry {
     }
 
     /// Clear all tools from the registry.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // ToolRegistry clear (see #3490)
     pub fn clear(&mut self) {
         self.tools.clear();
         self.invalidate_api_cache();
@@ -930,7 +930,7 @@ impl ToolRegistryBuilder {
     /// when `tool_setup.rs` conditionally registers them on top of
     /// `with_agent_tools`.
     #[must_use]
-    #[allow(dead_code)] // legacy allow_shell convenience wrapper; used by tests, prod uses with_agent_tools_policy
+    #[allow(dead_code)] // legacy allow_shell convenience wrapper; used by tests, prod uses with_agent_tools_policy (see #3490)
     pub fn with_agent_tools(self, allow_shell: bool) -> Self {
         self.with_agent_tools_policy(crate::worker_profile::ShellPolicy::from_legacy_allow_shell(
             allow_shell,
@@ -1100,7 +1100,7 @@ fn to_snake_case(s: &str) -> String {
 
 /// Adapter that wraps an MCP tool definition so it can live in the
 /// unified `ToolRegistry` alongside native tools (§5.B).
-#[allow(dead_code)]
+#[allow(dead_code)] // McpToolAdapter struct; MCP integration (see #3490)
 struct McpToolAdapter {
     name: String,
     tool: crate::mcp::McpTool,

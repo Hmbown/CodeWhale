@@ -24,7 +24,7 @@ pub enum StepStatus {
 }
 
 impl StepStatus {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // PlanState estimated_tokens; part of public API (see #3490)
     #[must_use]
     pub fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_lowercase().as_str() {
@@ -35,7 +35,7 @@ impl StepStatus {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // PlanState tokens_used; part of public API (see #3490)
     #[must_use]
     pub fn symbol(&self) -> &'static str {
         match self {
@@ -402,7 +402,7 @@ fn clean_list(values: Vec<String>) -> Vec<String> {
 
 /// Validation result for plan transitions
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // PlanValidation enum; part of plan validation API (see #3490)
 pub enum PlanValidation {
     Ok,
     Warning(String),
@@ -410,7 +410,7 @@ pub enum PlanValidation {
 }
 
 /// Validate a plan update
-#[allow(dead_code)]
+#[allow(dead_code)] // validate_plan_update; part of plan validation API (see #3490)
 pub fn validate_plan_update(current: &PlanState, update: &UpdatePlanArgs) -> PlanValidation {
     let current_steps: std::collections::HashMap<_, _> = current
         .steps()

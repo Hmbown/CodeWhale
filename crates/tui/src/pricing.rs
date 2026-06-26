@@ -44,7 +44,7 @@ pub struct CostEstimate {
 }
 
 impl CostEstimate {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Cost usd_only constructor (see #3490)
     pub fn usd_only(usd: f64) -> Self {
         Self { usd, cny: 0.0 }
     }
@@ -66,7 +66,7 @@ impl CostEstimate {
 /// Response from `GET https://api.deepseek.com/user/balance`.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct BalanceResponse {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // AccountInfo is_available field (see #3490)
     pub is_available: bool,
     pub balance_infos: Vec<BalanceInfo>,
 }
@@ -78,10 +78,10 @@ pub struct BalanceInfo {
     #[serde(default)]
     pub total_balance: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // AccountInfo topped_up_balance field (see #3490)
     pub topped_up_balance: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // AccountInfo granted_balance field (see #3490)
     pub granted_balance: String,
 }
 
@@ -242,7 +242,7 @@ pub fn input_cost_note(model: &str) -> Option<String> {
 
 /// Calculate cost for a turn given token usage and model.
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // calculate_turn_cost convenience wrapper (see #3490)
 pub fn calculate_turn_cost(model: &str, input_tokens: u32, output_tokens: u32) -> Option<f64> {
     calculate_turn_cost_estimate(model, input_tokens, output_tokens).map(|estimate| estimate.usd)
 }
@@ -359,7 +359,7 @@ pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<Cos
 
 /// Format a USD cost for compact display.
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // format_cost convenience wrapper (see #3490)
 pub fn format_cost(cost: f64) -> String {
     format_cost_amount(cost, CostCurrency::Usd)
 }

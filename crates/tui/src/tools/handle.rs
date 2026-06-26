@@ -20,7 +20,7 @@ use crate::tools::spec::{
 
 const DEFAULT_MAX_CHARS: usize = 12_000;
 const HARD_MAX_CHARS: usize = 50_000;
-#[allow(dead_code)] // Used by producers as they begin returning var_handle records.
+#[allow(dead_code)] // Used by producers as they begin returning var_handle records. (see #3490)
 const REPR_PREVIEW_CHARS: usize = 160;
 
 pub type SharedHandleStore = Arc<Mutex<HandleStore>>;
@@ -64,14 +64,14 @@ pub struct HandleRecord {
     pub value: HandleValue,
 }
 
-#[allow(dead_code)] // Producers land in later v0.8.33 slices; handle_read is first.
+#[allow(dead_code)] // Producers land in later v0.8.33 slices; handle_read is first. (see #3490)
 #[derive(Debug, Clone)]
 pub enum HandleValue {
     Text(String),
     Json(Value),
 }
 
-#[allow(dead_code)] // Foundation methods used by upcoming RLM/agent session producers.
+#[allow(dead_code)] // Foundation methods used by upcoming RLM/agent session producers. (see #3490)
 impl HandleValue {
     fn length(&self) -> usize {
         match self {
@@ -114,7 +114,7 @@ pub struct HandleStore {
     records: HashMap<HandleKey, HandleRecord>,
 }
 
-#[allow(dead_code)] // Insertors are for producer tools; this PR wires the reader first.
+#[allow(dead_code)] // Insertors are for producer tools; this PR wires the reader first. (see #3490)
 impl HandleStore {
     #[must_use]
     pub fn insert_text(
@@ -761,7 +761,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     out
 }
 
-#[allow(dead_code)] // Used when producer tools register handle payloads.
+#[allow(dead_code)] // Used when producer tools register handle payloads. (see #3490)
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);

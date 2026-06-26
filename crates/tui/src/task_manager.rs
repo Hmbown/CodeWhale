@@ -309,7 +309,7 @@ pub struct TaskManagerConfig {
     pub default_mode: String,
     pub allow_shell: bool,
     pub trust_mode: bool,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TaskManagerConfig max_subagents (see #3490)
     pub max_subagents: usize,
 }
 
@@ -807,12 +807,12 @@ impl TaskManager {
         Ok(manager)
     }
 
-    #[allow(dead_code)] // Public API for external callers (runtime API)
+    #[allow(dead_code)] // Public API for external callers (runtime API) (see #3490)
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
     }
 
-    #[allow(dead_code)] // Public API for external callers
+    #[allow(dead_code)] // Public API for external callers (see #3490)
     pub fn is_shutdown(&self) -> bool {
         self.cancel_token.is_cancelled()
     }

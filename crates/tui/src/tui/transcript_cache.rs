@@ -111,7 +111,7 @@ impl TranscriptCache {
 
     /// Drop every cached entry. Used when the underlying transcript shape
     /// changes drastically (e.g. session reset).
-    #[allow(dead_code)] // Reserved for /clear and session-reset call sites.
+    #[allow(dead_code)] // Reserved for /clear and session-reset call sites. (see #3490)
     pub fn clear(&mut self) {
         self.entries.clear();
         self.insertion_order.clear();

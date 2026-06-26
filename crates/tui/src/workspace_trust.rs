@@ -40,7 +40,7 @@ pub struct WorkspaceTrust {
 
 impl WorkspaceTrust {
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // WorkspaceTrust empty constructor; used in test helpers (see #3490)
     pub fn empty() -> Self {
         Self { paths: Vec::new() }
     }
@@ -80,7 +80,7 @@ impl WorkspaceTrust {
     /// normalization) starts with one of the trusted prefixes. Directory
     /// trust grants access to anything under the directory.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // WorkspaceTrust permits check; used in runtime access control (see #3490)
     pub fn permits(&self, candidate: &Path) -> bool {
         let canonical = candidate
             .canonicalize()

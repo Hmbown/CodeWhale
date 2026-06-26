@@ -25,7 +25,7 @@ use super::ToolUseState;
 
 // === Types ============================================================
 
-#[allow(dead_code)] // `index` mirrors batch order for diagnostic ergonomics.
+#[allow(dead_code)] // `index` mirrors batch order for diagnostic ergonomics. (see #3490)
 pub(super) struct ToolExecOutcome {
     pub(super) index: usize,
     pub(super) id: String,

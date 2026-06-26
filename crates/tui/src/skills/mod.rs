@@ -477,7 +477,7 @@ impl SkillRegistry {
 /// need to filter further. Returns an empty vec when nothing is
 /// installed (the system-prompt skills block is then suppressed).
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // Skill directory discovery; used by install/refresh paths (see #3490)
 pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
     skills_directories_for_mode(workspace, SkillDiscoveryMode::Compatible)
 }
@@ -585,7 +585,7 @@ pub fn discover_in_workspace_with_mode(
 /// outside that set so explicit configuration cannot be buried by large global
 /// libraries.
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // Skill discovery helper; used by workspace initialization (see #3490)
 pub fn discover_for_workspace_and_dir(workspace: &Path, skills_dir: &Path) -> SkillRegistry {
     discover_for_workspace_and_dir_with_mode(workspace, skills_dir, SkillDiscoveryMode::Compatible)
 }

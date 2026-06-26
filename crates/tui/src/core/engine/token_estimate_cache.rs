@@ -97,7 +97,7 @@ impl TokenEstimateCache {
     /// Record a messages-revision bump. The engine calls this whenever
     /// `session.messages` is mutated. Calling it with a value smaller than
     /// the current value is a no-op (the cache is monotonic).
-    #[allow(dead_code)] // exposed for future wiring of /clear and reset paths; tests exercise it
+    #[allow(dead_code)] // exposed for future wiring of /clear and reset paths; tests exercise it (see #3490)
     pub fn bump_messages_revision(&mut self, revision: u64) {
         if revision > self.messages_revision {
             self.messages_revision = revision;
@@ -106,7 +106,7 @@ impl TokenEstimateCache {
     }
 
     /// Forget all cached state. Used by `/clear` and session reset paths.
-    #[allow(dead_code)] // exposed for future wiring of /clear and reset paths; tests exercise it
+    #[allow(dead_code)] // exposed for future wiring of /clear and reset paths; tests exercise it (see #3490)
     pub fn invalidate(&mut self) {
         self.cached_tokens = None;
         self.system_fingerprint = 0;
@@ -116,7 +116,7 @@ impl TokenEstimateCache {
     }
 
     /// Returns `(hits, misses)` counters since the last `invalidate` call.
-    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it
+    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it (see #3490)
     #[must_use]
     pub fn stats(&self) -> (u64, u64) {
         (self.hits, self.misses)
@@ -124,7 +124,7 @@ impl TokenEstimateCache {
 
     /// Returns the most recent `(revision, tokens)` audit entries, newest
     /// first. Bounded by [`AUDIT_RING_CAPACITY`].
-    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it
+    #[allow(dead_code)] // surfaced via /status in a follow-up; tests exercise it (see #3490)
     #[must_use]
     pub fn recent_audit(&self) -> &[(u64, usize)] {
         &self.audit_ring

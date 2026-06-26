@@ -25,7 +25,7 @@ pub struct TurnContext {
     pub id: String,
 
     /// When the turn started
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TurnMetadata started_at (see #3490)
     pub started_at: Instant,
 
     /// Current step in the turn (tool call iteration)
@@ -38,7 +38,7 @@ pub struct TurnContext {
     tool_call_count: usize,
 
     /// Whether the turn has been cancelled
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TurnMetadata cancelled flag (see #3490)
     pub cancelled: bool,
 
     /// Usage for this turn
@@ -85,13 +85,13 @@ impl TurnContext {
     }
 
     /// Cancel the turn
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TurnContext cancel; part of public API (see #3490)
     pub fn cancel(&mut self) {
         self.cancelled = true;
     }
 
     /// Get the elapsed time
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TurnContext elapsed; part of public API (see #3490)
     pub fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
     }

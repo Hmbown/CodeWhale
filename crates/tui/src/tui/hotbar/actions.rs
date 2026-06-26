@@ -14,7 +14,7 @@ use crate::tui::command_palette::{
 pub const HOTBAR_COMPACT_LABEL_MAX_WIDTH: usize = 7;
 
 /// Result of firing a hotbar action.
-#[allow(dead_code)]
+#[allow(dead_code)] // HotbarDispatch enum; public API (see #3490)
 #[derive(Debug, Clone, PartialEq)]
 pub enum HotbarDispatch {
     /// The action was fully handled by mutating [`App`].
@@ -24,7 +24,7 @@ pub enum HotbarDispatch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)]
+#[allow(dead_code)] // HotbarActionCategory enum; public API (see #3490)
 pub enum HotbarActionCategory {
     App,
     Slash,
@@ -46,7 +46,7 @@ impl HotbarActionCategory {
     }
 
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionCategory parse; public API (see #3490)
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "app" => Some(Self::App),
@@ -80,7 +80,7 @@ impl HotbarArgsBehavior {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // HotbarSafetyClass enum; public API (see #3490)
 pub enum HotbarSafetyClass {
     LocalUi,
     LocalState,
@@ -98,7 +98,7 @@ pub enum HotbarRecommendation {
 
 impl HotbarRecommendation {
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarSafetyClass is_recommendable (see #3490)
     pub const fn is_recommendable(self) -> bool {
         matches!(self, Self::Default | Self::Eligible)
     }
@@ -284,7 +284,7 @@ pub trait HotbarActionSource {
 }
 
 /// Uniform interface for actions that can be bound to a hotbar slot.
-#[allow(dead_code)]
+#[allow(dead_code)] // HotbarAction trait; public API (see #3490)
 pub trait HotbarAction: Send + Sync {
     /// Stable action id used in config and dispatch.
     fn id(&self) -> &str;
@@ -364,7 +364,7 @@ pub fn recommend_hotbar_actions(
 }
 
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // recommended_hotbar_bindings; config setup (see #3490)
 pub fn recommended_hotbar_bindings(
     app: &App,
     options: HotbarRecommendationOptions,
@@ -573,36 +573,36 @@ impl HotbarActionSource for SlashCommandHotbarActionSource {
 }
 
 impl HotbarActionRegistry {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry get (see #3490)
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<dyn HotbarAction>> {
         self.actions.get(id).cloned()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry len (see #3490)
     #[must_use]
     pub fn len(&self) -> usize {
         self.actions.len()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry is_empty (see #3490)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.actions.is_empty()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry iter (see #3490)
     pub fn iter(&self) -> impl Iterator<Item = &dyn HotbarAction> {
         self.actions.values().map(Arc::as_ref)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry metadata (see #3490)
     #[must_use]
     pub fn metadata(&self, locale: Locale) -> Vec<HotbarActionMetadata> {
         self.iter().map(|action| action.metadata(locale)).collect()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // HotbarActionRegistry metadata_validation_errors (see #3490)
     #[must_use]
     pub fn metadata_validation_errors(&self, locale: Locale) -> Vec<String> {
         let mut errors = Vec::new();
@@ -656,7 +656,7 @@ enum AppHotbarKind {
     TrustToggle,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // AppHotbarAction struct; hotbar action impl (see #3490)
 struct AppHotbarAction {
     id: &'static str,
     short_label: &'static str,
@@ -842,7 +842,7 @@ impl HotbarAction for AppHotbarAction {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // SlashHotbarAction struct; hotbar action impl (see #3490)
 struct SlashHotbarAction {
     info: &'static CommandInfo,
     id: String,

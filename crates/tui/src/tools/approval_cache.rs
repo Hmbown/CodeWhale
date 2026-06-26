@@ -118,13 +118,13 @@ impl ApprovalCache {
     }
 
     /// Number of cached entries.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Approval cache len accessor (see #3490)
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the cache is empty.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Approval cache is_empty accessor (see #3490)
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

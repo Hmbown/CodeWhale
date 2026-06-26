@@ -172,7 +172,7 @@ impl SessionCostSnapshot {
 
 impl SessionMetadata {
     /// Copy cost fields from another metadata (used when forking a session).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Cost fork helper; used by main.rs and session commands (see #3490)
     pub fn copy_cost_from(&mut self, other: &SessionMetadata) {
         self.cost = other.cost;
     }

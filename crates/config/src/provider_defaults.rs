@@ -104,7 +104,7 @@ pub(crate) const DEFAULT_ZAI_MODEL: &str = "GLM-5.2";
 pub(crate) const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
 // GLM-5.2 is both the default and a named tier; the alias arm resolves the
 // `glm-5.2` spelling to DEFAULT_ZAI_MODEL directly, so this constant is
-// referenced only in cfg(test) assertions (see tests.rs).
+// referenced only in cfg(test) assertions (see tests.rs). (see #3490)
 #[allow(dead_code)]
 pub(crate) const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
 pub(crate) const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";

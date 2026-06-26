@@ -28,39 +28,39 @@ pub enum Event {
     // === Streaming Events ===
     /// A new message block has started
     MessageStarted {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamEvent ContentBlockStart index (see #3490)
         index: usize,
     },
 
     /// Incremental text content delta
     MessageDelta {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamEvent ContentBlockDelta index (see #3490)
         index: usize,
         content: String,
     },
 
     /// Message block completed
     MessageComplete {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamEvent ContentBlockStop index (see #3490)
         index: usize,
     },
 
     /// Thinking block started
     ThinkingStarted {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamEvent MessageDelta index (see #3490)
         index: usize,
     },
 
     /// Incremental thinking content delta
     ThinkingDelta {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // MCP StreamEvent Ping (see #3490)
         index: usize,
         content: String,
     },
 
     /// Thinking block completed
     ThinkingComplete {
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamEvent internal_error_tx field (see #3490)
         index: usize,
     },
 
@@ -111,10 +111,10 @@ pub enum Event {
         auto: bool,
         message: String,
         /// Number of messages before compaction.
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamError messages_before (see #3490)
         messages_before: Option<usize>,
         /// Number of messages after compaction.
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamError messages_after (see #3490)
         messages_after: Option<usize>,
     },
 
@@ -183,7 +183,7 @@ pub enum Event {
     /// An error occurred
     Error {
         envelope: ErrorEnvelope,
-        #[allow(dead_code)]
+        #[allow(dead_code)] // StreamError recoverable flag (see #3490)
         recoverable: bool,
     },
 
@@ -244,7 +244,7 @@ pub enum Event {
     },
 
     /// Request user decision after sandbox denial
-    #[allow(dead_code)]
+    #[allow(dead_code)] // UserInputDecision ElevationRequired (see #3490)
     ElevationRequired {
         tool_id: String,
         tool_name: String,

@@ -30,7 +30,7 @@ static LOG_MUTEX: Mutex<()> = Mutex::new(());
 // ---------------------------------------------------------------------------
 
 /// The concrete shell that the dispatcher will use.
-#[allow(dead_code)]
+#[allow(dead_code)] // ShellKind enum; wired in ShellDispatcher resolution (see #3490)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellKind {
     /// PowerShell 7+ (`pwsh.exe`).
@@ -108,7 +108,7 @@ pub struct ShellDispatcher {
     kind: ShellKind,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ShellDispatcher public impl; wired in config-based shell selection (see #3490)
 impl ShellDispatcher {
     /// Detect the user's shell from the environment.
     ///

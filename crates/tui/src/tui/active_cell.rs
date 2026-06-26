@@ -77,7 +77,7 @@ impl ActiveCell {
 
     /// Number of entries (each rendered as its own [`HistoryCell`]).
     #[must_use]
-    #[allow(dead_code)] // Public surface used by tests and future renderers.
+    #[allow(dead_code)] // Public surface used by tests and future renderers. (see #3490)
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
@@ -109,7 +109,7 @@ impl ActiveCell {
     /// invalidation; the chance of a wrap-around collision is astronomical
     /// over a single session and any miss only causes one extra re-render.
     #[must_use]
-    #[allow(dead_code)] // Used by App::bump_active_cell_revision and future cache wiring.
+    #[allow(dead_code)] // Used by App::bump_active_cell_revision and future cache wiring. (see #3490)
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -161,7 +161,7 @@ impl ActiveCell {
     /// Push an entry with no tool id binding (used for non-tool grouping if
     /// ever needed). Currently unused; kept for symmetry with Codex which
     /// allows e.g. session-header cells to live in `active_cell`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // push_untracked; used by session migration paths (see #3490)
     pub fn push_untracked(&mut self, cell: HistoryCell) -> usize {
         let entry_idx = self.entries.len();
         self.entries.push(cell);
@@ -190,7 +190,7 @@ impl ActiveCell {
 
     /// Look up the entry index that holds the given tool id.
     #[must_use]
-    #[allow(dead_code)] // Reserved for the Codex-style "exec end target" lookup.
+    #[allow(dead_code)] // Reserved for the Codex-style "exec end target" lookup. (see #3490)
     pub fn entry_index_for_tool(&self, tool_id: &str) -> Option<usize> {
         self.tool_to_entry.get(tool_id).copied()
     }
@@ -236,7 +236,7 @@ impl ActiveCell {
     /// Remove the tool-id binding for an entry without removing the entry
     /// itself (the entry remains in the active group, presumably with its
     /// status updated).
-    #[allow(dead_code)] // Reserved for cancellation paths that prune ids without flushing.
+    #[allow(dead_code)] // Reserved for cancellation paths that prune ids without flushing. (see #3490)
     pub fn forget_tool(&mut self, tool_id: &str) -> Option<usize> {
         self.tool_to_entry.remove(tool_id)
     }

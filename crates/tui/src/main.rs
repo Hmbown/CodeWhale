@@ -85,9 +85,9 @@ mod runtime_log;
 mod runtime_threads;
 mod sandbox;
 mod seam_manager;
-#[allow(dead_code)]
+#[allow(dead_code)] // Session diagnostics module; gated behind --diagnostics flag (see #3490)
 mod session_diagnostics;
-#[allow(dead_code)]
+#[allow(dead_code)] // Session manager module; imported in main for initialization (see #3490)
 mod session_manager;
 mod settings;
 mod shell_dispatcher;

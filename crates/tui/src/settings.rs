@@ -70,7 +70,7 @@ impl Default for TuiPrefs {
 }
 
 /// Per-action keybinding overrides stored inside [`TuiPrefs`].
-#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
+#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657). (see #3490)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct KeybindPrefs {
@@ -91,7 +91,7 @@ pub struct KeybindPrefs {
     pub toggle_sidebar: Option<String>,
 }
 
-#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
+#[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657). (see #3490)
 impl TuiPrefs {
     /// Return the canonical path of the TUI preferences file:
     /// `~/.codewhale/tui.toml`, or legacy `~/.deepseek/tui.toml` when present.
@@ -971,7 +971,7 @@ impl Settings {
     }
 
     /// Get available setting keys and their descriptions
-    #[allow(dead_code)]
+    #[allow(dead_code)] // available_settings; reserved for settings UI (see #3490)
     pub fn available_settings() -> Vec<(&'static str, &'static str)> {
         vec![
             (
@@ -1136,7 +1136,7 @@ impl Settings {
 
     /// Load, update, and save a provider/model tuple as the global default
     /// (the explicit "save as default" path).
-    #[allow(dead_code)] // wired to an explicit save-as-default action in a later UX pass (#3227).
+    #[allow(dead_code)] // wired to an explicit save-as-default action in a later UX pass (#3227). (see #3490)
     pub fn persist_provider_model_selection_as_default(
         provider: ApiProvider,
         model: &str,

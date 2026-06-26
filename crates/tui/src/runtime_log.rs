@@ -66,12 +66,13 @@ pub struct TuiLogGuard {
     // wired up so adding one later doesn't require revisiting the
     // guard struct.
     #[allow(dead_code)]
+    // RuntimeLog guard path; kept for diagnostics struct completeness (see #3490)
     log_path: PathBuf,
 }
 
 impl TuiLogGuard {
     /// Path the subscriber is writing to.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // RuntimeLog log_path accessor (see #3490)
     #[must_use]
     pub fn log_path(&self) -> &std::path::Path {
         &self.log_path

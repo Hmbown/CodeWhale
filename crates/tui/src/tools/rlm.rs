@@ -659,7 +659,7 @@ fn preview_output(text: &str) -> String {
     )
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Compile-time type assertion for VarHandle (see #3490)
 fn _assert_var_handle_shape(_: Option<VarHandle>) {}
 
 #[cfg(test)]

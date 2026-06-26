@@ -76,7 +76,7 @@ pub trait LlmClient: Send + Sync {
 }
 
 /// Trait for clients that support configurable retry behavior
-#[allow(dead_code)] // Part of LLM provider interface, will be used by additional providers
+#[allow(dead_code)] // Part of LLM provider interface, will be used by additional providers (see #3490)
 pub trait RetryConfigurable {
     fn retry_config(&self) -> &RetryConfig;
     fn set_retry_config(&mut self, config: RetryConfig);
@@ -781,11 +781,13 @@ pub struct RetryConfig {
     pub respect_retry_after: bool,
 
     /// HTTP status codes that should trigger a retry
-    #[allow(dead_code)] // Used in tests via is_retryable_status()
+    #[allow(dead_code)]
+    // retryable_status_codes; test/config field (see #3490)
     pub retryable_status_codes: Vec<u16>,
 
     /// Timeout for individual requests (seconds, 0 = no timeout)
-    #[allow(dead_code)] // Configuration field for retry consumers
+    #[allow(dead_code)]
+    // request_timeout; config field for retry consumers (see #3490)
     pub request_timeout: f64,
 
     /// Total timeout for all retry attempts (seconds, 0 = no total timeout)
@@ -810,7 +812,7 @@ impl Default for RetryConfig {
     }
 }
 
-#[allow(dead_code)] // Public builder API, used in tests
+#[allow(dead_code)] // Public builder API, used in tests (see #3490)
 impl RetryConfig {
     /// Creates a new `RetryConfig` with default values
     pub fn new() -> Self {
@@ -1091,7 +1093,7 @@ where
 }
 
 /// Simplified version of `with_retry` without callback
-#[allow(dead_code)] // Convenience wrapper for with_retry
+#[allow(dead_code)] // Convenience wrapper for with_retry (see #3490)
 pub async fn with_retry_simple<F, Fut, T>(config: &RetryConfig, operation: F) -> RetryResult<T>
 where
     F: FnMut() -> Fut,

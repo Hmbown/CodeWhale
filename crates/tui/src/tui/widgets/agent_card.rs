@@ -216,7 +216,7 @@ impl FanoutCard {
     }
 
     /// Pre-seed worker slots when the fanout size is known up front.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Worker pre-seed builder; used by views (see #3490)
     pub fn with_workers<I, S>(mut self, ids: I) -> Self
     where
         I: IntoIterator<Item = S>,

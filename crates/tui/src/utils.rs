@@ -420,7 +420,7 @@ where
     })
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ensure_dir utility; used by CLI initialization paths (see #3490)
 pub fn ensure_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)
         .with_context(|| format!("Failed to create directory: {}", path.display()))
@@ -428,7 +428,7 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
 
 /// Render JSON with pretty formatting, falling back to a compact string on error.
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // pretty_json utility; used by debug/logging commands (see #3490)
 pub fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
