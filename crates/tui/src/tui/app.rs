@@ -5835,6 +5835,9 @@ pub enum AppAction {
     OpenFleetSetup,
     /// Open the `/hotbar` setup wizard.
     OpenHotbarSetup,
+    /// Open the /setup summary wizard.
+    #[allow(dead_code)] // Reserved; will be wired to a keyboard shortcut or /setup command
+    OpenSetupSummary,
     /// Open an external URL in the system browser.
     OpenExternalUrl {
         url: String,

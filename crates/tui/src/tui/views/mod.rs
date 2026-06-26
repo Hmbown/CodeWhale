@@ -18,6 +18,7 @@ use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod fleet_setup;
 pub mod mode_picker;
+pub mod setup_summary;
 pub mod status_picker;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +44,7 @@ pub enum ModalKind {
     FeedbackPicker,
     ThemePicker,
     ContextMenu,
+    SetupSummary,
 }
 
 #[derive(Debug, Clone)]
