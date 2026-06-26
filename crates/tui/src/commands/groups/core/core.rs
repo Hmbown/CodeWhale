@@ -440,9 +440,14 @@ fn provider_link_info(provider_id: &str) -> ProviderLinkInfo {
             docs_url: "https://docs.deepinfra.com/quickstart",
             note: "Create DeepInfra API keys from the dashboard.",
         },
+        "qianfan" => ProviderLinkInfo {
+            key_url: None,
+            docs_url: "https://cloud.baidu.com/doc/qianfan/index.html",
+            note: "Create Baidu Qianfan API keys from the Qianfan console.",
+        },
         _ => ProviderLinkInfo {
             key_url: None,
-            docs_url: "https://codewhale.dev/docs/providers",
+            docs_url: "https://codewhale.net/en/docs",
             note: "Use the provider console for credentials, then configure the matching env var.",
         },
     }
@@ -1277,9 +1282,20 @@ mod tests {
         assert!(msg.contains("https://platform.deepseek.com/api_keys"));
         assert!(msg.contains("Xiaomi MiMo (xiaomi-mimo)"));
         assert!(msg.contains("https://platform.xiaomimimo.com/token-plan"));
+        assert!(msg.contains("Baidu Qianfan (qianfan)"));
+        assert!(msg.contains("https://cloud.baidu.com/doc/qianfan/index.html"));
         assert!(msg.contains("OPENAI_API_KEY"));
         assert!(msg.contains("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"));
+        assert!(!msg.contains("https://codewhale.dev/docs/providers"));
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn provider_link_fallback_uses_current_codewhale_docs() {
+        let links = provider_link_info("unknown-provider");
+
+        assert_eq!(links.docs_url, "https://codewhale.net/en/docs");
+        assert_eq!(links.key_url, None);
     }
 
     #[test]
