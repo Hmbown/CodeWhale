@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sub-agent configuration layer while WhaleFlow is the agent-authored
   orchestration plan that selects and monitors Fleet slots.
 
+### Fixed
+
+- Updated the `/links` provider fallback to the current CodeWhale docs URL and
+  added a Baidu Qianfan docs link. Harvested from #3621 by @noaft.
+
 ## [0.8.65] - 2026-06-24
 
 ### Added
