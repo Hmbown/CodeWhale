@@ -5,14 +5,14 @@
 use std::borrow::Cow;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-#[allow(dead_code)]
+#[allow(dead_code)] // TextDirection enum; part of public localization API (see #3490)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextDirection {
     Ltr,
     Rtl,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // LocaleCoverage enum; part of public localization API (see #3490)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocaleCoverage {
     English,
@@ -20,7 +20,7 @@ pub enum LocaleCoverage {
     PlannedQa,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // LocaleSpec struct; part of public localization API (see #3490)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocaleSpec {
     pub tag: &'static str,
@@ -67,7 +67,7 @@ impl Locale {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Locale::spec accessor; public API (see #3490)
     pub fn spec(self) -> LocaleSpec {
         match self {
             Self::En => LocaleSpec {
@@ -129,7 +129,7 @@ impl Locale {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Locale::shipped locales list; public API (see #3490)
     pub fn shipped() -> &'static [Self] {
         &[
             Self::En,
@@ -143,7 +143,7 @@ impl Locale {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // PLANNED_QA_LOCALES; reserved for QA pipeline integration (see #3490)
 pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
     LocaleSpec {
         tag: "ar",
@@ -680,7 +680,7 @@ pub enum MessageId {
     VoiceTranscribed,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ALL_MESSAGE_IDS; used by locale coverage verification (see #3490)
 pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ComposerPlaceholder,
     MessageId::HistorySearchPlaceholder,
@@ -1220,7 +1220,7 @@ where
     Locale::En
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // truncate_to_width utility; public API (see #3490)
 pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
