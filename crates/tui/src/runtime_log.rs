@@ -65,7 +65,8 @@ pub struct TuiLogGuard {
     // `--print-log-path`). Currently no caller — keep the accessor
     // wired up so adding one later doesn't require revisiting the
     // guard struct.
-    #[allow(dead_code)] // RuntimeLog guard path; kept for diagnostics struct completeness (see #3490)
+    #[allow(dead_code)]
+    // RuntimeLog guard path; kept for diagnostics struct completeness (see #3490)
     log_path: PathBuf,
 }
 

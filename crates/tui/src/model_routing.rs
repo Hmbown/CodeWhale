@@ -276,7 +276,7 @@ pub(crate) struct AutoRouteSelection {
 /// Render the auto-router system prompt with the actual candidate ids
 /// (#3018): the classifier must answer with ids the active provider can
 /// serve, not hardcoded DeepSeek spellings.
-#[allow(dead_code)] // legacy active-provider flash router tests still exercise this prompt (see #3490) // legacy active-provider flash router tests still exercise this prompt.
+#[allow(dead_code)] // legacy active-provider flash router tests still exercise this prompt (see #3490)
 pub(crate) fn auto_router_system_prompt(
     candidates: &RouterCandidates,
     cost_saving: bool,
@@ -385,7 +385,7 @@ pub(crate) fn normalize_auto_route_effort_for_provider(
     }
 }
 
-#[allow(dead_code)] // superseded by route-effective inventory resolver #3205 (see #3490) // superseded by the route-effective inventory resolver (#3205).
+#[allow(dead_code)] // superseded by route-effective inventory resolver #3205 (see #3490)
 pub(crate) async fn resolve_auto_route_with_flash(
     config: &Config,
     latest_request: &str,
@@ -404,7 +404,7 @@ pub(crate) async fn resolve_auto_route_with_flash(
     .await
 }
 
-#[allow(dead_code)] // superseded by route-effective inventory resolver #3205 (see #3490) // superseded by the route-effective inventory resolver (#3205).
+#[allow(dead_code)] // superseded by route-effective inventory resolver #3205 (see #3490)
 pub(crate) async fn resolve_auto_route_with_flash_for_session(
     config: &Config,
     latest_request: &str,
@@ -457,7 +457,7 @@ pub(crate) async fn resolve_auto_route_with_flash_for_session(
     }
 }
 
-#[allow(dead_code)] // retained for legacy active-provider flash resolver (see #3490) // retained for the legacy active-provider flash resolver.
+#[allow(dead_code)] // retained for legacy active-provider flash resolver (see #3490)
 fn auto_route_from_heuristic(
     provider: ApiProvider,
     latest_request: &str,
@@ -743,7 +743,7 @@ fn parse_inventory_auto_route_recommendation(
     })
 }
 
-#[allow(dead_code)] // retained for legacy active-provider flash resolver (see #3490) // retained for the legacy active-provider flash resolver.
+#[allow(dead_code)] // retained for legacy active-provider flash resolver (see #3490)
 async fn auto_route_flash_recommendation(
     config: &Config,
     candidates: &RouterCandidates,

@@ -388,7 +388,8 @@ pub struct EngineConfig {
     pub tools_always_load: HashSet<String>,
     /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
     /// through bubblewrap instead of relying solely on Landlock (#2184).
-    #[allow(dead_code)] // Wired through ShellManager in follow-up PR (see #3490) // Wired through ShellManager in follow-up PR
+    #[allow(dead_code)]
+    // Wired through ShellManager in follow-up PR (see #3490)
     pub prefer_bwrap: bool,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.

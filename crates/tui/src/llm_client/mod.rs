@@ -781,11 +781,13 @@ pub struct RetryConfig {
     pub respect_retry_after: bool,
 
     /// HTTP status codes that should trigger a retry
-    #[allow(dead_code)] // retryable_status_codes; test/config field (see #3490) // Used in tests via is_retryable_status()
+    #[allow(dead_code)]
+    // retryable_status_codes; test/config field (see #3490)
     pub retryable_status_codes: Vec<u16>,
 
     /// Timeout for individual requests (seconds, 0 = no timeout)
-    #[allow(dead_code)] // request_timeout; config field for retry consumers (see #3490) // Configuration field for retry consumers
+    #[allow(dead_code)]
+    // request_timeout; config field for retry consumers (see #3490)
     pub request_timeout: f64,
 
     /// Total timeout for all retry attempts (seconds, 0 = no total timeout)

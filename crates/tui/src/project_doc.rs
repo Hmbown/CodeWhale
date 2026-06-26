@@ -22,7 +22,7 @@ pub const DOC_FILENAMES: &[&str] = &[
 ];
 
 /// Maximum bytes to read from project docs (default: 32KB)
-#[allow(dead_code)] // DEFAULT_MAX_BYTES; used by read_project_docs (see #3490) // Used by read_project_docs (see #3490)
+#[allow(dead_code)] // DEFAULT_MAX_BYTES; used by read_project_docs (see #3490)
 pub const DEFAULT_MAX_BYTES: usize = 32768;
 
 /// A discovered project document

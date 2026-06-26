@@ -119,7 +119,8 @@ pub struct WebConfigSession {
 #[cfg(not(feature = "web"))]
 #[derive(Debug)]
 pub struct WebConfigSession {
-    #[allow(dead_code)] // WebConfigSession receiver; reserved for future event-driven config UI (see #3490)
+    #[allow(dead_code)]
+    // WebConfigSession receiver; reserved for future event-driven config UI (see #3490)
     pub receiver: tokio::sync::mpsc::UnboundedReceiver<WebConfigSessionEvent>,
 }
 

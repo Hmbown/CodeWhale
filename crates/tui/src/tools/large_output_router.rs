@@ -138,7 +138,7 @@ impl LargeOutputRouter {
     /// registry layer). The method is public so callers outside this crate
     /// can unit-test the prompt shape.
     #[must_use]
-    #[allow(dead_code)] // used by future Flash synthesis call; keep for API stability (see #3490) // used by future Flash synthesis call; keep for API stability
+    #[allow(dead_code)] // used by future Flash synthesis call; keep for API stability (see #3490)
     pub fn synthesis_prompt(tool_name: &str, raw_output: &str, estimated_tokens: usize) -> String {
         format!(
             "You are a synthesis assistant. The tool `{tool_name}` produced {estimated_tokens} tokens \
@@ -195,7 +195,7 @@ impl WorkshopVariables {
     ///
     /// Called by the `promote_to_context` tool (not yet wired in this PR).
     #[must_use]
-    #[allow(dead_code)] // consumed by promote_to_context tool in follow-up (see #3490) // consumed by promote_to_context tool in follow-up
+    #[allow(dead_code)] // consumed by promote_to_context tool in follow-up (see #3490)
     pub fn take_raw(&mut self) -> Option<(String, String)> {
         if self.last_tool_result.is_empty() {
             return None;
