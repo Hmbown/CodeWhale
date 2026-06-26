@@ -40,7 +40,7 @@ clap_complete = "4.5"
 dirs = "6.0.0"
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 semver = "1.0.28"
