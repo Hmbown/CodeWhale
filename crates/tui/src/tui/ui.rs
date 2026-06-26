@@ -7401,14 +7401,7 @@ async fn apply_command_result(
                 if app.view_stack.top_kind() != Some(ModalKind::SetupSummary) {
                     app.view_stack
                         .push(crate::tui::views::setup_summary::SetupSummaryView::new(
-                            crate::tui::views::setup_summary::SetupSummaryData {
-                                mcp_servers: vec![],
-                                mcp_config_path: None,
-                                skills_dirs: vec![],
-                                skills_installed: 0,
-                                plugin_dir: None,
-                                plugin_available: false,
-                            },
+                            config,
                         ));
                 }
             }

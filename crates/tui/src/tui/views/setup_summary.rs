@@ -41,8 +41,71 @@ pub struct SetupSummaryView {
 
 impl SetupSummaryView {
     #[must_use]
-    pub fn new(data: SetupSummaryData) -> Self {
+    pub fn new(config: &Config) -> Self {
+        let data = Self::collect(config);
         Self { data, scroll: 0 }
+    }
+
+    fn collect(config: &Config) -> SetupSummaryData {
+        let mcp_path = config.mcp_config_path();
+        let mcp_config_path = Some(mcp_path.to_string_lossy().to_string());
+        let mcp_servers = if mcp_path.exists() {
+            crate::mcp::load_config(&mcp_path)
+                .ok()
+                .map(|cfg| {
+                    cfg.servers.iter().map(|(name, svr)| {
+                        let state = if svr.is_enabled() { "enabled" } else { "disabled" };
+                        McpServerInfo {
+                            name: name.clone(),
+                            enabled: svr.is_enabled(),
+                            state: state.to_string(),
+                        }
+                    }).collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        let skills_dir = crate::skills::default_skills_dir();
+        let skills_dirs = vec![skills_dir.to_string_lossy().to_string()];
+        let skills_installed = if skills_dir.exists() {
+            crate::skills::SkillRegistry::discover(&skills_dir).len()
+        } else {
+            0
+        };
+
+        SetupSummaryData {
+            mcp_servers,
+            mcp_config_path,
+            skills_dirs,
+            skills_installed,
+            plugin_dir: None,
+            plugin_available: false,
+        }
+    }
+                        }).collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            }))
+            .unwrap_or_default();
+
+        let skills_dir = crate::skills::default_skills_dir();
+        let skills_dirs = vec![skills_dir.to_string_lossy().to_string()];
+        let skills_installed = if skills_dir.exists() {
+            crate::skills::SkillRegistry::discover(&skills_dir).len()
+        } else {
+            0
+        };
+
+        SetupSummaryData {
+            mcp_servers,
+            mcp_config_path: config.mcp_config_path(),
+            skills_dirs,
+            skills_installed,
+            plugin_dir: app.plugin_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+            plugin_available: app.plugin_dir.as_ref().is_some_and(|d| d.exists()),
+        }
     }
 }
 
@@ -288,19 +351,5 @@ mod tests {
         assert_eq!(data.mcp_servers.len(), 2);
         assert_eq!(data.skills_installed, 5);
         assert!(data.plugin_available);
-    }
-
-    #[test]
-    fn setup_summary_view_new() {
-        let data = SetupSummaryData {
-            mcp_servers: vec![],
-            mcp_config_path: None,
-            skills_dirs: vec![],
-            skills_installed: 0,
-            plugin_dir: None,
-            plugin_available: false,
-        };
-        let _view = SetupSummaryView::new(data);
-        // View should construct without panicking
     }
 }
