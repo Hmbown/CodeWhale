@@ -1143,6 +1143,17 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!("{full_prompt}\n\n{block}");
     }
 
+    if let Some(block) = crate::plugins::try_with_registry(|r| crate::plugins::render_plugin_block(r))
+        .flatten()
+        .or_else(|| {
+            let r = crate::plugins::discover_all(&[]);
+            crate::plugins::render_plugin_block(&r)
+        })
+        .filter(|b| !b.is_empty())
+    {
+        full_prompt = format!("{full_prompt}\n\n{block}");
+    }
+
     // 4. Context Management — included in all modes.
     {
         full_prompt.push_str(

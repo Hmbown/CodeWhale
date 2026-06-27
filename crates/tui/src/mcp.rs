@@ -27,6 +27,7 @@ pub mod oauth;
 use self::headers::{apply_safe_custom_headers, with_default_mcp_http_headers};
 use crate::child_env;
 use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
+use crate::plugins;
 use crate::utils::write_atomic;
 
 // === Error diagnostics helpers (#71) ===
@@ -2014,6 +2015,14 @@ pub struct McpPool {
     last_mtimes: Vec<Option<std::time::SystemTime>>,
 }
 
+fn merge_plugin_mcp_servers(config: &mut McpConfig) {
+    if let Some(servers) = plugins::try_with_registry(|r| r.enabled_mcp_servers()) {
+        for (name, server_config) in servers {
+            config.servers.entry(name).or_insert(server_config);
+        }
+    }
+}
+
 impl McpPool {
     /// Create a new pool with the given configuration
     pub fn new(config: McpConfig) -> Self {
@@ -2047,8 +2056,9 @@ impl McpPool {
         workspace: &Path,
     ) -> Result<Self> {
         let config = load_config_with_workspace(path, workspace)?;
-        let workspace = checked_workspace_path(workspace)?;
         let mut pool = Self::new(config);
+        merge_plugin_mcp_servers(&mut pool.config);
+        let workspace = checked_workspace_path(workspace)?;
         pool.config_sources = vec![
             path.to_path_buf(),
             checked_workspace_mcp_config_path(&workspace)?,
@@ -2142,6 +2152,7 @@ impl McpPool {
         // get_or_connect picks up the new config (sandbox flags, env, args).
         self.drop_all_connections("config reload");
         self.config = new_config;
+        merge_plugin_mcp_servers(&mut self.config);
         self.config_hash = new_hash;
         Ok(true)
     }

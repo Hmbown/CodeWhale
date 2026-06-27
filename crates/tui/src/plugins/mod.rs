@@ -1,8 +1,12 @@
+pub mod injection;
+pub mod registry;
+
 mod discovery;
 mod manifest;
-mod registry;
 
 pub use discovery::discover_all;
+pub use injection::render_plugin_block;
+#[allow(unused_imports)]
 pub use manifest::{LoadedPlugin, PluginManifest, PluginSource};
 pub use registry::PluginRegistry;
 
