@@ -63,10 +63,77 @@ fn render_skill_warnings(registry: &SkillRegistry) -> String {
     out
 }
 
+fn skill_discovery_mode(app: &App) -> crate::skills::SkillDiscoveryMode {
+    crate::skills::SkillDiscoveryMode::from_codewhale_only(app.skills_scan_codewhale_only)
+}
+
+fn skill_discovery_mode_label(mode: crate::skills::SkillDiscoveryMode) -> &'static str {
+    match mode {
+        crate::skills::SkillDiscoveryMode::Compatible => "compatible",
+        crate::skills::SkillDiscoveryMode::CodeWhaleOnly => "codewhale-only",
+    }
+}
+
+fn visible_skill_directories(app: &App) -> Vec<std::path::PathBuf> {
+    crate::skills::skill_directories_for_workspace_and_dir(
+        &app.workspace,
+        &app.skills_dir,
+        skill_discovery_mode(app),
+    )
+}
+
+fn inspect_skills(app: &mut App) -> CommandResult {
+    let mode = skill_discovery_mode(app);
+    let dirs = visible_skill_directories(app);
+    let registry = discover_visible_skills(app);
+    let warnings = render_skill_warnings(&registry);
+
+    let mut output = String::from("Skills Inspect\n");
+    output.push_str("─────────────────────────────\n");
+    let _ = writeln!(
+        output,
+        "Discovery mode: {}",
+        skill_discovery_mode_label(mode)
+    );
+    let _ = writeln!(output, "Workspace: {}", app.workspace.display());
+    let _ = writeln!(
+        output,
+        "Configured skills dir: {}",
+        app.skills_dir.display()
+    );
+
+    if dirs.is_empty() {
+        output.push_str("\nSearched directories: none found\n");
+    } else {
+        let _ = writeln!(output, "\nSearched directories ({}):", dirs.len());
+        for (idx, dir) in dirs.iter().enumerate() {
+            let _ = writeln!(output, "  {}. {}", idx + 1, dir.display());
+        }
+    }
+
+    let _ = writeln!(output, "\nAvailable skills ({}):", registry.len());
+    if registry.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for skill in registry.list() {
+            if skill.description.trim().is_empty() {
+                let _ = writeln!(output, "  - {}", skill.name);
+            } else {
+                let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
+            }
+            let _ = writeln!(output, "    path: {}", skill.path.display());
+        }
+    }
+
+    output.push_str(&warnings);
+    CommandResult::message(output)
+}
+
 /// List all available skills. Pass `--remote` (or `remote`) to fetch the
 /// curated registry instead of scanning the local skills directory.
 /// Pass `sync` to pull the registry index and download all skills to the
-/// local cache (`~/.codewhale/cache/skills/`).
+/// local cache (`~/.codewhale/cache/skills/`). Pass `inspect` to show local
+/// discovery mode, searched directories, and skill source paths.
 fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     let mut prefix: Option<String> = None;
     if let Some(arg) = arg {
@@ -77,6 +144,9 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         if trimmed == "sync" || trimmed == "--sync" {
             return sync_skills(app);
         }
+        if trimmed == "inspect" || trimmed == "--inspect" {
+            return inspect_skills(app);
+        }
         if !trimmed.is_empty() {
             // Anything else is treated as a name-prefix filter (#1318).
             // Reject obviously malformed args (whitespace inside the
@@ -84,7 +154,9 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             // collide with skill names. Skill names that start with
             // `-` aren't allowed by the loader so this is safe.
             if trimmed.starts_with('-') || trimmed.split_whitespace().count() > 1 {
-                return CommandResult::error("Usage: /skills [--remote|sync|<name-prefix>]");
+                return CommandResult::error(
+                    "Usage: /skills [--remote|sync|inspect|<name-prefix>]",
+                );
             }
             prefix = Some(trimmed.to_ascii_lowercase());
         }
@@ -630,7 +702,7 @@ pub(in crate::commands) const SKILLS_INFO: crate::commands::traits::CommandInfo 
     crate::commands::traits::CommandInfo {
         name: "skills",
         aliases: &["jinengliebiao"],
-        usage: "/skills [--remote|sync|<prefix>]",
+        usage: "/skills [--remote|sync|inspect|<prefix>]",
         description_id: crate::localization::MessageId::CmdSkillsDescription,
     };
 
@@ -1020,6 +1092,42 @@ mod tests {
     }
 
     #[test]
+    fn test_skills_inspect_reports_discovery_details_and_source_paths() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        let workspace_skill_dir = tmpdir
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join("workspace-skill");
+        std::fs::create_dir_all(&workspace_skill_dir).unwrap();
+        std::fs::write(
+            workspace_skill_dir.join("SKILL.md"),
+            "---\nname: workspace-skill\ndescription: Workspace skill\n---\nDo workspace work",
+        )
+        .unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "configured-skill",
+            "---\nname: configured-skill\ndescription: Configured skill\n---\nDo configured work",
+        );
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let result = list_skills(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect should return a message");
+
+        assert!(msg.contains("Skills Inspect"), "got: {msg}");
+        assert!(msg.contains("Discovery mode: compatible"), "got: {msg}");
+        assert!(msg.contains("Searched directories"), "got: {msg}");
+        assert!(msg.contains(".agents/skills"), "got: {msg}");
+        assert!(msg.contains("skills"), "got: {msg}");
+        assert!(msg.contains("Available skills (2):"), "got: {msg}");
+        assert!(msg.contains("workspace-skill"), "got: {msg}");
+        assert!(msg.contains("configured-skill"), "got: {msg}");
+        assert!(msg.contains("path:"), "got: {msg}");
+    }
+
+    #[test]
     fn test_list_skills_respects_codewhale_only_scan() {
         let tmpdir = TempDir::new().unwrap();
         let _home = IsolatedHome::new(&tmpdir);
@@ -1054,6 +1162,45 @@ mod tests {
 
         assert!(msg.contains("/codewhale-skill"), "got: {msg}");
         assert!(!msg.contains("/claude-skill"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_skills_inspect_reports_codewhale_only_scan_mode() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        let claude_skill_dir = tmpdir
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("claude-skill");
+        std::fs::create_dir_all(&claude_skill_dir).unwrap();
+        std::fs::write(
+            claude_skill_dir.join("SKILL.md"),
+            "---\nname: claude-skill\ndescription: Claude skill\n---\nbody",
+        )
+        .unwrap();
+        let codewhale_skill_dir = tmpdir
+            .path()
+            .join(".codewhale")
+            .join("skills")
+            .join("codewhale-skill");
+        std::fs::create_dir_all(&codewhale_skill_dir).unwrap();
+        std::fs::write(
+            codewhale_skill_dir.join("SKILL.md"),
+            "---\nname: codewhale-skill\ndescription: CodeWhale skill\n---\nbody",
+        )
+        .unwrap();
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        app.skills_dir = tmpdir.path().join(".codewhale").join("skills");
+        app.skills_scan_codewhale_only = true;
+        let result = list_skills(&mut app, Some("--inspect"));
+        let msg = result.message.expect("inspect should return a message");
+
+        assert!(msg.contains("Discovery mode: codewhale-only"), "got: {msg}");
+        assert!(msg.contains("codewhale-skill"), "got: {msg}");
+        assert!(!msg.contains("claude-skill"), "got: {msg}");
+        assert!(!msg.contains(".claude/skills"), "got: {msg}");
     }
 
     #[test]
