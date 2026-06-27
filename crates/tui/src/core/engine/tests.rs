@@ -1355,13 +1355,13 @@ fn tool_errors_with_specific_recovery_do_not_get_generic_fallback() {
 fn repeated_tool_errors_wait_until_degradation_threshold() {
     let tools = vec!["web_search".to_string()];
 
-    assert!(tool_error_degradation_runtime_hint(1, &tools, &[ErrorCategory::Tool]).is_none());
+    assert!(tool_error_degradation_runtime_hint(1, &tools, &[ErrorCategory::Tool], &[]).is_none());
 }
 
 #[test]
 fn repeated_tool_errors_emit_model_visible_degradation_hint() {
     let tools = vec!["web_search".to_string(), "web_search".to_string()];
-    let hint = tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Tool])
+    let hint = tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Tool], &[])
         .expect("second consecutive tool-error step should emit a runtime hint");
 
     assert!(hint.contains("2 consecutive"), "{hint}");
@@ -1376,8 +1376,51 @@ fn repeated_authorization_errors_do_not_emit_degradation_hint() {
     let tools = vec!["exec_shell".to_string()];
 
     assert!(
-        tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Authorization]).is_none()
+        tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Authorization], &[])
+            .is_none()
     );
+}
+
+#[test]
+fn repeated_search_errors_suggest_direct_url_patterns_for_domains() {
+    let tools = vec!["web_search".to_string()];
+    let inputs = vec![json!({"query": "site:example.edu announcements"})];
+    let hint = tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Tool], &inputs)
+        .expect("repeated web_search failure should emit a domain-aware fallback hint");
+
+    assert!(hint.contains("fetch_url"), "{hint}");
+    assert!(hint.contains("https://example.edu/announcements"), "{hint}");
+    assert!(hint.contains("https://example.edu/news"), "{hint}");
+}
+
+#[test]
+fn repeated_web_run_errors_suggest_direct_url_patterns_for_domains_list() {
+    let tools = vec!["web.run".to_string()];
+    let inputs = vec![json!({
+        "search_query": [
+            {
+                "q": "announcements",
+                "domains": ["www.example.edu"]
+            }
+        ]
+    })];
+    let hint = tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Tool], &inputs)
+        .expect("repeated web.run failure should emit a domain-aware fallback hint");
+
+    assert!(hint.contains("https://example.edu/announcements"), "{hint}");
+    assert!(hint.contains("https://example.edu/news"), "{hint}");
+}
+
+#[test]
+fn repeated_search_errors_do_not_treat_versions_as_domains() {
+    let tools = vec!["web_search".to_string()];
+    let inputs = vec![json!({"query": "release v1.2 notes"})];
+    let hint = tool_error_degradation_runtime_hint(2, &tools, &[ErrorCategory::Tool], &inputs)
+        .expect("repeated web_search failure should still emit the generic hint");
+
+    assert!(hint.contains("alternate tool"), "{hint}");
+    assert!(!hint.contains("fetch_url"), "{hint}");
+    assert!(!hint.contains("https://v1.2"), "{hint}");
 }
 
 #[test]
