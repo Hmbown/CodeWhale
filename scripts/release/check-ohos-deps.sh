@@ -12,15 +12,44 @@ cd "$(dirname "$0")/../.."
 target="${1:-aarch64-unknown-linux-ohos}"
 package="${CODEWHALE_OHOS_DEP_PACKAGE:-codewhale-tui}"
 
-tree="$(
-  cargo tree \
-    --locked \
-    --package "${package}" \
-    --all-features \
-    --target "${target}" \
-    --prefix none \
-    --no-dedupe
-)"
+cargo_tree_with_retry() {
+  local attempt
+  local max_attempts="${CODEWHALE_OHOS_DEP_RETRIES:-3}"
+  local delay_seconds="${CODEWHALE_OHOS_DEP_RETRY_DELAY_SECONDS:-10}"
+  local err_file
+  local output
+  local status
+
+  err_file="$(mktemp)"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if output="$(
+      cargo tree \
+        --locked \
+        --package "${package}" \
+        --all-features \
+        --target "${target}" \
+        --prefix none \
+        --no-dedupe \
+        2>"${err_file}"
+    )"; then
+      rm -f "${err_file}"
+      printf '%s\n' "${output}"
+      return 0
+    else
+      status=$?
+    fi
+
+    cat "${err_file}" >&2
+    if ((attempt >= max_attempts)); then
+      rm -f "${err_file}"
+      return "${status}"
+    fi
+    echo "cargo tree for OHOS dependency graph failed (attempt ${attempt}/${max_attempts}); retrying in ${delay_seconds}s..." >&2
+    sleep "${delay_seconds}"
+  done
+}
+
+tree="$(cargo_tree_with_retry)"
 
 disallowed="$(
   grep -E '^(nix v0\.(28|29)\.|portable-pty v|starlark v|arboard v|keyring v)' <<<"${tree}" || true

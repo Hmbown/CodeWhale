@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hardened the OHOS dependency drift check against transient Cargo registry EOFs
+  by retrying the dependency graph probe before failing CI.
 - Updated the `/links` provider fallback to the current CodeWhale docs URL and
   added a Baidu Qianfan docs link. Harvested from #3621 by @noaft.
 
