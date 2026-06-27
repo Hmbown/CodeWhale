@@ -1,6 +1,8 @@
+mod discovery;
 mod manifest;
 mod registry;
 
+pub use discovery::discover_all;
 pub use manifest::{LoadedPlugin, PluginManifest, PluginSource};
 pub use registry::PluginRegistry;
 
@@ -9,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 static PLUGIN_REGISTRY: OnceLock<Mutex<PluginRegistry>> = OnceLock::new();
 
 pub fn init_registry(config_disabled: &[String]) {
-    let _ = PLUGIN_REGISTRY.set(Mutex::new(PluginRegistry::new()));
+    let _ = PLUGIN_REGISTRY.set(Mutex::new(discover_all(config_disabled)));
 }
 
 pub fn with_registry<F, R>(f: F) -> R
