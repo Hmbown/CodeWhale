@@ -20,6 +20,11 @@ cargo_tree_with_retry() {
   local output
   local status
 
+  if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || ((max_attempts < 1)); then
+    echo "CODEWHALE_OHOS_DEP_RETRIES must be an integer greater than or equal to 1." >&2
+    return 1
+  fi
+
   err_file="$(mktemp)"
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     if output="$(
