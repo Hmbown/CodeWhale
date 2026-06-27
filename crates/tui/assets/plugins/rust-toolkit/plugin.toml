@@ -1,0 +1,12 @@
+[plugin]
+name = "rust-toolkit"
+description = "Rust development tools: cargo check, clippy, and test runner"
+version = "1.0.0"
+default_enabled = true
+
+[skills]
+paths = ["skills/rust-check/"]
+
+[when]
+os = ["linux", "windows", "macos"]
+required_binaries = ["cargo"]

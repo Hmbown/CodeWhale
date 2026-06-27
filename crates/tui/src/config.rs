@@ -2249,6 +2249,10 @@ pub struct Config {
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
 
+    /// Plugin system configuration.
+    #[serde(default)]
+    pub plugins: Option<PluginsConfig>,
+
     /// Sibling `permissions.toml` ask-rules compiled for runtime checks.
     ///
     /// This is deliberately not part of `config.toml`; it is loaded from the
@@ -2527,6 +2531,14 @@ impl SkillsConfig {
     pub fn scan_codewhale_only(&self) -> bool {
         self.scan_codewhale_only.unwrap_or(false)
     }
+}
+
+/// `[plugins]` table — user-level plugin configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginsConfig {
+    /// List of plugin names to forcibly disable.
+    #[serde(default)]
+    pub disabled: Option<Vec<String>>,
 }
 
 /// `[network]` table — mirrors `codewhale_config::NetworkPolicyToml` so the live
@@ -5527,6 +5539,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         provider: override_cfg.provider.or(base.provider),
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
+        plugins: override_cfg.plugins.or(base.plugins),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         default_text_model: override_cfg.default_text_model.or(base.default_text_model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),

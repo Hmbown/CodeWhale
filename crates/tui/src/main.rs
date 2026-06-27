@@ -1,4 +1,4 @@
-//! CLI entry point for CodeWhale.
+﻿//! CLI entry point for CodeWhale.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -61,6 +61,7 @@ mod models;
 mod network_policy;
 mod oauth;
 mod palette;
+mod plugins;
 mod prefix_cache;
 mod pricing;
 mod project_context;
@@ -1289,6 +1290,7 @@ async fn main() -> Result<()> {
     // for follow-up messages. Use `codewhale exec` for explicit non-interactive
     // one-shot behavior (#2370).
     let config = load_config_from_cli(&cli)?;
+    crate::plugins::init_registry(&[]);
     if let Some(initial_input) = top_level_prompt_initial_input(&cli.prompt) {
         return run_interactive(&cli, &config, None, Some(initial_input)).await;
     }

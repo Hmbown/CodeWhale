@@ -7,7 +7,7 @@ mod mcp;
 mod network;
 mod task;
 
-use crate::commands::CommandResult;
+use crate::commands::CommandResult;use crate::commands::groups::plugins::plugin_command as plugin_cmd;
 use crate::commands::traits::{Command, CommandGroup, CommandInfo, FunctionCommand};
 use crate::localization::MessageId;
 use crate::tui::app::App;
@@ -22,7 +22,7 @@ impl CommandGroup for UtilityCommands {
             Box::new(FunctionCommand::new(&JOBS_INFO, run_jobs)),
             Box::new(FunctionCommand::new(&MCP_INFO, run_mcp)),
             Box::new(FunctionCommand::new(&NETWORK_INFO, run_network)),
-            Box::new(FunctionCommand::new(&PLUGINS_INFO, run_plugins)),
+            Box::new(FunctionCommand::new(&PLUGINS_INFO, run_plugins)),            Box::new(FunctionCommand::new(&PLUGIN_INFO, run_plugin)),
         ]
     }
 }
@@ -57,9 +57,15 @@ static NETWORK_INFO: CommandInfo = CommandInfo {
     usage: "/network [list|allow <host>|deny <host>|remove <host>|default <allow|deny|prompt>]",
     description_id: MessageId::CmdNetworkDescription,
 };
+static PLUGIN_INFO: CommandInfo = CommandInfo {
+    name: "plugin",
+    aliases: &[],
+    usage: "/plugin list|enable <name>|disable <name>|info <name>",
+    description_id: MessageId::CmdPluginDescription,
+};
 static PLUGINS_INFO: CommandInfo = CommandInfo {
     name: "plugins",
-    aliases: &["plugin"],
+    aliases: &[],  // "plugin" is now a separate command
     usage: "/plugins [name]",
     description_id: MessageId::CmdPluginDescription,
 };
@@ -83,6 +89,9 @@ fn run_mcp(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn run_network(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "network", arg)
 }
+fn run_plugin(app: &mut App, arg: Option<&str>) -> CommandResult {
+    plugin_cmd(app, arg)
+}
 fn run_plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "plugins", arg)
 }
@@ -98,8 +107,10 @@ pub(in crate::commands) fn dispatch(
         "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
         "network" => network::network(app, arg),
-        "plugins" | "plugin" => crate::commands::plugins::plugins(app, arg),
+                "plugins" => crate::commands::plugins::plugins(app, arg),
+        "plugin" => plugin_cmd(app, arg),
         _ => return None,
     };
     Some(result)
 }
+
