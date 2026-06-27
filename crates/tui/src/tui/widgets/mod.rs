@@ -2268,7 +2268,10 @@ fn char_display_width(ch: char) -> usize {
     if ch == '\t' {
         4
     } else {
-        UnicodeWidthChar::width(ch).unwrap_or(0).max(1)
+        // `None` (control/unassigned) defaults to one column; `Some(0)` (combining
+        // marks, ZWJ, zero-width spaces) must stay 0 so width math matches what the
+        // terminal renders. Mirrors `ui_text::char_display_width`.
+        UnicodeWidthChar::width(ch).unwrap_or(1)
     }
 }
 

@@ -209,7 +209,12 @@ fn char_display_width(ch: char) -> usize {
     if ch == '\t' {
         4
     } else {
-        UnicodeWidthChar::width(ch).unwrap_or(0).max(1)
+        // `width()` returns `None` for control/unassigned chars (default them to
+        // one column so layout doesn't collapse) and `Some(0)` for genuinely
+        // zero-width chars — combining marks, ZWJ, zero-width spaces — which must
+        // stay 0 so display-width math (truncation, slicing, overflow, copy)
+        // matches what the terminal actually renders.
+        UnicodeWidthChar::width(ch).unwrap_or(1)
     }
 }
 
@@ -270,6 +275,61 @@ mod tests {
     fn slice_text_truncates_at_end() {
         let text = "ab";
         assert_eq!(slice_text(text, 1, 5), "b");
+    }
+
+    // --- Unicode / CJK / terminal-width QA (issue #3488) -------------------
+    // These exercise the production width helpers directly so the assertions
+    // track the same code path the renderer uses.
+
+    #[test]
+    fn text_display_width_counts_cjk_as_two_columns() {
+        assert_eq!(text_display_width("中文"), 4); // two wide glyphs
+        assert_eq!(text_display_width("Hello世界"), 9); // 5 ASCII + 2×2
+        // Full-width (ambiguous→wide) punctuation is two columns each.
+        assert_eq!(text_display_width("，。！？"), 8);
+    }
+
+    #[test]
+    fn text_display_width_treats_zero_width_marks_as_zero() {
+        // A combining mark adds no column: "e" + U+0301 renders as one cell.
+        // (Regression guard: the old `.max(1)` counted it as 1, over-reporting
+        // width and causing premature truncation / border drift on text with
+        // combining marks or ZWJ emoji sequences.)
+        assert_eq!(text_display_width("e\u{0301}"), 1);
+        assert_eq!(text_display_width("cafe\u{0301}"), 4);
+        // ZWJ joiner itself is zero-width; the two emoji are 2 cols each.
+        assert_eq!(text_display_width("\u{1F469}\u{200D}\u{1F4BB}"), 4);
+    }
+
+    #[test]
+    fn text_display_width_keeps_control_and_tab_widths() {
+        // Control chars still occupy a column (avoid layout collapse); tab = 4.
+        assert_eq!(text_display_width("a\u{0007}b"), 3);
+        assert_eq!(text_display_width("\t"), 4);
+        assert_eq!(text_display_width("\ta"), 5);
+    }
+
+    #[test]
+    fn truncate_line_to_width_respects_display_width_not_byte_len() {
+        // No truncation when the string already fits by display width.
+        assert_eq!(truncate_line_to_width("中文", 10), "中文");
+        // Oversized: reserve 3 cols for the ellipsis, fill the rest by width.
+        let out = truncate_line_to_width("中文测试", 7);
+        assert_eq!(out, "中文...");
+        assert_eq!(text_display_width(&out), 7);
+        // Never split a wide glyph across the boundary, and never emit U+FFFD.
+        let clipped = truncate_line_to_width("界界界界界", 5);
+        assert!(text_display_width(&clipped) <= 5);
+        assert!(!clipped.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn slice_text_slices_cjk_by_display_column() {
+        // Columns:  中=[0,2) 文=[2,4) a=[4,5) b=[5,6)
+        let text = "中文ab";
+        assert_eq!(slice_text(text, 0, 2), "中");
+        assert_eq!(slice_text(text, 2, 4), "文");
+        assert_eq!(slice_text(text, 4, 6), "ab");
     }
 
     #[test]
