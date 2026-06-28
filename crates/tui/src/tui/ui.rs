@@ -2260,6 +2260,7 @@ async fn run_event_loop(
                         base_url,
                     } => {
                         app.session.last_tool_catalog = tool_catalog;
+                        let turn_base_url = base_url.clone();
                         app.session.last_base_url = base_url;
                         let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
                         app.suppress_stream_events_until_turn_complete = false;
@@ -2374,7 +2375,17 @@ async fn run_event_loop(
                         app.session.last_prompt_cache_hit_tokens = usage.prompt_cache_hit_tokens;
                         app.session.last_prompt_cache_miss_tokens = usage.prompt_cache_miss_tokens;
                         app.session.last_reasoning_replay_tokens = usage.reasoning_replay_tokens;
+                        let turn_provider =
+                            app.pending_turn_provider.take().unwrap_or(app.api_provider);
+                        let turn_model = app.pending_turn_model.take().unwrap_or_else(|| {
+                            app.last_effective_model
+                                .clone()
+                                .unwrap_or_else(|| app.model.clone())
+                        });
                         app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
+                            provider: turn_provider.as_str().to_string(),
+                            model: turn_model,
+                            base_url: turn_base_url,
                             input_tokens: usage.input_tokens,
                             output_tokens: usage.output_tokens,
                             cache_hit_tokens: usage.prompt_cache_hit_tokens,
@@ -6411,6 +6422,9 @@ async fn dispatch_user_message(
         app.last_effective_model = None;
     }
 
+    app.pending_turn_provider = Some(effective_provider);
+    app.pending_turn_model = Some(effective_model.clone());
+
     if let Err(err) = engine_handle
         .send(Op::SendMessage {
             content,
@@ -6440,6 +6454,8 @@ async fn dispatch_user_message(
         app.is_loading = false;
         app.dispatch_started_at = None;
         app.last_send_at = None;
+        app.pending_turn_provider = None;
+        app.pending_turn_model = None;
         return Err(err);
     }
 

@@ -2168,6 +2168,9 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     app.session.last_prompt_cache_miss_tokens = Some(40);
     app.session.last_reasoning_replay_tokens = Some(12);
     app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
+        provider: "deepseek".to_string(),
+        model: "deepseek-v4-pro".to_string(),
+        base_url: Some("https://api.deepseek.com/v1".to_string()),
         input_tokens: 120,
         output_tokens: 35,
         cache_hit_tokens: Some(80),
@@ -2780,6 +2783,9 @@ async fn provider_switch_clears_turn_cache_history() {
 
     let mut app = create_test_app();
     app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
+        provider: "deepseek".to_string(),
+        model: "deepseek-v4-pro".to_string(),
+        base_url: Some("https://api.deepseek.com/v1".to_string()),
         input_tokens: 100,
         output_tokens: 25,
         cache_hit_tokens: Some(70),

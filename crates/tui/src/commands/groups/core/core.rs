@@ -852,6 +852,9 @@ mod tests {
             layers: Vec::new(),
         });
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 100,
             output_tokens: 25,
             cache_hit_tokens: Some(70),
@@ -1113,6 +1116,9 @@ mod tests {
         app.auto_model = false;
         app.model = "deepseek-v4-pro".to_string();
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 100,
             output_tokens: 25,
             cache_hit_tokens: Some(70),
@@ -1134,6 +1140,9 @@ mod tests {
         app.auto_model = false;
         app.model = "deepseek-v4-pro".to_string();
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 100,
             output_tokens: 25,
             cache_hit_tokens: Some(70),

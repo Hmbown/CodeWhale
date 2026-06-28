@@ -872,6 +872,9 @@ mod tests {
         app.session.last_prompt_cache_miss_tokens = Some(40);
         app.session.last_reasoning_replay_tokens = Some(12);
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 120,
             output_tokens: 35,
             cache_hit_tokens: Some(80),

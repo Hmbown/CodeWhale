@@ -170,6 +170,13 @@ pub enum AppMode {
 /// One row in the per-turn cache-telemetry ring (`/cache` debug surface, #263).
 #[derive(Debug, Clone)]
 pub struct TurnCacheRecord {
+    /// API provider used by this turn.
+    pub provider: String,
+    /// Model route used by this turn. In auto-model mode this is the selected
+    /// effective model rather than the session's configured default.
+    pub model: String,
+    /// API base URL used by this turn's client, when available.
+    pub base_url: Option<String>,
     /// Provider-reported total input tokens for the turn (cache-hit +
     ///   cache-miss + uncategorized). Useful for sanity-checking that hits +
     ///   misses sum back to roughly the prompt size.
@@ -1600,6 +1607,9 @@ pub struct App {
     pub auto_model: bool,
     /// Last concrete model chosen while `auto_model` is active.
     pub last_effective_model: Option<String>,
+    /// Provider/model route dispatched for the currently in-flight turn.
+    pub pending_turn_provider: Option<ApiProvider>,
+    pub pending_turn_model: Option<String>,
     /// Current API provider (mirrors `Config::api_provider`).
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
@@ -2588,6 +2598,8 @@ impl App {
             provider_models,
             auto_model,
             last_effective_model: None,
+            pending_turn_provider: None,
+            pending_turn_model: None,
             api_provider: provider,
             provider_chain,
             provider_readiness,

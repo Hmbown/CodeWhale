@@ -712,10 +712,10 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
         .replace("{count}", &rows.len().to_string())
         .replace("{total}", &total.to_string())
         .replace("{model}", &app.model);
-    header.push_str(&"─".repeat(76));
+    header.push_str(&"─".repeat(120));
     header.push('\n');
-    header.push_str("turn   in    out   hit   miss   replay   ratio   age\n");
-    header.push_str(&"─".repeat(76));
+    header.push_str("turn   in    out   hit   miss   replay   ratio   age     route\n");
+    header.push_str(&"─".repeat(120));
     header.push('\n');
 
     let now = Instant::now();
@@ -729,6 +729,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
             .reasoning_replay_tokens
             .map_or_else(|| "—".to_string(), |t| t.to_string());
         let age = humanize_age(now.saturating_duration_since(rec.recorded_at));
+        let route = format_cache_route(rec);
 
         // No cache telemetry → render `—` everywhere and don't pollute totals
         // with inferred zeros. Some providers (and some routes inside DeepSeek)
@@ -736,7 +737,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
         // would make every aggregate ratio look broken.
         let Some(hit) = rec.cache_hit_tokens else {
             body.push_str(&format!(
-                "{turn:>4}  {input:>5}  {output:>5}  {hit:>5}  {miss:>5}  {replay:>6}   {ratio:>6}   {age}\n",
+                "{turn:>4}  {input:>5}  {output:>5}  {hit:>5}  {miss:>5}  {replay:>6}   {ratio:>6}   {age:<7} {route}\n",
                 turn = turn_index,
                 input = rec.input_tokens,
                 output = rec.output_tokens,
@@ -745,6 +746,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
                 replay = replay_cell,
                 ratio = "—",
                 age = age,
+                route = route,
             ));
             continue;
         };
@@ -766,7 +768,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
         };
 
         body.push_str(&format!(
-            "{turn:>4}  {input:>5}  {output:>5}  {hit:>5}  {miss:>5}  {replay:>6}   {ratio}   {age}\n",
+            "{turn:>4}  {input:>5}  {output:>5}  {hit:>5}  {miss:>5}  {replay:>6}   {ratio}   {age:<7} {route}\n",
             turn = turn_index,
             input = rec.input_tokens,
             output = rec.output_tokens,
@@ -775,6 +777,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
             replay = replay_cell,
             ratio = ratio,
             age = age,
+            route = route,
         ));
     }
 
@@ -789,7 +792,7 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
     };
 
     let mut footer = String::new();
-    footer.push_str(&"─".repeat(76));
+    footer.push_str(&"─".repeat(120));
     footer.push('\n');
     footer.push_str(
         &tr(locale, MessageId::CmdCacheTotals)
@@ -802,6 +805,26 @@ fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
     footer.push_str(&tr(locale, MessageId::CmdCacheAdvice));
 
     format!("{header}{body}{footer}")
+}
+
+fn format_cache_route(rec: &TurnCacheRecord) -> String {
+    let base = rec
+        .base_url
+        .as_deref()
+        .map(compact_base_url_host)
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("{}/{}@{}", rec.provider, rec.model, base)
+}
+
+fn compact_base_url_host(base_url: &str) -> String {
+    let without_scheme = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest);
+    without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string()
 }
 
 fn humanize_age(d: std::time::Duration) -> String {
@@ -1331,6 +1354,9 @@ mod tests {
         let now = Instant::now();
         // Three turns: 75% hit, 50% hit, miss-only (provider didn't report hit).
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 4_000,
             output_tokens: 200,
             cache_hit_tokens: Some(3_000),
@@ -1339,6 +1365,9 @@ mod tests {
             recorded_at: now,
         });
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 6_000,
             output_tokens: 250,
             cache_hit_tokens: Some(3_000),
@@ -1349,6 +1378,9 @@ mod tests {
         // Turn 3: hit reported but provider didn't report miss separately —
         // infer miss = input − hit and mark with `*`.
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 5_000,
             output_tokens: 100,
             cache_hit_tokens: Some(2_500),
@@ -1358,6 +1390,9 @@ mod tests {
         });
         // Turn 4: no telemetry at all — must not pollute aggregate ratios.
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 1_000,
             output_tokens: 50,
             cache_hit_tokens: None,
@@ -1384,6 +1419,46 @@ mod tests {
     }
 
     #[test]
+    fn cache_command_renders_route_for_each_turn() {
+        let mut app = create_test_app();
+        let now = Instant::now();
+        app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
+            input_tokens: 4_000,
+            output_tokens: 200,
+            cache_hit_tokens: Some(3_000),
+            cache_miss_tokens: Some(1_000),
+            reasoning_replay_tokens: None,
+            recorded_at: now,
+        });
+        app.push_turn_cache_record(TurnCacheRecord {
+            provider: "openrouter".to_string(),
+            model: "deepseek/deepseek-v4-pro".to_string(),
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            input_tokens: 4_000,
+            output_tokens: 200,
+            cache_hit_tokens: Some(500),
+            cache_miss_tokens: Some(3_500),
+            reasoning_replay_tokens: None,
+            recorded_at: now,
+        });
+
+        let result = cache(&mut app, None);
+        let msg = result.message.expect("cache produces a message");
+
+        assert!(
+            msg.contains("deepseek/deepseek-v4-pro@api.deepseek.com"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("openrouter/deepseek/deepseek-v4-pro@openrouter.ai"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
     fn cache_command_replays_reported_1177_low_hit_fixture() {
         let mut app = create_test_app();
         let now = Instant::now();
@@ -1397,6 +1472,9 @@ mod tests {
             (45_982, 294, 26_112, 19_870),
         ] {
             app.push_turn_cache_record(TurnCacheRecord {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                base_url: Some("https://api.deepseek.com/v1".to_string()),
                 input_tokens: input,
                 output_tokens: output,
                 cache_hit_tokens: Some(hit),
@@ -1422,6 +1500,9 @@ mod tests {
         let mut app = create_test_app();
         for _ in 0..3 {
             app.push_turn_cache_record(TurnCacheRecord {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                base_url: Some("https://api.deepseek.com/v1".to_string()),
                 input_tokens: 1_000,
                 output_tokens: 100,
                 cache_hit_tokens: Some(500),
@@ -1441,6 +1522,9 @@ mod tests {
         let mut app = create_test_app();
         for i in 0..(crate::tui::app::App::TURN_CACHE_HISTORY_CAP + 12) {
             app.push_turn_cache_record(TurnCacheRecord {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                base_url: Some("https://api.deepseek.com/v1".to_string()),
                 input_tokens: i as u32,
                 output_tokens: 1,
                 cache_hit_tokens: Some(i as u32),
@@ -2117,6 +2201,9 @@ mod tests {
             Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
 
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 10_000,
             output_tokens: 1_000,
             cache_hit_tokens: Some(8_000),
@@ -2125,6 +2212,9 @@ mod tests {
             recorded_at: Instant::now(),
         });
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 5_000,
             output_tokens: 500,
             cache_hit_tokens: Some(4_500),
@@ -2150,6 +2240,9 @@ mod tests {
             Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
 
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 10_000,
             output_tokens: 1_000,
             cache_hit_tokens: Some(1_000),
@@ -2180,6 +2273,9 @@ mod tests {
         // Fixture from #1747 / Amund's DeepSeek-TUI session aggregate:
         // hit=21,356,928, miss=8,470,281, output=165,624.
         app.push_turn_cache_record(TurnCacheRecord {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
             input_tokens: 29_827_209,
             output_tokens: 165_624,
             cache_hit_tokens: Some(21_356_928),
