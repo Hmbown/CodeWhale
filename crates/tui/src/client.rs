@@ -1717,6 +1717,7 @@ pub(super) fn apply_reasoning_effort(
                 body["thinking"] = json!({ "type": "disabled" });
             }
             ApiProvider::Stepfun => {}
+            ApiProvider::Sakana => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
             // DeepSeek compatibility: low/medium both map to high
@@ -1805,6 +1806,7 @@ pub(super) fn apply_reasoning_effort(
                 });
             }
             ApiProvider::Stepfun => {}
+            ApiProvider::Sakana => {}
         },
         "xhigh" | "max" | "highest" | "ultracode" => match provider {
             ApiProvider::Deepseek
@@ -1873,6 +1875,7 @@ pub(super) fn apply_reasoning_effort(
                 });
             }
             ApiProvider::Stepfun => {}
+            ApiProvider::Sakana => {}
         },
         _ => {}
     }

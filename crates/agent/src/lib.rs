@@ -849,6 +849,27 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // Sakana AI Fugu (https://api.sakana.ai)
+            ModelInfo {
+                id: "fugu".to_string(),
+                provider: ProviderKind::Sakana,
+                aliases: vec![
+                    "sakana-fugu".to_string(),
+                    "sakana/fugu".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "fugu-ultra-20260615".to_string(),
+                provider: ProviderKind::Sakana,
+                aliases: vec![
+                    "fugu-ultra".to_string(),
+                    "sakana-fugu-ultra".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
         ];
         Self::new(models)
     }

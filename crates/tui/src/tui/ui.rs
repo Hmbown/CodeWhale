@@ -8583,6 +8583,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
             crate::config::ApiProvider::Zai => Some("Z.ai"),
             crate::config::ApiProvider::Stepfun => Some("StepFun"),
             crate::config::ApiProvider::Minimax => Some("MiniMax"),
+            crate::config::ApiProvider::Sakana => Some("Sakana"),
             crate::config::ApiProvider::Custom => Some("Custom"),
         };
         let status_indicator_started_at = if app.low_motion {
@@ -9798,6 +9799,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
+            ApiProvider::Sakana => &mut providers.sakana,
         };
         entry.api_key = Some(api_key);
     }
@@ -9877,6 +9879,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Zai => &mut providers.zai,
         ApiProvider::Stepfun => &mut providers.stepfun,
         ApiProvider::Minimax => &mut providers.minimax,
+        ApiProvider::Sakana => &mut providers.sakana,
     };
     entry.auth_mode = Some(auth_mode);
 }

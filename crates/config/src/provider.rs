@@ -16,7 +16,8 @@ use super::{
     DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL,
     DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENMODEL_BASE_URL,
     DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
-    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL,
+    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL,
+    DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL,
     DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL,
     DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL,
     DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
@@ -581,6 +582,18 @@ provider!(
     aliases: ["deep-infra", "deep_infra"]
 );
 
+provider!(
+    Sakana,
+    Sakana,
+    "sakana",
+    "Sakana AI (Fugu)",
+    DEFAULT_SAKANA_BASE_URL,
+    DEFAULT_SAKANA_MODEL,
+    ["FUGU_API_KEY", "SAKANA_API_KEY"],
+    "sakana",
+    aliases: ["sakana-ai", "sakana_ai", "fugu"]
+);
+
 /// User-defined OpenAI-compatible endpoint (#1519).
 ///
 /// A single dynamic provider identity for arbitrary `[providers.<name>]
@@ -662,9 +675,10 @@ static ZAI: Zai = Zai;
 static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
 static DEEPINFRA: Deepinfra = Deepinfra;
+static SAKANA: Sakana = Sakana;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 29] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 30] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -693,6 +707,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 29] = [
     &STEPFUN,
     &MINIMAX,
     &DEEPINFRA,
+    &SAKANA,
     &CUSTOM,
 ];
 

@@ -62,6 +62,8 @@ enum ProviderArg {
     Minimax,
     #[value(alias = "deep-infra", alias = "deep_infra")]
     Deepinfra,
+    #[value(alias = "fugu", alias = "sakana-ai", alias = "sakana_ai")]
+    Sakana,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -93,6 +95,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Stepfun => ProviderKind::Stepfun,
             ProviderArg::Minimax => ProviderKind::Minimax,
             ProviderArg::Deepinfra => ProviderKind::Deepinfra,
+            ProviderArg::Sakana => ProviderKind::Sakana,
         }
     }
 }

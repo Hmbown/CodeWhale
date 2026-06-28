@@ -20,7 +20,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -543,6 +543,15 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_DEEPINFRA_TOKEN"
 # base_url = "https://api.deepinfra.com/v1/openai"
 # model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Sakana AI Fugu Provider (https://api.sakana.ai)
+# Provider aliases: sakana, sakana-ai, sakana_ai, fugu
+# Env var aliases: FUGU_API_KEY, SAKANA_API_KEY
+[providers.sakana]
+# api_key = "YOUR_FUGU_API_KEY"
+# base_url = "https://api.sakana.ai/v1"
+# model = "fugu"                            # or fugu-ultra-20260615
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Together AI Provider (https://www.together.ai/)

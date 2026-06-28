@@ -864,6 +864,7 @@ pub fn env_for(name: &str) -> Option<String> {
             "WANJIE_API_KEY",
             "WANJIE_MAAS_API_KEY",
         ],
+        "sakana" | "sakana-ai" | "sakana_ai" | "fugu" => &["FUGU_API_KEY", "SAKANA_API_KEY"],
         _ => return None,
     };
     for var in candidates {
