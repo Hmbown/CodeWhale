@@ -2,6 +2,7 @@
 //! network inspection.
 
 mod attachment;
+mod harness;
 mod jobs;
 mod mcp;
 mod network;
@@ -33,6 +34,10 @@ impl CommandGroup for UtilityCommands {
             Box::new(FunctionCommand::new(
                 network::NetworkCmd::info(),
                 network::NetworkCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                harness::HarnessCmd::info(),
+                harness::HarnessCmd::execute,
             )),
         ])
     }

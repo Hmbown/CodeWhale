@@ -93,6 +93,10 @@ pub struct FooterProps {
     /// Account balance chip spans (empty when un fetched or zero). Rendered
     /// in the left cluster right after cost.
     pub balance: Vec<Span<'static>>,
+    /// Resolved harness posture kind label for the active route.
+    pub posture_label: Option<&'static str>,
+    /// Color used for the harness posture chip.
+    pub posture_color: Color,
     /// Optional toast that, when present, replaces the left status line.
     pub toast: Option<FooterToast>,
     /// When `Some(frame_idx)`, the gap between the left status line and the
@@ -310,6 +314,8 @@ impl FooterProps {
             worked,
             cost,
             balance,
+            posture_label: app.harness_posture_label(),
+            posture_color: app.ui_theme.text_muted,
             toast,
             working_strip_frame: None,
             retry: crate::retry_status::snapshot(),
@@ -423,6 +429,15 @@ impl FooterWidget {
         let show_cost = !cost_text.is_empty();
         let balance_text = spans_text(&self.props.balance);
         let show_balance = !balance_text.is_empty();
+        let posture_text = self
+            .props
+            .posture_label
+            .map(|label| format!("\u{29E8} {label}"));
+        let show_posture = posture_text.is_some();
+        let posture_w = posture_text
+            .as_ref()
+            .map(|text| UnicodeWidthStr::width(text.as_str()))
+            .unwrap_or(0);
 
         let mode_w = mode_label.width();
         let sep_w = sep.width();
@@ -438,8 +453,34 @@ impl FooterWidget {
         let extra_sep = |w: usize| if w > 0 { sep_w } else { 0 };
         let model_prefix_w = if mode_w > 0 { mode_w + sep_w } else { 0 };
 
-        // Tier 1: [mode ·] model · balance · cost · status
+        // Tier 1: [mode ·] model · posture · balance · cost · status — full line.
         let full_w = model_prefix_w
+            + model_w
+            + extra_sep(posture_w)
+            + posture_w
+            + extra_sep(balance_w)
+            + balance_w
+            + extra_sep(cost_w)
+            + cost_w
+            + extra_sep(status_w)
+            + status_w;
+        if (show_posture || show_balance || show_cost || show_status) && full_w <= max_width {
+            return self.build_status_line_spans(
+                mode_label,
+                model.to_string(),
+                posture_text,
+                show_balance.then(|| balance_text.clone()),
+                show_cost.then(|| cost_text.clone()),
+                show_status.then_some(status_label),
+            );
+        }
+
+        // The posture chip is preview-only steady info, so it is the FIRST chip
+        // to drop and never displaces cost/balance/status. Every tier below
+        // omits it and is byte-for-byte the pre-posture layout.
+
+        // Tier 2: [mode ·] model · balance · cost · status — drop posture.
+        let with_status_w = model_prefix_w
             + model_w
             + extra_sep(balance_w)
             + balance_w
@@ -447,17 +488,18 @@ impl FooterWidget {
             + cost_w
             + extra_sep(status_w)
             + status_w;
-        if (show_balance || show_cost || show_status) && full_w <= max_width {
+        if (show_balance || show_cost || show_status) && with_status_w <= max_width {
             return self.build_status_line_spans(
                 mode_label,
                 model.to_string(),
+                None,
                 show_balance.then(|| balance_text.clone()),
                 show_cost.then(|| cost_text.clone()),
                 show_status.then_some(status_label),
             );
         }
 
-        // Tier 2: [mode ·] model · balance · cost — drop status.
+        // Tier 3: [mode ·] model · balance · cost — drop status.
         let with_cost_w = model_prefix_w
             + model_w
             + extra_sep(balance_w)
@@ -468,19 +510,21 @@ impl FooterWidget {
             return self.build_status_line_spans(
                 mode_label,
                 model.to_string(),
+                None,
                 show_balance.then(|| balance_text.clone()),
                 show_cost.then(|| cost_text.clone()),
                 None,
             );
         }
 
-        // Tier 3: [mode ·] model · balance — drop cost.
+        // Tier 4: [mode ·] model · balance — drop cost.
         if show_balance {
             let with_balance_w = model_prefix_w + model_w + sep_w + balance_w;
             if with_balance_w <= max_width {
                 return self.build_status_line_spans(
                     mode_label,
                     model.to_string(),
+                    None,
                     Some(balance_text.clone()),
                     None,
                     None,
@@ -488,24 +532,32 @@ impl FooterWidget {
             }
         }
 
-        // Tier 4: [mode ·] model — drop balance too.
+        // Tier 5: [mode ·] model — drop balance too.
         let mode_model_w = model_prefix_w + model_w;
         if mode_model_w <= max_width {
-            return self.build_status_line_spans(mode_label, model.to_string(), None, None, None);
+            return self.build_status_line_spans(
+                mode_label,
+                model.to_string(),
+                None,
+                None,
+                None,
+                None,
+            );
         }
 
-        // Tier 5: [mode ·] <truncated model> — ellipsize model when prefix fits.
+        // Tier 6: [mode ·] <truncated model> — ellipsize model when prefix fits.
         if model_prefix_w < max_width {
             let model_budget = max_width - model_prefix_w;
             if model_budget >= 4 {
                 let truncated = truncate_to_width(model, model_budget);
                 if !truncated.is_empty() {
-                    return self.build_status_line_spans(mode_label, truncated, None, None, None);
+                    return self
+                        .build_status_line_spans(mode_label, truncated, None, None, None, None);
                 }
             }
         }
 
-        // Tier 6: mode-only when present, otherwise truncated model.
+        // Tier 7: mode-only when present, otherwise truncated model.
         if mode_w > 0 && mode_w <= max_width {
             return vec![Span::styled(
                 mode_label.to_string(),
@@ -522,6 +574,7 @@ impl FooterWidget {
         &self,
         mode_label: &'static str,
         model_label: String,
+        posture: Option<String>,
         balance: Option<String>,
         cost: Option<String>,
         status: Option<&str>,
@@ -544,6 +597,18 @@ impl FooterWidget {
             spans.push(Span::styled(
                 model_label,
                 Style::default().fg(self.props.text_hint_color),
+            ));
+        }
+        if let Some(posture_text) = posture {
+            if !spans.is_empty() {
+                spans.push(Span::styled(
+                    sep.to_string(),
+                    Style::default().fg(self.props.text_dim_color),
+                ));
+            }
+            spans.push(Span::styled(
+                posture_text,
+                Style::default().fg(self.props.posture_color),
             ));
         }
         if let Some(balance_text) = balance {
@@ -813,6 +878,46 @@ mod tests {
         // App has cumulative_turn_duration == 0 so the chip is empty.
         assert!(props.worked.is_empty());
         assert!(props.toast.is_none());
+    }
+
+    #[test]
+    fn footer_shows_posture_chip() {
+        let app = make_app();
+        let props = idle_props_for(&app);
+        assert_eq!(props.posture_label, Some("cache-heavy"));
+
+        let rendered = render_at_width(props, 120);
+        assert!(rendered.contains("cache-heavy"));
+    }
+
+    #[test]
+    fn footer_hides_posture_chip_for_standard_route() {
+        let mut app = make_app();
+        app.api_provider = crate::config::ApiProvider::Openai;
+        app.model = "gpt-x".to_string();
+        app.auto_model = false;
+        let props = idle_props_for(&app);
+        assert_eq!(props.posture_label, None);
+
+        let rendered = render_at_width(props, 120);
+        assert!(
+            !rendered.contains('\u{29E8}'),
+            "standard route should render no posture chip: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn footer_posture_chip_yields_to_cost_when_space_tight() {
+        // Posture is steady preview info and must be the first chip dropped, so
+        // a tight width keeps cost while shedding the posture chip.
+        let mut props = props_with_status_and_cost("refreshing context", "$0.42");
+        props.posture_label = Some("cache-heavy");
+        let line = render_at_width(props, 47);
+        assert!(line.contains("$0.42"), "cost survives: {line:?}");
+        assert!(
+            !line.contains('\u{29E8}'),
+            "posture chip dropped first: {line:?}"
+        );
     }
 
     #[test]

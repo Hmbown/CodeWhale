@@ -570,6 +570,16 @@ fn load_repo_constitution_block(
     (None, None, warnings)
 }
 
+/// Discover `.codewhale/constitution.json` for read-only status display.
+///
+/// Uses the same walk and parse rules as prompt assembly; returns the source
+/// path only when the file carries usable policy.
+#[must_use]
+pub fn discover_repo_constitution_path(workspace: &Path) -> Option<PathBuf> {
+    let (_block, source_path, _warnings) = load_repo_constitution_block(workspace);
+    source_path
+}
+
 #[derive(Debug, Serialize)]
 struct ProjectContextPack {
     project_name: String,

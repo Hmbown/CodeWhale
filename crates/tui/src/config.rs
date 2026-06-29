@@ -2052,6 +2052,10 @@ pub struct Config {
     #[serde(default)]
     pub fleet: Option<codewhale_config::FleetConfigToml>,
 
+    /// Provider/model harness posture profiles (preview schema; read-only display).
+    #[serde(default)]
+    pub harness_profiles: Vec<codewhale_config::HarnessProfile>,
+
     /// Sub-agent model overrides.
     #[serde(default)]
     pub subagents: Option<SubagentsConfig>,
@@ -5647,6 +5651,11 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
             seam_model: override_cfg.context.seam_model.or(base.context.seam_model),
         },
         fleet: override_cfg.fleet.or(base.fleet),
+        harness_profiles: if override_cfg.harness_profiles.is_empty() {
+            base.harness_profiles
+        } else {
+            override_cfg.harness_profiles
+        },
         subagents: override_cfg.subagents.or(base.subagents),
         strict_tool_mode: override_cfg.strict_tool_mode.or(base.strict_tool_mode),
         runtime_api: override_cfg.runtime_api.or(base.runtime_api),

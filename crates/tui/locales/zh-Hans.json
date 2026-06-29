@@ -121,6 +121,7 @@
     "CmdFeedbackDescription": "生成 GitHub 反馈链接",
     "CmdHfDescription": "检查 Hugging Face MCP 设置和概念",
     "CmdHelpDescription": "理解概念、命令与快捷键",
+    "CmdHarnessDescription": "显示当前路由解析出的 harness 姿态（只读预览）",
     "CmdProfileDescription": "切换到命名配置配置文件",
     "CmdHomeDescription": "显示主页面板，含统计与快捷操作",
     "CmdHooksDescription": "列出已配置的生命周期钩子（只读）",

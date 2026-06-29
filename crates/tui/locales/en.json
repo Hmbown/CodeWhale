@@ -121,6 +121,7 @@
     "CmdFeedbackDescription": "Generate a GitHub feedback URL",
     "CmdHfDescription": "Inspect Hugging Face MCP setup and concepts",
     "CmdHelpDescription": "Understand concepts, commands, and keybindings",
+    "CmdHarnessDescription": "Show resolved harness posture for the active route (read-only preview)",
     "CmdProfileDescription": "Switch to a named config profile",
     "CmdHomeDescription": "Show home dashboard with stats and quick actions",
     "CmdHooksDescription": "List configured lifecycle hooks (read-only)",

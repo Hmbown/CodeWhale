@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use codewhale_config::{ProviderChain, route::RouteLimits};
+use codewhale_config::{
+    HarnessPostureKind, HarnessResolution, ProviderChain, resolve_harness_for_profiles,
+    route::RouteLimits,
+};
 
 use crate::artifacts::ArtifactRecord;
 use crate::client::{CacheWarmupKey, PromptInspection};
@@ -1746,6 +1749,8 @@ pub struct App {
     /// True when legacy memory push/inject behavior should stay disabled
     /// because Moraine pull/recall is the configured memory backend.
     pub moraine_fallback: bool,
+    /// User-configured harness profiles loaded from config.toml (preview display).
+    pub harness_profiles: Vec<codewhale_config::HarnessProfile>,
     pub use_alt_screen: bool,
     pub use_mouse_capture: bool,
     /// When true, plain Up/Down on an empty composer scroll the transcript
@@ -2802,6 +2807,7 @@ impl App {
             memory_path,
             use_memory,
             moraine_fallback: config.moraine_fallback(),
+            harness_profiles: config.harness_profiles.clone(),
             use_alt_screen,
             use_mouse_capture,
             use_bracketed_paste,
@@ -6090,6 +6096,42 @@ impl App {
                 .unwrap_or(DEFAULT_TEXT_MODEL);
         }
         &self.model
+    }
+
+    /// Provider route key for harness profile matching.
+    #[must_use]
+    pub fn active_provider_route(&self) -> &str {
+        self.api_provider.as_str()
+    }
+
+    /// Wire model id for harness profile matching (not the display label).
+    #[must_use]
+    pub fn active_model_for_harness(&self) -> &str {
+        self.effective_model_for_budget()
+    }
+
+    /// Read-only harness resolution for the active provider/model route.
+    #[must_use]
+    pub fn harness_resolution(&self) -> HarnessResolution {
+        resolve_harness_for_profiles(
+            &self.harness_profiles,
+            self.active_provider_route(),
+            self.active_model_for_harness(),
+        )
+    }
+
+    /// Footer/command label for the resolved harness posture kind.
+    ///
+    /// Returns `None` for the Standard posture so the footer chip stays absent
+    /// on ordinary routes (Standard is the default and not worth a chip).
+    #[must_use]
+    pub fn harness_posture_label(&self) -> Option<&'static str> {
+        match self.harness_resolution().posture.kind {
+            HarnessPostureKind::CacheHeavy => Some("cache-heavy"),
+            HarnessPostureKind::Lean => Some("lean"),
+            HarnessPostureKind::Custom => Some("custom"),
+            HarnessPostureKind::Standard => None,
+        }
     }
 
     pub fn model_display_label(&self) -> String {
