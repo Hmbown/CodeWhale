@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::CommandResult;
 use crate::compaction::estimate_input_tokens_conservative;
-use crate::tui::app::App;
+use crate::tui::app::{App, AppMode};
 use crate::utils::{display_path, estimate_message_chars};
 
 /// Show a compact runtime status report for the current TUI session.
@@ -34,6 +34,7 @@ fn format_status(app: &App) -> String {
     push_row(&mut out, "Directory:", &display_path(&app.workspace));
     push_row(&mut out, "Mode:", app.mode.label());
     push_row(&mut out, "Permissions:", &permission_summary(app));
+    push_row(&mut out, "Safety:", &safety_summary(app));
     push_row(&mut out, "Project docs:", &project_docs(&app.workspace));
     push_row(
         &mut out,
@@ -141,6 +142,14 @@ fn permission_summary(app: &App) -> String {
     )
 }
 
+fn safety_summary(app: &App) -> &'static str {
+    match app.mode {
+        AppMode::Plan => "sandbox read-only, network off",
+        AppMode::Agent | AppMode::Auto => "sandbox workspace-write, network on",
+        AppMode::Yolo => "sandbox disabled, network unrestricted",
+    }
+}
+
 fn project_docs(workspace: &Path) -> String {
     let docs: Vec<&str> = ["AGENTS.md", "CLAUDE.md"]
         .into_iter()
@@ -203,7 +212,7 @@ mod tests {
     use super::*;
     use crate::config::{ApiProvider, Config};
     use crate::models::{ContentBlock, Message};
-    use crate::tui::app::TuiOptions;
+    use crate::tui::app::{AppMode, TuiOptions};
     use crate::tui::history::HistoryCell;
 
     fn create_test_app(workspace: PathBuf) -> App {
@@ -271,6 +280,25 @@ mod tests {
         assert!(msg.contains("Cache hit/miss:"));
         assert!(msg.contains("70 hit / 30 miss"));
         assert!(msg.contains("Use /statusline to configure footer items."));
+    }
+
+    #[test]
+    fn status_report_surfaces_effective_safety_policy() {
+        let tmpdir = TempDir::new().expect("temp dir");
+        let mut app = create_test_app(tmpdir.path().to_path_buf());
+
+        app.mode = AppMode::Agent;
+        let agent = format_status(&app);
+        assert!(agent.contains("Safety:"));
+        assert!(agent.contains("sandbox workspace-write, network on"));
+
+        app.mode = AppMode::Plan;
+        let plan = format_status(&app);
+        assert!(plan.contains("sandbox read-only, network off"));
+
+        app.mode = AppMode::Yolo;
+        let yolo = format_status(&app);
+        assert!(yolo.contains("sandbox disabled, network unrestricted"));
     }
 
     #[test]
