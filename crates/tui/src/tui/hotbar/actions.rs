@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 
 use crate::commands::{self, CommandInfo, CommandResult};
-use crate::localization::Locale;
+use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, SidebarFocus};
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
@@ -703,6 +703,52 @@ impl AppHotbarAction {
             HotbarRecommendation::Eligible
         }
     }
+
+    fn localized_display_name(&self, locale: Locale) -> String {
+        let Some(id) = self.display_name_id() else {
+            return self.display_name.to_string();
+        };
+        tr(locale, id).into_owned()
+    }
+
+    fn localized_description(&self, locale: Locale) -> String {
+        let Some(id) = self.description_id() else {
+            return self.description.to_string();
+        };
+        tr(locale, id).into_owned()
+    }
+
+    fn display_name_id(&self) -> Option<MessageId> {
+        Some(match self.kind {
+            AppHotbarKind::VoiceToggle => MessageId::HotbarActionVoiceToggleName,
+            AppHotbarKind::SessionCompact => MessageId::HotbarActionSessionCompactName,
+            AppHotbarKind::Mode(AppMode::Plan) => MessageId::HotbarActionModePlanName,
+            AppHotbarKind::Mode(AppMode::Agent) => MessageId::HotbarActionModeAgentName,
+            AppHotbarKind::Mode(AppMode::Yolo) => MessageId::HotbarActionModeYoloName,
+            AppHotbarKind::Mode(AppMode::Auto) => return None,
+            AppHotbarKind::ReasoningCycle => MessageId::HotbarActionReasoningCycleName,
+            AppHotbarKind::SidebarToggle => MessageId::HotbarActionSidebarToggleName,
+            AppHotbarKind::FileTreeToggle => MessageId::HotbarActionFileTreeToggleName,
+            AppHotbarKind::PaletteOpen => MessageId::HotbarActionPaletteOpenName,
+            AppHotbarKind::TrustToggle => MessageId::HotbarActionTrustToggleName,
+        })
+    }
+
+    fn description_id(&self) -> Option<MessageId> {
+        Some(match self.kind {
+            AppHotbarKind::VoiceToggle => MessageId::HotbarActionVoiceToggleDescription,
+            AppHotbarKind::SessionCompact => MessageId::HotbarActionSessionCompactDescription,
+            AppHotbarKind::Mode(AppMode::Plan) => MessageId::HotbarActionModePlanDescription,
+            AppHotbarKind::Mode(AppMode::Agent) => MessageId::HotbarActionModeAgentDescription,
+            AppHotbarKind::Mode(AppMode::Yolo) => MessageId::HotbarActionModeYoloDescription,
+            AppHotbarKind::Mode(AppMode::Auto) => return None,
+            AppHotbarKind::ReasoningCycle => MessageId::HotbarActionReasoningCycleDescription,
+            AppHotbarKind::SidebarToggle => MessageId::HotbarActionSidebarToggleDescription,
+            AppHotbarKind::FileTreeToggle => MessageId::HotbarActionFileTreeToggleDescription,
+            AppHotbarKind::PaletteOpen => MessageId::HotbarActionPaletteOpenDescription,
+            AppHotbarKind::TrustToggle => MessageId::HotbarActionTrustToggleDescription,
+        })
+    }
 }
 
 impl HotbarAction for AppHotbarAction {
@@ -710,13 +756,13 @@ impl HotbarAction for AppHotbarAction {
         self.id
     }
 
-    fn metadata(&self, _locale: Locale) -> HotbarActionMetadata {
+    fn metadata(&self, locale: Locale) -> HotbarActionMetadata {
         HotbarActionMetadata {
             id: self.id.to_string(),
             source_id: "builtin".to_string(),
-            display_name: self.display_name.to_string(),
+            display_name: self.localized_display_name(locale),
             compact_label: self.short_label.to_string(),
-            description: self.description.to_string(),
+            description: self.localized_description(locale),
             category: HotbarActionCategory::App,
             args: HotbarArgsBehavior::None,
             safety: self.safety(),
@@ -749,9 +795,13 @@ impl HotbarAction for AppHotbarAction {
 
     fn disabled_reason(&self, app: &App) -> Option<String> {
         match self.kind {
-            AppHotbarKind::ReasoningCycle if app.auto_model => {
-                Some("Reasoning effort is controlled by auto model routing.".to_string())
-            }
+            AppHotbarKind::ReasoningCycle if app.auto_model => Some(
+                tr(
+                    app.ui_locale,
+                    MessageId::HotbarActionReasoningCycleAutoDisabled,
+                )
+                .into_owned(),
+            ),
             _ => None,
         }
     }

@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::config::Config;
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::app::App;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
@@ -26,19 +27,58 @@ pub struct HotbarSetupActionRow {
 }
 
 impl HotbarSetupActionRow {
-    fn status_label(&self) -> &'static str {
-        if self.disabled_reason.is_some() {
-            "disabled"
-        } else if matches!(self.metadata.args, HotbarArgsBehavior::Required) {
-            "prefill"
-        } else {
-            "ready"
-        }
+    fn status_label(&self, locale: Locale) -> String {
+        tr(
+            locale,
+            if self.disabled_reason.is_some() {
+                MessageId::HotbarSetupStatusDisabled
+            } else if matches!(self.metadata.args, HotbarArgsBehavior::Required) {
+                MessageId::HotbarSetupStatusPrefill
+            } else {
+                MessageId::HotbarSetupStatusReady
+            },
+        )
+        .into_owned()
     }
+}
+
+fn hotbar_setup_source_label(locale: Locale, source: HotbarActionCategory) -> String {
+    tr(
+        locale,
+        match source {
+            HotbarActionCategory::App => MessageId::HotbarSetupSourceApp,
+            HotbarActionCategory::Slash => MessageId::HotbarSetupSourceSlash,
+            HotbarActionCategory::Mcp => MessageId::HotbarSetupSourceMcp,
+            HotbarActionCategory::Skill => MessageId::HotbarSetupSourceSkill,
+            HotbarActionCategory::Plugin => MessageId::HotbarSetupSourcePlugin,
+        },
+    )
+    .into_owned()
+}
+
+fn tr_hotbar_setup(locale: Locale, id: MessageId, replacements: &[(&str, String)]) -> String {
+    let mut message = tr(locale, id).into_owned();
+    for (placeholder, value) in replacements {
+        message = message.replace(placeholder, value);
+    }
+    message
+}
+
+fn hotbar_setup_dirty_label(locale: Locale, is_dirty: bool) -> String {
+    tr(
+        locale,
+        if is_dirty {
+            MessageId::HotbarSetupDirtyModified
+        } else {
+            MessageId::HotbarSetupDirtyClean
+        },
+    )
+    .into_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotbarSetupView {
+    locale: Locale,
     sources: Vec<HotbarActionCategory>,
     actions: Vec<HotbarSetupActionRow>,
     selected_source_idx: usize,
@@ -113,6 +153,7 @@ impl HotbarSetupView {
             .collect::<BTreeMap<_, _>>();
 
         Self {
+            locale: app.ui_locale,
             sources,
             actions,
             selected_source_idx: 0,
@@ -188,12 +229,26 @@ impl HotbarSetupView {
         if let Some(error) = self.validation_errors.last() {
             return error.clone();
         }
-        let dirty = if self.is_dirty() { "modified" } else { "clean" };
+        let dirty = hotbar_setup_dirty_label(self.locale, self.is_dirty());
         let action = self
             .selected_action()
-            .map(|row| format!("{} ({})", row.metadata.display_name, row.status_label()))
-            .unwrap_or_else(|| "No action".to_string());
-        format!("slot {} | {action} | {dirty}", self.selected_slot)
+            .map(|row| {
+                format!(
+                    "{} ({})",
+                    row.metadata.display_name,
+                    row.status_label(self.locale)
+                )
+            })
+            .unwrap_or_else(|| tr(self.locale, MessageId::HotbarSetupNoAction).into_owned());
+        tr_hotbar_setup(
+            self.locale,
+            MessageId::HotbarSetupStatusLine,
+            &[
+                ("{slot}", self.selected_slot.to_string()),
+                ("{action}", action),
+                ("{dirty}", dirty),
+            ],
+        )
     }
 
     #[cfg(test)]
@@ -227,9 +282,13 @@ impl HotbarSetupView {
 
     pub fn select_slot(&mut self, slot: u8) -> bool {
         if !(1..=codewhale_config::HOTBAR_SLOT_COUNT).contains(&slot) {
-            self.validation_errors = vec![format!(
-                "Hotbar slot {slot} is outside 1-{}",
-                codewhale_config::HOTBAR_SLOT_COUNT
+            self.validation_errors = vec![tr_hotbar_setup(
+                self.locale,
+                MessageId::HotbarSetupSlotOutOfRange,
+                &[
+                    ("{slot}", slot.to_string()),
+                    ("{max}", codewhale_config::HOTBAR_SLOT_COUNT.to_string()),
+                ],
             )];
             return false;
         }
@@ -240,13 +299,18 @@ impl HotbarSetupView {
 
     pub fn assign_selected_action(&mut self) -> bool {
         let Some(row) = self.selected_action().cloned() else {
-            self.validation_errors = vec!["No action selected.".to_string()];
+            self.validation_errors =
+                vec![tr(self.locale, MessageId::HotbarSetupNoActionSelected).into_owned()];
             return false;
         };
         if let Some(reason) = row.disabled_reason {
-            self.validation_errors = vec![format!(
-                "{} cannot be assigned: {reason}",
-                row.metadata.display_name
+            self.validation_errors = vec![tr_hotbar_setup(
+                self.locale,
+                MessageId::HotbarSetupCannotAssign,
+                &[
+                    ("{action}", row.metadata.display_name),
+                    ("{reason}", reason),
+                ],
             )];
             return false;
         }
@@ -358,10 +422,11 @@ impl HotbarSetupView {
             .sources
             .iter()
             .map(|source| {
+                let label = hotbar_setup_source_label(self.locale, *source);
                 if Some(*source) == self.selected_source() {
-                    format!("[{}]", source.as_str())
+                    format!("[{label}]")
                 } else {
-                    source.as_str().to_string()
+                    label
                 }
             })
             .collect::<Vec<_>>()
@@ -375,7 +440,9 @@ impl HotbarSetupView {
         lines.push(Line::from(""));
 
         let Some(source) = self.selected_source() else {
-            lines.push(Line::from("No hotbar actions are available."));
+            lines.push(Line::from(
+                tr(self.locale, MessageId::HotbarSetupNoActions).into_owned(),
+            ));
             return lines;
         };
 
@@ -395,15 +462,15 @@ impl HotbarSetupView {
                 " "
             };
             let recommended = if self.recommended_action_ids.contains(&row.metadata.id) {
-                "rec"
+                tr(self.locale, MessageId::HotbarSetupRecommended).into_owned()
             } else {
-                ""
+                String::new()
             };
             let mut text = format!(
                 "{marker}{checked} {:<3} {:<20} {:<8} {}",
                 recommended,
                 row.metadata.display_name,
-                row.status_label(),
+                row.status_label(self.locale),
                 row.metadata.description
             );
             if let Some(reason) = row.disabled_reason.as_deref() {
@@ -421,7 +488,9 @@ impl HotbarSetupView {
                     .draft_bindings
                     .get(&slot)
                     .map(|binding| compact_action_id(&binding.action))
-                    .unwrap_or_else(|| "empty".to_string());
+                    .unwrap_or_else(|| {
+                        tr(self.locale, MessageId::HotbarSetupEmptySlot).into_owned()
+                    });
                 if slot == self.selected_slot {
                     format!("[{slot}:{label}]")
                 } else {
@@ -434,7 +503,7 @@ impl HotbarSetupView {
         lines.push(Line::from(self.status_text()));
         if self.help_visible {
             lines.push(Line::from(
-                "Tab/Shift+Tab source  Up/Down action  1-8 slot  Enter assign  Space toggle  Delete clear  s save  Esc cancel",
+                tr(self.locale, MessageId::HotbarSetupHelp).into_owned(),
             ));
         }
         lines
@@ -523,7 +592,12 @@ impl ModalView for HotbarSetupView {
         };
         Clear.render(popup_area, buf);
         let block = Block::default()
-            .title(" Hotbar setup ")
+            .title(Line::from(Span::styled(
+                tr(self.locale, MessageId::HotbarSetupTitle),
+                Style::default()
+                    .fg(palette::DEEPSEEK_SKY)
+                    .add_modifier(Modifier::BOLD),
+            )))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR));
         let inner = block.inner(popup_area);
@@ -561,6 +635,7 @@ fn compact_action_id(action_id: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::{Locale, MessageId, tr};
     use crate::tui::app::TuiOptions;
     use crossterm::event::KeyModifiers;
     use std::path::PathBuf;
@@ -588,12 +663,33 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
+        app.ui_locale = Locale::En;
+        app
+    }
+
+    fn test_app_with_locale(locale: Locale) -> App {
+        let mut app = test_app();
+        app.ui_locale = locale;
         app
     }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn rendered_text(view: &HotbarSetupView) -> String {
+        let area = Rect::new(0, 0, 140, 36);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let mut out = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
     }
 
     #[test]
@@ -608,6 +704,69 @@ mod tests {
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::App));
         assert!(view.recommended_action_ids().contains("mode.agent"));
         assert!(view.checked_action_ids().contains("mode.plan"));
+    }
+
+    #[test]
+    fn wizard_chrome_uses_non_english_locale() {
+        let app = test_app_with_locale(Locale::ZhHant);
+        let mut view = HotbarSetupView::new(&app, &Config::default());
+        view.clear_selected_slot();
+        view.handle_key(key(KeyCode::Char('?')));
+
+        let status = view.status_text();
+        assert!(status.contains("槽位 1"), "status was {status:?}");
+        assert!(
+            status.contains(tr(Locale::ZhHant, MessageId::HotbarSetupDirtyModified).as_ref()),
+            "status was {status:?}"
+        );
+        assert!(!status.contains("slot 1 |"), "status was {status:?}");
+        assert!(!status.contains("modified"), "status was {status:?}");
+
+        let rendered = rendered_text(&view);
+        let compact_rendered = rendered.replace(' ', "");
+        for expected in [
+            "Hotbar設定",
+            "[應用]",
+            "命令",
+            "就緒",
+            "槽位",
+            "來源",
+            "分配",
+            "儲存",
+            "取消",
+            "Agent模式",
+            "命令面板",
+            "切換側邊欄",
+        ] {
+            assert!(
+                compact_rendered.contains(expected),
+                "missing {expected:?} in render:\n{rendered}"
+            );
+        }
+        assert!(
+            compact_rendered.contains(":空"),
+            "missing localized empty slot:\n{rendered}"
+        );
+
+        for leaked in [
+            "Hotbar setup",
+            "Tab/Shift+Tab source",
+            "Enter assign",
+            "Esc cancel",
+            "slot 1 |",
+            "ready",
+            "modified",
+            "empty",
+            "Agent mode",
+            "Command palette",
+            "Toggle sidebar",
+            "Switch the conversation",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "leaked {leaked:?} in render:\n{rendered}"
+            );
+        }
     }
 
     #[test]
