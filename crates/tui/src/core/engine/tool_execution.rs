@@ -149,7 +149,7 @@ fn emit_tool_audit_to_path(path: &Path, event: serde_json::Value) {
         );
         return;
     }
-    match OpenOptions::new().create(true).append(true).open(&path) {
+    match OpenOptions::new().create(true).append(true).open(path) {
         Ok(mut file) => {
             if let Err(e) = writeln!(file, "{line}") {
                 tracing::error!("Failed to write to audit log {}: {e}", path.display());
