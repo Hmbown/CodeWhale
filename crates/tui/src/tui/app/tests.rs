@@ -1,5 +1,7 @@
 use super::*;
-use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
+use crate::config::{
+    ApiProvider, CompactionRuntimeConfig, Config, ProviderConfig, ProvidersConfig,
+};
 use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
 use crate::tools::todo::TodoStatus;
@@ -1953,6 +1955,51 @@ fn test_compaction_config() {
     app.last_effective_model = Some("deepseek-v4-flash".to_string());
     let config = app.compaction_config();
     assert_eq!(config.model, "deepseek-v4-flash");
+}
+
+#[test]
+fn compaction_config_respects_config_enabled_override() {
+    let config = Config {
+        compaction: CompactionRuntimeConfig {
+            enabled: Some(false),
+        },
+        ..Default::default()
+    };
+    let mut app = App::new(test_options(false), &config);
+    app.auto_compact = true;
+    assert!(!app.compaction_config().enabled);
+
+    let config = Config {
+        compaction: CompactionRuntimeConfig {
+            enabled: Some(true),
+        },
+        ..Default::default()
+    };
+    let mut app = App::new(test_options(false), &config);
+    app.auto_compact = false;
+    assert!(app.compaction_config().enabled);
+}
+
+#[test]
+fn app_refreshes_compaction_override_from_runtime_config() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.compaction_enabled_override = Some(true);
+
+    let config = Config {
+        compaction: CompactionRuntimeConfig {
+            enabled: Some(false),
+        },
+        ..Default::default()
+    };
+    app.refresh_config_runtime_overrides(&config);
+    assert_eq!(app.compaction_enabled_override, Some(false));
+    assert!(!app.automatic_compaction_enabled());
+
+    let config = Config::default();
+    app.auto_compact = true;
+    app.refresh_config_runtime_overrides(&config);
+    assert_eq!(app.compaction_enabled_override, None);
+    assert!(app.automatic_compaction_enabled());
 }
 
 #[test]

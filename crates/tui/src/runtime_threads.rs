@@ -874,7 +874,7 @@ impl RuntimeThreadManager {
                     )
                 };
             let compaction = crate::compaction::CompactionConfig {
-                enabled: auto_compact_enabled,
+                enabled: cfg.compaction_enabled(auto_compact_enabled),
                 model: String::new(), // per-engine, filled below
                 token_threshold: compaction_threshold_for_model_at_percent(
                     &cfg.default_text_model.clone().unwrap_or_default(),
@@ -2506,7 +2506,7 @@ impl RuntimeThreadManager {
                 auto_compact_default_for_model(&thread.model)
             };
         let compaction = CompactionConfig {
-            enabled: auto_compact_enabled,
+            enabled: cfg.compaction_enabled(auto_compact_enabled),
             model: thread.model.clone(),
             token_threshold: compaction_threshold_for_model_at_percent(
                 &thread.model,

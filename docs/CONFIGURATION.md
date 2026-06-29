@@ -933,7 +933,9 @@ policy for known context windows up to the 1M-token V4 class. Automatic
 compaction runs before the active model limit and carries the compacted summary
 forward into the next request. The trigger defaults to
 `auto_compact_threshold_percent = 80`. Users who prefer manual continuity can
-persist `auto_compact = false`; manual `/compact` / Ctrl+L remains available.
+persist `auto_compact = false`; `[compaction].enabled = false` is the
+engine-level config.toml switch for replacement compaction. Manual `/compact` /
+Ctrl+L remains available.
 You can inspect or update these from the TUI with `/settings` and `/config`
 (interactive editor).
 
@@ -1021,12 +1023,13 @@ separate:
 | Cost estimate | Approximate spend from provider usage and configured DeepSeek rates. | Display only. |
 
 For known context-window models, including 1M-class V4 models, replacement
-compaction is enabled by default unless the user explicitly configures
-`auto_compact = false`. It fires at the active model's compaction threshold and
-replays the generated summary through the stable system prompt on the next
-request. Unknown model ids remain opt-in. The Flash seam manager remains opt-in
-(`[context].enabled = false`), and the capacity controller remains disabled
-unless configured.
+compaction follows `[compaction].enabled` when explicitly configured; otherwise
+it keeps the existing `auto_compact` settings behavior. It fires at the active
+model's compaction threshold and replays the generated summary through the
+stable system prompt on the next request. Unknown model ids remain opt-in. The
+Flash seam manager remains disabled by default; `[context].enabled` opts in,
+and `[seam_manager].enabled` can explicitly override that master switch. The
+capacity controller remains disabled unless configured.
 
 ### Command Migration Notes
 
@@ -1266,6 +1269,10 @@ If you are upgrading from older releases:
     `~/.codewhale/snapshots/<project_hash>/<worktree_hash>/.git`, with legacy
     `~/.deepseek/snapshots/...` fallback when only the legacy state exists, and
     never use the workspace's own `.git` directory
+- `compaction.*` (optional): replacement compaction engine switch:
+  - `[compaction].enabled` (bool, default unset): when set, overrides the
+    settings-derived `auto_compact` engine switch. Set `false` for full manual
+    control over automatic replacement compaction.
 - `context.*` (optional): append-only Fin seam manager, currently opt-in.
   Fin is the fast `deepseek-v4-flash` path with thinking off used for
   coordination work such as routing, summaries, and context maintenance.
@@ -1277,6 +1284,11 @@ If you are upgrading from older releases:
   - `[context].l2_threshold` (int, default `384000`)
   - `[context].l3_threshold` (int, default `576000`)
   - `[context].seam_model` (string, default `deepseek-v4-flash`)
+- `seam_manager.*` (optional): explicit alias for the Flash seam manager master
+  switch:
+  - `[seam_manager].enabled` (bool, default unset): overrides
+    `[context].enabled` when set. Thresholds and model remain under
+    `[context]`.
 - `retry.*` (optional): retry/backoff settings for API requests:
   - `[retry].enabled` (bool, default `true`)
   - `[retry].max_retries` (int, default `3`)

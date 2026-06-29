@@ -5732,6 +5732,18 @@ fn should_auto_compact_before_send_respects_threshold_and_setting() {
     app.auto_compact = false;
     assert!(!should_auto_compact_before_send(&app));
 
+    // The config.toml engine switch is a hard gate for automatic pre-send
+    // compaction, independent of the saved UI auto_compact setting.
+    app.auto_compact = true;
+    app.auto_compact_threshold_percent = 70.0;
+    app.compaction_enabled_override = Some(false);
+    assert!(!should_auto_compact_before_send(&app));
+
+    app.auto_compact = false;
+    app.compaction_enabled_override = Some(true);
+    assert!(should_auto_compact_before_send(&app));
+    app.compaction_enabled_override = None;
+
     // Small estimated context + auto_compact ON can trigger once the
     // configured percent threshold is crossed. This still matches the
     // #115 fix: the estimate is the primary signal, not the engine's
@@ -5768,6 +5780,26 @@ fn context_pressure_warning_reflects_auto_compact_threshold_state() {
     let status = app.status_message.expect("context warning");
     assert!(
         status.contains("Auto-compaction will run before the next send."),
+        "unexpected status: {status}"
+    );
+
+    let mut app = create_test_app();
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "context ".repeat(240_000),
+            cache_control: None,
+        }],
+    }];
+    app.auto_compact = true;
+    app.compaction_enabled_override = Some(false);
+    app.auto_compact_threshold_percent = 70.0;
+
+    maybe_warn_context_pressure(&mut app);
+
+    let status = app.status_message.expect("context warning");
+    assert!(
+        status.contains("Automatic compaction is disabled"),
         "unexpected status: {status}"
     );
 }

@@ -1682,6 +1682,22 @@ pub struct ContextConfig {
     pub seam_model: Option<String>,
 }
 
+/// Explicit Flash seam-manager switch.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SeamManagerConfig {
+    /// Overrides `[context].enabled` when set. Default: inherit context.enabled.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// Engine replacement-compaction switch.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CompactionRuntimeConfig {
+    /// Overrides the settings-derived auto-compaction default when set.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 /// Sub-agent model overrides. Keys in `models` can be role names (`worker`,
 /// `explorer`, `awaiter`) or type names (`general`, `explore`, `plan`,
 /// `review`, `custom`). Per-call explicit model choices still win.
@@ -1997,6 +2013,16 @@ pub struct Config {
     /// Append-only layered context management with Flash seam manager (#159).
     #[serde(default)]
     pub context: ContextConfig,
+
+    /// Explicit Flash seam-manager switch (#3765). This is a narrow alias for
+    /// `[context].enabled`; threshold/model fields stay under `[context]`.
+    #[serde(default, alias = "seamManager")]
+    pub seam_manager: SeamManagerConfig,
+
+    /// Engine replacement-compaction switch (#3765). When unset, the runtime
+    /// keeps using the settings-derived `auto_compact` behavior.
+    #[serde(default)]
+    pub compaction: CompactionRuntimeConfig,
 
     /// Agent Fleet trust/security/role/exec config.
     #[serde(default)]
@@ -3638,6 +3664,19 @@ impl Config {
     #[must_use]
     pub fn project_context_pack_enabled(&self) -> bool {
         self.context.project_pack.unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn seam_manager_enabled(&self) -> bool {
+        self.seam_manager
+            .enabled
+            .or(self.context.enabled)
+            .unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn compaction_enabled(&self, settings_default: bool) -> bool {
+        self.compaction.enabled.unwrap_or(settings_default)
     }
 
     /// Return whether shell execution is allowed. Defaults to `false`: shell
@@ -5535,6 +5574,15 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
                 .l3_threshold
                 .or(base.context.l3_threshold),
             seam_model: override_cfg.context.seam_model.or(base.context.seam_model),
+        },
+        seam_manager: SeamManagerConfig {
+            enabled: override_cfg
+                .seam_manager
+                .enabled
+                .or(base.seam_manager.enabled),
+        },
+        compaction: CompactionRuntimeConfig {
+            enabled: override_cfg.compaction.enabled.or(base.compaction.enabled),
         },
         fleet: override_cfg.fleet.or(base.fleet),
         subagents: override_cfg.subagents.or(base.subagents),

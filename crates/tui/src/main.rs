@@ -7027,7 +7027,7 @@ async fn run_exec_agent(
         )
     };
     let compaction = CompactionConfig {
-        enabled: auto_compact_enabled,
+        enabled: execution_config.compaction_enabled(auto_compact_enabled),
         model: effective_model.clone(),
         token_threshold: crate::route_budget::compaction_threshold_for_route_at_percent(
             effective_provider,

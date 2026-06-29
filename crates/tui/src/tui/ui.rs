@@ -7654,6 +7654,7 @@ async fn apply_command_result(
                 match Config::load(app.config_path.clone(), Some(&profile)) {
                     Ok(new_config) => {
                         *config = new_config.clone();
+                        app.refresh_config_runtime_overrides(config);
                         app.api_provider = config.api_provider();
                         let new_model = config.default_model();
                         app.set_model_selection(new_model.clone());
@@ -10636,8 +10637,8 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     }
 
-    let recommendation = if !app.auto_compact {
-        "Consider enabling auto_compact or use /compact."
+    let recommendation = if !app.automatic_compaction_enabled() {
+        "Automatic compaction is disabled; use /compact or enable auto_compact/[compaction].enabled."
     } else if percent >= configured_threshold {
         "Auto-compaction will run before the next send."
     } else {
@@ -10664,7 +10665,7 @@ fn maybe_warn_context_pressure(app: &mut App) {
 }
 
 fn should_auto_compact_before_send(app: &App) -> bool {
-    if !app.auto_compact {
+    if !app.automatic_compaction_enabled() {
         return false;
     }
     context_usage_snapshot(app)
