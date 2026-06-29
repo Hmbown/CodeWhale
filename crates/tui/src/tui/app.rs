@@ -2874,6 +2874,41 @@ impl App {
             self.status_message = Some(format!("Failed to mark onboarding: {err}"));
         }
         self.needs_redraw = true;
+        self.maybe_show_feature_intro();
+    }
+
+    /// Show the one-time Fleet + Hotbar introduction nudge. Idempotent and
+    /// gated by a persisted `Settings::feature_intro_shown` flag, so it appears
+    /// exactly once per install: at the end of first-run onboarding (called from
+    /// [`Self::finish_onboarding`]) and on the next launch for returning users
+    /// who haven't seen it (called from `run_tui` after `App::new`). Plain copy,
+    /// no marketing language. Stays silent while onboarding is still in progress.
+    pub fn maybe_show_feature_intro(&mut self) {
+        if self.onboarding != OnboardingState::None {
+            return;
+        }
+        let mut settings = Settings::load().unwrap_or_default();
+        if settings.feature_intro_shown {
+            return;
+        }
+        settings.feature_intro_shown = true;
+        if let Err(err) = settings.save() {
+            self.status_message = Some(format!("Failed to save feature-intro flag: {err}"));
+            // Still show the nudge; the flag write may simply retry next launch.
+        }
+        self.add_message(HistoryCell::System {
+            content: Self::feature_intro_content(),
+        });
+        self.needs_redraw = true;
+    }
+
+    /// The one-time Fleet + Hotbar introduction copy. Plain language, no
+    /// marketing. Pure so it can be unit-tested without touching disk or env.
+    pub(crate) fn feature_intro_content() -> String {
+        let alt = crate::tui::widgets::key_hint::alt_prefix();
+        format!(
+            "A couple of things you can set up any time:\n\n• Hotbar — {alt}1-8 shortcuts for common actions. Run `/hotbar` to customize, or `/hotbar off` to hide it.\n• Fleet — a durable team of sub-agents for parallel work. Run `/fleet setup` to configure a loadout.\n\nThis tip won't show again."
+        )
     }
 
     /// Apply a locale tag selected from the onboarding language picker (#566).
@@ -5877,6 +5912,11 @@ pub enum AppAction {
     OpenFleetSetup,
     /// Open the `/hotbar` setup wizard.
     OpenHotbarSetup,
+    /// Disable the Hotbar: persist `hotbar = []` and clear the live slots.
+    DisableHotbar,
+    /// Restore the default recommended Hotbar slots: remove the `hotbar` key so
+    /// the resolver falls back to the built-in defaults.
+    RestoreHotbarDefaults,
     /// Open an external URL in the system browser.
     OpenExternalUrl {
         url: String,

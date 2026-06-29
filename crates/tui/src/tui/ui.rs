@@ -735,6 +735,13 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let mut app = App::new(options.clone(), config);
     sync_config_provider_from_app(config, &app);
 
+    // One-time Fleet + Hotbar intro for returning (non-resuming) users. First-
+    // time users see it when they finish onboarding. Gated by a persisted flag,
+    // so it shows exactly once and never inside a resumed session transcript.
+    if options.resume_session_id.is_none() {
+        app.maybe_show_feature_intro();
+    }
+
     // Load existing session if resuming.
     if let Some(ref session_id) = options.resume_session_id
         && let Ok(manager) = SessionManager::default_location()
@@ -7566,6 +7573,8 @@ async fn apply_command_result(
                         .push(crate::tui::hotbar::setup::HotbarSetupView::new(app, config));
                 }
             }
+            AppAction::DisableHotbar => disable_hotbar(app, config),
+            AppAction::RestoreHotbarDefaults => restore_hotbar_defaults(app, config),
             AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
                 Ok(()) => {
                     app.status_message = Some(format!("Opened {label} in your browser"));
@@ -9047,6 +9056,51 @@ fn apply_hotbar_setup_saved(
     app.needs_redraw = true;
 }
 
+/// Hide the Hotbar: persist `hotbar = []` (the canonical "disabled" state) and
+/// clear the live in-memory slots so the panel disappears immediately. The
+/// explicit empty array — not a missing key — is what disables defaults, so we
+/// store `Some(vec![])` rather than `None`.
+fn disable_hotbar(app: &mut App, config: &mut Config) {
+    match crate::config_persistence::persist_hotbar_bindings(app.config_path.as_deref(), &[]) {
+        Ok(path) => {
+            config.hotbar = Some(Vec::new());
+            app.status_message = Some(format!(
+                "Hotbar hidden (hotbar = [] in {}). Bring it back with `/hotbar on`.",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            app.status_message = Some(format!("Failed to hide Hotbar: {err}"));
+            app.add_message(HistoryCell::System {
+                content: format!("Failed to hide Hotbar: {err}"),
+            });
+        }
+    }
+    app.needs_redraw = true;
+}
+
+/// Restore the default recommended Hotbar slots: remove the `hotbar` key so the
+/// resolver falls back to the built-in defaults. This is an explicit reset, so
+/// any custom bindings are replaced with the recommended set.
+fn restore_hotbar_defaults(app: &mut App, config: &mut Config) {
+    match crate::config_persistence::remove_hotbar_from_config(app.config_path.as_deref()) {
+        Ok(path) => {
+            config.hotbar = None;
+            app.status_message = Some(format!(
+                "Hotbar restored to default slots ({}). Customize with `/hotbar`.",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            app.status_message = Some(format!("Failed to restore Hotbar defaults: {err}"));
+            app.add_message(HistoryCell::System {
+                content: format!("Failed to restore Hotbar defaults: {err}"),
+            });
+        }
+    }
+    app.needs_redraw = true;
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_view_events(
     terminal: &mut AppTerminal,
@@ -9336,6 +9390,9 @@ async fn handle_view_events(
             }
             ViewEvent::HotbarSetupSaved { bindings } => {
                 apply_hotbar_setup_saved(app, config, bindings);
+            }
+            ViewEvent::HotbarDisableRequested => {
+                disable_hotbar(app, config);
             }
             ViewEvent::SubAgentsRefresh => {
                 app.status_message = Some("Refreshing sub-agents...".to_string());

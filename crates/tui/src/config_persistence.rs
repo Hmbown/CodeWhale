@@ -381,6 +381,41 @@ pub(crate) fn persist_hotbar_bindings(
     Ok(path)
 }
 
+/// Remove the `hotbar` key from the resolved config so the resolver falls back
+/// to the built-in default slots (`/hotbar on` / `/hotbar reset`). Unlike
+/// `persist_hotbar_bindings(&[])` — which writes an explicit `hotbar = []` and
+/// therefore *disables* the hotbar — this deletes the key entirely, restoring
+/// defaults. If the file or key is absent there is nothing to restore; we still
+/// return the resolved path. Surrounding keys are preserved via `toml_edit`;
+/// a comment used as the removed key's own leading decor is removed with it
+/// (standard `toml_edit` key-prefix behavior).
+pub(crate) fn remove_hotbar_from_config(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if !path.exists() {
+        // No config file ⇒ no `hotbar` key ⇒ defaults already apply.
+        return Ok(path);
+    }
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read config at {}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(path);
+    }
+    let mut document = raw
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("failed to edit config at {}", path.display()))?;
+    let table = document.as_table_mut();
+    if table.remove("hotbar").is_none() {
+        // Key wasn't present ⇒ defaults already apply; avoid a needless rewrite.
+        return Ok(path);
+    }
+    fs::write(&path, document.to_string())
+        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    Ok(path)
+}
+
 pub(crate) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
 
@@ -760,5 +795,66 @@ enabled = true
         let parsed: codewhale_config::ConfigToml =
             toml::from_str(&body).expect("written hotbar config should parse");
         assert_eq!(parsed.hotbar, Some(Vec::new()));
+    }
+
+    #[test]
+    fn remove_hotbar_from_config_deletes_key_to_restore_defaults() {
+        let temp_root = temp_root("codewhale-hotbar-remove");
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".codewhale").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Seed a config with a hotbar binding and an unrelated key whose own
+        // trailing comment is NOT the hotbar key's decor (so it must survive).
+        fs::write(
+            &path,
+            "hotbar = [{ slot = 1, action = \"mode.plan\" }]\nother = true  # keep me\n",
+        )
+        .unwrap();
+
+        let returned = remove_hotbar_from_config(Some(&path)).expect("remove should succeed");
+        assert_eq!(returned, path);
+
+        let body = fs::read_to_string(&path).expect("written file should be readable");
+        assert!(
+            !body.contains("hotbar"),
+            "hotbar key should be gone: {body}"
+        );
+        // An unrelated key and its own trailing comment must survive the rewrite.
+        assert!(
+            body.contains("other = true"),
+            "unrelated key should survive: {body}"
+        );
+        assert!(
+            body.contains("keep me"),
+            "comment that is not the hotbar key's decor should survive: {body}"
+        );
+
+        let parsed: codewhale_config::ConfigToml =
+            toml::from_str(&body).expect("restored config should parse");
+        assert_eq!(
+            parsed.hotbar, None,
+            "removing the key reads back as None so the resolver falls back to defaults"
+        );
+    }
+
+    #[test]
+    fn remove_hotbar_from_config_is_a_noop_when_key_absent() {
+        let temp_root = temp_root("codewhale-hotbar-remove-absent");
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".codewhale").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "other = true\n").unwrap();
+
+        let before = fs::read_to_string(&path).unwrap();
+        remove_hotbar_from_config(Some(&path)).expect("noop should succeed");
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "an absent hotbar key should not trigger a rewrite"
+        );
     }
 }

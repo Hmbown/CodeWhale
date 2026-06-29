@@ -120,7 +120,9 @@ but still require restarting the model client.
 
 ### User workspace entries
 
-For a shell opt-in that should live in the user's global config rather than in
+Interactive Agent sessions expose shell tools by default with approval gating
+unless you explicitly disable them. For a shell opt-in that should live in the
+user's global config for noninteractive or durable-task profiles rather than in
 the repository, add a workspace-scoped entry:
 
 ```toml
@@ -1061,7 +1063,12 @@ If you are upgrading from older releases:
   `eval`) default to `concise` unless config/env/CLI overrides it.
   Override per process with `CODEWHALE_VERBOSITY` or the legacy
   `DEEPSEEK_VERBOSITY` alias.
-- `allow_shell` (bool, optional): defaults to `false`; shell tools must be explicitly enabled.
+- `allow_shell` (bool, optional): in interactive TUI Agent sessions, omitting
+  this keeps shell tools available with approval prompts; setting it to `false`
+  hides shell tools. Headless, durable-task, and other noninteractive profiles
+  keep the conservative omitted-field default and require `allow_shell = true`
+  to expose shell. Plan mode always hides shell; YOLO enables shell and
+  auto-approval.
 - `approval_policy` (string, optional): `on-request`, `untrusted`, or `never`. Runtime `approval_mode` editing in `/config` also accepts `on-request` and `untrusted` aliases.
 - `sandbox_mode` (string, optional): `read-only`, `workspace-write`, `danger-full-access`, `external-sandbox`.
   Platform support is not identical. macOS uses Seatbelt for policy

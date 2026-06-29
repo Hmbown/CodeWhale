@@ -252,6 +252,9 @@ pub enum ViewEvent {
     HotbarSetupSaved {
         bindings: Vec<codewhale_config::HotbarBindingToml>,
     },
+    /// Emitted by the `/hotbar` setup wizard when the user chooses "Disable
+    /// Hotbar". The host persists `hotbar = []` and hides the panel.
+    HotbarDisableRequested,
     /// Emitted by the live-transcript overlay while in backtrack preview
     /// mode (#133) when the user steps the highlighted user message with
     /// Left or Right. The handler advances `app.backtrack`, refreshes the

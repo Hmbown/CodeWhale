@@ -72,7 +72,7 @@ const CORE_ACTION_TOOL_FALLBACKS: &[CoreActionToolFallback] = &[
     CoreActionToolFallback {
         name: "exec_shell",
         description: "Run shell commands in the workspace.",
-        unavailable_reason: "Not present in the current model-visible catalog. Shell requires Agent or Yolo mode with allow_shell = true and no command tool allow/deny gate blocking it.",
+        unavailable_reason: "Not present in the current model-visible catalog. Interactive Agent sessions expose shell by default unless allow_shell = false; noninteractive and durable profiles require allow_shell = true. Plan mode hides shell, and command tool allow/deny gates can also block it.",
     },
     CoreActionToolFallback {
         name: "write_file",
@@ -650,10 +650,11 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
 }
 
 fn shell_tool_allow_shell_hint() -> &'static str {
-    "Shell tools are disabled because top-level `allow_shell = false`; \
-     they require `allow_shell = true`. \
-     In Agent mode, run `/config allow_shell true` for this session or add `--save` \
-     for future sessions; the next turn will expose shell with approval gating"
+    "Shell tools are absent because this session or profile disabled shell access, \
+     commonly via top-level `allow_shell = false` or Plan mode. \
+     Interactive Agent mode exposes shell by default with approval gating unless disabled. \
+     Run `/config allow_shell true` for this session or add `--save` for future sessions; \
+     the next turn will expose shell again"
 }
 
 fn is_shell_tool_name(tool_name: &str) -> bool {

@@ -1,10 +1,11 @@
 use super::*;
 use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
+use crate::settings::Settings;
 use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
 use crate::tools::todo::TodoStatus;
 use crate::tui::clipboard::PastedImage;
-use crate::tui::history::{GenericToolCell, ToolCell, ToolStatus};
+use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus};
 
 fn test_options(yolo: bool) -> TuiOptions {
     TuiOptions {
@@ -40,6 +41,80 @@ fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::
 #[cfg(windows)]
 fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[test]
+fn feature_intro_content_mentions_features_and_disable_paths() {
+    let content = App::feature_intro_content();
+    assert!(content.contains("Hotbar"));
+    assert!(content.contains("/hotbar") && content.contains("/hotbar off"));
+    assert!(content.contains("Fleet") && content.contains("/fleet setup"));
+}
+
+#[test]
+fn feature_intro_is_silent_while_onboarding_is_in_progress() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::Welcome;
+    let before = app.history.len();
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before,
+        "must not nudge while onboarding is in progress"
+    );
+}
+
+#[test]
+fn feature_intro_shows_once_persists_then_is_idempotent() {
+    let _env_lock = lock_test_env();
+    let tmp = std::env::temp_dir().join(format!("cw-feature-intro-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let config_path = tmp.join("config.toml");
+    let _env = EnvVarGuard::set(
+        "DEEPSEEK_CONFIG_PATH",
+        config_path.to_string_lossy().as_ref(),
+    );
+    let _ = std::fs::remove_file(tmp.join("settings.toml"));
+
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::None;
+    let before = app.history.len();
+
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before + 1,
+        "intro should be added on the first call"
+    );
+    let content = match app.history.last() {
+        Some(HistoryCell::System { content }) => content.clone(),
+        other => panic!("expected a System intro cell, got {other:?}"),
+    };
+    assert!(
+        content.contains("Hotbar") && content.contains("/hotbar off"),
+        "intro should explain Hotbar + the disable path: {content:?}"
+    );
+    assert!(
+        content.contains("Fleet") && content.contains("/fleet setup"),
+        "intro should explain Fleet setup: {content:?}"
+    );
+
+    // Persisted flag now set → a second call is a no-op.
+    assert!(
+        Settings::load()
+            .expect("settings should load")
+            .feature_intro_shown,
+        "feature_intro_shown should be persisted"
+    );
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before + 1,
+        "intro must not repeat once the flag is persisted"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

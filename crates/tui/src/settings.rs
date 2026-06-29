@@ -350,6 +350,10 @@ pub struct Settings {
     /// point to large directory trees (e.g. `/usr`, home directories) can
     /// significantly increase first-turn latency and memory usage.
     pub workspace_follow_symlinks: bool,
+    /// One-time Fleet + Hotbar introduction has been shown. Drives a single
+    /// launch nudge (see `App::maybe_show_feature_intro`) so returning users
+    /// see it exactly once and never on subsequent launches.
+    pub feature_intro_shown: bool,
 }
 
 impl Default for Settings {
@@ -394,6 +398,7 @@ impl Default for Settings {
             synchronized_output: "auto".to_string(),
             prefer_external_pdftotext: false,
             workspace_follow_symlinks: false,
+            feature_intro_shown: false,
         }
     }
 }

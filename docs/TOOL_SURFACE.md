@@ -41,9 +41,11 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 ### Shell
 
 Shell tools appear in the model-visible tool catalog only when shell access is
-enabled for the active session or profile. In Agent mode that usually means
-`allow_shell = true`; YOLO enables shell access automatically. Plan mode keeps
-shell execution off.
+enabled for the active session or profile. Interactive TUI Agent sessions expose
+shell by default with approval prompts unless top-level `allow_shell = false`
+hides it. Headless, durable-task, and other noninteractive profiles keep the
+conservative omitted-field default and require `allow_shell = true`. YOLO
+enables shell access automatically. Plan mode keeps shell execution off.
 
 | Tool | Niche |
 |---|---|

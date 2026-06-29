@@ -354,6 +354,19 @@ impl HotbarSetupView {
 
     fn render_lines(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        // Plain intro: what Hotbar is + how to hide it, with the platform-correct
+        // modifier glyph (⌥ on macOS, alt+ elsewhere).
+        let alt_prefix = crate::tui::widgets::key_hint::alt_prefix();
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Hotbar gives you {alt_prefix}1-8 shortcuts. Assign actions below; \
+                 press 'd' or run `/hotbar off` to hide it."
+            ),
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .add_modifier(Modifier::DIM),
+        )));
+        lines.push(Line::from(""));
         let tabs = self
             .sources
             .iter()
@@ -434,7 +447,7 @@ impl HotbarSetupView {
         lines.push(Line::from(self.status_text()));
         if self.help_visible {
             lines.push(Line::from(
-                "Tab/Shift+Tab source  Up/Down action  1-8 slot  Enter assign  Space toggle  Delete clear  s save  Esc cancel",
+                "Tab/Shift+Tab source  Up/Down action  1-8 slot  Enter assign  Space toggle  Delete clear  s save  d disable  Esc cancel",
             ));
         }
         lines
@@ -503,6 +516,11 @@ impl ModalView for HotbarSetupView {
             }
             KeyCode::Char('s') | KeyCode::Char('S') if key.modifiers.is_empty() => {
                 self.save_action()
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') if key.modifiers.is_empty() => {
+                // "Disable Hotbar" from inside the setup flow: hide it and
+                // persist `hotbar = []`. Mirrors `/hotbar off`.
+                ViewAction::EmitAndClose(ViewEvent::HotbarDisableRequested)
             }
             KeyCode::Char('?') => {
                 self.help_visible = !self.help_visible;
@@ -666,6 +684,39 @@ mod tests {
             view.handle_key(key(KeyCode::Esc)),
             ViewAction::Close
         ));
+    }
+
+    #[test]
+    fn wizard_disable_key_emits_disable_request_and_intro_mentions_it() {
+        let app = test_app();
+
+        // 'd' and 'D' hide the Hotbar from inside the setup flow (mirrors /hotbar off).
+        let mut view = HotbarSetupView::new(&app, &Config::default());
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('d'))),
+            ViewAction::EmitAndClose(ViewEvent::HotbarDisableRequested)
+        ));
+        let mut view = HotbarSetupView::new(&app, &Config::default());
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('D'))),
+            ViewAction::EmitAndClose(ViewEvent::HotbarDisableRequested)
+        ));
+
+        // The always-visible intro explains what Hotbar is and the disable path.
+        let joined: String = view
+            .render_lines()
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(
+            joined.contains("shortcuts"),
+            "intro should explain what Hotbar is: {joined:?}"
+        );
+        assert!(
+            joined.contains("/hotbar off"),
+            "intro should mention the disable path: {joined:?}"
+        );
     }
 
     #[test]
