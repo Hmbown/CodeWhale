@@ -34,7 +34,7 @@ fn format_status(app: &App) -> String {
     push_row(&mut out, "Directory:", &display_path(&app.workspace));
     push_row(&mut out, "Mode:", app.mode.label());
     push_row(&mut out, "Permissions:", &permission_summary(app));
-    push_row(&mut out, "Safety:", &safety_summary(app));
+    push_row(&mut out, "Safety:", safety_summary(app));
     push_row(&mut out, "Project docs:", &project_docs(&app.workspace));
     push_row(
         &mut out,
