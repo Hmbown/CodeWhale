@@ -160,7 +160,7 @@ fn descriptor_protocol_matches_provider_wire() {
             "{kind:?} protocol must equal provider().wire()"
         );
         let expected = match kind {
-            ProviderKind::OpenaiCodex => RequestProtocol::Responses,
+            ProviderKind::OpenaiCodex | ProviderKind::OpenCodeZen => RequestProtocol::Responses,
             ProviderKind::DeepseekAnthropic | ProviderKind::Anthropic | ProviderKind::Openmodel => {
                 RequestProtocol::AnthropicMessages
             }
