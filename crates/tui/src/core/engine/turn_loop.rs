@@ -43,19 +43,6 @@ pub(super) fn registered_tool_approval_required(
     !auto_approve
 }
 
-pub(super) fn auto_review_force_prompt_overrides_auto_approve(
-    audit_event: &serde_json::Value,
-) -> bool {
-    audit_event
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        == Some("hold_for_review")
-        && audit_event
-            .get("action_kind")
-            .and_then(serde_json::Value::as_str)
-            == Some("publish")
-}
-
 pub(super) fn tool_error_degradation_runtime_hint(
     consecutive_tool_error_steps: u32,
     step_error_tool_names: &[String],
@@ -1828,18 +1815,14 @@ impl Engine {
                     match decision {
                         AutoReviewPlanDecision::NoChange => {}
                         AutoReviewPlanDecision::ForcePrompt(reason) => {
-                            // YOLO mode (auto_approve) skips ordinary review
-                            // holds, including Background+Destructive shell
-                            // holds created by the coarse shell risk fallback.
-                            // Publish-like actions are different: the
-                            // safety_floor marks them as durable-review holds
-                            // regardless of mode, so they must still surface a
-                            // forced prompt. A Block decision (typed deny
-                            // rules / hard blocks) still holds below
-                            // regardless of mode.
-                            if !self.session.auto_approve
-                                || auto_review_force_prompt_overrides_auto_approve(&audit_event)
-                            {
+                            // The mode is the single approval authority (#3790):
+                            // YOLO (auto_approve) skips ALL heuristic review
+                            // holds, including the publish-like safety floor —
+                            // there is no longer a publish carve-out that forces
+                            // a prompt past YOLO. Agent/Plan still review these.
+                            // A Block decision (typed deny rules / hard blocks)
+                            // still holds below regardless of mode.
+                            if !self.session.auto_approve {
                                 approval_required = true;
                                 approval_description = reason;
                                 approval_force_prompt = true;

@@ -1,10 +1,7 @@
 use super::*;
 
 use super::context::{COMPACTION_SUMMARY_MARKER, TURN_MAX_OUTPUT_TOKENS};
-use super::turn_loop::{
-    auto_review_force_prompt_overrides_auto_approve, registered_tool_approval_required,
-    tool_error_degradation_runtime_hint,
-};
+use super::turn_loop::{registered_tool_approval_required, tool_error_degradation_runtime_hint};
 use crate::config::ApiProvider;
 use crate::models::{SystemBlock, Usage};
 use crate::test_support::{EnvVarGuard, lock_test_env};
@@ -516,7 +513,6 @@ fn auto_review_policy_forces_prompt_for_shell_git_push() {
     );
     assert_eq!(audit["decision"], "hold_for_review");
     assert_eq!(audit["action_kind"], "publish");
-    assert!(auto_review_force_prompt_overrides_auto_approve(&audit));
 }
 
 #[test]
@@ -2724,11 +2720,15 @@ async fn yolo_mode_does_not_prompt_for_background_shell_safety_floor() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn yolo_mode_forces_prompt_for_publish_like_shell() {
-    // YOLO keeps ordinary/background approvals out of the way, but publish-like
-    // actions are deliberately durable-review holds. They must still surface a
-    // forced prompt even when `auto_approve` is true.
-    use wiremock::matchers::{body_string_contains, method, path};
+async fn yolo_mode_does_not_force_prompt_for_publish_like_shell() {
+    // #3790: the mode is the single approval authority. YOLO (`auto_approve`)
+    // is a true no-prompt contract — publish-like actions no longer carve out a
+    // forced prompt past YOLO. The tool runs without any ApprovalRequired.
+    // (Agent mode still reviews publish; see the auto_review_policy_* unit
+    // tests.) `cargo publish --dry-run` has no Cargo.toml in the temp workspace,
+    // so it fails fast with no network or side effects — we only assert it ran
+    // unprompted.
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let _lock = lock_test_env();
@@ -2752,15 +2752,16 @@ async fn yolo_mode_forces_prompt_for_publish_like_shell() {
         "data: [DONE]\n\n",
     );
 
+    // First model turn → emit the publish-like tool call (served once). The
+    // follow-up turn (carrying the tool result) → the done/stop response.
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("denied by user"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(done_sse),
+                .set_body_string(tool_call_sse),
         )
-        .expect(1)
+        .up_to_n_times(1)
         .with_priority(1)
         .mount(&server)
         .await;
@@ -2769,9 +2770,8 @@ async fn yolo_mode_forces_prompt_for_publish_like_shell() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(tool_call_sse),
+                .set_body_string(done_sse),
         )
-        .expect(1)
         .with_priority(2)
         .mount(&server)
         .await;
@@ -2792,7 +2792,6 @@ async fn yolo_mode_forces_prompt_for_publish_like_shell() {
         &api_config,
     );
     let run_task = tokio::spawn(engine.run());
-    let handle_for_approval = handle.clone();
 
     handle
         .send(Op::SendMessage {
@@ -2821,40 +2820,20 @@ async fn yolo_mode_forces_prompt_for_publish_like_shell() {
         .await
         .expect("send model turn");
 
-    let mut saw_forced_approval = false;
+    let mut saw_approval_request = false;
+    let mut saw_tool_complete = false;
     let mut rx = handle.rx_event.write().await;
     while let Some(event) = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
         .await
         .expect("timed out waiting for engine event")
     {
         match event {
-            Event::ApprovalRequired {
-                id,
-                tool_name,
-                description,
-                input,
-                approval_force_prompt,
-                ..
-            } => {
-                saw_forced_approval = true;
-                assert_eq!(tool_name, "exec_shell");
-                assert_eq!(input["command"], json!("cargo publish --dry-run"));
-                assert!(description.contains("publish-like"));
-                assert!(
-                    approval_force_prompt,
-                    "publish-like YOLO prompts must bypass TUI auto-approval"
-                );
-                handle_for_approval
-                    .deny_tool_call(id)
-                    .await
-                    .expect("deny publish-like shell");
+            Event::ApprovalRequired { .. } => {
+                // YOLO must not surface any approval for a publish-like action.
+                saw_approval_request = true;
             }
-            Event::ToolCallComplete { name, result, .. } if name == "exec_shell" => {
-                let err = result.expect_err("publish-like shell should be denied");
-                assert!(
-                    err.to_string().contains("denied by user"),
-                    "unexpected shell result: {err:?}"
-                );
+            Event::ToolCallComplete { name, .. } if name == "exec_shell" => {
+                saw_tool_complete = true;
             }
             Event::TurnComplete { status, .. } => {
                 assert_eq!(status, TurnOutcomeStatus::Completed);
@@ -2867,7 +2846,14 @@ async fn yolo_mode_forces_prompt_for_publish_like_shell() {
 
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run_task.await.expect("engine task");
-    assert!(saw_forced_approval);
+    assert!(
+        !saw_approval_request,
+        "YOLO must not force an approval prompt for publish-like shell (#3790)"
+    );
+    assert!(
+        saw_tool_complete,
+        "publish-like shell should run under YOLO without a prompt"
+    );
 }
 
 #[tokio::test]
