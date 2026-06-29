@@ -46,6 +46,7 @@ const TASK_STOP_TARGET_LABEL: &str = "[x]";
 const TASK_STOP_TARGET_SUFFIX: &str = " [x]";
 const HOTBAR_PANEL_HEIGHT: u16 = 4;
 const HOTBAR_ROW_COLUMNS: usize = 4;
+const HOTBAR_PANEL_TITLE: &str = "Hotbar (Alt+1-8)";
 
 pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config) {
     // Clear hover state at the start of each render
@@ -66,7 +67,12 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
         return;
     }
 
-    let (main_area, hotbar_area) = split_sidebar_hotbar_area(area);
+    let hotbar_enabled = hotbar_panel_enabled(app, config);
+    let (main_area, hotbar_area) = if hotbar_enabled {
+        split_sidebar_hotbar_area(area)
+    } else {
+        (area, None)
+    };
     match app.sidebar_focus {
         SidebarFocus::Auto => render_sidebar_auto(f, main_area, app),
         SidebarFocus::Pinned => render_sidebar_pinned(f, main_area, app),
@@ -244,7 +250,7 @@ fn render_hotbar_panel(f: &mut Frame, area: Rect, app: &mut App, config: &Config
     render_sidebar_section(
         f,
         area,
-        "Hotbar",
+        HOTBAR_PANEL_TITLE,
         hotbar_panel_lines(&slots, content_width, &app.ui_theme),
         hotbar_panel_hover_texts(&slots),
         Vec::new(),
@@ -252,15 +258,12 @@ fn render_hotbar_panel(f: &mut Frame, area: Rect, app: &mut App, config: &Config
     );
 }
 
+fn hotbar_panel_enabled(app: &App, config: &Config) -> bool {
+    !resolved_hotbar_bindings(app, config).is_empty()
+}
+
 fn hotbar_panel_slots(app: &App, config: &Config) -> Vec<HotbarPanelSlot> {
-    let known_action_ids = app
-        .hotbar_actions
-        .iter()
-        .map(|action| action.id())
-        .collect::<Vec<_>>();
-    let mut bindings = config
-        .resolve_hotbar_bindings(&known_action_ids)
-        .bindings
+    let mut bindings = resolved_hotbar_bindings(app, config)
         .into_iter()
         .map(|binding| (binding.slot, binding))
         .collect::<BTreeMap<_, _>>();
@@ -271,7 +274,7 @@ fn hotbar_panel_slots(app: &App, config: &Config) -> Vec<HotbarPanelSlot> {
                 return HotbarPanelSlot {
                     slot,
                     label: "-".to_string(),
-                    full_text: format!("Slot {slot}: empty"),
+                    full_text: format!("Slot {slot} (Alt+{slot}): empty"),
                     state: HotbarSlotState::Empty,
                 };
             };
@@ -282,7 +285,10 @@ fn hotbar_panel_slots(app: &App, config: &Config) -> Vec<HotbarPanelSlot> {
                 return HotbarPanelSlot {
                     slot,
                     label,
-                    full_text: format!("Slot {slot}: unknown action {}", binding.action),
+                    full_text: format!(
+                        "Slot {slot} (Alt+{slot}): unknown action {}",
+                        binding.action
+                    ),
                     state: HotbarSlotState::Unknown,
                 };
             };
@@ -300,7 +306,7 @@ fn hotbar_panel_slots(app: &App, config: &Config) -> Vec<HotbarPanelSlot> {
                 slot,
                 label: label.clone(),
                 full_text: format!(
-                    "Slot {slot}: {label}{status} ({}: {})",
+                    "Slot {slot} (Alt+{slot}): {label}{status} ({}: {})",
                     action.category(),
                     action.id()
                 ),
@@ -308,6 +314,15 @@ fn hotbar_panel_slots(app: &App, config: &Config) -> Vec<HotbarPanelSlot> {
             }
         })
         .collect()
+}
+
+fn resolved_hotbar_bindings(app: &App, config: &Config) -> Vec<codewhale_config::HotbarBinding> {
+    let known_action_ids = app
+        .hotbar_actions
+        .iter()
+        .map(|action| action.id())
+        .collect::<Vec<_>>();
+    config.resolve_hotbar_bindings(&known_action_ids).bindings
 }
 
 fn hotbar_configured_label(label: Option<&str>) -> Option<String> {
@@ -357,6 +372,7 @@ fn hotbar_panel_hover_texts(slots: &[HotbarPanelSlot]) -> Vec<String> {
 }
 
 fn hotbar_slot_cell_text(slot: &HotbarPanelSlot, cell_width: usize) -> String {
+    let chord = format!("Alt{}", slot.slot);
     let marker = match slot.state {
         HotbarSlotState::Empty => "-",
         HotbarSlotState::Inactive => "",
@@ -364,11 +380,11 @@ fn hotbar_slot_cell_text(slot: &HotbarPanelSlot, cell_width: usize) -> String {
         HotbarSlotState::Unknown => "?",
     };
     let text = if marker.is_empty() {
-        format!("{}:{}", slot.slot, slot.label)
+        format!("{chord}:{}", slot.label)
     } else if slot.state == HotbarSlotState::Empty {
-        format!("{}:{marker}", slot.slot)
+        format!("{chord}:{marker}")
     } else {
-        format!("{}:{marker}{}", slot.slot, slot.label)
+        format!("{chord}:{marker}{}", slot.label)
     };
     pad_to_display_width(clip_line_to_width(&text, cell_width), cell_width)
 }
@@ -3242,12 +3258,12 @@ mod tests {
         SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, SidebarToolRow,
         SidebarWorkChecklistItem, SidebarWorkStrategyStep, SidebarWorkSummary, ToolRowOrder,
         agent_row_hover_text, auto_sidebar_panels, background_task_spinner_prefix,
-        context_panel_cost_line, editorial_tool_rows, hotbar_panel_hover_texts, hotbar_panel_lines,
-        hotbar_panel_slots, normalize_activity_text, render_sidebar, sidebar_agent_rows,
-        sidebar_hover_rows, sidebar_work_summary, sort_sidebar_agent_rows_as_tree,
-        subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
-        task_panel_hover_texts, task_panel_lines, task_panel_rows, work_panel_empty_hint,
-        work_panel_hover_texts, work_panel_lines,
+        context_panel_cost_line, editorial_tool_rows, hotbar_panel_enabled,
+        hotbar_panel_hover_texts, hotbar_panel_lines, hotbar_panel_slots, normalize_activity_text,
+        render_sidebar, sidebar_agent_rows, sidebar_hover_rows, sidebar_work_summary,
+        sort_sidebar_agent_rows_as_tree, subagent_panel_hover_texts, subagent_panel_lines,
+        subagent_panel_rows, task_panel_hover_texts, task_panel_lines, task_panel_rows,
+        work_panel_empty_hint, work_panel_hover_texts, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette;
@@ -3428,10 +3444,12 @@ mod tests {
     }
 
     #[test]
-    fn hotbar_panel_slots_resolve_default_bindings_and_active_state() {
+    fn hotbar_panel_uses_default_bindings_when_config_is_absent() {
         let mut app = create_test_app();
         app.mode = AppMode::Agent;
         app.sidebar_focus = SidebarFocus::Pinned;
+
+        assert!(hotbar_panel_enabled(&app, &Config::default()));
 
         let slots = hotbar_panel_slots(&app, &Config::default());
 
@@ -3441,8 +3459,44 @@ mod tests {
         assert_eq!(slots[0].state, HotbarSlotState::Inactive);
         assert_eq!(slots[3].label, "agent");
         assert_eq!(slots[3].state, HotbarSlotState::Active);
+        assert!(
+            slots[3].full_text.contains("Alt+4"),
+            "hover text should expose the dispatch chord: {slots:?}"
+        );
+    }
+
+    #[test]
+    fn hotbar_panel_slots_resolve_configured_bindings_and_active_state() {
+        let mut app = create_test_app();
+        app.mode = AppMode::Agent;
+        app.sidebar_focus = SidebarFocus::Pinned;
+        let config = Config {
+            hotbar: Some(
+                codewhale_config::default_hotbar_bindings()
+                    .into_iter()
+                    .map(|binding| codewhale_config::HotbarBindingToml {
+                        slot: binding.slot,
+                        action: binding.action,
+                        label: binding.label,
+                    })
+                    .collect(),
+            ),
+            ..Config::default()
+        };
+
+        assert!(hotbar_panel_enabled(&app, &config));
+
+        let slots = hotbar_panel_slots(&app, &config);
+
+        assert_eq!(slots.len(), 8);
+        assert_eq!(slots[0].slot, 1);
+        assert_eq!(slots[0].label, "voice");
+        assert_eq!(slots[0].state, HotbarSlotState::Inactive);
+        assert_eq!(slots[3].label, "agent");
+        assert_eq!(slots[3].state, HotbarSlotState::Active);
         assert!(slots[3].full_text.contains("mode.agent"));
         assert!(slots[3].full_text.contains("active"));
+        assert!(slots[3].full_text.contains("Alt+4"));
         assert_eq!(
             slots[6].state,
             HotbarSlotState::Active,
@@ -3510,30 +3564,72 @@ mod tests {
         let mut app = create_test_app();
         app.mode = AppMode::Agent;
         app.sidebar_focus = SidebarFocus::Pinned;
-        let slots = hotbar_panel_slots(&app, &Config::default());
+        let config = Config {
+            hotbar: Some(
+                codewhale_config::default_hotbar_bindings()
+                    .into_iter()
+                    .map(|binding| codewhale_config::HotbarBindingToml {
+                        slot: binding.slot,
+                        action: binding.action,
+                        label: binding.label,
+                    })
+                    .collect(),
+            ),
+            ..Config::default()
+        };
+        let slots = hotbar_panel_slots(&app, &config);
 
-        let lines = hotbar_panel_lines(&slots, 20, &app.ui_theme);
+        let lines = hotbar_panel_lines(&slots, 32, &app.ui_theme);
         let text = lines_to_text(&lines);
         let hover = hotbar_panel_hover_texts(&slots);
 
         assert_eq!(text.len(), 2);
         assert!(
             text.iter()
-                .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 20),
+                .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 32),
             "hotbar lines must stay within the sidebar content width: {text:?}"
         );
         assert!(
-            text[0].contains("1:vo"),
+            text[0].contains("Alt1"),
             "first row should show slot 1: {text:?}"
         );
         assert!(
-            text[0].contains("4:*a"),
+            text[0].contains("Alt4:*"),
             "active slot should be visibly marked in the fixed grid: {text:?}"
         );
         assert_eq!(hover.len(), 2);
         assert!(
-            hover[0].contains("Slot 4: agent active"),
+            hover[0].contains("Slot 4 (Alt+4): agent active"),
             "row hover text should expose active status: {hover:?}"
+        );
+    }
+
+    #[test]
+    fn sidebar_hotbar_render_smoke_omits_panel_when_empty_config() {
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Pinned;
+        app.mode = AppMode::Agent;
+        let config = Config {
+            hotbar: Some(Vec::new()),
+            ..Config::default()
+        };
+
+        let backend = TestBackend::new(44, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
+            .expect("draw sidebar");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            !rendered.contains("Hotbar"),
+            "empty hotbar config should not render hotbar panel: {rendered:?}"
         );
     }
 
@@ -3562,11 +3658,15 @@ mod tests {
             "hotbar panel title missing: {rendered:?}"
         );
         assert!(
-            rendered.contains("1:voice"),
+            rendered.contains("Alt+1-8") || rendered.contains("Alt+1"),
+            "hotbar panel title should expose the accelerator: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("Alt1"),
             "slot 1 default binding should render: {rendered:?}"
         );
         assert!(
-            rendered.contains("4:*agent"),
+            rendered.contains("Alt4"),
             "active agent-mode slot should render distinctly: {rendered:?}"
         );
     }

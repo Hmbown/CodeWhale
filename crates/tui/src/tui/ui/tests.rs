@@ -4143,6 +4143,47 @@ fn hotbar_alt_digit_is_blocked_while_inline_selectors_are_open() {
 }
 
 #[test]
+fn decision_card_numeric_shortcuts_accept_bare_digits_only() {
+    assert_eq!(
+        decision_card_number_from_key(&KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE)),
+        Some(4)
+    );
+    assert_eq!(
+        decision_card_number_from_key(&KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT)),
+        None
+    );
+    assert_eq!(
+        decision_card_number_from_key(&KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL)),
+        None
+    );
+}
+
+#[test]
+fn hotbar_alt_digit_is_blocked_while_decision_card_is_active() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.decision_card = Some(crate::tui::widgets::decision_card::DecisionCard::new(
+        "Pick one".to_string(),
+        vec![
+            crate::tui::widgets::decision_card::DecisionOption {
+                label: "First".to_string(),
+                description: None,
+            },
+            crate::tui::widgets::decision_card::DecisionOption {
+                label: "Second".to_string(),
+                description: None,
+            },
+        ],
+        0,
+    ));
+
+    assert_eq!(
+        hotbar_slot_from_key(&app, &KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT)),
+        None
+    );
+}
+
+#[test]
 fn hotbar_dispatches_bound_slot_and_ignores_empty_slot() {
     let mut app = create_test_app();
     let config = Config::default();

@@ -26,7 +26,7 @@ impl RegisterCommand for HotbarCmd {
                 CommandResult::action(AppAction::OpenHotbarSetup)
             }
             Some("help" | "?") => CommandResult::message(
-                "Usage: /hotbar [setup]\n\n/hotbar opens the Hotbar setup wizard.",
+                "Usage: /hotbar [setup]\n\n/hotbar opens the Hotbar setup wizard. Press Alt+1 through Alt+8 to run configured slots; use hotbar = [] to hide the default bar.",
             ),
             Some(other) => CommandResult::error(format!(
                 "Unknown /hotbar target '{other}'. Use `/hotbar` or `/hotbar setup`."
@@ -95,12 +95,11 @@ mod tests {
 
         assert!(!result.is_error);
         assert!(result.action.is_none());
-        assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("/hotbar opens"))
-        );
+        assert!(result.message.as_deref().is_some_and(|message| {
+            message.contains("/hotbar opens")
+                && message.contains("Alt+1 through Alt+8")
+                && message.contains("hotbar = []")
+        }));
     }
 
     #[test]

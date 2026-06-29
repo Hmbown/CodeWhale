@@ -34,7 +34,7 @@ coverage.
 | Normal TUI/composer | `Alt-1` through `Alt-8` dispatch configured slots; bare digits remain text input. | `crates/tui/src/tui/ui/tests.rs::hotbar_alt_digit_fires_from_composer_and_sidebar_states`; `crates/tui/src/tui/ui/tests.rs::hotbar_bare_digit_inserts_text_even_when_composer_empty` |
 | Hidden/sidebar focus states | Hotbar dispatch is still available from hidden, auto, pinned, and focused sidebar states. | `crates/tui/src/tui/ui/tests.rs::hotbar_alt_digit_fires_from_composer_and_sidebar_states` |
 | Narrow sidebar | Hotbar panel keeps fixed two-row layout and bounded hover/status text. | `crates/tui/src/tui/sidebar.rs::hotbar_panel_lines_keep_two_fixed_rows_and_hover_status`; `docs/evidence/terminal-visual-regression-matrix.md` |
-| Modal/overlay open | Modal, approval, picker, and onboarding states block Hotbar numeric ownership. | `crates/tui/src/tui/ui/tests.rs::hotbar_digits_are_blocked_while_modal_or_onboarding_is_active`; `crates/tui/src/tui/ui/tests.rs::hotbar_alt_digit_is_blocked_while_inline_selectors_are_open` |
+| Modal/overlay open | Modal, approval, picker, decision-card, and onboarding states block Hotbar numeric ownership. | `crates/tui/src/tui/ui/tests.rs::hotbar_digits_are_blocked_while_modal_or_onboarding_is_active`; `crates/tui/src/tui/ui/tests.rs::hotbar_alt_digit_is_blocked_while_inline_selectors_are_open`; `crates/tui/src/tui/ui/tests.rs::hotbar_alt_digit_is_blocked_while_decision_card_is_active` |
 | Setup wizard open/save | Setup lists supported source categories, updates draft bindings, saves, and persists. | `crates/tui/src/tui/hotbar/setup.rs::wizard_sources_follow_registered_action_categories`; `crates/tui/src/tui/hotbar/setup.rs::wizard_save_emits_bindings_but_escape_only_closes`; `crates/tui/src/tui/ui/tests.rs::hotbar_setup_save_persists_bindings_to_config_path` |
 | Restart/re-dispatch | Persisted bindings parse back into config and resolve through the same dispatch path. | `crates/config/src/tests.rs::hotbar_tables_parse_and_round_trip`; `crates/tui/src/tui/ui/tests.rs::hotbar_dispatches_bound_slot_and_ignores_empty_slot` |
 
@@ -63,13 +63,14 @@ Run before claiming Hotbar MVP readiness:
 Manual pass, if a release candidate binary is available:
 
 1. Start with no `[hotbar]` config and verify the default eight slots render in
-   the sidebar.
+   the sidebar with visible `Alt1` through `Alt8` accelerator labels.
 2. Open `/hotbar`, bind a slash command, save, restart, and verify the binding
    persists.
 3. Press `Alt-1` through `Alt-8` from composer/sidebar states and verify only
    `Alt` chords dispatch.
-4. Open command palette, slash menu, setup wizard, and an approval modal; verify
-   Hotbar digits are blocked while those surfaces own input.
+4. Open command palette, slash menu, setup wizard, decision card, and an
+   approval modal; verify Hotbar digits are blocked while those surfaces own
+   input.
 5. Confirm MCP, skill, and plugin entries remain discoverable through their
    existing command-palette or slash-command paths and are not offered as direct
    Hotbar bindable actions.

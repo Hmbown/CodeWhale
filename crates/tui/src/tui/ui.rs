@@ -3578,39 +3578,39 @@ async fn run_event_loop(
             if app.view_stack.is_empty()
                 && let Some(card) = app.decision_card.as_mut()
             {
-                match key.code {
-                    KeyCode::Char(c @ '1'..='9') => {
-                        let n = (c as u8 - b'1' + 1) as usize;
-                        card.select_number(n);
-                        card.confirm();
-                        app.status_message = card
-                            .confirmed_label()
-                            .map(|label| format!("Selected: {label}"));
-                        app.decision_card = None;
-                        app.needs_redraw = true;
+                if let Some(n) = decision_card_number_from_key(&key) {
+                    card.select_number(n);
+                    card.confirm();
+                    app.status_message = card
+                        .confirmed_label()
+                        .map(|label| format!("Selected: {label}"));
+                    app.decision_card = None;
+                    app.needs_redraw = true;
+                } else {
+                    match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            card.select_next();
+                            app.needs_redraw = true;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            card.select_prev();
+                            app.needs_redraw = true;
+                        }
+                        KeyCode::Enter => {
+                            card.confirm();
+                            app.status_message = card
+                                .confirmed_label()
+                                .map(|label| format!("Selected: {label}"));
+                            app.decision_card = None;
+                            app.needs_redraw = true;
+                        }
+                        KeyCode::Esc => {
+                            app.decision_card = None;
+                            app.status_message = Some("Decision cancelled".to_string());
+                            app.needs_redraw = true;
+                        }
+                        _ => {}
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        card.select_next();
-                        app.needs_redraw = true;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        card.select_prev();
-                        app.needs_redraw = true;
-                    }
-                    KeyCode::Enter => {
-                        card.confirm();
-                        app.status_message = card
-                            .confirmed_label()
-                            .map(|label| format!("Selected: {label}"));
-                        app.decision_card = None;
-                        app.needs_redraw = true;
-                    }
-                    KeyCode::Esc => {
-                        app.decision_card = None;
-                        app.status_message = Some("Decision cancelled".to_string());
-                        app.needs_redraw = true;
-                    }
-                    _ => {}
                 }
                 submit_initial_input_if_ready(app, config, &engine_handle).await?;
                 continue;
@@ -5115,6 +5115,7 @@ fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u8> {
         if app.onboarding != OnboardingState::None
             || !app.view_stack.is_empty()
             || app.is_history_search_active()
+            || app.decision_card.is_some()
             || !visible_slash_menu_entries(app, SLASH_MENU_LIMIT).is_empty()
         {
             return None;
@@ -5124,6 +5125,17 @@ fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u8> {
     }
 
     None
+}
+
+fn decision_card_number_from_key(key: &event::KeyEvent) -> Option<usize> {
+    let KeyCode::Char(c @ '1'..='9') = key.code else {
+        return None;
+    };
+    if !key.modifiers.is_empty() {
+        return None;
+    }
+
+    Some((c as u8 - b'1' + 1) as usize)
 }
 
 fn dispatch_hotbar_slot(

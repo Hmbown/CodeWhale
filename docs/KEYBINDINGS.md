@@ -2,7 +2,7 @@
 
 This is the source-of-truth catalog of every keyboard shortcut the TUI recognizes. Bindings are grouped by **context** — the focus or modal state they fire in. A binding listed under "Composer" only takes effect when the composer is focused; one under "Transcript" only when the transcript has focus; and so on.
 
-Bindings are not (yet) user-configurable — tracked for a future release (#436, #437). This document is the contract that future config-file overrides will name into.
+Global key chords are not yet user-configurable — tracked for a future release (#436, #437). Hotbar slot actions are configurable with `[[hotbar]]` and `/hotbar`; the Hotbar activation chord remains `Alt-1` through `Alt-8`.
 
 ## Global (any context)
 
@@ -53,7 +53,9 @@ Editing the message you're about to send.
 
 ### Hotbar
 
-Hotbar trigger semantics are intentionally `Alt-1` through `Alt-8` only. Bare `1`-`8` is normal text input in the composer and remains owned by pickers, onboarding, approval prompts, and modal views.
+Hotbar trigger semantics are intentionally `Alt-1` through `Alt-8` only. On macOS keyboards this is the Option/Alt key plus the number row. Bare `1`-`8` is normal text input in the composer and remains owned by pickers, onboarding, approval prompts, and modal views.
+
+Function keys and `Cmd-1` through `Cmd-8` are not the primary Hotbar chords. Many terminals reserve those keys for tabs, windows, or OS shortcuts, and some never forward them to terminal apps. If a terminal is configured to send `Alt-1` for a custom shortcut, the Hotbar receives the same reliable chord.
 
 Fresh configs resolve to this default bar unless `[[hotbar]]` overrides it or `hotbar = []` disables it:
 
