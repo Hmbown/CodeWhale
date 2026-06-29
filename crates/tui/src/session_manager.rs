@@ -489,11 +489,19 @@ impl SessionManager {
 
     /// Clean up old sessions to stay within `MAX_SESSIONS` limit.
     pub fn cleanup_old_sessions(&self) -> std::io::Result<()> {
+        self.cleanup_old_sessions_except(None)
+    }
+
+    /// Clean up old sessions while preserving an active/resumed session.
+    pub fn cleanup_old_sessions_except(&self, protected_id: Option<&str>) -> std::io::Result<()> {
         let sessions = self.list_sessions()?;
 
         if sessions.len() > MAX_SESSIONS {
             // Delete oldest sessions
             for session in sessions.iter().skip(MAX_SESSIONS) {
+                if protected_id.is_some_and(|id| id == session.id) {
+                    continue;
+                }
                 let _ = self.delete_session(&session.id);
             }
         }
@@ -1108,6 +1116,23 @@ mod tests {
         workspace: &Path,
         updated_at: DateTime<Utc>,
     ) {
+        let session = make_session_record(id, workspace, updated_at);
+        manager.save_session(&session).expect("save");
+    }
+
+    fn write_session_record_without_cleanup(
+        manager: &SessionManager,
+        id: &str,
+        workspace: &Path,
+        updated_at: DateTime<Utc>,
+    ) {
+        let session = make_session_record(id, workspace, updated_at);
+        let path = manager.validated_session_path(id).expect("path");
+        let content = serde_json::to_string_pretty(&session).expect("json");
+        fs::write(path, content).expect("write session");
+    }
+
+    fn make_session_record(id: &str, workspace: &Path, updated_at: DateTime<Utc>) -> SavedSession {
         let session = SavedSession {
             schema_version: CURRENT_SESSION_SCHEMA_VERSION,
             messages: vec![make_test_message("user", "hi")],
@@ -1130,7 +1155,7 @@ mod tests {
             context_references: Vec::new(),
             artifacts: Vec::new(),
         };
-        manager.save_session(&session).expect("save");
+        session
     }
 
     fn write_empty_session_record(
@@ -2182,6 +2207,31 @@ mod tests {
         let loaded = manager.load_session(&session.metadata.id).expect("load");
 
         assert_eq!(loaded.artifacts, session.artifacts);
+    }
+
+    #[test]
+    fn cleanup_old_sessions_except_preserves_protected_old_session() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let now = Utc::now();
+        for idx in 0..(MAX_SESSIONS + 2) {
+            write_session_record_without_cleanup(
+                &manager,
+                &format!("session-{idx:02}"),
+                Path::new("/tmp"),
+                now - chrono::Duration::minutes(idx as i64),
+            );
+        }
+
+        manager
+            .cleanup_old_sessions_except(Some("session-51"))
+            .expect("cleanup");
+        let sessions = manager.list_sessions().expect("list");
+        let ids: Vec<_> = sessions.iter().map(|session| session.id.as_str()).collect();
+
+        assert!(ids.contains(&"session-51"));
+        assert!(!ids.contains(&"session-50"));
+        assert_eq!(sessions.len(), MAX_SESSIONS + 1);
     }
 
     // ---- #406 prune_sessions_older_than ----

@@ -6470,7 +6470,11 @@ async fn run_interactive(
         logging::warn(format!("Failed to install system skills: {e}"));
     }
 
-    spawn_interactive_startup_maintenance(workspace.clone(), config.snapshots_config());
+    spawn_interactive_startup_maintenance(
+        workspace.clone(),
+        config.snapshots_config(),
+        resume_session_id.clone(),
+    );
 
     // The `deepseek` launcher forwards `--yolo` to this binary via the
     // DEEPSEEK_YOLO env var (config.yolo), not as a CLI flag. Honour either.
@@ -6506,13 +6510,18 @@ async fn run_interactive(
 fn spawn_interactive_startup_maintenance(
     workspace: PathBuf,
     snapshots: crate::config::SnapshotsConfig,
+    protected_session_id: Option<String>,
 ) {
     let spawn_result = std::thread::Builder::new()
         .name("codewhale-startup-maintenance".to_string())
         .spawn(move || {
             // Keep the first interactive frame ahead of optional disk cleanup.
             std::thread::sleep(Duration::from_millis(500));
-            run_interactive_startup_maintenance(&workspace, &snapshots);
+            run_interactive_startup_maintenance(
+                &workspace,
+                &snapshots,
+                protected_session_id.as_deref(),
+            );
         });
 
     if let Err(err) = spawn_result {
@@ -6523,6 +6532,7 @@ fn spawn_interactive_startup_maintenance(
 fn run_interactive_startup_maintenance(
     workspace: &Path,
     snapshots: &crate::config::SnapshotsConfig,
+    protected_session_id: Option<&str>,
 ) {
     let started = Instant::now();
 
@@ -6552,7 +6562,7 @@ fn run_interactive_startup_maintenance(
     // Keeps at most MAX_SESSIONS (50) recent sessions; non-fatal on error.
     match session_manager::SessionManager::default_location() {
         Ok(manager) => {
-            if let Err(err) = manager.cleanup_old_sessions() {
+            if let Err(err) = manager.cleanup_old_sessions_except(protected_session_id) {
                 tracing::warn!(target: "session", ?err, "session cleanup skipped on boot");
             }
         }
