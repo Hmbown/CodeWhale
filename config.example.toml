@@ -769,9 +769,11 @@ exponential_base = 2.0
 # ─────────────────────────────────────────────────────────────────────────────────
 # Auto-compaction is a saved UI setting edited with `/config` (`auto_compact`).
 # The optional saved threshold setting is `auto_compact_threshold_percent`
-# (default 80). There is no config-file
-# `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
-# from the active model/context window.
+# (default 80). `[compaction].enabled` is the engine-level replacement
+# compaction switch; when unset, the engine keeps using the saved auto_compact
+# behavior.
+[compaction]
+# enabled = true
 
 # Append-only Flash seams are experimental and opt-in while the v0.7.5
 # context/cache audit validates prefix-cache behavior.
@@ -784,6 +786,11 @@ l1_threshold = 192000
 l2_threshold = 384000
 l3_threshold = 576000
 seam_model = "deepseek-v4-flash"
+
+# Optional explicit alias for the context seam manager master switch. When set,
+# this overrides `[context].enabled`; thresholds and model stay under [context].
+# [seam_manager]
+# enabled = false
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workshop / Large-Output Routing (#548)

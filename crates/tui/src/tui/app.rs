@@ -1696,6 +1696,7 @@ pub struct App {
     #[allow(dead_code)]
     pub system_prompt: Option<SystemPrompt>,
     pub auto_compact: bool,
+    pub compaction_enabled_override: Option<bool>,
     pub auto_compact_user_configured: bool,
     pub auto_compact_threshold_percent: f64,
     pub calm_mode: bool,
@@ -2628,6 +2629,7 @@ impl App {
             bracketed_paste_seen: false,
             system_prompt: None,
             auto_compact,
+            compaction_enabled_override: config.compaction.enabled,
             auto_compact_user_configured,
             auto_compact_threshold_percent,
             calm_mode,
@@ -5692,7 +5694,9 @@ impl App {
 
     pub fn compaction_config(&self) -> CompactionConfig {
         CompactionConfig {
-            enabled: self.auto_compact,
+            enabled: self
+                .compaction_enabled_override
+                .unwrap_or(self.auto_compact),
             token_threshold: self.compact_threshold,
             model: self.effective_model_for_budget().to_string(),
             ..Default::default()

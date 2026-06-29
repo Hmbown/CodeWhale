@@ -916,7 +916,7 @@ impl Engine {
         // is worth the extra request and transcript mutation.
         let seam_manager = deepseek_client.as_ref().map(|main_client| {
             let seam_config = SeamConfig {
-                enabled: api_config.context.enabled.unwrap_or(false),
+                enabled: api_config.seam_manager_enabled(),
                 verbatim_window_turns: api_config
                     .context
                     .verbatim_window_turns

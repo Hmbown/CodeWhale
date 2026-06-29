@@ -3509,6 +3509,7 @@ fn normalize_model_name_accepts_provider_prefixed_deepseek_ids() {
 fn default_context_seams_are_opt_in() {
     let config = Config::default();
     assert!(!config.context.enabled.unwrap_or(false));
+    assert!(!config.seam_manager_enabled());
     assert_eq!(config.context.l1_threshold.unwrap_or(192_000), 192_000);
     assert_eq!(
         config
@@ -3518,6 +3519,57 @@ fn default_context_seams_are_opt_in() {
             .unwrap_or("deepseek-v4-flash"),
         "deepseek-v4-flash"
     );
+}
+
+#[test]
+fn seam_manager_enabled_can_use_dedicated_table() -> Result<()> {
+    let config: Config = toml::from_str(
+        r#"
+        [context]
+        enabled = true
+
+        [seam_manager]
+        enabled = false
+        "#,
+    )?;
+
+    assert_eq!(config.context.enabled, Some(true));
+    assert_eq!(config.seam_manager.enabled, Some(false));
+    assert!(!config.seam_manager_enabled());
+
+    let config: Config = toml::from_str(
+        r#"
+        [seam_manager]
+        enabled = true
+        "#,
+    )?;
+
+    assert!(config.seam_manager_enabled());
+    Ok(())
+}
+
+#[test]
+fn compaction_enabled_uses_config_override_when_present() -> Result<()> {
+    let config = Config::default();
+    assert!(config.compaction_enabled(true));
+    assert!(!config.compaction_enabled(false));
+
+    let disabled: Config = toml::from_str(
+        r#"
+        [compaction]
+        enabled = false
+        "#,
+    )?;
+    assert!(!disabled.compaction_enabled(true));
+
+    let enabled: Config = toml::from_str(
+        r#"
+        [compaction]
+        enabled = true
+        "#,
+    )?;
+    assert!(enabled.compaction_enabled(false));
+    Ok(())
 }
 
 #[test]
@@ -3537,6 +3589,28 @@ fn profile_without_context_does_not_disable_base_context() {
 
     let merged = apply_profile(config, Some("work")).expect("profile");
     assert_eq!(merged.context.enabled, Some(true));
+}
+
+#[test]
+fn profile_without_context_gates_does_not_disable_base_gates() {
+    let mut profiles = HashMap::new();
+    profiles.insert("work".to_string(), Config::default());
+    let config = ConfigFile {
+        base: Config {
+            seam_manager: SeamManagerConfig {
+                enabled: Some(true),
+            },
+            compaction: CompactionRuntimeConfig {
+                enabled: Some(false),
+            },
+            ..Default::default()
+        },
+        profiles: Some(profiles),
+    };
+
+    let merged = apply_profile(config, Some("work")).expect("profile");
+    assert_eq!(merged.seam_manager.enabled, Some(true));
+    assert_eq!(merged.compaction.enabled, Some(false));
 }
 
 #[test]
