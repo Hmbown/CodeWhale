@@ -536,6 +536,7 @@ enum PermissionsFileStatus {
     Missing,
     Empty,
     Present,
+    Malformed,
 }
 
 impl PermissionsFileStatus {
@@ -544,6 +545,14 @@ impl PermissionsFileStatus {
             Self::Missing => "missing",
             Self::Empty => "empty",
             Self::Present => "present",
+            Self::Malformed => "malformed",
+        }
+    }
+
+    fn exists_label(self) -> &'static str {
+        match self {
+            Self::Missing => "no",
+            Self::Empty | Self::Present | Self::Malformed => "yes",
         }
     }
 }
@@ -571,21 +580,61 @@ fn configured_ask_rules_command(app: &App, raw: &str) -> CommandResult {
 }
 
 fn configured_ask_rules(app: &App) -> CommandResult {
-    let store = match codewhale_config::ConfigStore::load(app.config_path.clone()) {
-        Ok(store) => store,
-        Err(err) => return CommandResult::error(format!("Failed to load config: {err}")),
+    let permissions_path = match codewhale_config::resolve_permissions_path(app.config_path.clone())
+    {
+        Ok(path) => path,
+        Err(err) => {
+            return CommandResult::error(format!("Failed to resolve permissions.toml path: {err}"));
+        }
     };
-    let permissions_path = store.permissions_path();
     let status = match permissions_file_status(&permissions_path) {
         Ok(status) => status,
         Err(err) => return CommandResult::error(err),
     };
+    let mut rules = Vec::new();
+    let mut parse_error = None;
 
-    CommandResult::message(format_configured_ask_rules(
-        &permissions_path,
-        status,
-        &store.permissions().rules,
-    ))
+    let status = match status {
+        PermissionsFileStatus::Missing | PermissionsFileStatus::Empty => status,
+        PermissionsFileStatus::Present => {
+            match codewhale_config::read_permissions_file(&permissions_path) {
+                Ok(raw) => match toml::from_str::<codewhale_config::PermissionsToml>(&raw) {
+                    Ok(permissions) => {
+                        rules = permissions.rules;
+                        PermissionsFileStatus::Present
+                    }
+                    Err(err) => {
+                        parse_error = Some(err.to_string());
+                        PermissionsFileStatus::Malformed
+                    }
+                },
+                Err(err) => {
+                    return CommandResult::error(format!(
+                        "Failed to read permissions.toml at {}\n\
+Permissions path: {}\n\
+File exists: {}\n\
+File status: {}\n\
+Rule count: unavailable\n\
+Read error: permissions.toml at {} could not be read: {err}",
+                        permissions_path.display(),
+                        permissions_path.display(),
+                        status.exists_label(),
+                        status.label(),
+                        permissions_path.display()
+                    ));
+                }
+            }
+        }
+        PermissionsFileStatus::Malformed => PermissionsFileStatus::Malformed,
+    };
+
+    let output =
+        format_configured_ask_rules(&permissions_path, status, &rules, parse_error.as_deref());
+    if parse_error.is_some() {
+        CommandResult::error(output)
+    } else {
+        CommandResult::message(output)
+    }
 }
 
 fn permissions_file_status(path: &Path) -> Result<PermissionsFileStatus, String> {
@@ -604,12 +653,26 @@ fn format_configured_ask_rules(
     permissions_path: &Path,
     status: PermissionsFileStatus,
     rules: &[codewhale_config::ToolAskRule],
+    parse_error: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
     lines.push("Configured ask rules".to_string());
     lines.push(format!("Permissions path: {}", permissions_path.display()));
+    lines.push(format!("File exists: {}", status.exists_label()));
     lines.push(format!("File status: {}", status.label()));
-    lines.push(format!("Rule count: {}", rules.len()));
+    if parse_error.is_some() {
+        lines.push("Rule count: unavailable".to_string());
+    } else {
+        lines.push(format!("Rule count: {}", rules.len()));
+    }
+
+    if let Some(err) = parse_error {
+        lines.push(format!(
+            "Parse error: permissions.toml at {} could not be parsed: {err}",
+            permissions_path.display()
+        ));
+        return lines.join("\n");
+    }
 
     if rules.is_empty() {
         lines.push("No ask rules configured.".to_string());
@@ -2169,6 +2232,7 @@ mod tests {
         assert!(!result.is_error);
         assert!(msg.contains("Configured ask rules"));
         assert!(msg.contains(&format!("Permissions path: {}", permissions_path.display())));
+        assert!(msg.contains("File exists: no"));
         assert!(msg.contains("File status: missing"));
         assert!(msg.contains("Rule count: 0"));
         assert!(msg.contains("No ask rules configured."));
@@ -2189,6 +2253,7 @@ mod tests {
 
         assert!(!result.is_error);
         assert!(msg.contains(&format!("Permissions path: {}", permissions_path.display())));
+        assert!(msg.contains("File exists: yes"));
         assert!(msg.contains("File status: empty"));
         assert!(msg.contains("Rule count: 0"));
         assert!(msg.contains("No ask rules configured."));
@@ -2221,11 +2286,42 @@ path = "src/a.rs"
 
         assert!(!result.is_error);
         assert!(msg.contains(&format!("Permissions path: {}", permissions_path.display())));
+        assert!(msg.contains("File exists: yes"));
         assert!(msg.contains("File status: present"));
         assert!(msg.contains("Rule count: 2"));
         assert!(msg.contains("# | tool | command | path"));
         assert!(msg.contains("1 | exec_shell | cargo test | (any)"));
         assert!(msg.contains("2 | edit_file | (any) | src/a.rs"));
+    }
+
+    #[test]
+    fn config_command_ask_rules_reports_malformed_permissions_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let permissions_path =
+            codewhale_config::resolve_permissions_path(Some(config_path.clone())).unwrap();
+        fs::write(
+            &permissions_path,
+            r#"
+[[rules]]
+tool =
+"#,
+        )
+        .unwrap();
+        let mut app = create_test_app();
+        app.config_path = Some(config_path);
+
+        let result = config_command(&mut app, Some("ask-rules"));
+        let msg = result.message.unwrap();
+
+        assert!(result.is_error);
+        assert!(msg.contains("Error: Configured ask rules"));
+        assert!(msg.contains(&format!("Permissions path: {}", permissions_path.display())));
+        assert!(msg.contains("File exists: yes"));
+        assert!(msg.contains("File status: malformed"));
+        assert!(msg.contains("Rule count: unavailable"));
+        assert!(msg.contains("Parse error: permissions.toml"));
+        assert!(msg.contains(&permissions_path.display().to_string()));
     }
 
     #[test]
@@ -2239,17 +2335,39 @@ path = "src/a.rs"
             Path::new("permissions.toml"),
             PermissionsFileStatus::Present,
             &rules,
+            None,
         );
 
         assert_eq!(
             output,
             "Configured ask rules\n\
 Permissions path: permissions.toml\n\
+File exists: yes\n\
 File status: present\n\
 Rule count: 2\n\
 # | tool | command | path\n\
 1 | exec_shell | cargo test | (any)\n\
 2 | edit_file | (any) | src\\a.rs"
+        );
+    }
+
+    #[test]
+    fn config_command_ask_rules_parse_error_output_format_is_stable() {
+        let output = format_configured_ask_rules(
+            Path::new("permissions.toml"),
+            PermissionsFileStatus::Malformed,
+            &[],
+            Some("expected a string"),
+        );
+
+        assert_eq!(
+            output,
+            "Configured ask rules\n\
+Permissions path: permissions.toml\n\
+File exists: yes\n\
+File status: malformed\n\
+Rule count: unavailable\n\
+Parse error: permissions.toml at permissions.toml could not be parsed: expected a string"
         );
     }
 

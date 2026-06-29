@@ -3564,6 +3564,12 @@ pub fn resolve_permissions_path(config_path: Option<PathBuf>) -> Result<PathBuf>
     checked_permissions_path_for_config_path(&resolve_config_path(config_path)?)
 }
 
+/// Read a resolved `permissions.toml` path using the same checked/no-follow
+/// path handling as config loading.
+pub fn read_permissions_file(path: &Path) -> Result<String> {
+    read_checked_permissions_file(path)
+}
+
 fn load_sibling_permissions(config_path: &Path) -> Result<PermissionsToml> {
     let permissions_path = checked_permissions_path_for_config_path(config_path)?;
     if !checked_path_exists(&permissions_path)? {
