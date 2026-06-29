@@ -40,7 +40,7 @@ pub mod repo;
 #[allow(unused_imports)]
 pub use paths::{snapshot_dir_for, snapshot_git_dir};
 #[allow(unused_imports)]
-pub use prune::{DEFAULT_MAX_AGE, prune_older_than, prune_older_than_at};
+pub use prune::{DEFAULT_MAX_AGE, prune_older_than};
 
 /// Maximum snapshots kept per workspace side-repo. Oldest are pruned
 /// after each new snapshot to cap disk usage (#1112).

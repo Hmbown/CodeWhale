@@ -152,13 +152,18 @@ pub fn write_sha_spillover(sha: &str, content: &str) -> io::Result<PathBuf> {
         })?
         .to_path_buf();
     if path.exists() {
-        let _ = with_spillover_write_lock(&parent, || {
+        return match with_spillover_write_lock(&parent, || {
             if path.exists() {
                 let _ = refresh_modified(&path);
+            } else {
+                crate::utils::write_atomic(&path, content.as_bytes())?;
             }
-            Ok(())
-        });
-        return Ok(path);
+            Ok(path.clone())
+        }) {
+            Ok(path) => Ok(path),
+            Err(_) if path.exists() => Ok(path),
+            Err(err) => Err(err),
+        };
     }
 
     with_spillover_write_lock(&parent, || {

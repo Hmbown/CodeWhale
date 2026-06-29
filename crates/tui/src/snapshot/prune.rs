@@ -6,7 +6,7 @@
 
 use std::io;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use super::paths::snapshot_git_dir;
 use super::repo::SnapshotRepo;
@@ -29,31 +29,11 @@ pub fn prune_older_than(workspace: &Path, max_age: Duration) -> io::Result<usize
     Ok(removed)
 }
 
-/// Prune snapshots older than `max_age` relative to `now`.
-///
-/// This fixed-cutoff variant is conservative at the cutoff second because git
-/// commit timestamps do not preserve subsecond ordering.
-pub fn prune_older_than_at(
-    workspace: &Path,
-    max_age: Duration,
-    now: SystemTime,
-) -> io::Result<usize> {
-    let git_dir = snapshot_git_dir(workspace);
-    if !git_dir.exists() {
-        return Ok(0);
-    }
-    let repo = SnapshotRepo::open_or_init(workspace)?;
-    let removed = repo.prune_older_than_at(max_age, now)?;
-    repo.prune_unreachable_objects()?;
-    Ok(removed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::lock_test_env;
     use std::sync::MutexGuard;
-    use std::time::UNIX_EPOCH;
     use tempfile::tempdir;
 
     /// Same guard shape as in `repo::tests` — pins HOME for the lifetime
@@ -109,23 +89,5 @@ mod tests {
 
         let removed = prune_older_than(&workspace, Duration::from_secs(0)).unwrap();
         assert!(removed >= 1);
-    }
-
-    #[test]
-    fn prune_with_launch_cutoff_keeps_cutoff_second_snapshots() {
-        let tmp = tempdir().unwrap();
-        let _home = scoped_home(tmp.path());
-        let workspace = tmp.path().join("ws");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
-
-        std::fs::write(workspace.join("f.txt"), "x").unwrap();
-        repo.snapshot("turn:0").unwrap();
-        let snapshot = repo.list(1).unwrap().pop().unwrap();
-        let launch_time = UNIX_EPOCH + Duration::from_secs(snapshot.timestamp as u64);
-
-        let removed = prune_older_than_at(&workspace, Duration::from_secs(0), launch_time).unwrap();
-        assert_eq!(removed, 0);
-        assert_eq!(repo.list(10).unwrap().len(), 1);
     }
 }

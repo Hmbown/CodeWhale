@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
 use uuid::Uuid;
 
 /// Maximum number of sessions to retain
@@ -726,26 +725,6 @@ fn copy_file_create_new(src: &Path, dst: &Path) -> io::Result<bool> {
 /// (the underlying repo logs at WARN if anything blew up).
 pub fn prune_workspace_snapshots(workspace: &Path, max_age: std::time::Duration) {
     match crate::snapshot::prune_older_than(workspace, max_age) {
-        Ok(0) => {}
-        Ok(n) => {
-            tracing::debug!(target: "snapshot", "boot prune removed {n} snapshot(s)");
-        }
-        Err(e) => {
-            tracing::warn!(target: "snapshot", "boot prune failed: {e}");
-        }
-    }
-}
-
-/// Prune snapshots older than `max_age` as of `now`.
-///
-/// Startup maintenance passes the launch timestamp so delayed cleanup does not
-/// prune snapshots created by the first interactive turn.
-pub fn prune_workspace_snapshots_at(
-    workspace: &Path,
-    max_age: std::time::Duration,
-    now: SystemTime,
-) {
-    match crate::snapshot::prune_older_than_at(workspace, max_age, now) {
         Ok(0) => {}
         Ok(n) => {
             tracing::debug!(target: "snapshot", "boot prune removed {n} snapshot(s)");

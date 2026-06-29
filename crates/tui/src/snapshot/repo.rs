@@ -425,6 +425,10 @@ impl SnapshotRepo {
     /// snapshot tree relative to the workspace root. We do NOT touch the
     /// user's own `.git` — snapshots only contain working-tree files.
     pub fn restore(&self, id: &SnapshotId) -> io::Result<()> {
+        self.with_repo_write_lock(|| self.restore_locked(id))
+    }
+
+    fn restore_locked(&self, id: &SnapshotId) -> io::Result<()> {
         let current_paths = self.tree_paths("HEAD")?;
         let target_paths = self.tree_paths(id.as_str())?;
         let checkout = run_git(
@@ -452,12 +456,14 @@ impl SnapshotRepo {
     /// again would be a no-op, so the caller should continue scanning
     /// older snapshots.
     pub fn work_tree_matches_snapshot(&self, id: &SnapshotId) -> io::Result<bool> {
-        let diff = run_git(
-            &self.git_dir,
-            &self.work_tree,
-            &["diff", "--quiet", id.as_str(), "--", ":/"],
-        )?;
-        Ok(diff.status.success())
+        self.with_repo_read_lock(|| {
+            let diff = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["diff", "--quiet", id.as_str(), "--", ":/"],
+            )?;
+            Ok(diff.status.success())
+        })
     }
 
     fn tree_paths(&self, treeish: &str) -> io::Result<HashSet<PathBuf>> {
@@ -512,6 +518,10 @@ impl SnapshotRepo {
 
     /// List up to `limit` most-recent snapshots, newest first.
     pub fn list(&self, limit: usize) -> io::Result<Vec<Snapshot>> {
+        self.with_repo_read_lock(|| self.list_locked(limit))
+    }
+
+    fn list_locked(&self, limit: usize) -> io::Result<Vec<Snapshot>> {
         // `git log -<n>` is the short form of `--max-count=<n>`; if `limit`
         // is `usize::MAX` (caller asked for "everything") we pass an empty
         // count so git defaults to no upper bound.
@@ -559,43 +569,25 @@ impl SnapshotRepo {
         self.with_repo_write_lock(|| self.prune_older_than_locked(max_age))
     }
 
-    pub fn prune_older_than_at(&self, max_age: Duration, now: SystemTime) -> io::Result<usize> {
-        self.with_repo_write_lock(|| self.prune_older_than_locked_at(max_age, now, false))
-    }
-
     fn prune_older_than_locked(&self, max_age: Duration) -> io::Result<usize> {
-        self.prune_older_than_locked_at(max_age, SystemTime::now(), true)
-    }
-
-    fn prune_older_than_locked_at(
-        &self,
-        max_age: Duration,
-        now: SystemTime,
-        include_cutoff_second: bool,
-    ) -> io::Result<usize> {
-        let now = now
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| io_other(format!("clock error: {e}")))?
             .as_secs() as i64;
         let cutoff = now - max_age.as_secs() as i64;
 
-        let snapshots = self.list(usize::MAX)?;
+        let snapshots = self.list_locked(usize::MAX)?;
         if snapshots.is_empty() {
             return Ok(0);
         }
 
-        // Snapshots are newest-first. Find the index of the first prune
-        // candidate; every entry from that index onward is removed. The
-        // immediate path includes the cutoff second so zero-age manual prune
-        // remains aggressive. The fixed-cutoff startup path excludes it
-        // because git timestamps cannot distinguish subsecond launch order.
-        let cut_index = snapshots.iter().position(|s| {
-            if include_cutoff_second {
-                s.timestamp <= cutoff
-            } else {
-                s.timestamp < cutoff
-            }
-        });
+        // Snapshots are newest-first. Find the index of the first one
+        // at-or-older than the cutoff — every entry from that index
+        // onward is a candidate for removal. We use `<=` so a 0-second
+        // retention drops same-second commits (otherwise tests calling
+        // `prune_older_than(Duration::ZERO)` immediately after creating
+        // a snapshot would never prune anything).
+        let cut_index = snapshots.iter().position(|s| s.timestamp <= cutoff);
         let Some(cut) = cut_index else {
             return Ok(0);
         };
@@ -669,7 +661,7 @@ impl SnapshotRepo {
     }
 
     fn prune_keep_last_n_locked(&self, max_count: usize) -> io::Result<usize> {
-        let snapshots = self.list(usize::MAX)?;
+        let snapshots = self.list_locked(usize::MAX)?;
         if snapshots.len() <= max_count {
             return Ok(0);
         }
@@ -754,6 +746,19 @@ impl SnapshotRepo {
             .open(lock_path)?;
         let mut lock = fd_lock::RwLock::new(lock_file);
         let _guard = lock.write()?;
+        f()
+    }
+
+    fn with_repo_read_lock<T>(&self, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let lock_path = self.git_dir.join(SNAPSHOT_LOCK_FILE);
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+        let lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.read()?;
         f()
     }
 
