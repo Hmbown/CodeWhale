@@ -467,7 +467,10 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
         };
     }
 
-    if matches!(provider, ApiProvider::OpenaiCodex | ApiProvider::OpenCodeZen) {
+    if matches!(
+        provider,
+        ApiProvider::OpenaiCodex | ApiProvider::OpenCodeZen
+    ) {
         let ctx_window = if provider == ApiProvider::OpenaiCodex {
             OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS
         } else {
@@ -2586,7 +2589,14 @@ pub struct ProvidersConfig {
     pub minimax: ProviderConfig,
     #[serde(default, alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     pub sakana: ProviderConfig,
-    #[serde(default, alias = "opencode-zen", alias = "opencode_zen", alias = "opencodezen", alias = "zen", alias = "opencode")]
+    #[serde(
+        default,
+        alias = "opencode-zen",
+        alias = "opencode_zen",
+        alias = "opencodezen",
+        alias = "zen",
+        alias = "opencode"
+    )]
     pub opencode_zen: ProviderConfig,
     /// Arbitrary user-named custom providers (#1519).
     ///

@@ -159,7 +159,13 @@ pub struct ProvidersToml {
     pub deepinfra: ProviderConfigToml,
     #[serde(default, alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     pub sakana: ProviderConfigToml,
-    #[serde(default, alias = "opencode-zen", alias = "opencode_zen", alias = "zen", alias = "opencode")]
+    #[serde(
+        default,
+        alias = "opencode-zen",
+        alias = "opencode_zen",
+        alias = "zen",
+        alias = "opencode"
+    )]
     pub opencode_zen: ProviderConfigToml,
     /// Catch-all table for the dynamic OpenAI-compatible custom provider
     /// identity (#1519). Arbitrary `[providers.<name>]` tables are handled by
