@@ -19,11 +19,16 @@ function applySecurityHeaders(res: NextResponse): NextResponse {
 function detectLocale(req: NextRequest): string {
   // 1. Cookie
   const cookie = req.cookies.get(COOKIE)?.value;
-  if (cookie && locales.includes(cookie as typeof locales[number])) return cookie;
+  if (cookie && (locales as readonly string[]).includes(cookie)) return cookie;
 
-  // 2. Accept-Language header
+  // 2. Accept-Language header — match against all shipped locales
   const accept = req.headers.get("accept-language") ?? "";
-  if (/^zh/i.test(accept.split(",")[0])) return "zh";
+  if (accept) {
+    const preferred = accept.split(",").map((s) => s.split(";")[0].trim().split("-")[0].toLowerCase());
+    for (const lang of preferred) {
+      if ((locales as readonly string[]).includes(lang)) return lang;
+    }
+  }
 
   return defaultLocale;
 }
