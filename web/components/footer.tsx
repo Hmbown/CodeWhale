@@ -35,6 +35,7 @@ const EN_COLS = [
       { label: "Code of Conduct", href: "https://github.com/Hmbown/CodeWhale/blob/main/CODE_OF_CONDUCT.md" },
       { label: "Security", href: "https://github.com/Hmbown/CodeWhale/blob/main/SECURITY.md" },
       { label: "License (MIT)", href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE" },
+      { label: "Mirrors (CNB · Tsinghua)", href: "/en/install#other-ways" },
     ],
   },
 ];
@@ -69,6 +70,7 @@ const ZH_COLS = [
       { label: "行为准则", href: "https://github.com/Hmbown/CodeWhale/blob/main/CODE_OF_CONDUCT.md" },
       { label: "安全策略", href: "https://github.com/Hmbown/CodeWhale/blob/main/SECURITY.md" },
       { label: "MIT 许可证", href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE" },
+      { label: "国内镜像（CNB · 清华 Tuna）", href: "/zh/install#other-ways" },
     ],
   },
 ];

@@ -184,6 +184,37 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
 
+      {/* TRUST STRIP — key facts, no overclaiming */}
+      <section className="hairline-t hairline-b">
+        <div className="mx-auto max-w-[1400px] px-6 py-4">
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[0.7rem] font-mono text-ink-mute">
+            <span>
+              <span className="text-jade mr-1">✓</span>
+              {facts.license ?? "MIT"} {isZh ? "开源" : "license"}
+            </span>
+            <span className="hidden sm:inline">·</span>
+            <span>
+              <span className="text-jade mr-1">✓</span>
+              {isZh ? "本地运行，无需云端" : "local-first, no cloud required"}
+            </span>
+            <span className="hidden sm:inline">·</span>
+            <span>
+              <span className="text-jade mr-1">✓</span>
+              {isZh ? `${facts.providers.length} 个提供商，开放模型优先` : `${facts.providers.length} providers, open models first`}
+            </span>
+            <span className="hidden sm:inline">·</span>
+            <Link href="https://github.com/Hmbown/CodeWhale/blob/main/SECURITY.md" className="hover:text-indigo transition-colors">
+              <span className="text-jade mr-1">✓</span>
+              {isZh ? "安全模型" : "security model"}
+            </Link>
+            <span className="hidden sm:inline">·</span>
+            <Link href="/docs" className="hover:text-indigo transition-colors">
+              {isZh ? "文档 →" : "docs →"}
+            </Link>
+          </div>
+        </div>
+      </section>
+
       <StatGrid stats={stats} />
 
       {/* GET STARTED — the two or three steps, with the real links */}
