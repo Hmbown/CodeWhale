@@ -233,6 +233,74 @@ fn persist_subagents_value_key(
     Ok(path)
 }
 
+pub(crate) fn persist_table_bool_key(
+    config_path: Option<&Path>,
+    table_name: &str,
+    key: &str,
+    value: bool,
+) -> anyhow::Result<PathBuf> {
+    persist_table_value_key(config_path, table_name, key, toml::Value::Boolean(value))
+}
+
+pub(crate) fn persist_table_string_key(
+    config_path: Option<&Path>,
+    table_name: &str,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<PathBuf> {
+    persist_table_value_key(
+        config_path,
+        table_name,
+        key,
+        toml::Value::String(value.to_string()),
+    )
+}
+
+fn persist_table_value_key(
+    config_path: Option<&Path>,
+    table_name: &str,
+    key: &str,
+    value: toml::Value,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path(config_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let (mut doc, original_raw) = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        let doc: toml::Value = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        (doc, Some(raw))
+    } else {
+        (toml::Value::Table(toml::value::Table::new()), None)
+    };
+    let root = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let section = root
+        .entry(table_name.to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let section_table = section
+        .as_table_mut()
+        .with_context(|| format!("`{table_name}` section in config.toml must be a table"))?;
+    section_table.insert(key.to_string(), value);
+
+    if let Some(raw) = original_raw {
+        save_toml_preserving_comments(&path, &doc, &raw)?;
+    } else {
+        let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+        fs::write(&path, body)
+            .with_context(|| format!("failed to write config at {}", path.display()))?;
+    }
+    Ok(path)
+}
+
 pub(crate) fn persist_provider_base_url_key(
     config_path: Option<&Path>,
     provider: ApiProvider,
@@ -663,6 +731,58 @@ mod tests {
         assert!(
             body.contains("allow_shell = true"),
             "new key not written: {body}"
+        );
+    }
+
+    #[test]
+    fn persist_table_bool_key_updates_existing_memory_enabled() {
+        let temp_root = temp_root("codewhale-persist-memory-update");
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "allow_shell = true\n\n[memory]\nenabled = true\n").unwrap();
+
+        let written = persist_table_bool_key(Some(&path), "memory", "enabled", false)
+            .expect("persist should succeed");
+        let body = fs::read_to_string(&written).expect("written file should be readable");
+        assert!(
+            body.contains("enabled = false"),
+            "memory enabled should be false: {body}"
+        );
+        assert!(
+            !body.contains("enabled = true"),
+            "memory enabled should not still be true: {body}"
+        );
+    }
+
+    #[test]
+    fn persist_memory_enabled_round_trips_through_config_load() {
+        let temp_root = temp_root("codewhale-persist-memory-roundtrip");
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Initial config has memory enabled = true
+        fs::write(&path, "allow_shell = true\n\n[memory]\nenabled = true\n").unwrap();
+
+        // Verify initial state
+        let cfg0 = crate::config::Config::load(Some(path.clone()), None)
+            .expect("initial config should load");
+        assert!(cfg0.memory_enabled(), "memory should be enabled initially");
+
+        // Persist memory.enabled = false (what the GUI's set_config endpoint does)
+        persist_table_bool_key(Some(&path), "memory", "enabled", false)
+            .expect("persist should succeed");
+
+        // Reload config from disk and verify memory_enabled() reflects the change
+        let cfg1 = crate::config::Config::load(Some(path.clone()), None)
+            .expect("reloaded config should load");
+        assert!(
+            !cfg1.memory_enabled(),
+            "memory should be disabled after persisting false"
         );
     }
 

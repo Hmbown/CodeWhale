@@ -2513,6 +2513,11 @@ struct GuiConfigResponse {
     prefer_external_pdftotext: bool,
     workspace_follow_symlinks: bool,
     calm_mode: bool,
+    sandbox_mode: String,
+    strict_tool_mode: bool,
+    memory_enabled: bool,
+    search_provider: String,
+    prompt_suggestion: bool,
 }
 
 /// Request body for `POST /v1/config` (set a single config key).
@@ -2588,6 +2593,14 @@ async fn get_config(
         prefer_external_pdftotext: settings.prefer_external_pdftotext,
         workspace_follow_symlinks: settings.workspace_follow_symlinks,
         calm_mode: settings.calm_mode,
+        sandbox_mode: config
+            .sandbox_mode
+            .clone()
+            .unwrap_or_else(|| "workspace-write".to_string()),
+        strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
+        memory_enabled: config.memory_enabled(),
+        search_provider: config.search_provider().as_str().to_string(),
+        prompt_suggestion: config.prompt_suggestion_enabled(),
     }))
 }
 
@@ -2683,7 +2696,12 @@ async fn set_config(
                 }));
             }
             "allow_shell" => {
-                config_persistence::persist_root_string_key(config_path, "allow_shell", &value)
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for allow_shell: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "allow_shell", enabled)
             }
             "mcp_config_path" => {
                 config_persistence::persist_root_string_key(config_path, "mcp_config_path", &value)
@@ -2766,9 +2784,71 @@ async fn set_config(
                 let clamped = raw.min(u64::from(codewhale_config::MAX_SPAWN_DEPTH_CEILING));
                 config_persistence::persist_subagents_integer_key(config_path, "max_depth", clamped)
             }
+            "sandbox_mode" => {
+                let normalized = match value.to_lowercase().as_str() {
+                    "none" | "off" | "disabled" => "none".to_string(),
+                    "opensandbox" | "external-sandbox" | "external" => "opensandbox".to_string(),
+                    "workspace-write" | "workspace_write" => "workspace-write".to_string(),
+                    "read-only" | "read_only" => "read-only".to_string(),
+                    "danger-full-access" | "danger_full_access" | "full" => {
+                        "danger-full-access".to_string()
+                    }
+                    "workspace" | "workspace-read-write" | "workspace_read_write" => {
+                        "workspace-write".to_string()
+                    }
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "Invalid sandbox_mode '{value}'. Supported: none, read-only, workspace-write, danger-full-access, opensandbox"
+                        )));
+                    }
+                };
+                config_persistence::persist_root_string_key(
+                    config_path,
+                    "sandbox_mode",
+                    &normalized,
+                )
+            }
+            "strict_tool_mode" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for strict_tool_mode: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "strict_tool_mode", enabled)
+            }
+            "memory_enabled" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for memory_enabled: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_table_bool_key(
+                    config_path,
+                    "memory",
+                    "enabled",
+                    enabled,
+                )
+            }
+            "search_provider" => {
+                let normalized = value.to_lowercase();
+                config_persistence::persist_table_string_key(
+                    config_path,
+                    "search",
+                    "provider",
+                    &normalized,
+                )
+            }
+            "prompt_suggestion" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for prompt_suggestion: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "prompt_suggestion", enabled)
+            }
             _ => {
                 return Err(ApiError::bad_request(format!(
-                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth"
+                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
                 )));
             }
         };
