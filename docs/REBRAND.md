@@ -129,10 +129,36 @@ to `npm install -g codewhale`.
 
 ### Homebrew
 
-The tap formula still installs through the legacy `deepseek-tui` name for
-existing Homebrew users. Keep using `brew upgrade deepseek-tui` only for that
-compatibility path. New installs should prefer npm, Cargo, Docker, or direct
-downloads until the formula and tap repo are renamed.
+**Current state (v0.8.x):** The tap formula still uses the legacy
+`deepseek-tui` name for compatibility. Existing users keep running
+`brew upgrade deepseek-tui`. The formula installs the same current-release
+`codewhale` / `codewhale-tui` binaries.
+
+**Target state:** A `codewhale` formula in a renamed tap
+(`Hmbown/codewhale` or the existing `Hmbown/deepseek-tui` tap with an
+added `codewhale` formula alias). The legacy `deepseek-tui` formula
+remains installable as a compatibility-only alias.
+
+**Rollout steps:**
+
+1. **Audit the formula Ruby file** — confirm it already installs
+   `codewhale` / `codewhale-tui` binaries and only the formula *name* is
+   legacy.
+2. **Add a `codewhale` formula** to the tap that is identical to or
+   aliases the existing `deepseek-tui` formula.
+3. **Update website and docs** — show `brew install codewhale` as the
+   primary Homebrew path, mark `brew install deepseek-tui` as legacy
+   compatibility.
+4. **One release of overlap** — ship at least one release with both
+   `codewhale` and `deepseek-tui` formulas available so existing
+   crontabs/scripts can migrate.
+5. **Deprecation notice** — add a `caveat` in the legacy formula
+   directing users to `brew uninstall deepseek-tui && brew install codewhale`.
+6. **Eventually remove** the `deepseek-tui` formula after a deprecation
+   window (e.g., two minor releases).
+
+Until the formula rename ships, new installs should prefer npm, Cargo,
+Docker, or direct downloads.
 
 ### Manual / GitHub Releases
 
