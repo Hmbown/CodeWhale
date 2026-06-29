@@ -3396,7 +3396,7 @@ fn provider_metadata_defaults_match_runtime_helpers() {
         // speaks the native Messages API; every other built-in provider
         // is OpenAI-compatible Chat Completions.
         let expected_wire = match kind {
-            ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
+            ProviderKind::OpenaiCodex | ProviderKind::OpenCodeZen => provider::WireFormat::Responses,
             ProviderKind::Anthropic | ProviderKind::DeepseekAnthropic | ProviderKind::Openmodel => {
                 provider::WireFormat::AnthropicMessages
             }

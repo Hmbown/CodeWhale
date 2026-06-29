@@ -100,6 +100,13 @@ pub enum ProviderKind {
     Deepinfra,
     #[serde(alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     Sakana,
+    #[serde(
+        alias = "opencode-zen",
+        alias = "opencode_zen",
+        alias = "zen",
+        alias = "opencode"
+    )]
+    OpenCodeZen,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// A single dynamic identity for arbitrary `[providers.<name>]
@@ -111,7 +118,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -141,6 +148,7 @@ impl ProviderKind {
         Self::Minimax,
         Self::Deepinfra,
         Self::Sakana,
+        Self::OpenCodeZen,
         Self::Custom,
     ];
 

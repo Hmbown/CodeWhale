@@ -122,6 +122,9 @@ pub const DEFAULT_QIANFAN_BASE_URL: &str = "https://api.baiduqianfan.ai/v1";
 pub const DEFAULT_OPENAI_CODEX_MODEL: &str = "gpt-5.5";
 pub const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 pub const OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS: u32 = 400_000;
+// OpenCode Zen defaults
+pub const DEFAULT_OPENCODE_ZEN_MODEL: &str = "gpt-5.5";
+pub const DEFAULT_OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 /// Legacy `deepseek-cn` provider alias.
 ///
 /// DeepSeek's official API host is the same worldwide. Keep this alias for

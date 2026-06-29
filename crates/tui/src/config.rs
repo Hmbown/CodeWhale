@@ -71,6 +71,7 @@ pub enum ApiProvider {
     Minimax,
     Deepinfra,
     Sakana,
+    OpenCodeZen,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// Selected when `provider = "<name>"` names a `[providers.<name>]
@@ -204,6 +205,7 @@ impl ApiProvider {
             Self::Minimax => "https://platform.minimax.io/docs/guides/quickstart-preparation",
             Self::Deepinfra => "https://deepinfra.com/dash/api_keys",
             Self::Sakana => "https://api.sakana.ai/",
+            Self::OpenCodeZen => "https://opencode.ai/zen",
             Self::OpenaiCodex | Self::Sglang | Self::Vllm | Self::Ollama => return None,
             // Custom endpoints have no canonical credential page; the user
             // supplies the key via their own `api_key_env`.
@@ -219,7 +221,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 31] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 32] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -250,11 +252,12 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Minimax),
         Some(codewhale_config::ProviderKind::Deepinfra),
         Some(codewhale_config::ProviderKind::Sakana),
+        Some(codewhale_config::ProviderKind::OpenCodeZen),
         Some(codewhale_config::ProviderKind::Custom),
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 30] = [
+    const FROM_KIND_LOOKUP: [Self; 31] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -284,6 +287,7 @@ impl ApiProvider {
         Self::Minimax,
         Self::Deepinfra,
         Self::Sakana,
+        Self::OpenCodeZen,
         Self::Custom,
     ];
 
@@ -353,6 +357,10 @@ fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
         ApiProvider::OpenaiCodex => matches!(
             normalized.as_str(),
             "openai_codex" | "codex" | "chatgpt" | "openai_chatgpt"
+        ),
+        ApiProvider::OpenCodeZen => matches!(
+            normalized.as_str(),
+            "opencode_zen" | "opencode-zen" | "zen" | "opencode"
         ),
         ApiProvider::Anthropic => {
             matches!(
@@ -459,11 +467,16 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
         };
     }
 
-    if matches!(provider, ApiProvider::OpenaiCodex) {
+    if matches!(provider, ApiProvider::OpenaiCodex | ApiProvider::OpenCodeZen) {
+        let ctx_window = if provider == ApiProvider::OpenaiCodex {
+            OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS
+        } else {
+            crate::models::context_window_for_model(resolved_model).unwrap_or(200_000)
+        };
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
-            context_window: OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS,
+            context_window: ctx_window,
             max_output: crate::models::max_output_tokens_for_model(resolved_model).unwrap_or(4096),
             thinking_supported: true,
             cache_telemetry_supported: false,
@@ -1138,6 +1151,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL],
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
+        ApiProvider::OpenCodeZen => vec![DEFAULT_OPENCODE_ZEN_MODEL],
         ApiProvider::Openmodel => vec![DEFAULT_OPENMODEL_MODEL],
         ApiProvider::Zai => vec![DEFAULT_ZAI_MODEL, ZAI_GLM_5_1_MODEL, ZAI_GLM_5_TURBO_MODEL],
         ApiProvider::Stepfun => vec![DEFAULT_STEPFUN_MODEL],
@@ -2572,6 +2586,8 @@ pub struct ProvidersConfig {
     pub minimax: ProviderConfig,
     #[serde(default, alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     pub sakana: ProviderConfig,
+    #[serde(default, alias = "opencode-zen", alias = "opencode_zen", alias = "opencodezen", alias = "zen", alias = "opencode")]
+    pub opencode_zen: ProviderConfig,
     /// Arbitrary user-named custom providers (#1519).
     ///
     /// Captures every `[providers.<name>]` table whose key is not one of the
@@ -2622,6 +2638,7 @@ impl ProvidersConfig {
             ("providers.stepfun", &self.stepfun),
             ("providers.minimax", &self.minimax),
             ("providers.sakana", &self.sakana),
+            ("providers.opencode_zen", &self.opencode_zen),
         ];
         for (name, config) in builtins {
             validate_provider_context_window(name, config.context_window)?;
@@ -2950,6 +2967,7 @@ impl Config {
             ApiProvider::Together => &providers.together,
             ApiProvider::Qianfan => &providers.qianfan,
             ApiProvider::OpenaiCodex => &providers.openai_codex,
+            ApiProvider::OpenCodeZen => &providers.opencode_zen,
             ApiProvider::Anthropic => &providers.anthropic,
             ApiProvider::Openmodel => &providers.openmodel,
             ApiProvider::Zai => &providers.zai,
@@ -3010,6 +3028,7 @@ impl Config {
             ApiProvider::Together => &mut providers.together,
             ApiProvider::Qianfan => &mut providers.qianfan,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
+            ApiProvider::OpenCodeZen => &mut providers.opencode_zen,
             ApiProvider::Anthropic => &mut providers.anthropic,
             ApiProvider::Openmodel => &mut providers.openmodel,
             ApiProvider::Zai => &mut providers.zai,
@@ -3138,6 +3157,9 @@ impl Config {
         if provider == ApiProvider::OpenaiCodex {
             return DEFAULT_OPENAI_CODEX_MODEL.to_string();
         }
+        if provider == ApiProvider::OpenCodeZen {
+            return DEFAULT_OPENCODE_ZEN_MODEL.to_string();
+        }
 
         let moonshot_config = (provider == ApiProvider::Moonshot)
             .then(|| self.provider_config())
@@ -3202,6 +3224,7 @@ impl Config {
             ApiProvider::Together => DEFAULT_TOGETHER_MODEL,
             ApiProvider::Qianfan => DEFAULT_QIANFAN_MODEL,
             ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_MODEL,
+            ApiProvider::OpenCodeZen => DEFAULT_OPENCODE_ZEN_MODEL,
             ApiProvider::Openmodel => DEFAULT_OPENMODEL_MODEL,
             ApiProvider::Zai => DEFAULT_ZAI_MODEL,
             ApiProvider::Stepfun => DEFAULT_STEPFUN_MODEL,
@@ -3257,6 +3280,7 @@ impl Config {
             | ApiProvider::Together
             | ApiProvider::Qianfan
             | ApiProvider::OpenaiCodex
+            | ApiProvider::OpenCodeZen
             | ApiProvider::Zai
             | ApiProvider::Stepfun
             | ApiProvider::Minimax
@@ -3315,6 +3339,7 @@ impl Config {
                         ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
                         ApiProvider::Qianfan => DEFAULT_QIANFAN_BASE_URL,
                         ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
+                        ApiProvider::OpenCodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL,
                         ApiProvider::Openmodel => DEFAULT_OPENMODEL_BASE_URL,
                         ApiProvider::Zai => DEFAULT_ZAI_BASE_URL,
                         ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
@@ -3483,7 +3508,7 @@ impl Config {
             ApiProvider::Anthropic | ApiProvider::Openmodel => {
                 anyhow::bail!("{}", missing_provider_api_key_message(provider)?)
             }
-            ApiProvider::OpenaiCodex => anyhow::bail!(
+            ApiProvider::OpenaiCodex | ApiProvider::OpenCodeZen => anyhow::bail!(
                 "OpenAI Codex OAuth credentials not found.\n\
                  \n\
                  CodeWhale uses your existing ChatGPT/Codex login.\n\
@@ -4431,6 +4456,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .openai_codex
                     .base_url = Some(value);
             }
+            ApiProvider::OpenCodeZen => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .opencode_zen
+                    .base_url = Some(value);
+            }
             ApiProvider::Zai => {
                 config
                     .providers
@@ -4681,6 +4713,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Together => &mut providers.together,
             ApiProvider::Qianfan => &mut providers.qianfan,
             ApiProvider::OpenaiCodex => &mut providers.openai_codex,
+            ApiProvider::OpenCodeZen => &mut providers.opencode_zen,
             ApiProvider::Anthropic => &mut providers.anthropic,
             ApiProvider::Openmodel => &mut providers.openmodel,
             ApiProvider::Zai => &mut providers.zai,
@@ -4903,6 +4936,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Together => &mut providers.together,
                 ApiProvider::Qianfan => &mut providers.qianfan,
                 ApiProvider::OpenaiCodex => &mut providers.openai_codex,
+                ApiProvider::OpenCodeZen => &mut providers.opencode_zen,
                 ApiProvider::Anthropic => &mut providers.anthropic,
                 ApiProvider::Openmodel => &mut providers.openmodel,
                 ApiProvider::Zai => &mut providers.zai,
@@ -5676,6 +5710,7 @@ fn merge_providers(
             stepfun: merge_provider_config(base.stepfun, override_cfg.stepfun),
             minimax: merge_provider_config(base.minimax, override_cfg.minimax),
             sakana: merge_provider_config(base.sakana, override_cfg.sakana),
+            opencode_zen: merge_provider_config(base.opencode_zen, override_cfg.opencode_zen),
             custom: merge_custom_providers(base.custom, override_cfg.custom),
         }),
     }
@@ -6102,6 +6137,12 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
         // active_provider_has_env_api_key.
         return crate::oauth::auth_file_path().exists();
     }
+    if provider == ApiProvider::OpenCodeZen {
+        return config
+            .provider_config_for(provider)
+            .and_then(|c| c.api_key.as_deref())
+            .is_some_and(|k| !k.is_empty());
+    }
     if matches!(provider, ApiProvider::Huggingface)
         && std::env::var("HUGGINGFACE_API_KEY")
             .or_else(|_| std::env::var("HF_TOKEN"))
@@ -6165,6 +6206,12 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         // Token env overrides are checked above; also honor the Codex CLI OAuth
         // login on disk.
         return crate::oauth::auth_file_path().exists();
+    }
+    if provider == ApiProvider::OpenCodeZen {
+        return config
+            .provider_config_for(provider)
+            .and_then(|c| c.api_key.as_deref())
+            .is_some_and(|k| !k.is_empty());
     }
 
     // Self-hosted providers typically run without authentication.

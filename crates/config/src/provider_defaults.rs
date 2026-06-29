@@ -130,3 +130,6 @@ pub(crate) const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v
 // Sakana AI Fugu defaults
 pub(crate) const DEFAULT_SAKANA_MODEL: &str = "fugu";
 pub(crate) const DEFAULT_SAKANA_BASE_URL: &str = "https://api.sakana.ai/v1";
+// OpenCode Zen defaults
+pub(crate) const DEFAULT_OPENCODE_ZEN_MODEL: &str = "gpt-5.5";
+pub(crate) const DEFAULT_OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
