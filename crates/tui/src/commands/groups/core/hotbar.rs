@@ -26,7 +26,12 @@ impl RegisterCommand for HotbarCmd {
                 CommandResult::action(AppAction::OpenHotbarSetup)
             }
             Some("help" | "?") => CommandResult::message(
-                "Usage: /hotbar [setup]\n\n/hotbar opens the Hotbar setup wizard.",
+                "Usage: /hotbar [setup]\n\n\
+                 /hotbar opens the Hotbar setup wizard. Hotbar slots dispatch with \
+                 Alt+1 through Alt+8 when no modal, inline picker, or onboarding \
+                 surface owns input. Bare 1-8 insert text in the composer. \
+                 Cmd-number and F-keys are not Hotbar shortcuts unless a future \
+                 release documents and implements them.",
             ),
             Some(other) => CommandResult::error(format!(
                 "Unknown /hotbar target '{other}'. Use `/hotbar` or `/hotbar setup`."
@@ -88,19 +93,17 @@ mod tests {
     }
 
     #[test]
-    fn hotbar_help_arg_returns_usage() {
+    fn hotbar_help_arg_documents_supported_terminal_chord() {
         let mut app = test_app();
 
         let result = HotbarCmd::execute(&mut app, Some("help"));
 
         assert!(!result.is_error);
         assert!(result.action.is_none());
-        assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("/hotbar opens"))
-        );
+        let message = result.message.as_deref().expect("help text");
+        assert!(message.contains("Alt+1 through Alt+8"));
+        assert!(message.contains("Bare 1-8 insert text"));
+        assert!(message.contains("Cmd-number and F-keys are not Hotbar shortcuts"));
     }
 
     #[test]

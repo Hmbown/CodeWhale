@@ -436,6 +436,9 @@ impl HotbarSetupView {
             lines.push(Line::from(
                 "Tab/Shift+Tab source  Up/Down action  1-8 slot  Enter assign  Space toggle  Delete clear  s save  Esc cancel",
             ));
+            lines.push(Line::from(
+                "After save: Alt+1 through Alt+8 dispatch Hotbar slots. Bare 1-8 stay composer text outside setup.",
+            ));
         }
         lines
     }
@@ -709,6 +712,26 @@ mod tests {
                 .map(|binding| binding.action.as_str()),
             Some("slash.rename")
         );
+    }
+
+    #[test]
+    fn wizard_help_documents_runtime_hotbar_shortcut() {
+        let app = test_app();
+        let mut view = HotbarSetupView::new(&app, &Config::default());
+
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('?'))),
+            ViewAction::None
+        ));
+        let rendered = view
+            .render_lines()
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("After save: Alt+1 through Alt+8 dispatch Hotbar slots"));
+        assert!(rendered.contains("Bare 1-8 stay composer text outside setup"));
     }
 
     #[test]
