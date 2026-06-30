@@ -55,7 +55,9 @@ pub use plan::PlanUpdateCell;
 use thinking::extract_reasoning_summary;
 #[cfg(test)]
 use tool_run::ToolRunActivitySummary;
-pub use tool_run::{ToolRun, detect_tool_runs, detect_tool_runs_from_slices, tool_run_summary};
+#[cfg(test)]
+pub use tool_run::detect_tool_runs;
+pub use tool_run::{ToolRun, detect_tool_runs_from_slices, tool_run_summary};
 
 #[cfg(test)]
 use thinking::{REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL};

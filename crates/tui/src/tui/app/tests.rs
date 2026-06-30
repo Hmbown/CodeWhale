@@ -1974,6 +1974,36 @@ fn tool_run_expansion_toggle_opens_and_closes_run() {
 }
 
 #[test]
+fn tool_run_expansion_toggle_handles_active_run() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.tool_collapse_mode = ToolCollapseMode::Compact;
+    app.tool_collapse_threshold = 3;
+    app.add_message(HistoryCell::User {
+        content: "go".to_string(),
+    });
+
+    let active_start = app.history.len();
+    let active = app.active_cell.get_or_insert_with(ActiveCell::new);
+    for name in ["read_file", "list_dir", "web_search"] {
+        active.push_untracked(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Success,
+            input_summary: None,
+            output: Some("ok".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        })));
+    }
+
+    assert!(app.toggle_tool_run_expansion_at(active_start));
+    assert!(app.expanded_tool_runs.contains(&active_start));
+    assert!(app.toggle_tool_run_expansion_at(active_start + 2));
+    assert!(!app.expanded_tool_runs.contains(&active_start));
+}
+
+#[test]
 fn test_scroll_operations() {
     let mut app = App::new(test_options(false), &Config::default());
     // Just verify scroll methods can be called without panic

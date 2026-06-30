@@ -527,8 +527,10 @@ async fn spawn_test_server_with_root_token_mobile_workspace_subagents_and_config
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
-    let mut config = Config::default();
-    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
+    let config = Config {
+        mcp_config_path: Some(root.join("mcp.json").to_string_lossy().to_string()),
+        ..Default::default()
+    };
     let manager = TaskManager::start_with_executor(
         TaskManagerConfig {
             data_dir: root.join("tasks"),
@@ -3732,6 +3734,9 @@ fn skill_entry_is_bundled_requires_configured_bundle_path() {
 #[test]
 fn resolve_skills_dir_rejects_symlink_escaping_workspace() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let _env_lock = crate::test_support::lock_test_env();
+    let _home = crate::test_support::EnvVarGuard::set("HOME", tmp.path());
+    let _userprofile = crate::test_support::EnvVarGuard::set("USERPROFILE", tmp.path());
     let workspace_root = tmp.path().join("workspace");
     let escape_target = tmp.path().join("escape_target");
     fs::create_dir_all(&workspace_root).expect("create workspace");
@@ -3761,6 +3766,9 @@ fn resolve_skills_dir_rejects_symlink_escaping_workspace() {
 #[test]
 fn resolve_skills_dir_rejects_codewhale_only_symlink_escaping_workspace() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let _env_lock = crate::test_support::lock_test_env();
+    let _home = crate::test_support::EnvVarGuard::set("HOME", tmp.path());
+    let _userprofile = crate::test_support::EnvVarGuard::set("USERPROFILE", tmp.path());
     let workspace_root = tmp.path().join("workspace");
     let escape_target = tmp.path().join("escape_target");
     fs::create_dir_all(&workspace_root).expect("create workspace");

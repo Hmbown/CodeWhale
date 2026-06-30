@@ -3524,13 +3524,24 @@ impl App {
 
     #[must_use]
     pub fn tool_run_start_for_history_index(&self, index: usize) -> Option<usize> {
-        if !self.tool_collapse_active() || index >= self.history.len() {
+        if !self.tool_collapse_active() {
             return None;
         }
-        crate::tui::history::detect_tool_runs(&self.history, self.tool_collapse_threshold)
-            .into_iter()
-            .find(|run| index >= run.start && index < run.start.saturating_add(run.count))
-            .map(|run| run.start)
+        let active_entries = self
+            .active_cell
+            .as_ref()
+            .map_or(&[][..], crate::tui::active_cell::ActiveCell::entries);
+        if index >= self.history.len().saturating_add(active_entries.len()) {
+            return None;
+        }
+        crate::tui::history::detect_tool_runs_from_slices(
+            &self.history,
+            active_entries,
+            self.tool_collapse_threshold,
+        )
+        .into_iter()
+        .find(|run| index >= run.start && index < run.start.saturating_add(run.count))
+        .map(|run| run.start)
     }
 
     pub fn toggle_tool_run_expansion_at(&mut self, index: usize) -> bool {

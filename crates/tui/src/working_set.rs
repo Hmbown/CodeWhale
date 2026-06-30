@@ -1679,8 +1679,8 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).expect("mkdir");
-        fs::write(src.join("a.rs"), &"a".repeat(200)).expect("write");
-        fs::write(src.join("b.rs"), &"b".repeat(200)).expect("write");
+        fs::write(src.join("a.rs"), "a".repeat(200)).expect("write");
+        fs::write(src.join("b.rs"), "b".repeat(200)).expect("write");
 
         let mut ws = cache_maximal_ws();
         ws.config.max_resident_file_bytes = 200;

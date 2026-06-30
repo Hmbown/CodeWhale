@@ -57,6 +57,7 @@ impl ToolRunActivitySummary {
 /// cells can join dense runs; `v` / expansion keeps their raw details
 /// available without making routine verifier/shell work dominate the default
 /// transcript.
+#[cfg(test)]
 pub fn detect_tool_runs(history: &[HistoryCell], min_size: usize) -> Vec<ToolRun> {
     detect_tool_runs_from_slices(history, &[], min_size)
 }

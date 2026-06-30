@@ -2586,13 +2586,11 @@ async fn yolo_mode_does_not_prompt_for_model_driven_typed_ask_rule() {
             Event::ApprovalRequired { .. } => {
                 panic!("YOLO mode must not prompt for a model-driven typed ask-rule");
             }
-            Event::ToolCallComplete { name, result, .. } => {
-                if name == "exec_shell" {
-                    saw_complete = true;
-                    let result = result.expect("shell result");
-                    assert!(result.success, "{result:?}");
-                    assert!(result.content.contains("yolo-model-ask-rule"), "{result:?}");
-                }
+            Event::ToolCallComplete { name, result, .. } if name == "exec_shell" => {
+                saw_complete = true;
+                let result = result.expect("shell result");
+                assert!(result.success, "{result:?}");
+                assert!(result.content.contains("yolo-model-ask-rule"), "{result:?}");
             }
             Event::TurnComplete { status, .. } => {
                 assert_eq!(status, TurnOutcomeStatus::Completed);
@@ -2721,16 +2719,14 @@ async fn yolo_mode_does_not_prompt_for_background_shell() {
             Event::ApprovalRequired { .. } => {
                 panic!("YOLO mode must not prompt for a background shell command");
             }
-            Event::ToolCallComplete { name, result, .. } => {
-                if name == "exec_shell" {
-                    saw_complete = true;
-                    let result = result.expect("shell result");
-                    assert!(result.success, "{result:?}");
-                    assert!(
-                        result.content.contains("Background task started"),
-                        "expected a background start, got: {result:?}"
-                    );
-                }
+            Event::ToolCallComplete { name, result, .. } if name == "exec_shell" => {
+                saw_complete = true;
+                let result = result.expect("shell result");
+                assert!(result.success, "{result:?}");
+                assert!(
+                    result.content.contains("Background task started"),
+                    "expected a background start, got: {result:?}"
+                );
             }
             Event::TurnComplete { status, .. } => {
                 assert_eq!(status, TurnOutcomeStatus::Completed);

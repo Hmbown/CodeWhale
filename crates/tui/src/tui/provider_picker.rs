@@ -1949,6 +1949,14 @@ mod tests {
 
     #[test]
     fn self_hosted_provider_row_marks_self_hosted_in_hint() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let _sglang_key = crate::test_support::EnvVarGuard::remove("SGLANG_API_KEY");
+        let _sglang_base_url = crate::test_support::EnvVarGuard::remove("SGLANG_BASE_URL");
+        let _vllm_key = crate::test_support::EnvVarGuard::remove("VLLM_API_KEY");
+        let _vllm_base_url = crate::test_support::EnvVarGuard::remove("VLLM_BASE_URL");
+        let _ollama_key = crate::test_support::EnvVarGuard::remove("OLLAMA_API_KEY");
+        let _ollama_base_url = crate::test_support::EnvVarGuard::remove("OLLAMA_BASE_URL");
+
         let config = Config::default();
         let row =
             ProviderDashboardRow::from_config(ApiProvider::Ollama, ApiProvider::Ollama, &config);
