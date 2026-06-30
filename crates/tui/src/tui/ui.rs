@@ -7529,7 +7529,7 @@ async fn apply_command_result(
             AppAction::OpenModelPicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModelPicker) {
                     app.view_stack
-                        .push(crate::tui::model_picker::ModelPickerView::new(app));
+                        .push(crate::tui::model_picker::ModelPickerView::new(app, config));
                 }
             }
             AppAction::OpenProviderPicker => {
@@ -9040,10 +9040,14 @@ fn toggle_live_transcript_overlay(app: &mut App) {
 /// the standard "open model picker" path and seed its query by replaying the
 /// provider's display name as character input through the public view-stack
 /// key path — no model-picker internals are touched.
-fn open_model_picker_for_provider(app: &mut App, provider: crate::config::ApiProvider) {
+fn open_model_picker_for_provider(
+    app: &mut App,
+    config: &Config,
+    provider: crate::config::ApiProvider,
+) {
     if app.view_stack.top_kind() != Some(ModalKind::ModelPicker) {
         app.view_stack
-            .push(crate::tui::model_picker::ModelPickerView::new(app));
+            .push(crate::tui::model_picker::ModelPickerView::new(app, config));
     }
     for ch in provider.display_name().chars() {
         // Char input updates the query and never emits a ViewEvent, so the
@@ -9481,7 +9485,7 @@ async fn handle_view_events(
                 .await;
             }
             ViewEvent::ProviderPickerOpenModels { provider } => {
-                open_model_picker_for_provider(app, provider);
+                open_model_picker_for_provider(app, config, provider);
             }
             ViewEvent::ModeSelected { mode } => {
                 let prior_mode = app.mode;

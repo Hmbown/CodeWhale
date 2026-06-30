@@ -17,7 +17,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::config::{ApiProvider, model_completion_names_for_provider};
+use crate::config::{ApiProvider, Config, model_completion_names_for_provider};
 use crate::model_registry;
 use crate::palette;
 use crate::tui::app::{App, ReasoningEffort};
@@ -63,6 +63,16 @@ pub struct ModelPickerView {
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
     model_rows: Vec<ModelPickerRow>,
+    /// Other providers considered "configured" (#3830), shown by default
+    /// alongside `initial_provider`'s own rows without requiring the user to
+    /// type a search query first. Uses the same definition as the
+    /// `/provider` manager's default view
+    /// (`crate::config::provider_is_configured_for_active`): active
+    /// provider, working credentials/OAuth, or an explicit
+    /// `[providers.<name>]` entry. Self-hosted providers (Ollama/Sglang/
+    /// Vllm) don't qualify just because routing to them doesn't require a
+    /// key.
+    configured_providers: Vec<ApiProvider>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,22 +84,29 @@ struct ModelPickerRow {
 
 impl ModelPickerView {
     #[must_use]
-    pub fn new(app: &App) -> Self {
+    pub fn new(app: &App, config: &Config) -> Self {
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
             app.model.clone()
         };
         let model_rows = picker_model_rows_for_app(app);
+        let configured_providers = configured_providers_for(config, app.api_provider);
         let mut selected_model_idx = model_rows.iter().position(|row| {
             row.id == initial_model
                 && (row.provider.is_none() || row.provider == Some(app.api_provider))
         });
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
-            selected_model_idx = Some(active_provider_model_row_count(
+            // The custom row is conceptually appended right after every row
+            // the default (empty-query) view shows, so its index must match
+            // that count, not just the active-provider-scoped one (#3830) —
+            // `resolved_model`/`model_row_count` treat any selection at or
+            // past `visible_model_rows().len()` as "the custom row."
+            selected_model_idx = Some(default_visible_model_row_count(
                 &model_rows,
                 app.api_provider,
+                &configured_providers,
             ));
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
@@ -113,6 +130,7 @@ impl ModelPickerView {
             focus: Pane::Model,
             show_custom_model_row,
             model_rows,
+            configured_providers,
         }
     }
 
@@ -130,7 +148,11 @@ impl ModelPickerView {
             .iter()
             .filter(|row| {
                 if query.is_empty() {
-                    row.provider.is_none() || row.provider == Some(self.initial_provider)
+                    model_row_visible_by_default(
+                        row.provider,
+                        self.initial_provider,
+                        &self.configured_providers,
+                    )
                 } else {
                     model_row_matches_query(row, query, self.initial_provider)
                 }
@@ -595,10 +617,48 @@ fn model_row_label(row: &ModelPickerRow, initial_provider: ApiProvider) -> Strin
     }
 }
 
-fn active_provider_model_row_count(rows: &[ModelPickerRow], provider: ApiProvider) -> usize {
+/// Whether a model row shows up without the user typing a search query
+/// (#3830): `auto`, the active provider's own rows, and any other
+/// provider's rows once that provider is "configured" — same definition the
+/// `/provider` manager's default view uses.
+fn model_row_visible_by_default(
+    row_provider: Option<ApiProvider>,
+    initial_provider: ApiProvider,
+    configured_providers: &[ApiProvider],
+) -> bool {
+    match row_provider {
+        None => true,
+        Some(provider) => provider == initial_provider || configured_providers.contains(&provider),
+    }
+}
+
+/// Count of rows the default (empty-query) view shows — i.e. how many
+/// `model_rows` entries satisfy [`model_row_visible_by_default`]. Used to
+/// position the custom-model row right after them (#3830).
+fn default_visible_model_row_count(
+    rows: &[ModelPickerRow],
+    initial_provider: ApiProvider,
+    configured_providers: &[ApiProvider],
+) -> usize {
     rows.iter()
-        .filter(|row| row.provider.is_none() || row.provider == Some(provider))
+        .filter(|row| {
+            model_row_visible_by_default(row.provider, initial_provider, configured_providers)
+        })
         .count()
+}
+
+/// Providers other than `active` that should be treated as "configured" for
+/// the `/model` picker's default view (#3830). Reuses the same predicate the
+/// `/provider` manager applies so the two pickers never disagree about what
+/// "configured" means.
+fn configured_providers_for(config: &Config, active: ApiProvider) -> Vec<ApiProvider> {
+    ApiProvider::sorted_for_display()
+        .into_iter()
+        .filter(|provider| {
+            *provider != active
+                && crate::config::provider_is_configured_for_active(config, *provider, active)
+        })
+        .collect()
 }
 
 fn picker_model_hint(id: &str) -> String {
@@ -910,12 +970,30 @@ fn default_picker_effort_idx(provider: ApiProvider, model_is_auto: bool) -> usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
 
-    fn create_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
+    /// `_lock` bundles the process-wide test-env mutex with a guard that
+    /// neutralizes the real Codex CLI OAuth login on disk (`~/.codex/auth.json`),
+    /// if any — `has_api_key_for` checks `crate::oauth::auth_file_path().exists()`
+    /// unconditionally for `OpenaiCodex` (#3830), so without this, "default view
+    /// shows only configured providers" tests would pass or fail depending on
+    /// whether the machine running them happens to have a prior Codex login.
+    /// Declared in this order so the env var is restored (dropped first) while
+    /// the mutex is still held, before the mutex itself is released.
+    fn create_test_app() -> (
+        App,
+        Config,
+        (
+            crate::test_support::EnvVarGuard,
+            std::sync::MutexGuard<'static, ()>,
+        ),
+    ) {
         let lock = crate::test_support::lock_test_env();
+        let codex_auth_guard = crate::test_support::EnvVarGuard::set(
+            "OPENAI_CODEX_AUTH_FILE",
+            "/nonexistent/codewhale-test-codex-auth.json",
+        );
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: PathBuf::from("."),
@@ -937,7 +1015,8 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        let mut app = App::new(options, &Config::default());
+        let config = Config::default();
+        let mut app = App::new(options, &config);
         // App::new merges in the user's persisted settings.toml, which can override
         // the model, effort, and provider with whatever the developer
         // happens to have saved. Pin all three back to known values so
@@ -951,7 +1030,7 @@ mod tests {
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
         app.provider_models.clear();
-        (app, lock)
+        (app, config, (codex_auth_guard, lock))
     }
 
     fn type_model_query(view: &mut ModelPickerView, query: &str) {
@@ -993,7 +1072,7 @@ mod tests {
 
     #[test]
     fn picker_main_rows_are_scoped_to_active_provider() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Together;
         app.model = crate::config::DEFAULT_TOGETHER_MODEL.to_string();
         app.provider_models.insert(
@@ -1001,7 +1080,7 @@ mod tests {
             crate::config::DEFAULT_OPENROUTER_MODEL.to_string(),
         );
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert!(
             view.visible_model_rows()
@@ -1018,24 +1097,130 @@ mod tests {
     }
 
     #[test]
+    fn picker_default_view_includes_explicitly_configured_provider_rows() {
+        // #3830: an explicit `[providers.together]` entry (base URL override,
+        // no key) makes Together "configured," so its model rows surface in
+        // the default (no-query) view alongside DeepSeek's own rows and
+        // `auto` — not just when the user types a search query.
+        let (mut app, _default_config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                together: crate::config::ProviderConfig {
+                    base_url: Some("https://custom.together.example/v1".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let view = ModelPickerView::new(&app, &config);
+        let visible_ids = view.visible_model_ids();
+
+        assert!(
+            view.visible_model_rows()
+                .iter()
+                .any(|row| row.provider == Some(crate::config::ApiProvider::Together)),
+            "explicitly configured Together should surface rows by default: {visible_ids:?}"
+        );
+        assert!(visible_ids.contains(&crate::config::DEFAULT_TOGETHER_MODEL));
+        // Auto and the active provider's own rows are still present.
+        assert!(visible_ids.contains(&"auto"));
+        assert!(visible_ids.contains(&"deepseek-v4-pro"));
+    }
+
+    #[test]
+    fn picker_default_view_excludes_self_hosted_provider_without_explicit_setup() {
+        // #3830: `has_api_key_for` reports `true` unconditionally for
+        // self-hosted providers (no auth required to route to them) — that
+        // alone must not surface Sglang/Vllm in the default view for every
+        // user. Sglang (unlike Ollama) has real catalog model ids, so it's a
+        // meaningful row to check rather than an empty contribution.
+        let (mut app, _default_config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+        let config = Config::default();
+
+        let view = ModelPickerView::new(&app, &config);
+        assert!(
+            !view
+                .visible_model_rows()
+                .iter()
+                .any(|row| row.provider == Some(crate::config::ApiProvider::Sglang)),
+            "self-hosted Sglang has no explicit setup and isn't active"
+        );
+
+        // Discoverability is preserved: typing a query still reveals it.
+        let mut queried = ModelPickerView::new(&app, &config);
+        type_model_query(&mut queried, "sglang");
+        assert!(
+            queried
+                .visible_model_rows()
+                .iter()
+                .any(|row| row.provider == Some(crate::config::ApiProvider::Sglang)),
+            "searching should still surface unconfigured providers"
+        );
+    }
+
+    #[test]
+    fn custom_model_row_position_accounts_for_other_configured_providers() {
+        // #3830 regression: `resolved_model`/`model_row_count` treat any
+        // selection at or past `visible_model_rows().len()` as "the custom
+        // row." Once other configured providers' rows are mixed into the
+        // default view, the initial selection must still land past *all* of
+        // them, not just past the active provider's own rows.
+        let (mut app, _default_config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro-2026-04-XX".to_string();
+        app.auto_model = false;
+
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                together: crate::config::ProviderConfig {
+                    base_url: Some("https://custom.together.example/v1".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let view = ModelPickerView::new(&app, &config);
+        assert!(view.show_custom_model_row);
+        assert!(
+            view.visible_model_rows()
+                .iter()
+                .any(|row| row.provider == Some(crate::config::ApiProvider::Together)),
+            "sanity check: Together rows are actually in the default view"
+        );
+        assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
+        assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
+    }
+
+    #[test]
     fn picker_initial_selection_matches_app_state() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-flash".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert_eq!(view.resolved_model(), "deepseek-v4-flash");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Max);
     }
 
     #[test]
     fn picker_initial_selection_matches_auto_state() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Auto;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert_eq!(view.resolved_model(), "auto");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Auto);
@@ -1043,12 +1228,12 @@ mod tests {
 
     #[test]
     fn picker_auto_model_forces_auto_effort_on_apply() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Off;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert_eq!(view.resolved_model(), "auto");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Auto);
@@ -1056,10 +1241,10 @@ mod tests {
 
     #[test]
     fn picker_normalizes_low_medium_to_high() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::Medium;
         app.auto_model = false;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert_eq!(
             view.resolved_effort(),
             ReasoningEffort::High,
@@ -1085,13 +1270,13 @@ mod tests {
 
     #[test]
     fn codex_picker_exposes_responses_reasoning_tiers() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::OpenaiCodex;
         app.model = "gpt-5.5-codex".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Off;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert_eq!(view.resolved_effort(), ReasoningEffort::Low);
         let labels: Vec<_> =
@@ -1106,7 +1291,7 @@ mod tests {
 
     #[test]
     fn picker_excludes_saved_codex_model_from_deepseek_main_section() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
@@ -1114,7 +1299,7 @@ mod tests {
         app.provider_models
             .insert("openai-codex".to_string(), "gpt-5.5".to_string());
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert_eq!(view.resolved_effort(), ReasoningEffort::Off);
         assert!(
             view.visible_model_rows()
@@ -1127,7 +1312,7 @@ mod tests {
 
     #[test]
     fn picker_does_not_switch_provider_when_moving_through_model_rows() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
@@ -1135,7 +1320,7 @@ mod tests {
         app.provider_models
             .insert("openai-codex".to_string(), "gpt-5.5".to_string());
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         while view.move_down() {
             assert_ne!(
                 view.resolved_provider(),
@@ -1148,12 +1333,12 @@ mod tests {
 
     #[test]
     fn picker_query_reveals_cross_provider_route_rows() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         assert!(
             view.visible_model_rows()
                 .iter()
@@ -1177,12 +1362,12 @@ mod tests {
 
     #[test]
     fn picker_query_cross_provider_enter_emits_provider_switch() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         type_model_query(&mut view, "openrouter");
 
         let action = view.handle_key(KeyEvent::new(
@@ -1205,13 +1390,13 @@ mod tests {
 
     #[test]
     fn picker_query_no_match_custom_row_stays_active_provider_scoped() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Openrouter;
         app.model_ids_passthrough = true;
         app.model = crate::config::DEFAULT_OPENROUTER_MODEL.to_string();
         app.auto_model = false;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         type_model_query(&mut view, "custom-org/custom-model");
 
         assert_eq!(view.resolved_model(), "custom-org/custom-model");
@@ -1236,13 +1421,13 @@ mod tests {
 
     #[test]
     fn picker_query_no_match_strict_provider_enter_is_noop() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         type_model_query(&mut view, "definitely-not-a-deepseek-model");
 
         assert_eq!(view.model_row_count(), 0);
@@ -1255,12 +1440,12 @@ mod tests {
 
     #[test]
     fn picker_query_backspace_restores_active_provider_rows() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         type_model_query(&mut view, "openrouter");
         assert!(
             view.visible_model_rows()
@@ -1286,8 +1471,8 @@ mod tests {
 
     #[test]
     fn picker_effort_pane_ignores_query_typing() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
         view.handle_key(KeyEvent::new(
             KeyCode::Tab,
             crossterm::event::KeyModifiers::NONE,
@@ -1307,13 +1492,13 @@ mod tests {
 
     #[test]
     fn picker_query_resyncs_effort_for_codex_rows() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Auto;
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.resolved_effort(), ReasoningEffort::Auto);
 
         type_model_query(&mut view, "codex");
@@ -1331,23 +1516,23 @@ mod tests {
 
     #[test]
     fn picker_preserves_unknown_model_via_custom_row() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-pro-2026-04-XX".to_string();
         app.auto_model = false;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
     }
 
     #[test]
     fn picker_lists_openrouter_large_models() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Openrouter;
         app.model_ids_passthrough = true;
         app.model = "minimax/minimax-m3".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         let model_ids = view.visible_model_ids();
 
         assert!(model_ids.contains(&"arcee-ai/trinity-large-thinking"));
@@ -1367,12 +1552,12 @@ mod tests {
 
     #[test]
     fn picker_lists_xiaomi_mimo_chat_models_without_speech_models() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
         app.model = "mimo-v2.5-pro".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         let model_ids = view.visible_model_ids();
 
         for expected in ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"] {
@@ -1399,13 +1584,13 @@ mod tests {
 
     #[test]
     fn picker_for_ollama_preserves_current_local_tag_without_hosted_static_rows() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Ollama;
         app.model_ids_passthrough = true;
         app.model = "qwen2.5-coder:7b".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         let model_ids = view.visible_model_ids();
 
         assert_eq!(model_ids, vec!["auto"]);
@@ -1444,13 +1629,13 @@ mod tests {
 
     #[test]
     fn picker_preserves_custom_passthrough_model_ids() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Openrouter;
         app.model_ids_passthrough = true;
         app.model = "opencode-go/glm-5.1".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "opencode-go/glm-5.1");
@@ -1458,13 +1643,13 @@ mod tests {
 
     #[test]
     fn picker_exposes_active_custom_provider_model_row() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Custom;
         app.model_ids_passthrough = true;
         app.model = "vendor/custom-model-v1".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
 
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "vendor/custom-model-v1");
@@ -1476,14 +1661,14 @@ mod tests {
 
     #[test]
     fn picker_exposes_saved_model_for_active_provider() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
         app.model = "mimo-v2.5-custom".to_string();
         app.auto_model = false;
         app.provider_models
             .insert("xiaomi-mimo".to_string(), "mimo-v2.5-custom".to_string());
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         view.selected_model_idx = view
             .visible_model_rows()
             .iter()
@@ -1510,7 +1695,7 @@ mod tests {
 
     #[test]
     fn picker_excludes_saved_models_from_other_providers() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
         app.model = "mimo-v2.5-pro".to_string();
         app.auto_model = false;
@@ -1525,7 +1710,7 @@ mod tests {
             "custom-qianfan-service-id".to_string(),
         );
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         let model_ids = view.visible_model_ids();
 
         // Active provider's own model stays present (and ahead of the tail).
@@ -1548,27 +1733,27 @@ mod tests {
     fn picker_skips_unknown_provider_saved_models() {
         // A config key that maps to no known provider cannot be applied, so it
         // must not produce a picker row (#2596).
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
         app.model = "mimo-v2.5-pro".to_string();
         app.auto_model = false;
         app.provider_models
             .insert("totally-unknown".to_string(), "ghost-model".to_string());
 
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert!(!view.visible_model_ids().contains(&"ghost-model"));
     }
 
     #[test]
     fn picker_does_not_hijack_current_custom_model_with_saved_provider_row() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Openai;
         app.model_ids_passthrough = true;
         app.model = "kimi-k2.6".to_string();
         app.provider_models
             .insert("moonshot".to_string(), "kimi-k2.6".to_string());
 
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
 
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "kimi-k2.6");
@@ -1589,10 +1774,10 @@ mod tests {
 
     #[test]
     fn arrow_keys_move_within_focused_pane() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-pro".to_string();
         app.reasoning_effort = ReasoningEffort::High;
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 1);
         view.handle_key(KeyEvent::new(
             KeyCode::Down,
@@ -1620,9 +1805,9 @@ mod tests {
 
     #[test]
     fn mouse_wheel_moves_focused_picker_pane() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-pro".to_string();
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 1);
 
         view.handle_mouse(crossterm::event::MouseEvent {
@@ -1644,8 +1829,8 @@ mod tests {
 
     #[test]
     fn tab_switches_between_model_and_thinking() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.focus, Pane::Model);
         view.handle_key(KeyEvent::new(
             KeyCode::Tab,
@@ -1661,11 +1846,11 @@ mod tests {
 
     #[test]
     fn enter_emits_current_model_and_thinking() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::High;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 1);
         assert_eq!(view.selected_effort_idx, 2);
 
@@ -1704,11 +1889,11 @@ mod tests {
 
     #[test]
     fn deepseek_provider_uses_neutral_two_pane_selection() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-flash".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 2);
         assert_eq!(view.selected_effort_idx, 3);
         assert_eq!(view.focus, Pane::Model);
@@ -1718,10 +1903,10 @@ mod tests {
 
     #[test]
     fn model_picker_selected_row_renders_readable_selection_contrast() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-flash".to_string();
         app.auto_model = false;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         let area = Rect::new(0, 0, 100, 28);
         let mut buf = Buffer::empty(area);
 
@@ -1751,11 +1936,11 @@ mod tests {
 
     #[test]
     fn known_model_with_auto_effort_preserves_explicit_model() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Auto;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert!(!view.show_custom_model_row);
         assert_eq!(view.selected_model_idx, 1);
         assert_eq!(view.selected_effort_idx, 0);
@@ -1765,11 +1950,11 @@ mod tests {
 
     #[test]
     fn auto_model_selects_auto_row() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Auto;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 0);
         assert_eq!(view.selected_effort_idx, 0);
         assert_eq!(view.resolved_model(), "auto");
@@ -1778,11 +1963,11 @@ mod tests {
 
     #[test]
     fn custom_model_row_preserves_current_model_and_effort() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.model = "deepseek-v4-pro-2026-04-XX".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::High;
-        let view = ModelPickerView::new(&app);
+        let view = ModelPickerView::new(&app, &config);
         assert!(view.show_custom_model_row);
         assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
         assert_eq!(view.selected_effort_idx, 2);
@@ -1792,8 +1977,8 @@ mod tests {
 
     #[test]
     fn move_down_from_last_model_is_noop() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
         view.selected_model_idx = view.model_row_count() - 1;
         let result = view.move_down();
         assert!(!result);
@@ -1801,8 +1986,8 @@ mod tests {
 
     #[test]
     fn move_up_from_first_model_is_noop() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
         view.selected_model_idx = 0;
         let result = view.move_up();
         assert!(!result);
@@ -1810,8 +1995,8 @@ mod tests {
 
     #[test]
     fn immediate_esc_closes_without_apply() {
-        let (app, _lock) = create_test_app();
-        let mut view = ModelPickerView::new(&app);
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
         let action = view.handle_key(KeyEvent::new(
             KeyCode::Esc,
             crossterm::event::KeyModifiers::NONE,
@@ -1821,9 +2006,9 @@ mod tests {
 
     #[test]
     fn esc_after_selection_move_closes_without_apply() {
-        let (mut app, _lock) = create_test_app();
+        let (mut app, config, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::High;
-        let mut view = ModelPickerView::new(&app);
+        let mut view = ModelPickerView::new(&app, &config);
         view.handle_key(KeyEvent::new(
             KeyCode::Down,
             crossterm::event::KeyModifiers::NONE,
@@ -1844,7 +2029,7 @@ mod tests {
     #[test]
     fn model_picker_is_usable_and_opaque_at_blocker_sizes() {
         use crate::tui::views::ViewStack;
-        let (app, _lock) = create_test_app();
+        let (app, config, _lock) = create_test_app();
         for (w, h) in BLOCKER_SIZES {
             let area = Rect::new(0, 0, w, h);
             let mut buf = Buffer::empty(area);
@@ -1859,7 +2044,7 @@ mod tests {
             // Render through the ViewStack so the shared opaque backdrop is
             // painted exactly as it is in production.
             let mut stack = ViewStack::new();
-            stack.push(ModelPickerView::new(&app));
+            stack.push(ModelPickerView::new(&app, &config));
             stack.render(area, &mut buf);
 
             let rows: Vec<String> = (0..h)

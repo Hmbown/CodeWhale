@@ -5325,7 +5325,11 @@ fn normalize_auth_mode(mode: &str) -> String {
     mode.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
 
-fn base_url_uses_local_host(base_url: &str) -> bool {
+/// Whether a base URL points at a loopback/unspecified host, i.e. a local
+/// runtime rather than a hosted endpoint. Shared by the active-provider
+/// local-base-url check above and the `/provider` picker's custom-provider
+/// auth-optionality heuristic (#3830).
+pub(crate) fn base_url_uses_local_host(base_url: &str) -> bool {
     let Some(host) = base_url_host(base_url) else {
         return false;
     };
@@ -6215,6 +6219,82 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     }
 
     false
+}
+
+/// Whether a provider counts as "configured" for the default `/provider`
+/// and `/model` manager views (#3830). Shared by both pickers so "what shows
+/// up without browsing the full catalog" stays a single definition.
+/// Self-hosted providers (Ollama/Sglang/Vllm) report `has_key = true`
+/// unconditionally in [`has_api_key_for`] since they don't require auth to
+/// route to — that's correct for routing, but wrong for "did the user set
+/// this up," so a self-hosted provider only qualifies via an explicit
+/// `[providers.<name>]` entry or being active, never via `has_key` alone
+/// (otherwise every self-hosted provider type would always show up).
+#[must_use]
+pub(crate) fn provider_is_configured(
+    provider: ApiProvider,
+    is_active: bool,
+    has_key: bool,
+    configured: Option<&ProviderConfig>,
+    is_named_custom_entry: bool,
+) -> bool {
+    // A *named* custom provider entry (one the user actually added) always
+    // counts. The unconfigured `Custom` placeholder row that fills the slot
+    // when no custom provider exists yet is not itself "configured" — it's
+    // the catalog's invitation to add one.
+    if is_active || is_named_custom_entry {
+        return true;
+    }
+    if configured.is_some_and(provider_config_is_explicit) {
+        return true;
+    }
+    if provider.is_self_hosted() {
+        return false;
+    }
+    has_key
+}
+
+/// Convenience wrapper around [`provider_is_configured`] for callers that
+/// just want "is this provider configured given the active one," without
+/// the provider picker's multi-row named-custom-provider bookkeeping
+/// (`is_named_custom_entry`) — e.g. the `/model` picker (#3830), which only
+/// ever resolves the single, currently-selected `Custom` slot via
+/// [`Config::provider_config_for`], the same way model/route resolution
+/// does everywhere else.
+#[must_use]
+pub(crate) fn provider_is_configured_for_active(
+    config: &Config,
+    provider: ApiProvider,
+    active: ApiProvider,
+) -> bool {
+    provider_is_configured(
+        provider,
+        provider == active,
+        has_api_key_for(config, provider),
+        config.provider_config_for(provider),
+        false,
+    )
+}
+
+/// True when a `[providers.<name>]` table entry has any field the user would
+/// have had to set explicitly — base URL, model, auth, etc. Used by
+/// [`provider_is_configured`]: merely existing in the
+/// (always-`Some`-once-any-provider-is-configured) `ProvidersConfig` struct
+/// isn't enough, since untouched providers still resolve to a
+/// `ProviderConfig::default()` there.
+fn provider_config_is_explicit(entry: &ProviderConfig) -> bool {
+    entry.api_key.is_some()
+        || entry.base_url.is_some()
+        || entry.model.is_some()
+        || entry.auth_mode.is_some()
+        || entry.auth.is_some()
+        || entry.context_window.is_some()
+        || entry.mode.is_some()
+        || entry.max_concurrency.is_some()
+        || entry.http_headers.is_some()
+        || entry.path_suffix.is_some()
+        || entry.reasoning_stream_style.is_some()
+        || entry.insecure_skip_tls_verify.is_some()
 }
 
 /// Save an API key to the appropriate place for the given provider.

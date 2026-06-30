@@ -26,7 +26,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::config::{ApiProvider, Config, has_api_key_for, kimi_cli_credentials_present};
+use crate::config::{
+    ApiProvider, Config, base_url_uses_local_host, has_api_key_for, kimi_cli_credentials_present,
+    provider_is_configured,
+};
 use crate::core::ops::ProviderRuntimeStatus;
 use crate::model_profile::{SupportState, resolved_capability_profile};
 use crate::palette;
@@ -929,58 +932,6 @@ fn custom_provider_has_auth(configured: Option<&crate::config::ProviderConfig>) 
     })
 }
 
-/// Whether a provider counts as "configured" for the default `/provider`
-/// view (#3830). Self-hosted providers (Ollama/Sglang/Vllm) report
-/// `has_key = true` unconditionally in `has_api_key_for` since they don't
-/// require auth to route to — that's correct for routing, but wrong for "did
-/// the user set this up," so a self-hosted provider only qualifies via an
-/// explicit `[providers.<name>]` entry or being active, never via `has_key`
-/// alone (otherwise every self-hosted provider type would always show up).
-fn provider_is_configured(
-    provider: ApiProvider,
-    is_active: bool,
-    has_key: bool,
-    configured: Option<&crate::config::ProviderConfig>,
-    is_named_custom_entry: bool,
-) -> bool {
-    // A *named* custom provider entry (one the user actually added) always
-    // counts. The unconfigured `Custom` placeholder row that fills the slot
-    // when no custom provider exists yet (`provider_id_override: None` in
-    // `from_config_with_provider_id`) is not itself "configured" — it's the
-    // catalog's invitation to add one.
-    if is_active || is_named_custom_entry {
-        return true;
-    }
-    if configured.is_some_and(provider_config_is_explicit) {
-        return true;
-    }
-    if provider.is_self_hosted() {
-        return false;
-    }
-    has_key
-}
-
-/// True when a `[providers.<name>]` table entry has any field the user would
-/// have had to set explicitly — base URL, model, auth, etc. Used by
-/// [`provider_is_configured`]: merely existing in the
-/// (always-`Some`-once-any-provider-is-configured) `ProvidersConfig` struct
-/// isn't enough, since untouched providers still resolve to a
-/// `ProviderConfig::default()` there.
-fn provider_config_is_explicit(entry: &crate::config::ProviderConfig) -> bool {
-    entry.api_key.is_some()
-        || entry.base_url.is_some()
-        || entry.model.is_some()
-        || entry.auth_mode.is_some()
-        || entry.auth.is_some()
-        || entry.context_window.is_some()
-        || entry.mode.is_some()
-        || entry.max_concurrency.is_some()
-        || entry.http_headers.is_some()
-        || entry.path_suffix.is_some()
-        || entry.reasoning_stream_style.is_some()
-        || entry.insecure_skip_tls_verify.is_some()
-}
-
 fn custom_provider_auth_is_optional(configured: Option<&crate::config::ProviderConfig>) -> bool {
     configured.is_some_and(|entry| {
         entry
@@ -1002,29 +953,6 @@ fn auth_mode_disables_api_key(mode: &str) -> bool {
             .as_str(),
         "none" | "off" | "disabled" | "no_auth" | "noapi" | "no_api_key" | "anonymous"
     )
-}
-
-fn base_url_uses_local_host(base_url: &str) -> bool {
-    let without_scheme = base_url
-        .split_once("://")
-        .map_or(base_url, |(_, rest)| rest);
-    let authority = without_scheme.split('/').next().unwrap_or_default();
-    let host = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or(authority)
-        .trim_start_matches('[')
-        .split(']')
-        .next()
-        .unwrap_or(authority)
-        .split(':')
-        .next()
-        .unwrap_or(authority)
-        .to_ascii_lowercase();
-    matches!(host.as_str(), "localhost" | "0.0.0.0")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|addr| addr.is_loopback() || addr.is_unspecified())
 }
 
 fn missing_auth_message(
@@ -1848,6 +1776,9 @@ mod tests {
     fn mouse_scroll_moves_selection_in_list_stage() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        // Scroll across the full catalog (#3830), not just the configured
+        // subset, which would only contain the active provider here.
+        picker.toggle_view();
         let before = picker.selected_idx;
         picker.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
