@@ -12457,8 +12457,15 @@ fn should_auto_compact_before_send(app: &App) -> bool {
     if !app.auto_compact {
         return false;
     }
+    // Gate on the same ceiling-anchored token threshold the engine uses
+    // (`app.compact_threshold`, derived via `route_budget` from the input budget
+    // ceiling), rather than a raw window-relative percentage. On a tight window
+    // with a large output reservation, `pct-of-window` would wait past the point
+    // input can actually occupy; comparing estimated context against the shared
+    // token trigger keeps the pre-send gate and the engine auto-compaction in
+    // the same dimension.
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= app.auto_compact_threshold_percent.clamp(10.0, 100.0))
+        .map(|(used, _, _)| used.max(0) as usize >= app.compact_threshold)
         .unwrap_or(false)
 }
 

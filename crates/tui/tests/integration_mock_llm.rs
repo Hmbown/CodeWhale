@@ -549,8 +549,14 @@ fn compaction_config_defaults_are_enabled_for_session_survivability() {
     // This test is a smoke check that the defaults compile and are correct.
     // The production `CompactionConfig::default()` is exercised by
     // `compaction::tests::should_compact_respects_enabled_flag` etc.
-    let config = crate::models::compaction_threshold_for_model_at_percent("deepseek-v4-pro", 80.0);
-    // Verify the threshold is reasonable (> 0 and < context window).
-    assert!(config > 0, "compaction threshold must be positive");
-    assert!(config < 1_000_000, "compaction threshold must be below 1M");
+    //
+    // `compaction_threshold_for_model_at_percent` moved to `route_budget` (it
+    // now reserves output before measuring fullness, anchoring the trigger to
+    // the input budget ceiling) and is covered by tests there. This harness only
+    // wires `models.rs`, so smoke-check the window metadata that feeds the
+    // threshold instead: a known, positive, 1M-class V4 window.
+    let window = crate::models::context_window_for_model("deepseek-v4-pro")
+        .expect("deepseek-v4-pro must have a known context window");
+    assert!(window > 0, "context window must be positive");
+    assert_eq!(window, 1_000_000, "deepseek-v4-pro is a 1M-window model");
 }

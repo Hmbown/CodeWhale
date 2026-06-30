@@ -52,9 +52,12 @@ pub const DEFAULT_COMPACTION_TRIGGER_PERCENT: f64 = 75.0;
 /// Percentage of the window at or above which pressure is [`PressureLevel::Critical`].
 pub const CRITICAL_PRESSURE_PERCENT: f64 = 90.0;
 
-/// Percentage of the window at or above which pressure is [`PressureLevel::High`].
-/// This is the compaction trigger by default, so High and "compaction
-/// suggested" coincide at the seeded thresholds.
+/// Percentage of the *window* at or above which pressure is
+/// [`PressureLevel::High`]. Pressure stays a coarse window-relative signal for
+/// the UI; the actual compaction trigger is anchored to the input budget
+/// ceiling (see [`ContextBudget::compaction_trigger_for_percent`]), so the two
+/// only loosely correspond on roomy windows and intentionally diverge on tight
+/// ones where output reservation eats into the usable input.
 pub const HIGH_PRESSURE_PERCENT: f64 = DEFAULT_COMPACTION_TRIGGER_PERCENT;
 
 /// Percentage of the window at or above which pressure is [`PressureLevel::Medium`].
@@ -145,11 +148,19 @@ pub struct ContextBudget {
     /// Derived from the configured cap, clamped to fit the window while leaving
     /// at least [`MIN_INPUT_BUDGET_TOKENS`] of input room.
     pub output_cap_tokens: u64,
+    /// The spendable input ceiling for the turn: `window - output_cap -
+    /// headroom`, saturating at 0. This — not the raw window — is the canonical
+    /// denominator for every compaction-trigger percentage. Reserving output
+    /// before measuring "how full" is what keeps a tight window (e.g. a 256K
+    /// self-hosted deployment reserving a large output cap) from setting a
+    /// trigger above the room input can actually occupy.
+    pub input_budget_ceiling: u64,
     /// Input tokens still available before hitting the reserved boundary
-    /// (`window - output_cap - headroom - input`, saturating at 0).
+    /// (`input_budget_ceiling - input`, saturating at 0).
     pub available_input_tokens: u64,
     /// Input-token level at or above which compaction should be suggested
-    /// (`DEFAULT_COMPACTION_TRIGGER_PERCENT` of the window).
+    /// (`DEFAULT_COMPACTION_TRIGGER_PERCENT` of [`Self::input_budget_ceiling`],
+    /// not of the window — see that field for why).
     pub compaction_trigger_tokens: u64,
     /// Coarse pressure level derived from window usage.
     pub pressure: PressureLevel,
@@ -176,8 +187,13 @@ impl ContextBudget {
         let input_budget_ceiling = window_tokens.saturating_sub(reserved);
         let available_input_tokens = input_budget_ceiling.saturating_sub(input_tokens);
 
+        // Anchor the trigger to the *input budget ceiling*, not the window.
+        // `percent_of(ceiling, pct)` with `pct <= 100` can never exceed the
+        // ceiling, so the trigger is structurally guaranteed to sit inside the
+        // room input may occupy (see the `input_budget_ceiling` field doc and
+        // the `trigger_never_exceeds_input_ceiling` property test).
         let compaction_trigger_tokens =
-            percent_of(window_tokens, DEFAULT_COMPACTION_TRIGGER_PERCENT);
+            percent_of(input_budget_ceiling, DEFAULT_COMPACTION_TRIGGER_PERCENT);
 
         let pressure =
             PressureLevel::from_usage_percent(usage_percent(window_tokens, input_tokens));
@@ -186,10 +202,25 @@ impl ContextBudget {
             window_tokens,
             input_tokens,
             output_cap_tokens,
+            input_budget_ceiling,
             available_input_tokens,
             compaction_trigger_tokens,
             pressure,
         }
+    }
+
+    /// Compaction trigger (in input tokens) for an arbitrary caller-supplied
+    /// percentage, anchored to [`Self::input_budget_ceiling`].
+    ///
+    /// This is the single source of truth for "how many input tokens before we
+    /// compact": every route/model threshold helper routes through it instead
+    /// of computing its own `percent × window`. Because the percentage is
+    /// applied to the ceiling (window minus reserved output and headroom) and
+    /// [`percent_of`] clamps the percentage to `0..=100`, the result can never
+    /// exceed the ceiling regardless of how the window/output cap relate.
+    #[must_use]
+    pub fn compaction_trigger_for_percent(&self, percent: f64) -> u64 {
+        percent_of(self.input_budget_ceiling, percent)
     }
 
     /// Fraction of the window currently consumed by input, as a percentage in
@@ -313,16 +344,20 @@ mod tests {
     // -- Compaction trigger -------------------------------------------------
 
     #[test]
-    fn compaction_trigger_is_three_quarters_of_window() {
+    fn compaction_trigger_is_three_quarters_of_input_ceiling() {
         for &window in WINDOWS {
-            let budget = ContextBudget::new(window, 0, 64_000);
-            let expected = percent_of(window, DEFAULT_COMPACTION_TRIGGER_PERCENT);
+            let cap = 64_000u64;
+            let budget = ContextBudget::new(window, 0, cap);
+            let expected = percent_of(
+                budget.input_budget_ceiling,
+                DEFAULT_COMPACTION_TRIGGER_PERCENT,
+            );
             assert_eq!(
                 budget.compaction_trigger_tokens, expected,
-                "window {window}: trigger should be 75% of window"
+                "window {window}: trigger should be 75% of the input budget ceiling"
             );
-            // The trigger must always sit strictly inside the window.
-            assert!(budget.compaction_trigger_tokens < window);
+            // The trigger must always sit inside the room input can occupy.
+            assert!(budget.compaction_trigger_tokens <= budget.input_budget_ceiling);
         }
     }
 
@@ -330,18 +365,57 @@ mod tests {
     fn should_compact_flips_at_the_trigger() {
         let window = 1_048_576;
         let cap = 262_144;
-        let trigger = percent_of(window, DEFAULT_COMPACTION_TRIGGER_PERCENT);
+        // Trigger is now anchored to the input budget ceiling; read it from the
+        // budget rather than recomputing a window-relative value.
+        let trigger = ContextBudget::new(window, 0, cap).compaction_trigger_tokens;
+        assert!(trigger > 0);
 
         let below = ContextBudget::new(window, trigger - 1, cap);
         assert!(!below.should_compact());
-        assert!(!below.pressure.suggests_compaction());
 
         let at = ContextBudget::new(window, trigger, cap);
         assert!(at.should_compact());
-        assert!(at.pressure.suggests_compaction());
 
         let above = ContextBudget::new(window, trigger + 1, cap);
         assert!(above.should_compact());
+    }
+
+    #[test]
+    fn trigger_never_exceeds_input_ceiling() {
+        // Deterministic stand-in for a property test (the crate has no proptest
+        // dependency): sweep a wide grid of windows, output caps, and percents
+        // and assert the dimensional invariant holds everywhere. This is what
+        // makes the overflow "impossible by construction" rather than clamped.
+        const WINDOW_GRID: &[u64] = &[
+            0, 512, 8_192, 65_536, 131_072, 262_144, 500_000, 1_048_576, 2_000_000,
+        ];
+        const CAP_GRID: &[u64] = &[0, 1_024, 64_000, 131_072, 262_144, 1_000_000, 4_000_000];
+        const INPUT_GRID: &[u64] = &[0, 1_024, 200_000, 2_000_000];
+        const PERCENT_GRID: &[f64] = &[10.0, 50.0, 75.0, 80.0, 95.0, 100.0];
+
+        for &window in WINDOW_GRID {
+            for &cap in CAP_GRID {
+                for &input in INPUT_GRID {
+                    let budget = ContextBudget::new(window, input, cap);
+                    assert!(
+                        budget.compaction_trigger_tokens <= budget.input_budget_ceiling,
+                        "default trigger exceeded ceiling: window={window} cap={cap} \
+                         trigger={} ceiling={}",
+                        budget.compaction_trigger_tokens,
+                        budget.input_budget_ceiling,
+                    );
+                    for &pct in PERCENT_GRID {
+                        let trigger = budget.compaction_trigger_for_percent(pct);
+                        assert!(
+                            trigger <= budget.input_budget_ceiling,
+                            "trigger@{pct}% exceeded ceiling: window={window} cap={cap} \
+                             trigger={trigger} ceiling={}",
+                            budget.input_budget_ceiling,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

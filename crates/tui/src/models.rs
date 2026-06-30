@@ -14,7 +14,6 @@ pub const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: u32 = 1_000_000;
 /// models resolve to their own scaled value via
 /// [`compaction_threshold_for_model`] (#664).
 pub const DEFAULT_COMPACTION_TOKEN_THRESHOLD: usize = 102_400;
-const COMPACTION_THRESHOLD_PERCENT: u32 = 80;
 pub const DEFAULT_AUTO_COMPACT_MAX_CONTEXT_WINDOW_TOKENS: u32 = DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS;
 
 // === Core Message Types ===
@@ -527,23 +526,13 @@ fn explicit_context_window_hint(model_lower: &str) -> Option<u32> {
     None
 }
 
-/// Derive a compaction token threshold from model context and a caller-supplied
-/// percentage.
-#[must_use]
-pub fn compaction_threshold_for_model_at_percent(model: &str, percent: f64) -> usize {
-    let Some(window) = context_window_for_model(model) else {
-        return DEFAULT_COMPACTION_TOKEN_THRESHOLD;
-    };
-
-    let percent = percent.clamp(10.0, 100.0);
-    let threshold = (f64::from(window) * percent / 100.0).round();
-    let threshold = if threshold.is_finite() && threshold > 0.0 {
-        threshold as u64
-    } else {
-        u64::from(window) * u64::from(COMPACTION_THRESHOLD_PERCENT) / 100
-    };
-    usize::try_from(threshold).unwrap_or(DEFAULT_COMPACTION_TOKEN_THRESHOLD)
-}
+// `compaction_threshold_for_model_at_percent` used to live here as a plain
+// `percent × window` calculation. It moved to `crate::route_budget` (alongside
+// the output-reservation primitives) so it can reserve output before measuring
+// fullness — anchoring the compaction trigger to the input budget ceiling
+// instead of the raw window. `models` stays free of that dependency because it
+// is `#[path]`-included as a standalone module by some integration test
+// harnesses and must compile without the rest of the crate.
 
 /// Whether auto-compaction should be enabled when the user did not explicitly
 /// configure it. v0.8.64 defaults automatic continuity on for known model
@@ -720,10 +709,6 @@ mod tests {
             assert_eq!(context_window_for_model(model), Some(1_050_000));
             assert_eq!(max_output_tokens_for_model(model), Some(128_000));
             assert!(model_supports_reasoning(model));
-            assert_eq!(
-                compaction_threshold_for_model_at_percent(model, 80.0),
-                840_000
-            );
         }
 
         for model in [
@@ -741,10 +726,6 @@ mod tests {
             assert_eq!(context_window_for_model(model), Some(400_000));
             assert_eq!(max_output_tokens_for_model(model), Some(128_000));
             assert!(model_supports_reasoning(model));
-            assert_eq!(
-                compaction_threshold_for_model_at_percent(model, 80.0),
-                320_000
-            );
         }
 
         assert_eq!(context_window_for_model("gpt-5.5-nano"), None);
@@ -923,43 +904,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compaction_threshold_scales_with_context_window() {
-        assert_eq!(
-            compaction_threshold_for_model_at_percent("deepseek-v3.2-128k", 80.0),
-            102_400
-        );
-        // v0.8.11 (#664): unknown-model fallback also resolves to 80% of
-        // `LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS` (128K legacy DeepSeek
-        // fallback) — same late-trigger discipline as the V4 path. Was
-        // `50_000` pre-v0.8.11; that hardcoded value compacted at ~5% of a
-        // 1M window when model detection silently fell through, which is
-        // exactly the prefix-cache-burning behaviour we're getting away from.
-        assert_eq!(
-            compaction_threshold_for_model_at_percent("unknown-model", 80.0),
-            102_400
-        );
-    }
-
-    #[test]
-    fn compaction_scales_for_deepseek_v4_1m_context() {
-        assert_eq!(
-            compaction_threshold_for_model_at_percent("deepseek-v4-pro", 80.0),
-            800_000
-        );
-    }
-
-    #[test]
-    fn compaction_threshold_honors_configured_percent() {
-        assert_eq!(
-            compaction_threshold_for_model_at_percent("deepseek-v4-pro", 75.0),
-            750_000
-        );
-        assert_eq!(
-            compaction_threshold_for_model_at_percent("trinity-large-thinking", 80.0),
-            209_715
-        );
-    }
+    // The `compaction_threshold_for_model_at_percent` tests moved to
+    // `route_budget` together with the function, which now reserves output and
+    // anchors the trigger to the input budget ceiling rather than the raw
+    // window.
 
     #[test]
     fn auto_compaction_defaults_on_for_known_supported_model_windows() {

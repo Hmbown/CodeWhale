@@ -475,6 +475,9 @@ fn app_new_defaults_auto_compact_on_for_256k_class_models_when_unset() {
     let config_path = tmp.path().join("config.toml");
     let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
 
+    // 256K window reserves output via `effective_max_output_tokens`, which
+    // honors this env var; pin it off so the ceiling math is deterministic.
+    let _max_out = EnvVarGuard::remove("DEEPSEEK_MAX_OUTPUT_TOKENS");
     let mut options = test_options(false);
     options.model = "trinity-large-thinking".to_string();
     let app = App::new(options, &Config::default());
@@ -482,7 +485,9 @@ fn app_new_defaults_auto_compact_on_for_256k_class_models_when_unset() {
     assert!(app.auto_compact);
     assert!(!app.auto_compact_user_configured);
     assert_eq!(app.auto_compact_threshold_percent, 80.0);
-    assert_eq!(app.compact_threshold, 209_715);
+    // Anchored to the input budget ceiling (256K window − 64K reserved output −
+    // 1K headroom = 195_584), 80% → 156_467, not the old 80%-of-window 209_715.
+    assert_eq!(app.compact_threshold, 156_467);
 }
 
 #[test]
@@ -499,7 +504,9 @@ fn app_new_defaults_auto_compact_on_for_v4_class_models_when_unset() {
     assert!(app.auto_compact);
     assert!(!app.auto_compact_user_configured);
     assert_eq!(app.auto_compact_threshold_percent, 80.0);
-    assert_eq!(app.compact_threshold, 800_000);
+    // 1M window reserves the full 262_144 output (≥500K branch, env-independent),
+    // ceiling 736_832; 80% → 589_466, not the old 80%-of-window 800_000.
+    assert_eq!(app.compact_threshold, 589_466);
 }
 
 #[test]
@@ -510,13 +517,15 @@ fn app_new_respects_explicit_auto_compact_false_for_256k_class_models() {
     std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n").expect("settings");
     let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
 
+    let _max_out = EnvVarGuard::remove("DEEPSEEK_MAX_OUTPUT_TOKENS");
     let mut options = test_options(false);
     options.model = "trinity-large-thinking".to_string();
     let app = App::new(options, &Config::default());
 
     assert!(!app.auto_compact);
     assert!(app.auto_compact_user_configured);
-    assert_eq!(app.compact_threshold, 209_715);
+    // Ceiling-anchored (see app_new_defaults_auto_compact_on_for_256k_class_models).
+    assert_eq!(app.compact_threshold, 156_467);
 }
 
 #[test]
@@ -533,7 +542,8 @@ fn app_new_respects_explicit_auto_compact_false_for_v4_class_models() {
 
     assert!(!app.auto_compact);
     assert!(app.auto_compact_user_configured);
-    assert_eq!(app.compact_threshold, 800_000);
+    // Ceiling-anchored (see app_new_defaults_auto_compact_on_for_v4_class_models).
+    assert_eq!(app.compact_threshold, 589_466);
 }
 
 #[test]

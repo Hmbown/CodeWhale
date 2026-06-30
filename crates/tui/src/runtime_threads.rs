@@ -30,10 +30,8 @@ use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::{Event as EngineEvent, TurnOutcomeStatus};
 use crate::core::ops::Op;
-use crate::models::{
-    ContentBlock, Message, SystemPrompt, Usage, auto_compact_default_for_model,
-    compaction_threshold_for_model_at_percent,
-};
+use crate::models::{ContentBlock, Message, SystemPrompt, Usage, auto_compact_default_for_model};
+use crate::route_budget::compaction_threshold_for_model_at_percent;
 use crate::tools::plan::new_shared_plan_state;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::new_shared_todo_list;
