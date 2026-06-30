@@ -1,0 +1,59 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+          echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p codewhale-cli -p codewhale-tui
+
+      - name: Stage binaries
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp target/x86_64-pc-windows-msvc/release/codewhale.exe artifacts/
+          cp target/x86_64-pc-windows-msvc/release/codewhale-tui.exe artifacts/
+          cp target/x86_64-pc-windows-msvc/release/codew.exe artifacts/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codewhale-windows-x64
+          path: artifacts/*
+          if-no-files-found: error
