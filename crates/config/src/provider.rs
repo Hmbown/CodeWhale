@@ -14,16 +14,16 @@ use super::{
     DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL, DEFAULT_NOVITA_MODEL,
     DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL,
-    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENMODEL_BASE_URL,
-    DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
-    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
-    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
-    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
-    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
-    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
-    DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
-    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
-    DEFAULT_ZAI_MODEL, ProviderKind,
+    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL,
+    DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
+    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL,
+    DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL,
+    DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL,
+    DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL,
+    DEFAULT_VOLCENGINE_BASE_URL, DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL,
+    DEFAULT_WANJIE_ARK_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL,
+    DEFAULT_ZAI_BASE_URL, DEFAULT_ZAI_MODEL, ProviderKind,
 };
 
 /// Wire protocol spoken by a provider.
@@ -594,6 +594,47 @@ provider!(
     aliases: ["sakana-ai", "sakana_ai", "fugu"]
 );
 
+/// OpenCode Zen curated model gateway using the Responses API.
+pub struct OpenCodeZen;
+
+impl Provider for OpenCodeZen {
+    fn id(&self) -> &'static str {
+        "opencode-zen"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::OpenCodeZen
+    }
+
+    fn display_name(&self) -> &'static str {
+        "OpenCode Zen"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_OPENCODE_ZEN_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_OPENCODE_ZEN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "opencode_zen"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["opencode_zen", "opencodezen", "zen", "opencode"]
+    }
+
+    fn wire(&self) -> WireFormat {
+        WireFormat::Responses
+    }
+}
+
 /// User-defined OpenAI-compatible endpoint (#1519).
 ///
 /// A single dynamic provider identity for arbitrary `[providers.<name>]
@@ -676,9 +717,10 @@ static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
 static DEEPINFRA: Deepinfra = Deepinfra;
 static SAKANA: Sakana = Sakana;
+static OPENCODE_ZEN: OpenCodeZen = OpenCodeZen;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 30] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 31] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -708,6 +750,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 30] = [
     &MINIMAX,
     &DEEPINFRA,
     &SAKANA,
+    &OPENCODE_ZEN,
     &CUSTOM,
 ];
 

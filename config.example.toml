@@ -20,7 +20,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | opencode-zen
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -551,7 +551,18 @@ max_subagents = 10 # optional (1-20)
 [providers.sakana]
 # api_key = "YOUR_FUGU_API_KEY"
 # base_url = "https://api.sakana.ai/v1"
-# model = "fugu"                            # or fugu-ultra-20260615
+# model = "fugu"
+
+# OpenCode Zen Provider (https://opencode.ai/zen)
+# OpenCode Zen is a curated model gateway that provides access to
+# tested and verified models through the OpenAI Responses API.
+# Sign up at https://opencode.ai/zen, copy your API key.
+# Provider aliases: opencode-zen, opencode_zen, zen, opencode
+# Env var aliases: OPENCODE_ZEN_API_KEY, OPENCODE_API_KEY
+[providers.opencode_zen]
+# api_key = "YOUR_OPENCODE_ZEN_API_KEY"
+# base_url = "https://opencode.ai/zen/v1"
+# model = "gpt-5.5"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Together AI Provider (https://www.together.ai/)

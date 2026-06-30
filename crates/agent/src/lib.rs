@@ -675,6 +675,14 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // OpenCode Zen curated gateway models
+            ModelInfo {
+                id: "gpt-5.5".to_string(),
+                provider: ProviderKind::OpenCodeZen,
+                aliases: vec!["zen-gpt-5.5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
             // Anthropic native Messages API models (#3014)
             ModelInfo {
                 id: "claude-opus-4-8".to_string(),

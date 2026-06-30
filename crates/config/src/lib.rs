@@ -159,6 +159,14 @@ pub struct ProvidersToml {
     pub deepinfra: ProviderConfigToml,
     #[serde(default, alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     pub sakana: ProviderConfigToml,
+    #[serde(
+        default,
+        alias = "opencode-zen",
+        alias = "opencode_zen",
+        alias = "zen",
+        alias = "opencode"
+    )]
+    pub opencode_zen: ProviderConfigToml,
     /// Catch-all table for the dynamic OpenAI-compatible custom provider
     /// identity (#1519). Arbitrary `[providers.<name>]` tables are handled by
     /// the tui-side flatten map; this named slot keeps the canonical
@@ -257,6 +265,7 @@ impl ProvidersToml {
             ProviderKind::Minimax => &self.minimax,
             ProviderKind::Deepinfra => &self.deepinfra,
             ProviderKind::Sakana => &self.sakana,
+            ProviderKind::OpenCodeZen => &self.opencode_zen,
             ProviderKind::Custom => &self.custom,
         }
     }
@@ -292,6 +301,7 @@ impl ProvidersToml {
             ProviderKind::Minimax => &mut self.minimax,
             ProviderKind::Deepinfra => &mut self.deepinfra,
             ProviderKind::Sakana => &mut self.sakana,
+            ProviderKind::OpenCodeZen => &mut self.opencode_zen,
             ProviderKind::Custom => &mut self.custom,
         }
     }
@@ -1964,6 +1974,7 @@ impl ConfigToml {
                 ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
                 ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
                 ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL.to_string(),
+                ProviderKind::OpenCodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL.to_string(),
                 // The custom provider has no built-in endpoint; fall back to its
                 // descriptor placeholder so the lookup is total. Real custom
                 // routes always supply a configured base_url before this point.
@@ -2540,6 +2551,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Minimax => DEFAULT_MINIMAX_MODEL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
         ProviderKind::Sakana => DEFAULT_SAKANA_MODEL,
+        ProviderKind::OpenCodeZen => DEFAULT_OPENCODE_ZEN_MODEL,
         // No built-in default model; the registry placeholder keeps this total.
         ProviderKind::Custom => provider.provider().default_model(),
     }
@@ -2576,6 +2588,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
         ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL,
+        ProviderKind::OpenCodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL,
         // No built-in default base URL; the registry placeholder keeps this total.
         ProviderKind::Custom => provider.provider().default_base_url(),
     }
@@ -4102,6 +4115,8 @@ struct EnvRuntimeOverrides {
     deepinfra_model: Option<String>,
     sakana_base_url: Option<String>,
     sakana_model: Option<String>,
+    opencode_zen_base_url: Option<String>,
+    opencode_zen_model: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -4334,6 +4349,10 @@ impl EnvRuntimeOverrides {
             deepinfra_model: std::env::var("DEEPINFRA_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            opencode_zen_base_url: std::env::var("OPENCODE_ZEN_BASE_URL")
+                .or_else(|_| std::env::var("OPENCODE_ZEN_BASE"))
+                .ok(),
+            opencode_zen_model: std::env::var("OPENCODE_ZEN_MODEL").ok(),
             sakana_base_url: std::env::var("SAKANA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -4391,6 +4410,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Minimax => self.minimax_base_url.clone(),
             ProviderKind::Deepinfra => self.deepinfra_base_url.clone(),
             ProviderKind::Sakana => self.sakana_base_url.clone(),
+            ProviderKind::OpenCodeZen => self.opencode_zen_base_url.clone(),
             // No dedicated CODEWHALE_CUSTOM_BASE_URL env override: a custom
             // provider's base URL comes from its `[providers.<name>]` table.
             ProviderKind::Custom => None,
@@ -4421,6 +4441,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Minimax => self.minimax_model.clone(),
             ProviderKind::Deepinfra => self.deepinfra_model.clone(),
             ProviderKind::Sakana => self.sakana_model.clone(),
+            ProviderKind::OpenCodeZen => self.opencode_zen_model.clone(),
             _ => None,
         }?;
 

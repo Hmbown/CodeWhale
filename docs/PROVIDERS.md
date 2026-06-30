@@ -32,7 +32,7 @@ The canonical provider IDs are:
 `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`,
 `siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`,
 `ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`,
-`openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, and `sakana`.
+`openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, `sakana`, and `opencode-zen`.
 
 Use any of these surfaces to select a provider:
 
@@ -106,6 +106,7 @@ the listed provider env vars.
 | `minimax` | `[providers.minimax]` | OpenAI Chat Completions | `MINIMAX_API_KEY` |
 | `deepinfra` | `[providers.deepinfra]` | OpenAI Chat Completions | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
 | `sakana` | `[providers.sakana]` | OpenAI Chat Completions | `FUGU_API_KEY`, `SAKANA_API_KEY` |
+| `opencode-zen` | `[providers.opencode_zen]` | OpenAI Responses | `OPENCODE_ZEN_API_KEY`, `OPENCODE_API_KEY` |
 
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
@@ -269,6 +270,7 @@ the same links where possible.
 | `anthropic` | `[providers.anthropic]` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`; default `https://api.anthropic.com` | `claude-opus-4-8`, `claude-sonnet-4-6` (default), `claude-haiku-4-5` | Native Anthropic Messages API route (`/v1/messages`, `x-api-key` + `anthropic-version: 2023-06-01`) — not OpenAI-compatible. Prompt caching via `cache_control` breakpoints, adaptive thinking + `output_config.effort`, signed thinking blocks replayed verbatim, cache telemetry normalized per #2961. `ANTHROPIC_MODEL` is accepted. |
 | `openmodel` | `[providers.openmodel]` | `OPENMODEL_API_KEY` | `OPENMODEL_BASE_URL`; default `https://api.openmodel.ai` | `deepseek-v4-flash`; provider-scoped custom model IDs pass through | OpenModel Anthropic-compatible Messages route. Uses `/v1/messages`, Bearer auth, and `anthropic-version: 2023-06-01`; OpenModel selects DeepSeek, DashScope, Xiaomi, Claude, and other routes by model id. `OPENMODEL_MODEL` is accepted. |
 | `sakana` | `[providers.sakana]` | `FUGU_API_KEY`, `SAKANA_API_KEY` | `SAKANA_BASE_URL`; default `https://api.sakana.ai/v1` | `fugu` (default), `fugu-ultra-20260615` | Sakana AI Fugu OpenAI-compatible route. Standard Chat Completions wire protocol; streaming supported. `fugu-ultra-20260615` is the heavy/reasoning variant. Env var aliases: `FUGU_API_KEY` (primary), `SAKANA_API_KEY`; provider aliases: `sakana-ai`, `sakana_ai`, `fugu`. |
+| `opencode-zen` | `[providers.opencode_zen]` | `OPENCODE_ZEN_API_KEY`, `OPENCODE_API_KEY` | `OPENCODE_ZEN_BASE_URL`; default `https://opencode.ai/zen/v1` | `gpt-5.5` (default); `/models` lists all available Zen models dynamically | OpenCode Zen curated model gateway. Uses the OpenAI Responses API wire protocol. Sign up at https://opencode.ai/zen for an API key. Models include GPT 5.5, Claude Opus, Gemini, DeepSeek V4, GLM, Qwen, Kimi, and more. Env var aliases: `OPENCODE_ZEN_API_KEY` (primary), `OPENCODE_API_KEY`; provider aliases: `opencode-zen`, `opencode_zen`, `opencodezen`, `zen`, `opencode`. |
 
 ### Hugging Face Provider vs MCP vs Hub
 
