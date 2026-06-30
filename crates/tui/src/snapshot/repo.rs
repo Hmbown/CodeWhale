@@ -13,6 +13,7 @@
 //! directory".
 
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
@@ -51,6 +52,7 @@ pub struct SnapshotRepo {
 }
 
 const STALE_TMP_PACK_AGE: Duration = Duration::from_secs(60 * 60);
+const SNAPSHOT_LOCK_FILE: &str = "codewhale-snapshot.lock";
 
 /// Maximum total snapshot storage in megabytes before pruning kicks in at
 /// snapshot time. Keeps the side repo from blowing up the user's disk during
@@ -305,6 +307,10 @@ impl SnapshotRepo {
     ///
     /// Returns the snapshot's commit SHA.
     pub fn snapshot(&self, label: &str) -> io::Result<SnapshotId> {
+        self.with_repo_write_lock(|| self.snapshot_locked(label))
+    }
+
+    fn snapshot_locked(&self, label: &str) -> io::Result<SnapshotId> {
         // Guard against disk blowup (#1112): if the snapshot directory has
         // grown beyond the limit, prune aggressively before adding more.
         if let Ok(current_mb) = dir_size_mb(&self.git_dir)
@@ -320,7 +326,7 @@ impl SnapshotRepo {
             // we're under the target, or until there's nothing left.
             let mut age = Duration::from_secs(1);
             for _ in 0..10 {
-                let _ = self.prune_older_than(age);
+                let _ = self.prune_older_than_locked(age);
                 if let Ok(new_size) = dir_size_mb(&self.git_dir)
                     && new_size <= PRUNE_TARGET_MB
                 {
@@ -343,8 +349,8 @@ impl SnapshotRepo {
                     target: "snapshot",
                     "snapshot storage still over limit after pruning; wiping history"
                 );
-                let _ = self.prune_older_than(Duration::ZERO);
-                let _ = self.prune_unreachable_objects();
+                let _ = self.prune_older_than_locked(Duration::ZERO);
+                let _ = self.prune_unreachable_objects_locked();
             }
         }
         // Stage every tracked + untracked path the workspace exposes.
@@ -419,6 +425,10 @@ impl SnapshotRepo {
     /// snapshot tree relative to the workspace root. We do NOT touch the
     /// user's own `.git` — snapshots only contain working-tree files.
     pub fn restore(&self, id: &SnapshotId) -> io::Result<()> {
+        self.with_repo_write_lock(|| self.restore_locked(id))
+    }
+
+    fn restore_locked(&self, id: &SnapshotId) -> io::Result<()> {
         let current_paths = self.tree_paths("HEAD")?;
         let target_paths = self.tree_paths(id.as_str())?;
         let checkout = run_git(
@@ -446,12 +456,14 @@ impl SnapshotRepo {
     /// again would be a no-op, so the caller should continue scanning
     /// older snapshots.
     pub fn work_tree_matches_snapshot(&self, id: &SnapshotId) -> io::Result<bool> {
-        let diff = run_git(
-            &self.git_dir,
-            &self.work_tree,
-            &["diff", "--quiet", id.as_str(), "--", ":/"],
-        )?;
-        Ok(diff.status.success())
+        self.with_repo_read_lock(|| {
+            let diff = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["diff", "--quiet", id.as_str(), "--", ":/"],
+            )?;
+            Ok(diff.status.success())
+        })
     }
 
     fn tree_paths(&self, treeish: &str) -> io::Result<HashSet<PathBuf>> {
@@ -506,6 +518,10 @@ impl SnapshotRepo {
 
     /// List up to `limit` most-recent snapshots, newest first.
     pub fn list(&self, limit: usize) -> io::Result<Vec<Snapshot>> {
+        self.with_repo_read_lock(|| self.list_locked(limit))
+    }
+
+    fn list_locked(&self, limit: usize) -> io::Result<Vec<Snapshot>> {
         // `git log -<n>` is the short form of `--max-count=<n>`; if `limit`
         // is `usize::MAX` (caller asked for "everything") we pass an empty
         // count so git defaults to no upper bound.
@@ -550,13 +566,17 @@ impl SnapshotRepo {
     /// `git gc --prune=now` to actually reclaim space. Cheap and avoids
     /// rewriting history when nothing has aged out.
     pub fn prune_older_than(&self, max_age: Duration) -> io::Result<usize> {
+        self.with_repo_write_lock(|| self.prune_older_than_locked(max_age))
+    }
+
+    fn prune_older_than_locked(&self, max_age: Duration) -> io::Result<usize> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| io_other(format!("clock error: {e}")))?
             .as_secs() as i64;
         let cutoff = now - max_age.as_secs() as i64;
 
-        let snapshots = self.list(usize::MAX)?;
+        let snapshots = self.list_locked(usize::MAX)?;
         if snapshots.is_empty() {
             return Ok(0);
         }
@@ -637,7 +657,11 @@ impl SnapshotRepo {
     /// are preserved — only the parent chain to older snapshots is cut.
     /// Old objects become unreachable and gc reclaims them.
     pub fn prune_keep_last_n(&self, max_count: usize) -> io::Result<usize> {
-        let snapshots = self.list(usize::MAX)?;
+        self.with_repo_write_lock(|| self.prune_keep_last_n_locked(max_count))
+    }
+
+    fn prune_keep_last_n_locked(&self, max_count: usize) -> io::Result<usize> {
+        let snapshots = self.list_locked(usize::MAX)?;
         if snapshots.len() <= max_count {
             return Ok(0);
         }
@@ -712,9 +736,39 @@ impl SnapshotRepo {
         Ok(removed)
     }
 
+    fn with_repo_write_lock<T>(&self, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let lock_path = self.git_dir.join(SNAPSHOT_LOCK_FILE);
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.write()?;
+        f()
+    }
+
+    fn with_repo_read_lock<T>(&self, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let lock_path = self.git_dir.join(SNAPSHOT_LOCK_FILE);
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+        let lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock.read()?;
+        f()
+    }
+
     /// Drop unreachable loose objects left behind by interrupted or
     /// orphaned side-repo operations.
     pub fn prune_unreachable_objects(&self) -> io::Result<()> {
+        self.with_repo_write_lock(|| self.prune_unreachable_objects_locked())
+    }
+
+    fn prune_unreachable_objects_locked(&self) -> io::Result<()> {
         let prune = run_git(&self.git_dir, &self.work_tree, &["prune", "--expire=now"])?;
         if !prune.status.success() {
             return Err(io_other(format!(

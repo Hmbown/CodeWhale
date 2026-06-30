@@ -5,7 +5,7 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -6498,37 +6498,13 @@ async fn run_interactive(
         logging::warn(format!("Failed to install system skills: {e}"));
     }
 
-    // Prune stale workspace snapshots from prior sessions (7-day default).
-    // Non-fatal: a flaky disk, missing `git`, or read-only home should
-    // never block the TUI from starting.
-    let snapshots = config.snapshots_config();
-    if snapshots.enabled {
-        session_manager::prune_workspace_snapshots(&workspace, snapshots.max_age());
+    // Snapshot pruning rewrites side-repo refs and can run GC, so keep it
+    // before the TUI exposes snapshot list/restore commands.
+    if config.snapshots_config().enabled {
+        session_manager::prune_workspace_snapshots(&workspace, config.snapshots_config().max_age());
     }
-
-    // Prune stale tool-output spillover files (#422). Non-fatal: home
-    // missing or directory unreadable just means nothing got pruned;
-    // we never block startup. Runs unconditionally because the
-    // spillover store is created lazily on first write — there's no
-    // user-facing setting to gate.
-    match crate::tools::truncate::prune_older_than(crate::tools::truncate::SPILLOVER_MAX_AGE) {
-        Ok(0) => {}
-        Ok(n) => tracing::debug!(
-            target: "spillover",
-            "boot prune removed {n} spillover file(s)"
-        ),
-        Err(err) => tracing::warn!(
-            target: "spillover",
-            ?err,
-            "spillover prune skipped on boot"
-        ),
-    }
-
-    // v0.8.44: prune managed sessions on boot to prevent unbounded growth.
-    // Keeps at most MAX_SESSIONS (50) recent sessions; non-fatal on error.
-    if let Ok(manager) = session_manager::SessionManager::default_location() {
-        let _ = manager.cleanup_old_sessions();
-    }
+    let protected_session_token = resume_session_id.clone();
+    spawn_interactive_startup_maintenance(workspace.clone(), protected_session_token);
 
     // The `deepseek` launcher forwards `--yolo` to this binary via the
     // DEEPSEEK_YOLO env var (config.yolo), not as a CLI flag. Honour either.
@@ -6559,6 +6535,81 @@ async fn run_interactive(
         },
     )
     .await
+}
+
+fn spawn_interactive_startup_maintenance(
+    workspace: PathBuf,
+    protected_session_token: Option<String>,
+) {
+    let spawn_result = std::thread::Builder::new()
+        .name("codewhale-startup-maintenance".to_string())
+        .spawn(move || {
+            // Keep the first interactive frame ahead of optional disk cleanup.
+            std::thread::sleep(Duration::from_millis(500));
+            run_interactive_startup_maintenance(&workspace, protected_session_token.as_deref());
+        });
+
+    if let Err(err) = spawn_result {
+        logging::warn(format!("Startup maintenance skipped: {err}"));
+    }
+}
+
+fn startup_maintenance_protected_session_id(
+    resume_session_id: Option<&str>,
+    workspace: &Path,
+) -> Option<String> {
+    let session_id = resume_session_id?;
+    if session_id != "latest" {
+        return Some(session_id.to_string());
+    }
+
+    session_manager::SessionManager::default_location()
+        .ok()
+        .and_then(|manager| {
+            manager
+                .get_latest_session_for_workspace(workspace)
+                .ok()
+                .flatten()
+        })
+        .map(|session| session.id)
+}
+
+fn run_interactive_startup_maintenance(workspace: &Path, protected_session_token: Option<&str>) {
+    let started = Instant::now();
+
+    // Prune stale tool-output spillover files (#422). Non-fatal: home
+    // missing or directory unreadable just means nothing got pruned.
+    match crate::tools::truncate::prune_older_than(crate::tools::truncate::SPILLOVER_MAX_AGE) {
+        Ok(0) => {}
+        Ok(n) => tracing::debug!(
+            target: "spillover",
+            "boot prune removed {n} spillover file(s)"
+        ),
+        Err(err) => tracing::warn!(
+            target: "spillover",
+            ?err,
+            "spillover prune skipped on boot"
+        ),
+    }
+
+    // v0.8.44: prune managed sessions to prevent unbounded growth.
+    // Keeps at most MAX_SESSIONS (50) recent sessions; non-fatal on error.
+    let protected_session_id =
+        startup_maintenance_protected_session_id(protected_session_token, workspace);
+    match session_manager::SessionManager::default_location() {
+        Ok(manager) => {
+            if let Err(err) = manager.cleanup_old_sessions_except(protected_session_id.as_deref()) {
+                tracing::warn!(target: "session", ?err, "session cleanup skipped on boot");
+            }
+        }
+        Err(err) => tracing::warn!(target: "session", ?err, "session cleanup skipped on boot"),
+    }
+
+    tracing::debug!(
+        target: "startup",
+        elapsed_ms = started.elapsed().as_millis(),
+        "startup maintenance finished"
+    );
 }
 
 #[derive(Debug)]

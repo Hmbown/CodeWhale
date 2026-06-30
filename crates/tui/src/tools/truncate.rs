@@ -33,19 +33,16 @@
 //! tool-details pager opens the spillover file when the user
 //! presses the tool-details shortcut on a spilled tool cell.
 
-use std::fs;
+use std::fs::{self, FileTimes, OpenOptions};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::tools::spec::ToolResult;
 
-// `Path` is only referenced from helpers gated to test builds.
-#[cfg(test)]
-use std::path::Path;
-
 /// Name of the spillover directory under the CodeWhale home.
 pub const SPILLOVER_DIR_NAME: &str = "tool_outputs";
+const SPILLOVER_LOCK_FILE: &str = ".codewhale-tool-outputs.lock";
 
 /// Default threshold above which a tool result is a candidate for
 /// spillover. Mirrors the `MAX_MEMORY_SIZE` ceiling we use elsewhere
@@ -145,14 +142,38 @@ pub fn write_sha_spillover(sha: &str, content: &str) -> io::Result<PathBuf> {
             "sha must be a 64-char lowercase hex digest",
         )
     })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "could not resolve sha spillover directory",
+            )
+        })?
+        .to_path_buf();
     if path.exists() {
-        return Ok(path);
+        return match with_spillover_write_lock(&parent, || {
+            if path.exists() {
+                let _ = refresh_modified(&path);
+            } else {
+                crate::utils::write_atomic(&path, content.as_bytes())?;
+            }
+            Ok(path.clone())
+        }) {
+            Ok(path) => Ok(path),
+            Err(_) if path.exists() => Ok(path),
+            Err(err) => Err(err),
+        };
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    crate::utils::write_atomic(&path, content.as_bytes())?;
-    Ok(path)
+
+    with_spillover_write_lock(&parent, || {
+        if path.exists() {
+            let _ = refresh_modified(&path);
+            return Ok(path.clone());
+        }
+        crate::utils::write_atomic(&path, content.as_bytes())?;
+        Ok(path.clone())
+    })
 }
 
 /// Write `content` to the spillover file for `id`. Creates the
@@ -169,11 +190,19 @@ pub fn write_spillover(id: &str, content: &str) -> io::Result<PathBuf> {
             "could not resolve spillover path (empty/invalid id or missing home directory)",
         )
     })?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    crate::utils::write_atomic(&path, content.as_bytes())?;
-    Ok(path)
+    let parent = path
+        .parent()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "could not resolve spillover directory",
+            )
+        })?
+        .to_path_buf();
+    with_spillover_write_lock(&parent, || {
+        crate::utils::write_atomic(&path, content.as_bytes())?;
+        Ok(path.clone())
+    })
 }
 
 /// Drop spillover files older than `max_age`. Returns the number of
@@ -187,11 +216,15 @@ pub fn prune_older_than(max_age: Duration) -> io::Result<usize> {
     if !root.exists() {
         return Ok(0);
     }
+    with_spillover_write_lock(&root, || prune_older_than_locked(&root, max_age))
+}
+
+fn prune_older_than_locked(root: &Path, max_age: Duration) -> io::Result<usize> {
     let cutoff = SystemTime::now()
         .checked_sub(max_age)
         .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut pruned = 0usize;
-    for entry in fs::read_dir(&root)? {
+    for entry in fs::read_dir(root)? {
         let entry = match entry {
             Ok(e) => e,
             Err(err) => {
@@ -200,6 +233,12 @@ pub fn prune_older_than(max_age: Duration) -> io::Result<usize> {
             }
         };
         let path = entry.path();
+        if path
+            .file_name()
+            .is_some_and(|name| name == SPILLOVER_LOCK_FILE)
+        {
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
@@ -219,6 +258,24 @@ pub fn prune_older_than(max_age: Duration) -> io::Result<usize> {
         }
     }
     Ok(pruned)
+}
+
+fn refresh_modified(path: &Path) -> io::Result<()> {
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_times(FileTimes::new().set_modified(SystemTime::now()))
+}
+
+fn with_spillover_write_lock<T>(root: &Path, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    fs::create_dir_all(root)?;
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(SPILLOVER_LOCK_FILE))?;
+    let mut lock = fd_lock::RwLock::new(lock_file);
+    let _guard = lock.write()?;
+    f()
 }
 
 /// Convenience for the common "too long? spill it." pattern. If
@@ -625,6 +682,53 @@ mod tests {
         with_test_home(tmp.path(), || {
             let err = write_spillover("...", "x").unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        });
+    }
+
+    #[test]
+    fn write_sha_spillover_refreshes_reused_file_mtime() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+        with_test_home(tmp.path(), || {
+            let sha = "a".repeat(64);
+            let path = write_sha_spillover(&sha, "large result").expect("write sha");
+            let stale_time = SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);
+            let file = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("open sha");
+            file.set_times(FileTimes::new().set_modified(stale_time))
+                .expect("backdate sha");
+
+            let reused = write_sha_spillover(&sha, "large result").expect("reuse sha");
+            let refreshed = fs::metadata(&reused)
+                .expect("metadata")
+                .modified()
+                .expect("modified");
+
+            assert_eq!(reused, path);
+            assert!(refreshed > stale_time);
+        });
+    }
+
+    #[test]
+    fn write_sha_spillover_reuses_existing_file_when_refresh_fails() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+        with_test_home(tmp.path(), || {
+            let sha = "b".repeat(64);
+            let path = write_sha_spillover(&sha, "first").expect("write sha");
+            let original_permissions = fs::metadata(&path).expect("metadata").permissions();
+            let mut readonly_permissions = original_permissions.clone();
+            readonly_permissions.set_readonly(true);
+            fs::set_permissions(&path, readonly_permissions).expect("make readonly");
+
+            let reused = write_sha_spillover(&sha, "second");
+            fs::set_permissions(&path, original_permissions).expect("restore permissions");
+
+            let reused = reused.expect("reuse readonly sha");
+            assert_eq!(reused, path);
+            assert_eq!(fs::read_to_string(&path).unwrap(), "first");
         });
     }
 
