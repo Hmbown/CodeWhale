@@ -18,7 +18,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-06-24T09:06:20.600Z",
+  "generatedAt": "2026-06-30T02:03:34.268Z",
   "version": "0.8.65",
   "crates": [
     "agent",
@@ -88,7 +88,7 @@ export const FACTS: RepoFacts = {
     {
       "id": "xiaomi-mimo",
       "label": "Xiaomi MiMo",
-      "env": "XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"
+      "env": "XIAOMI_MIMO_TOKEN_PLAN_API_KEY / MIMO_TOKEN_PLAN_API_KEY / XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"
     },
     {
       "id": "novita",

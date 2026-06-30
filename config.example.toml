@@ -53,6 +53,7 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
+#   mimo-v2.5-pro-ultraspeed        — Xiaomi MiMo V2.5 Pro UltraSpeed chat model ID
 #   mimo-v2.5                       — Xiaomi MiMo V2.5 Omni model ID
 #   mimo-v2.5-tts                   — Xiaomi MiMo speech/TTS model ID
 #   mimo-v2.5-tts-voicedesign       — Xiaomi MiMo voice-design TTS model ID
@@ -437,9 +438,10 @@ max_subagents = 10 # optional (1-20)
 [providers.xiaomi_mimo]
 # api_key = "YOUR_XIAOMI_KEY"
 # base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
+# # base_url = "https://token-plan-ams.xiaomimimo.com/v1"  # Token Plan Europe / Amsterdam
 # # base_url = "https://api.xiaomimimo.com/v1"           # Pay-as-you-go / sk- keys
 # model = "mimo-v2.5-pro"              # chat/reasoning
-# Chat model IDs: mimo-v2.5-pro, mimo-v2.5
+# Chat model IDs: mimo-v2.5-pro, mimo-v2.5-pro-ultraspeed, mimo-v2.5
 # Token Plan subscriptions use separate tp-* API keys plus api-key auth.
 # mode = "token-plan-sgp"              # default Token Plan endpoint
 # mode = "token-plan-cn"               # China cluster

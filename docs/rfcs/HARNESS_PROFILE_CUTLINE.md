@@ -27,7 +27,7 @@ stores, candidate manifests, promotion gates, or an agentic Harness Creator.
 | Model family | Intended posture | Notes |
 | --- | --- | --- |
 | DeepSeek V4 Pro / Flash | cache-heavy | Preserve prefix stability and large-context continuity. |
-| Xiaomi MiMo v2.5 Pro / Flash | cache-heavy | Similar long-context/cache posture, but route and auth remain distinct from DeepSeek. |
+| Xiaomi MiMo V2.5 Pro / UltraSpeed / V2.5 | cache-heavy | Similar long-context/cache posture, but route and auth remain distinct from DeepSeek. Older V2 Flash names are historical examples, not current direct-provider defaults. |
 | Arcee Trinity Thinking | cache-heavy or explicit Arcee profile | Direct Arcee IDs such as `trinity-large-thinking` must not be hidden behind OpenRouter aliases. |
 | Hugging Face / local / open-weight routes | lean | Prefer smaller context packs, stricter tool surfaces, and subagent-oriented decomposition. |
 | Generic OpenAI-compatible gateways | standard unless matched | Do not infer provider-specific posture from a bare endpoint alone. |
