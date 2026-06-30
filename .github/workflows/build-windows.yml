@@ -3,11 +3,7 @@ name: Build Windows
 on:
   push:
     branches: [main]
-    paths:
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
