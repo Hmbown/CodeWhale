@@ -15,6 +15,7 @@ const EN_LINKS = [
   { href: "/en/roadmap", label: "Roadmap", cn: "路线" },
   { href: "/en/faq", label: "FAQ", cn: "问答" },
   { href: "/en/contribute", label: "Contribute", cn: "参与" },
+  { href: "https://github.com/Hmbown/CodeWhale", label: "GitHub", cn: "源码" },
 ];
 
 const ZH_LINKS = [
@@ -26,6 +27,7 @@ const ZH_LINKS = [
   { href: "/zh/roadmap", label: "路线图", cn: "" },
   { href: "/zh/faq", label: "常见问题", cn: "" },
   { href: "/zh/contribute", label: "参与贡献", cn: "" },
+  { href: "https://github.com/Hmbown/CodeWhale", label: "GitHub", cn: "" },
 ];
 
 export function Nav({ locale = "en" }: { locale?: Locale }) {
