@@ -293,15 +293,20 @@ upload to Hugging Face and does not perform direct Hugging Face Hub HTTP search.
 `xiaomi-mimo` defaults to `mimo-v2.5-pro` for long-context reasoning and coding
 work. The chat picker also exposes `mimo-v2.5-pro-ultraspeed` and the latest
 Omni model `mimo-v2.5`. Xiaomi MiMo TTS is available through
-`codewhale --provider xiaomi-mimo speech "text"
---model tts` (or the `tts` alias) plus model-visible `speech` / `tts` tools in
-Agent/YOLO mode.
+`codewhale --provider xiaomi-mimo speech "text" --model tts` (or the `tts`
+alias) plus model-visible `speech` / `tts` tools in Agent/YOLO mode.
+
+`/provider xiaomi-mimo ultraspeed` and `/provider xiaomi-mimo pro-ultraspeed`
+both select `mimo-v2.5-pro-ultraspeed`. Speech aliases such as `tts`,
+`voice-design`, and `voice-clone` are separate from normal chat defaults.
 
 Token Plan keys default to the Singapore endpoint
 `https://token-plan-sgp.xiaomimimo.com/v1`. If your MiMo account is provisioned
 for the China region, set `base_url = "https://token-plan-cn.xiaomimimo.com/v1"`
 explicitly in `[providers.xiaomi_mimo]` or set `mode = "token-plan-cn"`. Europe
-Token Plan accounts can use `mode = "token-plan-ams"`; `mode = "pay-as-you-go"`
+Token Plan accounts can set
+`base_url = "https://token-plan-ams.xiaomimimo.com/v1"` or use
+`mode = "token-plan-ams"`; `mode = "pay-as-you-go"`
 selects the standard API endpoint and standard MiMo key family. Xiaomi Token
 Plan docs and console expose credit/quota semantics, but CodeWhale does not
 currently have a documented balance endpoint to poll, so cost display remains
