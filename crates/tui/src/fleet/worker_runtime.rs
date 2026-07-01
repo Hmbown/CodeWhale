@@ -11,87 +11,16 @@
 //! - Mailbox events stream into fleet ledger as `FleetWorkerEventPayload`
 //! - `FleetWorkerInspection` reads both ledger state and sub-agent worker records
 
-#![allow(dead_code)]
-
 use anyhow::{Result, bail};
 use codewhale_protocol::fleet::{
-    FleetHostSpec, FleetResolvedRoute, FleetTaskSpec, FleetTaskWorkerProfile,
-    FleetWorkerEventPayload, FleetWorkerSpec,
+    FleetResolvedRoute, FleetTaskSpec, FleetTaskWorkerProfile, FleetWorkerSpec,
 };
 
-use super::host::FleetHostKind;
 use super::profile::AgentProfile;
 use crate::config::ApiProvider;
 use crate::route_runtime::resolve_route_candidate;
-use crate::tools::subagent::{
-    AgentWorkerSpec, AgentWorkerStatus, AgentWorkerToolProfile, SubAgentType,
-};
+use crate::tools::subagent::{AgentWorkerSpec, AgentWorkerToolProfile, SubAgentType};
 use crate::worker_profile::{ModelRoute, ToolScope, WorkerRuntimeProfile};
-
-/// Map a fleet worker spec's host kind to a display string.
-pub fn fleet_host_kind_for_spec(spec: &FleetWorkerSpec) -> FleetHostKind {
-    match &spec.host {
-        FleetHostSpec::Local => FleetHostKind::LocalProcess,
-        FleetHostSpec::Ssh { .. } => FleetHostKind::Ssh,
-        FleetHostSpec::Docker { .. } => FleetHostKind::LocalProcess, // Docker runs local-ish
-    }
-}
-
-/// Map a fleet host kind to a compact display label.
-pub fn fleet_host_kind_label(kind: FleetHostKind) -> &'static str {
-    match kind {
-        FleetHostKind::LocalProcess => "local",
-        FleetHostKind::Ssh => "ssh",
-    }
-}
-
-/// Build a sub-agent `AgentWorkerSpec` from a fleet task spec and worker spec.
-///
-/// The fleet task's `instructions` become the sub-agent's `objective`, the
-/// `worker.role` maps to a `SubAgentType`, and tool/capability restrictions
-/// become an `AgentWorkerToolProfile`.
-pub fn fleet_task_to_worker_spec(
-    worker_id: &str,
-    run_id: &str,
-    task_spec: &FleetTaskSpec,
-    _worker_spec: &FleetWorkerSpec,
-    model: &str,
-    workspace: &std::path::Path,
-) -> AgentWorkerSpec {
-    let agent_type =
-        fleet_role_to_agent_type(task_spec.worker.as_ref().and_then(|w| w.role.as_deref()));
-
-    let tool_profile = fleet_tool_profile(task_spec.worker.as_ref());
-
-    let objective = fleet_task_prompt(task_spec);
-    let max_spawn_depth = codewhale_config::FleetExecConfig::default().max_spawn_depth;
-    let runtime_profile =
-        fleet_worker_runtime_profile(&agent_type, &tool_profile, model, 0, max_spawn_depth);
-
-    AgentWorkerSpec {
-        worker_id: worker_id.to_string(),
-        run_id: run_id.to_string(),
-        parent_run_id: None,
-        session_name: Some(format!("fleet-{}-{}", worker_id, task_spec.id)),
-        objective,
-        role: task_spec.worker.as_ref().and_then(|w| w.role.clone()),
-        agent_type,
-        model: model.to_string(),
-        workspace: workspace.to_path_buf(),
-        git_branch: None,
-        context_mode: "fresh".to_string(),
-        fork_context: false,
-        tool_profile,
-        runtime_profile,
-        max_steps: task_spec
-            .budget
-            .as_ref()
-            .and_then(|b| b.max_tool_calls)
-            .unwrap_or(u32::MAX),
-        spawn_depth: 0,
-        max_spawn_depth,
-    }
-}
 
 /// Validate that every task referencing a workspace agent profile can resolve it.
 ///
@@ -502,59 +431,6 @@ fn fleet_model_route_for_loadout(
     }
 }
 
-/// Create a fleet artifact ref from a worker output.
-///
-/// Uses the fleet artifact conventions: logs go under `.codewhale/fleet/`,
-/// reports under `.codewhale/fleet/reports/`.
-pub fn fleet_artifact_ref(
-    _run_id: &str,
-    _worker_id: &str,
-    kind: codewhale_protocol::fleet::FleetArtifactKind,
-    path: std::path::PathBuf,
-) -> codewhale_protocol::fleet::FleetArtifactRef {
-    codewhale_protocol::fleet::FleetArtifactRef {
-        kind,
-        path,
-        checksum: None,
-        mime_type: None,
-        size_bytes: None,
-    }
-}
-
-/// Map a sub-agent `AgentWorkerStatus` to a fleet `FleetWorkerEventPayload`.
-///
-/// This is the streaming bridge: as the sub-agent runs, each status transition
-/// produces a corresponding fleet ledger event so the TUI surfaces stay in sync.
-pub fn agent_status_to_fleet_event(
-    status: AgentWorkerStatus,
-    message: Option<&str>,
-    tool_name: Option<&str>,
-) -> FleetWorkerEventPayload {
-    match status {
-        AgentWorkerStatus::Queued => FleetWorkerEventPayload::Queued,
-        AgentWorkerStatus::Starting => FleetWorkerEventPayload::Starting,
-        AgentWorkerStatus::Running => FleetWorkerEventPayload::Running,
-        AgentWorkerStatus::WaitingForUser => FleetWorkerEventPayload::ModelWait { model: None },
-        AgentWorkerStatus::ModelWait => FleetWorkerEventPayload::ModelWait { model: None },
-        AgentWorkerStatus::RunningTool => FleetWorkerEventPayload::RunningTool {
-            tool: tool_name.unwrap_or("unknown").to_string(),
-            call_id: None,
-        },
-        AgentWorkerStatus::Completed => FleetWorkerEventPayload::Completed {
-            exit_code: Some(0),
-            summary: message.map(|s| s.to_string()),
-        },
-        AgentWorkerStatus::Failed => FleetWorkerEventPayload::Failed {
-            reason: message.unwrap_or("unknown error").to_string(),
-            recoverable: false,
-        },
-        AgentWorkerStatus::Cancelled => FleetWorkerEventPayload::Cancelled { cancelled_by: None },
-        AgentWorkerStatus::Interrupted => FleetWorkerEventPayload::Interrupted {
-            signal: message.map(|s| s.to_string()),
-        },
-    }
-}
-
 /// Apply exec hardening to a worker spec from fleet config (#3027).
 ///
 /// Filters tools against allowed/disallowed lists, caps max_steps to
@@ -622,31 +498,10 @@ fn filter_tool_profile(
     }
 }
 
-/// Determine whether a tool is safe for parallel execution (#2983).
-///
-/// Read-only tools that don't mutate state and have no side effects
-/// are candidates for conservative parallel batching.
-pub fn is_parallel_safe_read_only_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "read_file"
-            | "grep_files"
-            | "file_search"
-            | "list_dir"
-            | "git_status"
-            | "git_diff"
-            | "git_log"
-            | "git_show"
-            | "git_blame"
-            | "fetch_url"
-            | "web_search"
-            | "tool_search"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codewhale_protocol::fleet::FleetHostSpec;
 
     fn fleet_task(id: &str, worker: Option<FleetTaskWorkerProfile>) -> FleetTaskSpec {
         FleetTaskSpec {
@@ -1139,14 +994,17 @@ mod tests {
             max_concurrent_tasks: None,
         };
 
-        let spec = fleet_task_to_worker_spec(
+        let spec = fleet_task_to_worker_spec_with_profiles(
             "worker-1",
             "run-1",
             &task,
             &worker,
             "auto",
             std::path::Path::new("/tmp"),
-        );
+            &[],
+            None,
+        )
+        .unwrap();
 
         // Root fleet worker runs at depth 0; its budget equals the shared
         // sub-agent default (3) so fleet and sub-agents are one substrate and
@@ -1250,14 +1108,17 @@ mod tests {
                 metadata: Default::default(),
             };
 
-            let spec = fleet_task_to_worker_spec(
+            let spec = fleet_task_to_worker_spec_with_profiles(
                 &format!("{role}-worker"),
                 "run-3289",
                 &task,
                 &worker,
                 model,
                 std::path::Path::new("/tmp"),
-            );
+                &[],
+                None,
+            )
+            .unwrap();
 
             assert_eq!(spec.role.as_deref(), Some(role));
             assert_eq!(spec.agent_type, expected_type, "role {role}");
@@ -1488,23 +1349,6 @@ mod tests {
             filtered,
             AgentWorkerToolProfile::Explicit(vec!["read_file".to_string(),])
         );
-    }
-
-    #[test]
-    fn parallel_safe_read_only_tools_includes_grep_and_read() {
-        assert!(is_parallel_safe_read_only_tool("read_file"));
-        assert!(is_parallel_safe_read_only_tool("grep_files"));
-        assert!(is_parallel_safe_read_only_tool("git_status"));
-        assert!(is_parallel_safe_read_only_tool("web_search"));
-    }
-
-    #[test]
-    fn destructive_tools_not_parallel_safe() {
-        assert!(!is_parallel_safe_read_only_tool("exec_shell"));
-        assert!(!is_parallel_safe_read_only_tool("write_file"));
-        assert!(!is_parallel_safe_read_only_tool("edit_file"));
-        assert!(!is_parallel_safe_read_only_tool("apply_patch"));
-        assert!(!is_parallel_safe_read_only_tool("agent"));
     }
 
     #[test]
