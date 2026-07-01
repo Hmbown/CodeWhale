@@ -1008,7 +1008,6 @@ dependencies = [
  "cucumber",
  "dirs",
  "dotenvy",
- "fd-lock",
  "flate2",
  "futures-util",
  "ignore",
