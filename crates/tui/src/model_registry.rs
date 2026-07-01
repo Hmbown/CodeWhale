@@ -336,5 +336,4 @@ mod tests {
     fn lookup_returns_none_for_completely_unknown_model() {
         assert!(lookup("totally-made-up-model-xyz").is_none());
     }
-
 }
