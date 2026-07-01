@@ -1488,11 +1488,11 @@ async fn mcp_pool_call_tool_preserves_tool_names_with_dashes() {
     };
     let mut conn = test_connection(Box::new(transport));
     conn.name = "dephy".to_string();
-    conn.tools = vec![McpTool {
+    conn.tools = vec![Arc::new(McpTool {
         name: "company--search".to_string(),
         description: None,
         input_schema: serde_json::json!({}),
-    }];
+    })];
 
     let mut pool = McpPool::new(McpConfig {
         timeouts: McpTimeouts::default(),
@@ -1531,11 +1531,11 @@ async fn mcp_pool_call_tool_preserves_server_names_with_underscores() {
     };
     let mut conn = test_connection(Box::new(transport));
     conn.name = "my_db".to_string();
-    conn.tools = vec![McpTool {
+    conn.tools = vec![Arc::new(McpTool {
         name: "execute_sql".to_string(),
         description: None,
         input_schema: serde_json::json!({}),
-    }];
+    })];
 
     let mut pool = McpPool::new(McpConfig {
         timeouts: McpTimeouts::default(),
@@ -1574,11 +1574,11 @@ async fn mcp_pool_call_tool_prefers_longest_matching_server_name() {
     };
     let mut short_conn = test_connection(Box::new(short_transport));
     short_conn.name = "my".to_string();
-    short_conn.tools = vec![McpTool {
+    short_conn.tools = vec![Arc::new(McpTool {
         name: "db_execute_sql".to_string(),
         description: None,
         input_schema: serde_json::json!({}),
-    }];
+    })];
 
     let sent_long = Arc::new(Mutex::new(Vec::new()));
     let long_transport = ScriptedValueTransport {
@@ -1591,11 +1591,11 @@ async fn mcp_pool_call_tool_prefers_longest_matching_server_name() {
     };
     let mut long_conn = test_connection(Box::new(long_transport));
     long_conn.name = "my_db".to_string();
-    long_conn.tools = vec![McpTool {
+    long_conn.tools = vec![Arc::new(McpTool {
         name: "execute_sql".to_string(),
         description: None,
         input_schema: serde_json::json!({}),
-    }];
+    })];
 
     let mut pool = McpPool::new(McpConfig {
         timeouts: McpTimeouts::default(),

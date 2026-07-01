@@ -1103,7 +1103,7 @@ fn to_snake_case(s: &str) -> String {
 #[allow(dead_code)]
 struct McpToolAdapter {
     name: String,
-    tool: crate::mcp::McpTool,
+    tool: std::sync::Arc<crate::mcp::McpTool>,
     pool: std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>,
 }
 

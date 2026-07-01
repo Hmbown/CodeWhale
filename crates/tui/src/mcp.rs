@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -774,7 +775,7 @@ fn response_id_matches(id: Option<&serde_json::Value>, expected_id: &str) -> boo
 pub struct McpConnection {
     name: String,
     transport: Box<dyn McpTransport>,
-    tools: Vec<McpTool>,
+    tools: Vec<Arc<McpTool>>,
     resources: Vec<McpResource>,
     resource_templates: Vec<McpResourceTemplate>,
     prompts: Vec<McpPrompt>,
@@ -1036,7 +1037,7 @@ impl McpConnection {
             if let Some(arr) = result.get("tools").and_then(|t| t.as_array()) {
                 for item in arr {
                     match serde_json::from_value::<McpTool>(item.clone()) {
-                        Ok(tool) => self.tools.push(tool),
+                        Ok(tool) => self.tools.push(Arc::new(tool)),
                         Err(err) => {
                             // Skip individual malformed entries instead of
                             // dropping the whole page (#1410). The old
@@ -1299,7 +1300,7 @@ impl McpConnection {
     }
 
     /// Get discovered tools
-    pub fn tools(&self) -> &[McpTool] {
+    pub fn tools(&self) -> &[Arc<McpTool>] {
         &self.tools
     }
 
@@ -1650,7 +1651,7 @@ impl McpPool {
     }
 
     /// Get all discovered tools with server-prefixed names
-    pub fn all_tools(&self) -> Vec<(String, &McpTool)> {
+    pub fn all_tools(&self) -> Vec<(String, Arc<McpTool>)> {
         let mut tools = Vec::new();
         for (server, conn) in &self.connections {
             for tool in conn.tools() {
@@ -1658,7 +1659,7 @@ impl McpPool {
                     continue;
                 }
                 // Format: mcp_{server}_{tool}
-                tools.push((format!("mcp_{}_{}", server, tool.name), tool));
+                tools.push((format!("mcp_{}_{}", server, tool.name), Arc::clone(tool)));
             }
         }
         // Sort by prefixed name so iteration order across servers is
