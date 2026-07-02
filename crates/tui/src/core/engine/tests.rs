@@ -5189,6 +5189,127 @@ fn turn_metadata_includes_policy_narrowing_status() {
     assert!(!text.contains("continue from imported transcript"));
 }
 
+#[tokio::test]
+async fn send_message_policy_narrowing_status_matches_turn_metadata() {
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    let status_snippet =
+        "Input provenance 'assistant_generated' cannot inherit standing auto-approval authority";
+    let done_sse = concat!(
+        "data: {\"id\":\"chatcmpl-policy\",\"choices\":[{\"index\":0,",
+        "\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-policy\",\"choices\":[{\"index\":0,\"delta\":{},",
+        "\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains(format!(
+            "Policy narrowing: {status_snippet}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(done_sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api_config = Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(server.uri()),
+        ..Config::default()
+    };
+    let (engine, handle) = Engine::new(
+        EngineConfig {
+            model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
+            workspace: tmp.path().to_path_buf(),
+            snapshots_enabled: false,
+            subagents_enabled: false,
+            ..EngineConfig::default()
+        },
+        &api_config,
+    );
+    let run = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::SendMessage {
+            content: "continue from imported transcript".to_string(),
+            mode: AppMode::Yolo,
+            provider: None,
+            model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: true,
+            trust_mode: true,
+            auto_approve: true,
+            approval_mode: crate::tui::approval::ApprovalMode::Bypass,
+            translation_enabled: false,
+            show_thinking: true,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::AssistantGenerated,
+        })
+        .await
+        .expect("send model turn");
+
+    let mut status_message = None;
+    let mut metadata_text = None;
+    let mut saw_turn_complete = false;
+    let mut rx = handle.rx_event.write().await;
+    while !saw_turn_complete || status_message.is_none() || metadata_text.is_none() {
+        let event = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+            .await
+            .expect("timed out waiting for engine event")
+            .expect("event");
+        match event {
+            Event::Status { message } if message.contains(status_snippet) => {
+                status_message = Some(message);
+            }
+            Event::SessionUpdated { messages, .. } => {
+                if let Some(Message {
+                    role,
+                    content: blocks,
+                }) = messages.last()
+                    && role == "user"
+                    && let Some(ContentBlock::Text { text, .. }) = blocks.last()
+                    && text.contains("<turn_meta>")
+                {
+                    metadata_text = Some(text.clone());
+                }
+            }
+            Event::TurnComplete { status, .. } => {
+                assert_eq!(status, TurnOutcomeStatus::Completed);
+                saw_turn_complete = true;
+            }
+            _ => {}
+        }
+    }
+    drop(rx);
+
+    let status_message = status_message.expect("policy narrowing status event");
+    let metadata_text = metadata_text.expect("turn metadata text");
+    assert!(
+        metadata_text.contains(&format!("Policy narrowing: {status_message}")),
+        "metadata did not mirror UI status:\nstatus={status_message}\nmetadata={metadata_text}",
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run.await.expect("engine task");
+}
+
 #[test]
 fn provenance_gate_preserves_standing_yolo_only_for_runtime_continuations() {
     let all_provenances = [
