@@ -5509,3 +5509,41 @@ fn fanout_of_workers_with_huge_outputs_keeps_resident_state_bounded() {
         );
     });
 }
+
+#[test]
+fn write_json_atomic_survives_concurrent_writers() {
+    use std::sync::Arc;
+    // Many threads persisting the same state.json concurrently (the real
+    // persist_state_best_effort pattern) must never publish a torn file.
+    let dir = tempdir().expect("tempdir");
+    // Canonicalize so the base matches how write_json_atomic normalizes the
+    // workspace (on macOS the tempdir lives under the /var -> /private/var
+    // symlink); otherwise the workspace-relative path check would reject it.
+    let base = dir.path().canonicalize().expect("canonicalize tempdir");
+    let workspace = Arc::new(base.clone());
+    let path = Arc::new(base.join(".codewhale").join("subagents").join("state.json"));
+    let mut handles = Vec::new();
+    for i in 0..16 {
+        let ws = Arc::clone(&workspace);
+        let p = Arc::clone(&path);
+        handles.push(std::thread::spawn(move || {
+            let payload = serde_json::json!({ "writer": i, "blob": "x".repeat(8192) });
+            let _ = write_json_atomic(&ws, &p, &payload);
+        }));
+    }
+    for h in handles {
+        h.join().expect("writer thread");
+    }
+    // The published file must be complete, valid JSON — not a half-written mix.
+    let contents = std::fs::read_to_string(&*path).expect("read state.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&contents).expect("state.json must be complete/valid JSON");
+    assert!(parsed.get("writer").is_some());
+    // No stray temp files left behind.
+    let leftover: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .expect("read subagents dir")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+        .collect();
+    assert!(leftover.is_empty(), "temp files leaked: {leftover:?}");
+}

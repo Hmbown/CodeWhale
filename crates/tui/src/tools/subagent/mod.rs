@@ -3443,6 +3443,14 @@ fn instant_from_duration(duration: Duration) -> Instant {
         .unwrap_or_else(Instant::now)
 }
 
+/// Per-write sequence so each `write_json_atomic` uses a distinct temp file.
+/// `persist_state_best_effort` fires a fresh thread per call, so multiple
+/// persists of the same `state.json` can be in flight at once; keying the temp
+/// name only on the pid (as before) made every thread write the *same*
+/// `state.<pid>.tmp` and a rename could publish a half-written file — corrupt
+/// state that fails to parse on reload.
+static WRITE_JSON_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn write_json_atomic<T: Serialize>(workspace: &Path, path: &Path, value: &T) -> Result<()> {
     let workspace = normalize_subagent_workspace(workspace);
     reject_workspace_relative_symlinks(&workspace, path)?;
@@ -3450,10 +3458,15 @@ fn write_json_atomic<T: Serialize>(workspace: &Path, path: &Path, value: &T) -> 
         fs::create_dir_all(parent)?;
     }
     let payload = serde_json::to_string_pretty(value)?;
-    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
+    let seq = WRITE_JSON_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_path = path.with_extension(format!("{}.{seq}.tmp", std::process::id()));
     reject_workspace_relative_symlinks(&workspace, &tmp_path)?;
     fs::write(&tmp_path, payload)?;
-    fs::rename(tmp_path, path)?;
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        // Don't leave a stray temp behind if the publish failed.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err.into());
+    }
     Ok(())
 }
 
