@@ -5,32 +5,6 @@
 use std::borrow::Cow;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextDirection {
-    Ltr,
-    Rtl,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocaleCoverage {
-    English,
-    V076Core,
-    PlannedQa,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocaleSpec {
-    pub tag: &'static str,
-    pub display_name: &'static str,
-    pub script: &'static str,
-    pub direction: TextDirection,
-    pub fallback: &'static str,
-    pub coverage: LocaleCoverage,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Locale {
     En,
@@ -68,68 +42,6 @@ impl Locale {
     }
 
     #[allow(dead_code)]
-    pub fn spec(self) -> LocaleSpec {
-        match self {
-            Self::En => LocaleSpec {
-                tag: "en",
-                display_name: "English",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::English,
-            },
-            Self::Ja => LocaleSpec {
-                tag: "ja",
-                display_name: "Japanese",
-                script: "Jpan",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::ZhHans => LocaleSpec {
-                tag: "zh-Hans",
-                display_name: "Chinese Simplified",
-                script: "Hans",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::ZhHant => LocaleSpec {
-                tag: "zh-Hant",
-                display_name: "Chinese Traditional",
-                script: "Hant",
-                direction: TextDirection::Ltr,
-                fallback: "zh-Hans",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::PtBr => LocaleSpec {
-                tag: "pt-BR",
-                display_name: "Portuguese (Brazil)",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::Es419 => LocaleSpec {
-                tag: "es-419",
-                display_name: "Spanish (Latin America)",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::Vi => LocaleSpec {
-                tag: "vi",
-                display_name: "Vietnamese",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn shipped() -> &'static [Self] {
         &[
             Self::En,
@@ -142,82 +54,6 @@ impl Locale {
         ]
     }
 }
-
-#[allow(dead_code)]
-pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
-    LocaleSpec {
-        tag: "ar",
-        display_name: "Arabic",
-        script: "Arab",
-        direction: TextDirection::Rtl,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "hi",
-        display_name: "Hindi",
-        script: "Deva",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "bn",
-        display_name: "Bengali",
-        script: "Beng",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "id",
-        display_name: "Indonesian",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "sw",
-        display_name: "Swahili",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "ha",
-        display_name: "Hausa",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "yo",
-        display_name: "Yoruba",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "fr",
-        display_name: "French",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "fil",
-        display_name: "Filipino/Tagalog",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageId {
