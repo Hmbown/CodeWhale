@@ -80,6 +80,7 @@ tar = "0.4"
 flate2 = "1.1"
 sha2 = "0.11"
 rust-i18n = "4.1.0"
+shell-words = "1.1.1"
 
 [dev-dependencies]
 cucumber = "0.23.0"

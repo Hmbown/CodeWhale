@@ -488,6 +488,11 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         || name.starts_with("get_")
     {
         ToolCategory::Safe
+    } else if name == "start_mcp_server" {
+        // Starting an MCP server spawns child processes or opens network
+        // connections — classify as McpAction to trigger appropriate
+        // approval prompts.
+        ToolCategory::McpAction
     } else {
         ToolCategory::Unknown
     }

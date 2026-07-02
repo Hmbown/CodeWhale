@@ -190,7 +190,7 @@ fn normalize_domain_candidate(value: &str) -> Option<String> {
 }
 
 fn registered_tool_requires_non_bypassable_approval(tool_name: &str) -> bool {
-    matches!(tool_name, "rlm_eval")
+    matches!(tool_name, "rlm_eval" | "start_mcp_server")
 }
 
 impl Engine {

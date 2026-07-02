@@ -144,6 +144,13 @@ impl Engine {
         // so there's no failure mode worth gating on.
         builder = builder.with_notify_tool();
 
+        // Register the start_mcp_server tool so LLM can dynamically start
+        // MCP servers from conversation context. Only when the pool has been
+        // initialized (lazy via ensure_mcp_pool).
+        if let Some(ref pool) = self.mcp_pool {
+            builder = builder.with_runtime_mcp_tool(Arc::clone(pool));
+        }
+
         builder
     }
 }
