@@ -8309,6 +8309,35 @@ async fn mention_fallback_limited_to_same_token_lineage() {
 }
 
 #[test]
+fn mention_fallback_drops_entries_that_no_longer_match_the_live_needle() {
+    // Reviewer repro on PR #3902: `@docs/a` shows docs/apple.md, the user
+    // types `b`, and a fast Enter before the fresh walk lands must NOT be
+    // able to apply docs/apple.md against `@docs/ab`.
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/ab".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    app.composer.mention_completion_cache = Some(crate::tui::app::MentionCompletionCache {
+        key: mention_key_for(&app, "docs/a", 6),
+        entries: vec!["docs/apple.md".to_string(), "docs/abc.md".to_string()],
+    });
+    // An in-flight walk keeps the call on the fallback path in plain tests.
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key: mention_key_for(&app, "docs/ab", 6),
+        cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    });
+
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    assert_eq!(
+        entries,
+        vec!["docs/abc.md".to_string()],
+        "only entries matching the live needle may be shown or applied"
+    );
+}
+
+#[test]
 fn mention_inflight_walk_is_not_respawned_per_keystroke() {
     let tmpdir = TempDir::new().expect("tempdir");
     let mut app = create_test_app();

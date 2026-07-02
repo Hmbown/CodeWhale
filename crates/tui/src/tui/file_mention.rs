@@ -324,13 +324,10 @@ pub fn visible_mention_menu_entries(app: &mut App, limit: usize) -> Vec<String> 
     // results and test semantics are identical to the pre-async behavior.
     if tokio::runtime::Handle::try_current().is_ok() {
         let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let walker_cell = cell.clone();
+        let completion = MentionWalkCompletion { cell: cell.clone() };
         let walker_key = key.clone();
         crate::utils::spawn_blocking_supervised("mention-completion", move || {
-            let entries = run_mention_completion_walk(&walker_key);
-            if let Ok(mut guard) = walker_cell.lock() {
-                *guard = Some(entries);
-            }
+            completion.fill(run_mention_completion_walk(&walker_key));
         });
         app.composer.mention_completion_pending = Some(MentionCompletionPending {
             key: key.clone(),
@@ -344,6 +341,35 @@ pub fn visible_mention_menu_entries(app: &mut App, limit: usize) -> Vec<String> 
             entries: entries.clone(),
         });
         entries
+    }
+}
+
+/// Completion guarantee for a background mention walk: the shared cell is
+/// ALWAYS filled, even if the walk panics. Without this, a panicking walk
+/// would leave `mention_completion_pending` set forever and the Enter-hold
+/// for the pending token would never release (until Esc). On unwind the
+/// `Drop` impl writes an empty result, which drains normally.
+struct MentionWalkCompletion {
+    cell: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>,
+}
+
+impl MentionWalkCompletion {
+    fn fill(self, entries: Vec<String>) {
+        if let Ok(mut guard) = self.cell.lock() {
+            *guard = Some(entries);
+        }
+        // Normal path: `self` drops here with the cell already filled, so
+        // the Drop impl is a no-op.
+    }
+}
+
+impl Drop for MentionWalkCompletion {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.cell.lock()
+            && guard.is_none()
+        {
+            *guard = Some(Vec::new());
+        }
     }
 }
 
@@ -367,10 +393,15 @@ fn run_mention_completion_walk(key: &MentionCompletionKey) -> Vec<String> {
 /// so the popup stays open and Enter/Up/Down keep routing to it — but only
 /// when the cached results come from the same session context AND the same
 /// token lineage (the live partial extends the cached one, or vice versa
-/// for backspacing). Results for an unrelated earlier mention token must
-/// never surface here: Enter/Tab apply the shown list against the live
-/// token, so an unbounded fallback could splice the wrong file.
+/// for backspacing), and only the entries that still match the LIVE
+/// needle. Enter/Tab apply the shown list against the live token, so a
+/// fast Enter after a keystroke must never splice an entry the fresh walk
+/// would not have returned (e.g. `docs/apple.md` against `@docs/ab`).
+/// The filter mirrors the walk's case-insensitive substring match, so the
+/// surviving entries are a subset of the fresh walk's results; when it
+/// empties the list, the popup reads as pending and Enter is held instead.
 fn stale_mention_fallback_entries(app: &App, key: &MentionCompletionKey) -> Vec<String> {
+    let needle = key.partial.to_lowercase();
     app.composer
         .mention_completion_cache
         .as_ref()
@@ -379,7 +410,14 @@ fn stale_mention_fallback_entries(app: &App, key: &MentionCompletionKey) -> Vec<
             key.partial.starts_with(&cache.key.partial)
                 || cache.key.partial.starts_with(&key.partial)
         })
-        .map(|cache| cache.entries.clone())
+        .map(|cache| {
+            cache
+                .entries
+                .iter()
+                .filter(|entry| entry.to_lowercase().contains(&needle))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1059,6 +1097,28 @@ fn is_media_path(path: &Path) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A background walk must ALWAYS complete its cell — a panicking walk
+    /// otherwise leaves `mention_completion_pending` set forever and the
+    /// Enter-hold for that token never releases.
+    #[test]
+    fn mention_walk_completion_fills_cell_even_on_unwind() {
+        // Normal path: the filled result is preserved.
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completion = MentionWalkCompletion { cell: cell.clone() };
+        completion.fill(vec!["docs/a.md".to_string()]);
+        assert_eq!(
+            cell.lock().unwrap().as_deref(),
+            Some(&["docs/a.md".to_string()][..])
+        );
+
+        // Unwind path: dropping without filling writes an empty result so
+        // the pending walk drains instead of soft-locking.
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completion = MentionWalkCompletion { cell: cell.clone() };
+        drop(completion);
+        assert_eq!(cell.lock().unwrap().as_deref(), Some(&[][..]));
+    }
 
     /// #101 regression — workspace-vs-cwd divergence: `@bar.txt` typed from
     /// the cwd `<root>/sub` MUST resolve to `<root>/sub/bar.txt`, never to
