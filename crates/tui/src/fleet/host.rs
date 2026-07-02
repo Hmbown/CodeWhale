@@ -131,6 +131,7 @@ pub struct FleetHostWorkerStatus {
     pub state: FleetHostWorkerState,
     pub pid: Option<u32>,
     pub exit_code: Option<i32>,
+    pub memory_mb: Option<u64>,
     pub retryable: bool,
 }
 
@@ -157,9 +158,11 @@ pub struct LocalProcessFleetHostAdapter {
 struct LocalWorkerProcess {
     request: FleetWorkerStartRequest,
     child: Child,
+    host_kind: FleetHostKind,
     log_path: PathBuf,
     stopped: bool,
     last_exit: Option<ExitStatus>,
+    last_memory_mb: Option<u64>,
 }
 
 impl LocalProcessFleetHostAdapter {
@@ -222,9 +225,11 @@ impl LocalProcessFleetHostAdapter {
             LocalWorkerProcess {
                 request,
                 child,
+                host_kind,
                 log_path,
                 stopped: false,
                 last_exit: None,
+                last_memory_mb: None,
             },
         );
         Ok(handle)
@@ -262,16 +267,27 @@ impl FleetHostAdapter for LocalProcessFleetHostAdapter {
                 Some(process.child.id()),
                 status,
                 process.stopped,
+                process.last_memory_mb,
             ));
         }
         match process.child.try_wait() {
-            Ok(None) => Ok(FleetHostWorkerStatus {
-                worker_id: worker_id.to_string(),
-                state: FleetHostWorkerState::Running,
-                pid: Some(process.child.id()),
-                exit_code: None,
-                retryable: false,
-            }),
+            Ok(None) => {
+                let pid = process.child.id();
+                let memory_mb = if process.host_kind == FleetHostKind::LocalProcess {
+                    sample_process_memory_mb(pid)
+                } else {
+                    None
+                };
+                process.last_memory_mb = memory_mb.or(process.last_memory_mb);
+                Ok(FleetHostWorkerStatus {
+                    worker_id: worker_id.to_string(),
+                    state: FleetHostWorkerState::Running,
+                    pid: Some(pid),
+                    exit_code: None,
+                    memory_mb,
+                    retryable: false,
+                })
+            }
             Ok(Some(status)) => {
                 process.last_exit = Some(status);
                 Ok(status_from_exit(
@@ -279,6 +295,7 @@ impl FleetHostAdapter for LocalProcessFleetHostAdapter {
                     Some(process.child.id()),
                     status,
                     process.stopped,
+                    process.last_memory_mb,
                 ))
             }
             Err(err) => Err(FleetHostError::retryable(format!(
@@ -623,6 +640,7 @@ fn status_from_exit(
     pid: Option<u32>,
     status: ExitStatus,
     stopped: bool,
+    memory_mb: Option<u64>,
 ) -> FleetHostWorkerStatus {
     let success = status.success();
     FleetHostWorkerStatus {
@@ -636,8 +654,31 @@ fn status_from_exit(
         },
         pid,
         exit_code: status.code(),
+        memory_mb,
         retryable: !success && !stopped,
     }
+}
+
+#[cfg(unix)]
+fn sample_process_memory_mb(pid: u32) -> Option<u64> {
+    let output = Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let rss_kb = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    (rss_kb > 0).then_some(rss_kb.div_ceil(1024))
+}
+
+#[cfg(not(unix))]
+fn sample_process_memory_mb(_pid: u32) -> Option<u64> {
+    None
 }
 
 fn classify_spawn_error(err: std::io::Error, context: String) -> FleetHostError {
@@ -788,6 +829,24 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
+    #[test]
+    fn sample_process_memory_reports_nonzero_for_self() {
+        // The current test process is alive, so its RSS must sample to Some(>0).
+        let mb = sample_process_memory_mb(std::process::id());
+        assert!(
+            matches!(mb, Some(v) if v > 0),
+            "expected Some(>0) MB for the live self process, got {mb:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sample_process_memory_is_none_for_dead_pid() {
+        // PID 0 is not a real user process to `ps -p`, so sampling yields None.
+        assert_eq!(sample_process_memory_mb(0), None);
+    }
+
     fn shell_command(script: &str) -> FleetWorkerCommand {
         if cfg!(windows) {
             FleetWorkerCommand::new("cmd", ["/C", script])
@@ -865,6 +924,52 @@ mod tests {
         let logs = wait_for_log(&adapter, "local-restart", "restart-ready");
         assert!(logs.contains("restart-ready"));
         adapter.stop_worker("local-restart").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fleet_host_local_adapter_reports_running_worker_memory_usage() {
+        let tmp = TempDir::new().unwrap();
+        let mut adapter = LocalProcessFleetHostAdapter::new(tmp.path());
+        let request =
+            FleetWorkerStartRequest::new("local-memory", shell_command("printf ready; sleep 30"));
+
+        adapter.start_worker(request).unwrap();
+        let _ = wait_for_log(&adapter, "local-memory", "ready");
+
+        let status = adapter.read_status("local-memory").unwrap();
+
+        assert_eq!(status.state, FleetHostWorkerState::Running);
+        assert!(
+            status.memory_mb.is_some_and(|memory_mb| memory_mb > 0),
+            "running local worker status should include RSS memory_mb, got {status:?}"
+        );
+
+        adapter.stop_worker("local-memory").unwrap();
+    }
+
+    #[test]
+    fn fleet_host_ssh_kind_does_not_report_local_process_memory() {
+        let tmp = TempDir::new().unwrap();
+        let mut adapter = LocalProcessFleetHostAdapter::new(tmp.path());
+        let script = if cfg!(windows) {
+            "echo ready & ping -n 30 127.0.0.1 >NUL"
+        } else {
+            "printf ready; sleep 30"
+        };
+        let request = FleetWorkerStartRequest::new("ssh-memory", shell_command(script));
+
+        adapter
+            .start_with_kind(request, FleetHostKind::Ssh)
+            .unwrap();
+        let _ = wait_for_log(&adapter, "ssh-memory", "ready");
+
+        let status = adapter.read_status("ssh-memory").unwrap();
+
+        assert_eq!(status.state, FleetHostWorkerState::Running);
+        assert_eq!(status.memory_mb, None);
+
+        adapter.stop_worker("ssh-memory").unwrap();
     }
 
     #[test]
