@@ -40,6 +40,13 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
     ".deepseek/instructions.md",
 ];
 
+/// Rules directories auto-discovered at workspace level, in priority order.
+/// `.codewhale/rules/` is CodeWhale-native; `.claude/rules/` is Claude compatibility.
+/// All `.md` files in these directories are loaded as project rules in filename order.
+/// Security model: same trust class as AGENTS.md — workspace-contained content only,
+/// no absolute-path escape. Does not require #417 project-config relaxation.
+const RULES_DIRS: &[&str] = &[".codewhale/rules", ".claude/rules"];
+
 /// File name of the deprecated CodeWhale-native instructions file.
 const DEPRECATED_WHALE_FILENAME: &str = "WHALE.md";
 
@@ -74,6 +81,10 @@ const GLOBAL_INSTRUCTIONS_LEGACY_PATH: &[&str] = &[".deepseek", "instructions.md
 
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
+
+/// Maximum number of rule files loaded per rules directory.
+/// Prevents a project from silently injecting hundreds of rule files.
+const MAX_RULES_FILES: usize = 50;
 const PACK_README_MAX_CHARS: usize = 4_000;
 const PACK_MAX_ENTRIES: usize = 220;
 const PACK_MAX_SOURCE_FILES: usize = 60;
@@ -135,6 +146,10 @@ enum ProjectContextError {
 pub struct ProjectContext {
     /// The loaded instructions content
     pub instructions: Option<String>,
+    /// Auto-discovered rules from `.codewhale/rules/` / `.claude/rules/`.
+    /// Kept separate from `instructions` so rules alone don't block
+    /// parent-directory AGENTS.md discovery via `has_instructions()`.
+    pub rules_block: Option<String>,
     /// Path to the loaded file (for display)
     pub source_path: Option<PathBuf>,
     /// Any warnings during loading
@@ -157,6 +172,7 @@ impl ProjectContext {
     pub fn empty(project_root: PathBuf) -> Self {
         Self {
             instructions: None,
+            rules_block: None,
             source_path: None,
             warnings: Vec::new(),
             constitution_block: None,
@@ -183,18 +199,36 @@ impl ProjectContext {
                 .as_ref()
                 .map_or_else(|| "project".to_string(), |p| p.display().to_string());
 
-            format!(
+            let mut block = format!(
                 "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
-            )
+            );
+            // Append rules after instructions, inside the same logical block.
+            // Rules are kept separate from `instructions` so they don't block
+            // parent-directory AGENTS.md discovery via `has_instructions()`.
+            if let Some(rules) = &self.rules_block {
+                block.push('\n');
+                block.push_str(rules);
+            }
+            block
         });
 
         match (self.constitution_block.as_ref(), instructions_block) {
             (Some(constitution), Some(instructions)) => {
                 Some(format!("{constitution}\n\n{instructions}"))
             }
-            (Some(constitution), None) => Some(constitution.clone()),
+            (Some(constitution), None) => {
+                // Constitution present but no main instructions — still emit rules if any
+                if let Some(rules) = &self.rules_block {
+                    Some(format!("{constitution}\n\n{rules}"))
+                } else {
+                    Some(constitution.clone())
+                }
+            }
             (None, Some(instructions)) => Some(instructions),
-            (None, None) => None,
+            (None, None) => {
+                // No main instructions, but rules may exist on their own
+                self.rules_block.clone()
+            }
         }
     }
 }
@@ -705,6 +739,29 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
         }
     }
 
+    // Load rules from auto-discovered directories (.codewhale/rules/, .claude/rules/)
+    // Each rule file is wrapped in a <project_rule> block and appended after
+    // the main instructions content. Security model: same as AGENTS.md —
+    // workspace-contained content only, no absolute-path escape.
+    let mut rules_content = String::new();
+    for rules_dir in RULES_DIRS {
+        let rules = load_rules_from_dir(workspace, rules_dir);
+        for (path, content) in rules {
+            if !rules_content.is_empty() {
+                rules_content.push('\n');
+            }
+            rules_content.push_str(&format!(
+                "<project_rule source=\"{}\">\n{}\n</project_rule>",
+                path.display(),
+                content.trim()
+            ));
+        }
+    }
+
+    if !rules_content.is_empty() {
+        ctx.rules_block = Some(rules_content);
+    }
+
     // Check for trust file
     ctx.is_trusted = check_trust_status(workspace);
 
@@ -853,6 +910,20 @@ pub(crate) fn project_context_cache_candidate_paths(
     paths.push(workspace.join(".deepseek").join("trusted"));
     paths.push(workspace.join(".deepseek").join("trust.json"));
     paths.extend(crate::config::workspace_trust_config_candidate_paths());
+
+    // Include auto-discovered rules directory files so cache invalidates
+    // when rules change (not just when AGENTS.md changes).
+    for rules_dir in RULES_DIRS {
+        let dir_path = workspace.join(rules_dir);
+        if let Ok(entries) = std::fs::read_dir(&dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "md") {
+                    paths.push(path);
+                }
+            }
+        }
+    }
 
     paths
 }
@@ -1046,6 +1117,70 @@ fn context_candidate_exists(path: &Path) -> bool {
         let file_type = metadata.file_type();
         file_type.is_file() || file_type.is_symlink()
     })
+}
+
+/// Scan a rules directory for `.md` files and load them in filename order.
+/// Missing or unreadable directories return an empty vec (no error).
+/// Each file is verified through `load_context_file` (size check, symlink safety).
+fn load_rules_from_dir(workspace: &Path, rules_dir_name: &str) -> Vec<(PathBuf, String)> {
+    let rules_dir = workspace.join(rules_dir_name);
+    let mut entries: Vec<(PathBuf, String)> = Vec::new();
+
+    let dir_iter = match fs::read_dir(&rules_dir) {
+        Ok(iter) => iter,
+        Err(_) => return entries,
+    };
+
+    let mut file_paths: Vec<PathBuf> = Vec::new();
+    for entry in dir_iter.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md") && context_candidate_exists(&path) {
+            file_paths.push(path);
+        }
+    }
+
+    // Sort by filename for deterministic order
+    file_paths.sort_by(|a, b| {
+        a.file_name()
+            .unwrap_or_default()
+            .cmp(b.file_name().unwrap_or_default())
+    });
+
+    // Enforce per-directory cap
+    let total = file_paths.len();
+    if total > MAX_RULES_FILES {
+        tracing::warn!(
+            target: "project_context",
+            dir = %rules_dir.display(),
+            total,
+            cap = MAX_RULES_FILES,
+            "Truncating rules directory to cap"
+        );
+        file_paths.truncate(MAX_RULES_FILES);
+    }
+
+    for path in file_paths {
+        match load_context_file(&path) {
+            Ok(content) => {
+                tracing::info!(
+                    "Loaded project rule from {} ({} bytes)",
+                    path.display(),
+                    content.len()
+                );
+                entries.push((path, content));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "project_context",
+                    ?error,
+                    ?path,
+                    "Skipping unreadable rules file"
+                );
+            }
+        }
+    }
+
+    entries
 }
 
 #[cfg(unix)]
@@ -2212,6 +2347,214 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("Project Context (Auto-generated, ephemeral)")
+        );
+    }
+
+    // ── Rules directory auto-discovery tests ──
+
+    #[test]
+    fn rules_from_codewhale_dir_are_loaded_as_project_context() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(
+            rules_dir.join("security.md"),
+            "# Security\nNo hardcoded secrets.",
+        )
+        .expect("write");
+
+        let ctx = load_project_context(tmp.path());
+
+        let rules = ctx.rules_block.as_ref().expect("rules_block should be set");
+        assert!(
+            rules.contains("Security"),
+            "expected rules content, got: {rules}"
+        );
+        assert!(
+            rules.contains("<project_rule source="),
+            "expected <project_rule> wrapper, got: {rules}"
+        );
+    }
+
+    #[test]
+    fn rules_are_loaded_in_filename_order() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("zzz.md"), "last").expect("write");
+        fs::write(rules_dir.join("aaa.md"), "first").expect("write");
+        fs::write(rules_dir.join("mmm.md"), "middle").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        let pos_aaa = rules.find("first").unwrap();
+        let pos_mmm = rules.find("middle").unwrap();
+        let pos_zzz = rules.find("last").unwrap();
+        assert!(pos_aaa < pos_mmm, "aaa should come before mmm");
+        assert!(pos_mmm < pos_zzz, "mmm should come before zzz");
+    }
+
+    #[test]
+    fn rules_from_claude_dir_are_compat_loaded() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".claude/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("style.md"), "Use tabs").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+
+        let rules = ctx.rules_block.as_ref().expect("rules should be loaded");
+        assert!(
+            rules.contains("Use tabs"),
+            "expected .claude/rules/ compat loading"
+        );
+    }
+
+    #[test]
+    fn rules_directory_missing_does_not_crash() {
+        let tmp = tempdir().expect("tempdir");
+        // No .codewhale/rules/ or .claude/rules/ directories exist
+        let ctx = load_project_context(tmp.path());
+        // Rules block should be None when no rules directories exist
+        assert!(
+            ctx.rules_block.is_none(),
+            "rules_block should be None when no rules exist"
+        );
+    }
+
+    #[test]
+    fn rules_coexist_with_agents_md() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "Main project instructions").expect("write");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("extra.md"), "Extra rule").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(
+            instructions.contains("Main project instructions"),
+            "AGENTS.md content missing"
+        );
+        assert!(rules.contains("Extra rule"), "rules content missing");
+        // AGENTS.md should come first in system block
+        let block = ctx.as_system_block().unwrap();
+        let pos_agents = block.find("Main project instructions").unwrap();
+        let pos_rule = block.find("Extra rule").unwrap();
+        assert!(pos_agents < pos_rule, "AGENTS.md should precede rules");
+    }
+
+    #[test]
+    fn non_md_files_in_rules_dir_are_ignored() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("notes.txt"), "should be ignored").expect("write");
+        fs::write(rules_dir.join("valid.md"), "loaded").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(rules.contains("loaded"), "valid .md should be loaded");
+        assert!(
+            !rules.contains("should be ignored"),
+            ".txt should be ignored"
+        );
+    }
+
+    #[test]
+    fn rules_cap_truncates_excess_files() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        // Create more files than the cap
+        for i in 0..60 {
+            fs::write(
+                rules_dir.join(format!("rule_{i:04}.md")),
+                format!("content {i}"),
+            )
+            .expect("write");
+        }
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        // The last file (by sorted name) should NOT be present
+        assert!(
+            !rules.contains("content 59"),
+            "rule_0059 should be above cap"
+        );
+        // The first file should be present
+        assert!(
+            rules.contains("content 0"),
+            "rule_0000 should be within cap"
+        );
+        // Count <project_rule> blocks
+        let count = rules.matches("<project_rule source=").count();
+        assert_eq!(
+            count, MAX_RULES_FILES,
+            "exactly {MAX_RULES_FILES} rules should be loaded"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rules_rejects_symlinked_files() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let outside = tempdir().expect("outside tempdir");
+        let rules_dir = workspace.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        let outside_rule = outside.path().join("outside.md");
+        fs::write(&outside_rule, "outside content").expect("write outside");
+        std::os::unix::fs::symlink(&outside_rule, rules_dir.join("outside.md"))
+            .expect("symlink rule");
+
+        let ctx = load_project_context(workspace.path());
+
+        // Symlinked rules must not be loaded
+        assert!(
+            ctx.rules_block.is_none()
+                || !ctx
+                    .rules_block
+                    .as_ref()
+                    .unwrap()
+                    .contains("outside content"),
+            "symlinked rules must not be loaded"
+        );
+    }
+
+    #[test]
+    fn rules_from_both_dirs_are_loaded_together() {
+        let tmp = tempdir().expect("tempdir");
+        let codewhale_rules = tmp.path().join(".codewhale/rules");
+        let claude_rules = tmp.path().join(".claude/rules");
+        fs::create_dir_all(&codewhale_rules).expect("mkdir codewhale rules");
+        fs::create_dir_all(&claude_rules).expect("mkdir claude rules");
+        fs::write(codewhale_rules.join("cw.md"), "codewhale-rule").expect("write");
+        fs::write(claude_rules.join("claude.md"), "claude-rule").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(
+            rules.contains("codewhale-rule"),
+            ".codewhale/rules/ should be loaded"
+        );
+        assert!(
+            rules.contains("claude-rule"),
+            ".claude/rules/ should be loaded"
+        );
+        // .codewhale/rules/ content should appear before .claude/rules/ (RULES_DIRS order)
+        let pos_cw = rules.find("codewhale-rule").unwrap();
+        let pos_claude = rules.find("claude-rule").unwrap();
+        assert!(
+            pos_cw < pos_claude,
+            ".codewhale/rules/ should precede .claude/rules/"
         );
     }
 }
