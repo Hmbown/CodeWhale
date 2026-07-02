@@ -9,10 +9,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 mod headers;
@@ -1432,6 +1434,9 @@ pub struct McpPool {
     config_hash: u64,
     /// Most recently observed mtime for `config_sources`.
     last_mtimes: Vec<Option<std::time::SystemTime>>,
+    /// Dynamically added MCP servers (from tool calls at runtime).
+    /// These are not persisted to disk and live for the process lifetime.
+    pub(crate) dynamic_servers: Arc<RwLock<HashMap<String, McpServerConfig>>>,
 }
 
 impl McpPool {
@@ -1446,6 +1451,7 @@ impl McpPool {
             workspace: None,
             config_hash,
             last_mtimes: Vec::new(),
+            dynamic_servers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -1589,12 +1595,14 @@ impl McpPool {
 
         self.drop_connection(server_name, "reconnect");
 
+        // Check static config first, then dynamic servers
         let server_config = self
             .config
             .servers
             .get(server_name)
-            .ok_or_else(|| anyhow::anyhow!("Failed to find MCP server: {server_name}"))?
-            .clone();
+            .cloned()
+            .or_else(|| self.dynamic_servers.read().get(server_name).cloned())
+            .ok_or_else(|| anyhow::anyhow!("Failed to find MCP server: {server_name}"))?;
 
         if !server_config.is_enabled() {
             anyhow::bail!("Failed to connect MCP server '{server_name}': server is disabled");
@@ -2084,14 +2092,48 @@ impl McpPool {
         }
     }
 
-    /// Get list of configured server names
+    /// Get list of configured server names (static + dynamic)
     #[allow(dead_code)] // Public API for MCP consumers
-    pub fn server_names(&self) -> Vec<&str> {
-        self.config
-            .servers
-            .keys()
-            .map(std::string::String::as_str)
-            .collect()
+    pub fn server_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.config.servers.keys().cloned().collect();
+        let dynamic = self.dynamic_servers.read();
+        for name in dynamic.keys() {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    /// Add a runtime server configuration (in-memory only, not persisted).
+    ///
+    /// This is used for dynamically started MCP servers from chat context.
+    /// Stored in `dynamic_servers` so it doesn't interfere with file-based config reload.
+    ///
+    /// Returns `Err` if a server with the same name already exists as a static config
+    /// or a dynamic config. The caller should surface the error to the LLM/user.
+    pub fn add_runtime_server_config(
+        &self,
+        name: String,
+        config: McpServerConfig,
+    ) -> Result<(), String> {
+        if self.config.servers.contains_key(&name) {
+            return Err(format!(
+                "MCP server '{}' already exists in the config file. \
+                 Remove it from the config first, or choose a different name.",
+                name
+            ));
+        }
+        let mut dynamic = self.dynamic_servers.write();
+        if dynamic.contains_key(&name) {
+            return Err(format!(
+                "MCP server '{}' was already started earlier in this session. \
+                 Choose a different name.",
+                name
+            ));
+        }
+        dynamic.insert(name, config);
+        Ok(())
     }
 
     /// Get list of connected server names
