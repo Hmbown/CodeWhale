@@ -31,7 +31,7 @@ use crate::config::{ApiProvider, Config, DEFAULT_MAX_SUBAGENTS, DEFAULT_TEXT_MOD
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
 use crate::features::{Feature, Features};
 use crate::llm_client::LlmClient;
-use crate::mcp::McpPool;
+use crate::mcp::{McpConfig, McpPool};
 #[cfg(test)]
 use crate::models::ToolCaller;
 use crate::models::{
@@ -2415,6 +2415,11 @@ impl Engine {
         let plan_state = self.config.plan_state.clone();
 
         let tool_context = self.build_tool_context(input_policy.mode, input_policy.auto_approve);
+        // Ensure MCP pool is initialized before building the tool registry,
+        // so start_mcp_server can be registered when Feature::Mcp is enabled.
+        if self.config.features.enabled(Feature::Mcp) {
+            let _ = self.ensure_mcp_pool().await;
+        }
         let builder = self
             .build_turn_tool_registry_builder(input_policy.mode, todo_list, plan_state)
             .with_dynamic_tools(&dynamic_tools);
@@ -2571,11 +2576,15 @@ impl Engine {
                 self.api_config.api_provider(),
                 &self.config.model,
             );
+            let mut always_load = self.config.tools_always_load.clone();
+            if self.config.features.enabled(Feature::Mcp) {
+                always_load.insert("start_mcp_server".to_string());
+            }
             let mut catalog = build_model_tool_catalog_with_surface(
                 registry.to_api_tools_with_cache(true),
                 mcp_tools,
                 input_policy.mode,
-                &self.config.tools_always_load,
+                &always_load,
                 capability.tool_surface_budget,
             );
             for tool in &mut catalog {
@@ -3113,7 +3122,10 @@ impl Engine {
             &self.session.mcp_config_path,
             &self.session.workspace,
         )
-        .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
+        .unwrap_or_else(|e| {
+            tracing::debug!("No MCP config: {e}");
+            McpPool::new(McpConfig::default())
+        });
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }
