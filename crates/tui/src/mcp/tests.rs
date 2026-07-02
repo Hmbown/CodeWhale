@@ -765,7 +765,7 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_creation() {
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 
     fs::create_dir_all(&project_dir).unwrap();
     fs::write(
@@ -775,8 +775,11 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_creation() {
     .unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 }
 
@@ -800,13 +803,16 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_after_workspace_trust
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 
     write_workspace_trust_config(&trust_env.config_path, &workspace);
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 }
 
@@ -830,14 +836,17 @@ async fn workspace_mcp_pool_reload_drops_project_config_after_workspace_trust_re
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 
     fs::remove_file(&trust.config_path).unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 }
 
 #[tokio::test]
@@ -861,14 +870,17 @@ async fn workspace_mcp_pool_reload_drops_project_config_after_deletion() {
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 
     fs::remove_file(project_path).unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 }
 
 #[test]
@@ -1345,7 +1357,7 @@ async fn reload_if_config_changed_swaps_config_on_content_change() {
     assert!(reloaded, "content-changed config must trigger reload");
     let names = pool.server_names();
     assert!(
-        names.contains(&"new"),
+        names.contains(&"new".to_string()),
         "expected new server in pool after reload, got {names:?}"
     );
 }
@@ -3153,4 +3165,57 @@ async fn custom_headers_applied_to_get_preflight() {
         header_seen.load(AtomicOrdering::SeqCst),
         "GET preflight must include user-configured custom headers"
     );
+}
+
+// === add_runtime_server_config conflict tests ===
+
+#[test]
+fn add_runtime_server_config_rejects_static_conflict() {
+    let config: McpConfig = serde_json::from_str(
+        r#"{
+        "servers": {
+            "existing": {"command": "node server.js"}
+        }
+    }"#,
+    )
+    .unwrap();
+    let pool = McpPool::new(config);
+
+    let err = pool
+        .add_runtime_server_config(
+            "existing".to_string(),
+            serde_json::from_str(r#"{"command": "npx other"}"#).unwrap(),
+        )
+        .unwrap_err();
+    assert!(err.contains("already exists in the config file"));
+}
+
+#[test]
+fn add_runtime_server_config_rejects_dynamic_duplicate() {
+    let pool = McpPool::new(McpConfig::default());
+
+    pool.add_runtime_server_config(
+        "my_server".to_string(),
+        serde_json::from_str(r#"{"command": "node a.js"}"#).unwrap(),
+    )
+    .unwrap();
+
+    let err = pool
+        .add_runtime_server_config(
+            "my_server".to_string(),
+            serde_json::from_str(r#"{"command": "node b.js"}"#).unwrap(),
+        )
+        .unwrap_err();
+    assert!(err.contains("already started earlier"));
+}
+
+#[test]
+fn add_runtime_server_config_accepts_new_name() {
+    let pool = McpPool::new(McpConfig::default());
+
+    pool.add_runtime_server_config(
+        "brand_new".to_string(),
+        serde_json::from_str(r#"{"command": "node x.js"}"#).unwrap(),
+    )
+    .unwrap();
 }
