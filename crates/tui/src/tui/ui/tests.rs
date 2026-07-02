@@ -6,10 +6,14 @@ use crate::config::{
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
-use crate::tui::app::{ReasoningEffort, SidebarHoverRow, SidebarHoverSection, ToolDetailRecord};
+use crate::tui::app::{
+    MentionCompletionKey, MentionCompletionPending, ReasoningEffort, SidebarHoverRow,
+    SidebarHoverSection, ToolDetailRecord,
+};
 use crate::tui::file_mention::{
     apply_mention_menu_selection, find_file_mention_completions, partial_file_mention_at_cursor,
-    try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
+    poll_mention_completion, try_autocomplete_file_mention, user_request_with_file_mentions,
+    visible_mention_menu_entries,
 };
 use crate::tui::footer_ui::{
     active_tool_status_label, footer_auxiliary_spans, footer_balance_spans, footer_cache_spans,
@@ -8141,6 +8145,309 @@ fn apply_mention_menu_selection_is_noop_outside_a_mention() {
     let applied = apply_mention_menu_selection(&mut app, &["whatever".to_string()]);
     assert!(!applied);
     assert_eq!(app.input, "no @ here");
+}
+
+// ---- #3899: background @-mention completion walk ----
+
+fn mention_key_for(
+    app: &crate::tui::app::App,
+    partial: &str,
+    limit: usize,
+) -> MentionCompletionKey {
+    MentionCompletionKey {
+        workspace: app.workspace.clone(),
+        cwd: std::env::current_dir().ok(),
+        partial: partial.to_string(),
+        limit,
+        walk_depth: app.mention_walk_depth,
+        behavior: app.mention_menu_behavior.clone(),
+        follow_links: app.workspace_follow_symlinks,
+    }
+}
+
+#[test]
+fn mention_completion_sync_fallback_fills_cache_without_runtime() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    std::fs::create_dir_all(tmpdir.path().join("docs")).unwrap();
+    std::fs::write(tmpdir.path().join("docs/alpha.md"), "x").unwrap();
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Plain test — no tokio runtime, so the walk runs synchronously and the
+    // result is cached immediately with nothing left in flight.
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    assert!(entries.iter().any(|e| e == "docs/alpha.md"), "{entries:?}");
+    assert!(app.composer.mention_completion_pending.is_none());
+    assert!(app.composer.mention_completion_cache.is_some());
+}
+
+#[tokio::test]
+async fn mention_completion_walk_runs_off_thread_and_promotes() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    std::fs::create_dir_all(tmpdir.path().join("docs")).unwrap();
+    std::fs::write(tmpdir.path().join("docs/alpha.md"), "x").unwrap();
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // First call starts a background walk; with a cold cache the stale
+    // fallback is empty, but the pending walk must be registered.
+    let first = visible_mention_menu_entries(&mut app, 6);
+    assert!(first.is_empty(), "cold cache returns the empty fallback");
+    assert!(app.composer.mention_completion_pending.is_some());
+
+    let mut entries = Vec::new();
+    for _ in 0..400 {
+        entries = visible_mention_menu_entries(&mut app, 6);
+        if !entries.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        entries.iter().any(|e| e == "docs/alpha.md"),
+        "background walk result is promoted for the live key: {entries:?}"
+    );
+    assert!(app.composer.mention_completion_pending.is_none());
+}
+
+#[tokio::test]
+async fn mention_completion_stale_needle_walk_is_replaced() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    std::fs::create_dir_all(tmpdir.path().join("docs")).unwrap();
+    std::fs::write(tmpdir.path().join("docs/alpha.md"), "x").unwrap();
+
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Seed a completed walk for an older needle.
+    let stale_key = mention_key_for(&app, "old", 6);
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key: stale_key,
+        cell: std::sync::Arc::new(std::sync::Mutex::new(Some(vec![
+            "stale-entry.md".to_string(),
+        ]))),
+    });
+
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    // The completed old-needle walk is stored under its true key — never
+    // promoted as the live needle's result — and because "old" shares no
+    // token lineage with "docs/", it must not surface as the fallback
+    // either (Enter/Tab apply the shown list against the live token).
+    assert!(
+        entries.is_empty(),
+        "unrelated-token results must not surface: {entries:?}"
+    );
+    let cached = app
+        .composer
+        .mention_completion_cache
+        .as_ref()
+        .expect("stale result cached under its own key");
+    assert_eq!(cached.key.partial, "old");
+    let pending = app
+        .composer
+        .mention_completion_pending
+        .as_ref()
+        .expect("a fresh walk is spawned for the live key");
+    assert_eq!(pending.key.partial, "docs/");
+
+    // Once the fresh walk lands, the live needle's results replace the
+    // fallback.
+    let mut entries = Vec::new();
+    for _ in 0..400 {
+        entries = visible_mention_menu_entries(&mut app, 6);
+        if entries.iter().any(|e| e == "docs/alpha.md") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        entries.iter().any(|e| e == "docs/alpha.md"),
+        "fresh walk replaces the stale fallback: {entries:?}"
+    );
+}
+
+#[tokio::test]
+async fn mention_fallback_limited_to_same_token_lineage() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Cached results from an earlier keystroke of the SAME token ("doc" is
+    // a prefix of "docs/") serve as the anti-flicker fallback while the
+    // fresh walk runs.
+    app.composer.mention_completion_cache = Some(crate::tui::app::MentionCompletionCache {
+        key: mention_key_for(&app, "doc", 6),
+        entries: vec!["docs/alpha.md".to_string()],
+    });
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    assert_eq!(entries, vec!["docs/alpha.md".to_string()]);
+
+    // Cached results from an unrelated token never surface as fallback.
+    let mut other = create_test_app();
+    other.workspace = tmpdir.path().to_path_buf();
+    other.input = "look at @docs/".to_string();
+    other.cursor_position = other.input.chars().count();
+    other.composer.mention_completion_cache = Some(crate::tui::app::MentionCompletionCache {
+        key: mention_key_for(&other, "src/mai", 6),
+        entries: vec!["src/main.rs".to_string()],
+    });
+    let entries = visible_mention_menu_entries(&mut other, 6);
+    assert!(
+        entries.is_empty(),
+        "results for another token must not be applied against this one: {entries:?}"
+    );
+}
+
+#[test]
+fn mention_fallback_drops_entries_that_no_longer_match_the_live_needle() {
+    // Reviewer repro on PR #3902: `@docs/a` shows docs/apple.md, the user
+    // types `b`, and a fast Enter before the fresh walk lands must NOT be
+    // able to apply docs/apple.md against `@docs/ab`.
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/ab".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    app.composer.mention_completion_cache = Some(crate::tui::app::MentionCompletionCache {
+        key: mention_key_for(&app, "docs/a", 6),
+        entries: vec!["docs/apple.md".to_string(), "docs/abc.md".to_string()],
+    });
+    // An in-flight walk keeps the call on the fallback path in plain tests.
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key: mention_key_for(&app, "docs/ab", 6),
+        cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    });
+
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    assert_eq!(
+        entries,
+        vec!["docs/abc.md".to_string()],
+        "only entries matching the live needle may be shown or applied"
+    );
+}
+
+#[test]
+fn mention_inflight_walk_is_not_respawned_per_keystroke() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // A still-running walk for an older needle: dropping it cannot stop
+    // the blocking work, so it must be kept (serialized) rather than
+    // replaced with a concurrent walk for the new needle.
+    let old_key = mention_key_for(&app, "old", 6);
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key: old_key,
+        cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    });
+
+    let entries = visible_mention_menu_entries(&mut app, 6);
+    assert!(entries.is_empty());
+    let pending = app
+        .composer
+        .mention_completion_pending
+        .as_ref()
+        .expect("in-flight walk is retained");
+    assert_eq!(
+        pending.key.partial, "old",
+        "no concurrent walk is spawned while one is in flight"
+    );
+}
+
+#[test]
+fn mention_walk_pending_only_for_live_token() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+    let key = mention_key_for(&app, "docs/", 6);
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key,
+        cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    });
+
+    assert!(crate::tui::file_mention::mention_walk_pending(&app));
+
+    app.mention_menu_hidden = true;
+    assert!(
+        !crate::tui::file_mention::mention_walk_pending(&app),
+        "Esc-hidden popup must not swallow Enter"
+    );
+    app.mention_menu_hidden = false;
+
+    app.input = "no mention".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(
+        !crate::tui::file_mention::mention_walk_pending(&app),
+        "cursor outside a mention must not swallow Enter"
+    );
+}
+
+#[test]
+fn poll_mention_completion_promotes_once_and_sets_needs_redraw() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let key = mention_key_for(&app, "docs/", 6);
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key,
+        cell: std::sync::Arc::new(std::sync::Mutex::new(Some(vec![
+            "docs/alpha.md".to_string(),
+        ]))),
+    });
+
+    app.needs_redraw = false;
+    poll_mention_completion(&mut app);
+    assert!(app.needs_redraw, "a drained result schedules a repaint");
+    assert!(app.composer.mention_completion_pending.is_none());
+    assert!(app.composer.mention_completion_cache.is_some());
+
+    // Nothing left to drain: the poller must not busy-repaint.
+    app.needs_redraw = false;
+    poll_mention_completion(&mut app);
+    assert!(!app.needs_redraw);
+}
+
+#[test]
+fn poll_mention_completion_clears_pending_when_cursor_leaves_mention() {
+    let tmpdir = TempDir::new().expect("tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.input = "look at @docs/".to_string();
+    app.cursor_position = app.input.chars().count();
+    let key = mention_key_for(&app, "docs/", 6);
+    app.composer.mention_completion_pending = Some(MentionCompletionPending {
+        key,
+        cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    });
+
+    app.input = "no mention anymore".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    app.needs_redraw = false;
+    poll_mention_completion(&mut app);
+    assert!(
+        app.composer.mention_completion_pending.is_none(),
+        "an orphaned walk must not keep the loop polling forever"
+    );
+    assert!(!app.needs_redraw);
 }
 
 #[test]

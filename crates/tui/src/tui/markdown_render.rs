@@ -26,6 +26,7 @@
 
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -53,6 +54,25 @@ pub fn parse_invocation_count() -> u64 {
 #[cfg(test)]
 pub fn reset_parse_invocation_count() {
     PARSE_INVOCATIONS.with(|c| c.set(0));
+}
+
+// Thread-local counter of source lines classified by `parse_line_into`. Used
+// by tests to prove the streaming path parses O(delta) lines per chunk, not
+// the whole growing message (#3897).
+#[cfg(test)]
+thread_local! {
+    static PARSED_LINES: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+#[must_use]
+pub fn parsed_line_count() -> u64 {
+    PARSED_LINES.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub fn reset_parsed_line_count() {
+    PARSED_LINES.with(|c| c.set(0));
 }
 
 /// One classified line of markdown source, width-independent.
@@ -122,67 +142,78 @@ pub fn parse(content: &str) -> ParsedMarkdown {
     let mut in_code_block = false;
 
     for raw_line in content.lines() {
-        let trimmed = raw_line.trim_start();
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-
-        if in_code_block {
-            blocks.push(Block::Code {
-                line: raw_line.to_string(),
-            });
-            continue;
-        }
-
-        if let Some((level, text)) = parse_heading(trimmed) {
-            blocks.push(Block::Heading {
-                level,
-                text: text.to_string(),
-            });
-            if level == 1 {
-                blocks.push(Block::HeadingRule);
-            }
-            continue;
-        }
-
-        if let Some((bullet, text)) = parse_list_item(trimmed) {
-            blocks.push(Block::ListItem {
-                bullet,
-                text: text.to_string(),
-            });
-            continue;
-        }
-
-        if is_horizontal_rule(trimmed) {
-            blocks.push(Block::HorizontalRule);
-            continue;
-        }
-
-        match parse_table_row(trimmed) {
-            Some(cells) => {
-                blocks.push(Block::TableRow(cells));
-                continue;
-            }
-            None if trimmed.starts_with('|') => {
-                blocks.push(Block::TableSeparator);
-                continue;
-            }
-            None => {}
-        }
-
-        if trimmed.is_empty() {
-            // Whitespace-only lines are blank paragraphs.
-            blocks.push(Block::Blank);
-            continue;
-        }
-
-        blocks.push(Block::Paragraph {
-            text: raw_line.to_string(),
-        });
+        parse_line_into(raw_line, &mut in_code_block, &mut blocks);
     }
 
     ParsedMarkdown { blocks }
+}
+
+/// Classify one source line into blocks. `in_code_block` is the only
+/// cross-line parser state; it is advanced in place. Shared by [`parse`] and
+/// the incremental streaming path (#3897), so both classify identically by
+/// construction.
+fn parse_line_into(raw_line: &str, in_code_block: &mut bool, blocks: &mut Vec<Block>) {
+    #[cfg(test)]
+    PARSED_LINES.with(|c| c.set(c.get() + 1));
+
+    let trimmed = raw_line.trim_start();
+    if trimmed.starts_with("```") {
+        *in_code_block = !*in_code_block;
+        return;
+    }
+
+    if *in_code_block {
+        blocks.push(Block::Code {
+            line: raw_line.to_string(),
+        });
+        return;
+    }
+
+    if let Some((level, text)) = parse_heading(trimmed) {
+        blocks.push(Block::Heading {
+            level,
+            text: text.to_string(),
+        });
+        if level == 1 {
+            blocks.push(Block::HeadingRule);
+        }
+        return;
+    }
+
+    if let Some((bullet, text)) = parse_list_item(trimmed) {
+        blocks.push(Block::ListItem {
+            bullet,
+            text: text.to_string(),
+        });
+        return;
+    }
+
+    if is_horizontal_rule(trimmed) {
+        blocks.push(Block::HorizontalRule);
+        return;
+    }
+
+    match parse_table_row(trimmed) {
+        Some(cells) => {
+            blocks.push(Block::TableRow(cells));
+            return;
+        }
+        None if trimmed.starts_with('|') => {
+            blocks.push(Block::TableSeparator);
+            return;
+        }
+        None => {}
+    }
+
+    if trimmed.is_empty() {
+        // Whitespace-only lines are blank paragraphs.
+        blocks.push(Block::Blank);
+        return;
+    }
+
+    blocks.push(Block::Paragraph {
+        text: raw_line.to_string(),
+    });
 }
 
 /// Render a parsed-markdown AST at the given terminal width.
@@ -208,24 +239,48 @@ pub fn render_parsed_tagged(
 ) -> Vec<RenderedMarkdownLine> {
     let width = width.max(1) as usize;
     let mut out: Vec<RenderedMarkdownLine> = Vec::with_capacity(parsed.blocks.len());
+    render_blocks_tagged(&parsed.blocks, width, base_style, &mut out);
 
+    if out.is_empty() {
+        out.push(empty_rendered_line());
+    }
+
+    out
+}
+
+fn empty_rendered_line() -> RenderedMarkdownLine {
+    RenderedMarkdownLine {
+        line: Line::from(""),
+        is_code: false,
+        copy_prefix_width: 0,
+        copy_separator_after: CopyLineSeparator::Newline,
+    }
+}
+
+fn is_table_block(block: &Block) -> bool {
+    matches!(block, Block::TableRow(_) | Block::TableSeparator)
+}
+
+/// Render a run of blocks, grouping consecutive table rows/separators so
+/// column widths derive from the whole group. Shared by the full render and
+/// the incremental streaming path (#3897), so both produce identical lines
+/// by construction. No empty-output fallback here — callers add it over the
+/// COMBINED output.
+fn render_blocks_tagged(
+    blocks: &[Block],
+    width: usize,
+    base_style: Style,
+    out: &mut Vec<RenderedMarkdownLine>,
+) {
     let mut i = 0;
-    while i < parsed.blocks.len() {
-        if matches!(
-            &parsed.blocks[i],
-            Block::TableRow(_) | Block::TableSeparator
-        ) {
+    while i < blocks.len() {
+        if is_table_block(&blocks[i]) {
             let start = i;
-            while i < parsed.blocks.len()
-                && matches!(
-                    &parsed.blocks[i],
-                    Block::TableRow(_) | Block::TableSeparator
-                )
-            {
+            while i < blocks.len() && is_table_block(&blocks[i]) {
                 i += 1;
             }
             out.extend(
-                render_table_group(&parsed.blocks[start..i], width, base_style)
+                render_table_group(&blocks[start..i], width, base_style)
                     .into_iter()
                     .map(|line| RenderedMarkdownLine {
                         line,
@@ -237,84 +292,80 @@ pub fn render_parsed_tagged(
             continue;
         }
 
-        match &parsed.blocks[i] {
-            Block::Heading { text, .. } => {
-                let style = Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::BOLD);
-                out.extend(render_wrapped_line_tagged(text, width, style, false, false));
-            }
-            Block::HeadingRule => {
-                out.push(RenderedMarkdownLine {
-                    line: Line::from(Span::styled(
-                        "─".repeat(width.min(40)),
-                        Style::default().fg(palette::TEXT_DIM),
-                    )),
-                    is_code: false,
-                    copy_prefix_width: 0,
-                    copy_separator_after: CopyLineSeparator::Newline,
-                });
-            }
-            Block::HorizontalRule => {
-                out.push(RenderedMarkdownLine {
-                    line: Line::from(Span::styled(
-                        "─".repeat(width.min(60)),
-                        Style::default().fg(palette::TEXT_DIM),
-                    )),
-                    is_code: false,
-                    copy_prefix_width: 0,
-                    copy_separator_after: CopyLineSeparator::Newline,
-                });
-            }
-            Block::ListItem { bullet, text } => {
-                let bullet_style = Style::default().fg(palette::DEEPSEEK_SKY);
-                out.extend(render_list_line_tagged(
-                    bullet,
-                    text,
-                    width,
-                    bullet_style,
-                    base_style,
-                ));
-            }
-            Block::Code { line } => {
-                let code_style = Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::ITALIC);
-                out.extend(render_wrapped_line_tagged(
-                    line, width, code_style, true, true,
-                ));
-            }
-            Block::Paragraph { text } => {
-                let link_style = Style::default()
-                    .fg(palette::WHALE_ACCENT_PRIMARY)
-                    .add_modifier(Modifier::UNDERLINED);
-                out.extend(render_line_with_links_tagged(
-                    text, width, base_style, link_style,
-                ));
-            }
-            Block::Blank => {
-                out.push(RenderedMarkdownLine {
-                    line: Line::from(""),
-                    is_code: false,
-                    copy_prefix_width: 0,
-                    copy_separator_after: CopyLineSeparator::Newline,
-                });
-            }
-            Block::TableRow(_) | Block::TableSeparator => unreachable!(),
-        }
+        render_block_tagged(&blocks[i], width, base_style, out);
         i += 1;
     }
+}
 
-    if out.is_empty() {
-        out.push(RenderedMarkdownLine {
-            line: Line::from(""),
-            is_code: false,
-            copy_prefix_width: 0,
-            copy_separator_after: CopyLineSeparator::Newline,
-        });
+/// Render one non-table block.
+fn render_block_tagged(
+    block: &Block,
+    width: usize,
+    base_style: Style,
+    out: &mut Vec<RenderedMarkdownLine>,
+) {
+    match block {
+        Block::Heading { text, .. } => {
+            let style = Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD);
+            out.extend(render_wrapped_line_tagged(text, width, style, false, false));
+        }
+        Block::HeadingRule => {
+            out.push(RenderedMarkdownLine {
+                line: Line::from(Span::styled(
+                    "─".repeat(width.min(40)),
+                    Style::default().fg(palette::TEXT_DIM),
+                )),
+                is_code: false,
+                copy_prefix_width: 0,
+                copy_separator_after: CopyLineSeparator::Newline,
+            });
+        }
+        Block::HorizontalRule => {
+            out.push(RenderedMarkdownLine {
+                line: Line::from(Span::styled(
+                    "─".repeat(width.min(60)),
+                    Style::default().fg(palette::TEXT_DIM),
+                )),
+                is_code: false,
+                copy_prefix_width: 0,
+                copy_separator_after: CopyLineSeparator::Newline,
+            });
+        }
+        Block::ListItem { bullet, text } => {
+            let bullet_style = Style::default().fg(palette::DEEPSEEK_SKY);
+            out.extend(render_list_line_tagged(
+                bullet,
+                text,
+                width,
+                bullet_style,
+                base_style,
+            ));
+        }
+        Block::Code { line } => {
+            let code_style = Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::ITALIC);
+            out.extend(render_wrapped_line_tagged(
+                line, width, code_style, true, true,
+            ));
+        }
+        Block::Paragraph { text } => {
+            let link_style = Style::default()
+                .fg(palette::WHALE_ACCENT_PRIMARY)
+                .add_modifier(Modifier::UNDERLINED);
+            out.extend(render_line_with_links_tagged(
+                text, width, base_style, link_style,
+            ));
+        }
+        Block::Blank => {
+            out.push(empty_rendered_line());
+        }
+        Block::TableRow(_) | Block::TableSeparator => {
+            unreachable!("table blocks are grouped by render_blocks_tagged")
+        }
     }
-
-    out
 }
 
 /// Convenience wrapper: parse + render in one call.
@@ -337,6 +388,197 @@ pub fn render_markdown_tagged(
 ) -> Vec<RenderedMarkdownLine> {
     let parsed = parse(content);
     render_parsed_tagged(&parsed, width, base_style)
+}
+
+// ---------------------------------------------------------------------------
+//  Incremental rendering for streaming cells (#3897)
+// ---------------------------------------------------------------------------
+
+/// How many concurrent streaming render states to keep. The main transcript
+/// and the Ctrl+T overlay render the same growing message at different
+/// widths within one frame, and a streaming thinking body can interleave —
+/// a single slot would thrash between them.
+const STREAM_RENDER_SLOTS: usize = 4;
+
+thread_local! {
+    // Thread-local, like PARSE_INVOCATIONS: the TUI renders on one thread,
+    // and per-thread state keeps parallel tests isolated.
+    static STREAM_RENDER_CACHE: RefCell<Vec<StreamRenderState>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Incremental parse+render state for one growing markdown source.
+///
+/// Prefix stability is provable for this parser: classification is per line
+/// with a single carried bool (`in_code_block`), so appending bytes can never
+/// re-classify an earlier COMPLETE line — only the trailing partial line
+/// (after the last `\n`) is volatile. Rendering is per block except
+/// consecutive table rows, whose column widths derive from the whole group;
+/// a trailing table run therefore stays volatile until a non-table block
+/// lands after it.
+struct StreamRenderState {
+    /// The committed source prefix (everything up to `cutoff`). Stored so a
+    /// candidate content can be verified as an extension via one memcmp —
+    /// orders of magnitude cheaper than the parse+wrap it replaces.
+    committed_source: String,
+    /// Rendered-cell width the frozen lines were produced at.
+    width: usize,
+    base_style: Style,
+    /// OSC8 hyperlink support is a process-global flag that changes rendered
+    /// spans; captured so a flip invalidates the slot.
+    osc8: bool,
+    /// Parser fence state after the committed prefix.
+    in_code_block: bool,
+    /// Blocks parsed from the committed prefix.
+    stable_blocks: Vec<Block>,
+    /// Rendered output of `stable_blocks[..frozen_block_count]` — every
+    /// stable block except a trailing table-group run.
+    frozen_lines: Vec<RenderedMarkdownLine>,
+    frozen_block_count: usize,
+}
+
+impl StreamRenderState {
+    fn new(width: usize, base_style: Style, osc8: bool) -> Self {
+        Self {
+            committed_source: String::new(),
+            width,
+            base_style,
+            osc8,
+            in_code_block: false,
+            stable_blocks: Vec::new(),
+            frozen_lines: Vec::new(),
+            frozen_block_count: 0,
+        }
+    }
+
+    fn matches(&self, content: &str, width: usize, base_style: Style, osc8: bool) -> bool {
+        self.width == width
+            && self.base_style == base_style
+            && self.osc8 == osc8
+            && content.len() >= self.committed_source.len()
+            && content.as_bytes()[..self.committed_source.len()]
+                == *self.committed_source.as_bytes()
+    }
+
+    fn render(&mut self, content: &str) -> Vec<RenderedMarkdownLine> {
+        // Absorb newly completed lines (everything up to the last '\n').
+        // `lines()` strips a trailing '\r' itself, so a lone '\r' at the
+        // very end belongs to the volatile tail along with the partial line.
+        let cutoff = self.committed_source.len();
+        let new_cutoff = content.rfind('\n').map_or(0, |pos| pos + 1);
+        if new_cutoff > cutoff {
+            for raw_line in content[cutoff..new_cutoff].lines() {
+                parse_line_into(raw_line, &mut self.in_code_block, &mut self.stable_blocks);
+            }
+            self.committed_source.push_str(&content[cutoff..new_cutoff]);
+        }
+
+        // Freeze forward: render every stable block except a trailing
+        // table-group run (its column layout can still change when the tail
+        // appends more rows).
+        let mut stable_end = self.stable_blocks.len();
+        while stable_end > self.frozen_block_count
+            && is_table_block(&self.stable_blocks[stable_end - 1])
+        {
+            stable_end -= 1;
+        }
+        if stable_end > self.frozen_block_count {
+            render_blocks_tagged(
+                &self.stable_blocks[self.frozen_block_count..stable_end],
+                self.width,
+                self.base_style,
+                &mut self.frozen_lines,
+            );
+            self.frozen_block_count = stable_end;
+        }
+
+        // Volatile region: the stable trailing table run (if any) plus the
+        // partial last line, re-parsed with a scratch copy of the fence
+        // state so a "```" sitting in the partial line can't poison the
+        // committed parser state.
+        let mut volatile_blocks: Vec<Block> =
+            self.stable_blocks[self.frozen_block_count..].to_vec();
+        let tail = &content[self.committed_source.len()..];
+        if !tail.is_empty() {
+            let mut tail_fence_state = self.in_code_block;
+            for raw_line in tail.lines() {
+                parse_line_into(raw_line, &mut tail_fence_state, &mut volatile_blocks);
+            }
+        }
+
+        let mut out = self.frozen_lines.clone();
+        render_blocks_tagged(&volatile_blocks, self.width, self.base_style, &mut out);
+        if out.is_empty() {
+            // Match render_parsed_tagged's fallback over the COMBINED output.
+            out.push(empty_rendered_line());
+        }
+        out
+    }
+}
+
+/// Incremental variant of [`render_markdown_tagged`] for append-only
+/// streaming sources. Per call it parses only the source appended since the
+/// last call (plus the volatile trailing partial line / open table group)
+/// and re-renders only unfrozen blocks, instead of re-parsing and
+/// re-wrapping the whole growing message on every committed chunk (#3897).
+///
+/// Output is byte-identical to [`render_markdown_tagged`] on the same
+/// input; a non-extension of the cached source (backtrack, different cell)
+/// simply misses the cache and rebuilds from scratch. Callers should route
+/// the FINAL render of a finished message through [`render_markdown_tagged`].
+#[must_use]
+pub fn render_markdown_tagged_streaming(
+    content: &str,
+    width: u16,
+    base_style: Style,
+) -> Vec<RenderedMarkdownLine> {
+    let width_cells = width.max(1) as usize;
+    let osc8_enabled = osc8::enabled();
+    let out = STREAM_RENDER_CACHE.with(|cache| {
+        let mut slots = cache.borrow_mut();
+        let mut state = match slots
+            .iter()
+            .position(|slot| slot.matches(content, width_cells, base_style, osc8_enabled))
+        {
+            Some(idx) => slots.remove(idx),
+            None => StreamRenderState::new(width_cells, base_style, osc8_enabled),
+        };
+        let rendered = state.render(content);
+        // Move-to-front LRU keeps the active stream(s) resident.
+        slots.insert(0, state);
+        slots.truncate(STREAM_RENDER_SLOTS);
+        rendered
+    });
+
+    // Differential guard: any future parser/renderer change that breaks
+    // prefix stability fails loudly in debug builds and under `cargo test`.
+    #[cfg(debug_assertions)]
+    {
+        // Keep the test-only parsed-line counter measuring the streaming
+        // path alone — the guard's full re-parse is not part of the cost
+        // under test.
+        #[cfg(test)]
+        let parsed_lines_before = parsed_line_count();
+        let full = render_markdown_tagged(content, width, base_style);
+        #[cfg(test)]
+        PARSED_LINES.with(|c| c.set(parsed_lines_before));
+        debug_assert!(
+            rendered_lines_eq(&out, &full),
+            "streaming markdown render diverged from the full re-parse",
+        );
+    }
+
+    out
+}
+
+#[cfg(debug_assertions)]
+fn rendered_lines_eq(a: &[RenderedMarkdownLine], b: &[RenderedMarkdownLine]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(x, y)| {
+            x.line == y.line
+                && x.is_code == y.is_code
+                && x.copy_prefix_width == y.copy_prefix_width
+                && x.copy_separator_after == y.copy_separator_after
+        })
 }
 
 /// Render plain text: split on newlines, word-wrap each line independently,
@@ -1924,5 +2166,118 @@ mod tests {
         let rendered = render_paragraph_for_test("hello world", 0);
         // Any output is acceptable (the path is degenerate); assert no panic.
         let _ = rendered;
+    }
+
+    // ---- #3897: incremental rendering for streaming cells ----
+
+    fn assert_streaming_matches_full(content: &str, width: u16) {
+        // The streaming entry point carries its own debug_assert differential
+        // guard, but assert explicitly here too so a failure names the input.
+        let streaming = render_markdown_tagged_streaming(content, width, Style::default());
+        let full = render_markdown_tagged(content, width, Style::default());
+        assert_eq!(
+            streaming.len(),
+            full.len(),
+            "line count diverged at width {width} for {content:?}"
+        );
+        for (idx, (s, f)) in streaming.iter().zip(full.iter()).enumerate() {
+            assert_eq!(s.line, f.line, "line {idx} diverged for {content:?}");
+            assert_eq!(s.is_code, f.is_code, "is_code {idx} diverged");
+            assert_eq!(s.copy_prefix_width, f.copy_prefix_width);
+            assert_eq!(s.copy_separator_after, f.copy_separator_after);
+        }
+    }
+
+    const STREAMING_FIXTURE: &str = "# Title\n\nIntro paragraph with a [link](https://example.com) inside.\n\n## Sub-heading\n\n- first bullet\n- second bullet with 中文宽字符 text\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n| col a | col b |\n|-------|-------|\n| 1     | 2     |\n| 3     | 4     | 5 |\n\n---\n\nClosing paragraph after the table.\n";
+
+    #[test]
+    fn streaming_render_matches_full_render_at_every_chunk() {
+        for width in [24u16, 40, 80] {
+            for chunk_bytes in [1usize, 3, 7] {
+                let mut fed = String::new();
+                let mut remaining = STREAMING_FIXTURE;
+                while !remaining.is_empty() {
+                    let mut take = chunk_bytes.min(remaining.len());
+                    while !remaining.is_char_boundary(take) {
+                        take += 1;
+                    }
+                    fed.push_str(&remaining[..take]);
+                    remaining = &remaining[take..];
+                    assert_streaming_matches_full(&fed, width);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_render_parses_only_the_tail() {
+        let lines: Vec<String> = (0..120).map(|i| format!("paragraph line {i}\n")).collect();
+        let mut fed = String::new();
+
+        reset_parsed_line_count();
+        for line in &lines {
+            fed.push_str(line);
+            let _ = render_markdown_tagged_streaming(&fed, 80, Style::default());
+        }
+        let parsed = parsed_line_count();
+        let n = lines.len() as u64;
+        // Each committed line is parsed once by the incremental path (plus
+        // the volatile tail, which is empty here because every chunk ends in
+        // '\n'). A full re-parse per chunk would cost N*(N+1)/2 ≈ 7260 lines.
+        assert!(
+            parsed <= 2 * n + 4,
+            "streaming path parsed {parsed} lines for {n} single-line chunks — not O(delta)"
+        );
+    }
+
+    #[test]
+    fn streaming_slot_falls_back_on_non_extension() {
+        let first = "# Message A\n\nbody of a\n";
+        let _ = render_markdown_tagged_streaming(first, 60, Style::default());
+        // Shorter, unrelated content: not an extension of the cached prefix.
+        assert_streaming_matches_full("totally different", 60);
+        // Backtrack of the original content (shrunk mid-stream).
+        assert_streaming_matches_full("# Message A\n", 60);
+    }
+
+    #[test]
+    fn streaming_two_widths_interleaved_do_not_thrash() {
+        let mut fed = String::new();
+        for i in 0..20 {
+            fed.push_str(&format!("interleaved line {i} with some words\n"));
+            // Main transcript and overlay render the same stream at two
+            // widths in the same frame; both must stay byte-identical.
+            assert_streaming_matches_full(&fed, 60);
+            assert_streaming_matches_full(&fed, 80);
+        }
+    }
+
+    #[test]
+    fn trailing_table_group_stays_volatile() {
+        let mut fed = String::from("intro\n\n");
+        let rows = [
+            "| a | b |\n",
+            "|---|---|\n",
+            "| 1 | 2 |\n",
+            "| wide-cell-that-changes-layout | 4 | extra |\n",
+        ];
+        for row in rows {
+            fed.push_str(row);
+            // A later row can widen the whole group's column layout; earlier
+            // rows must re-render exactly as the full parse does.
+            assert_streaming_matches_full(&fed, 60);
+        }
+        fed.push_str("\nafter the table\n");
+        assert_streaming_matches_full(&fed, 60);
+    }
+
+    #[test]
+    fn unclosed_code_fence_streams_byte_identical() {
+        let source = "before\n```rust\nfn x() {\n```\nafter\n";
+        let mut fed = String::new();
+        for ch in source.chars() {
+            fed.push(ch);
+            assert_streaming_matches_full(&fed, 40);
+        }
     }
 }

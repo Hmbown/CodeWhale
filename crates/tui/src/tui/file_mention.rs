@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tui::app::{App, MentionCompletionCache};
+use crate::tui::app::{
+    App, MentionCompletionCache, MentionCompletionKey, MentionCompletionPending,
+};
 use crate::working_set::Workspace;
 
 /// Maximum number of `@`-mentions whose contents are inlined into one user
@@ -219,102 +221,251 @@ pub fn visible_mention_menu_entries(app: &mut App, limit: usize) -> Vec<String> 
         return Vec::new();
     }
 
-    let workspace = app.workspace.clone();
-    let cwd = std::env::current_dir().ok();
-    let walk_depth = app.mention_walk_depth;
-    let behavior = app.mention_menu_behavior.clone();
-    let follow_links = app.workspace_follow_symlinks;
+    let key = MentionCompletionKey {
+        workspace: app.workspace.clone(),
+        cwd: std::env::current_dir().ok(),
+        partial,
+        limit,
+        walk_depth: app.mention_walk_depth,
+        behavior: app.mention_menu_behavior.clone(),
+        follow_links: app.workspace_follow_symlinks,
+    };
+
     if let Some(ref cache) = app.composer.mention_completion_cache
-        && cache.workspace == workspace
-        && cache.cwd == cwd
-        && cache.partial == partial
-        && cache.limit == limit
-        && cache.walk_depth == walk_depth
-        && cache.behavior == behavior
-        && cache.follow_links == follow_links
+        && cache.key == key
     {
         return cache.entries.clone();
     }
 
     // Fast path (#3757): for non-path-like partials the candidate set is
     // needle-independent, so one cached walk serves every keystroke of the
-    // mention token and ranking happens in memory. Path-like partials fall
-    // through to the live walk because local path-reference completions are
-    // needle-gated (see `should_try_local_reference_completion`).
-    let path_like = partial.starts_with('.') || partial.contains('/') || partial.contains('\\');
-    if behavior != "browser" && !path_like {
+    // mention token and ranking happens in memory. Path-like and browser
+    // partials fall through to the background walk (#3899) because local
+    // path-reference completions are needle-gated
+    // (see `should_try_local_reference_completion`).
+    let path_like =
+        key.partial.starts_with('.') || key.partial.contains('/') || key.partial.contains('\\');
+    if key.behavior != "browser" && !path_like {
         const CANDIDATE_TTL: std::time::Duration = std::time::Duration::from_secs(4);
         let fresh = app
             .composer
             .mention_candidate_cache
             .as_ref()
             .is_some_and(|c| {
-                c.workspace == workspace
-                    && c.cwd == cwd
-                    && c.walk_depth == walk_depth
-                    && c.follow_links == follow_links
+                c.workspace == key.workspace
+                    && c.cwd == key.cwd
+                    && c.walk_depth == key.walk_depth
+                    && c.follow_links == key.follow_links
                     && c.collected_at.elapsed() < CANDIDATE_TTL
             });
         if !fresh {
             let ws = Workspace::with_cwd_depth_and_follow_links(
-                workspace.clone(),
-                cwd.clone(),
-                walk_depth,
-                follow_links,
+                key.workspace.clone(),
+                key.cwd.clone(),
+                key.walk_depth,
+                key.follow_links,
             );
             app.composer.mention_candidate_cache = Some(crate::tui::app::MentionCandidateCache {
-                workspace: workspace.clone(),
-                cwd: cwd.clone(),
-                walk_depth,
-                follow_links,
+                workspace: key.workspace.clone(),
+                cwd: key.cwd.clone(),
+                walk_depth: key.walk_depth,
+                follow_links: key.follow_links,
                 collected_at: std::time::Instant::now(),
                 candidates: ws.completion_candidates(),
             });
         }
         let ranked = match app.composer.mention_candidate_cache.as_ref() {
-            Some(cache) => {
-                crate::working_set::rank_completion_candidates(&cache.candidates, &partial, limit)
-            }
+            Some(cache) => crate::working_set::rank_completion_candidates(
+                &cache.candidates,
+                &key.partial,
+                key.limit,
+            ),
             None => Vec::new(),
         };
         let entries = super::file_frecency::rerank_by_frecency(ranked);
         app.composer.mention_completion_cache = Some(MentionCompletionCache {
-            workspace,
-            cwd,
-            partial,
-            limit,
-            walk_depth,
-            behavior,
-            follow_links,
+            key,
             entries: entries.clone(),
         });
         return entries;
     }
 
-    let ws = Workspace::with_cwd_depth_and_follow_links(
-        workspace.clone(),
-        cwd.clone(),
-        walk_depth,
-        app.workspace_follow_symlinks,
-    );
-    let entries = if behavior == "browser" {
-        find_file_mention_browser_completions(&ws, &partial, limit)
+    // Drain a completed background walk: promote it when it still matches
+    // the live key, discard it when the needle has moved on (#3899).
+    if let Some(pending) = app.composer.mention_completion_pending.take() {
+        let ready = pending.cell.lock().ok().and_then(|mut cell| cell.take());
+        match ready {
+            Some(entries) => {
+                let promoted = pending.key == key;
+                app.composer.mention_completion_cache = Some(MentionCompletionCache {
+                    key: pending.key,
+                    entries: entries.clone(),
+                });
+                if promoted {
+                    return entries;
+                }
+            }
+            None => {
+                // Still walking. Keep it even when the needle has moved on:
+                // dropping the handle cannot stop the blocking walk, so
+                // respawning per keystroke would stack concurrent
+                // full-workspace walks on the blocking pool. Keeping the
+                // old walk serializes them — its result is discarded on
+                // landing (key mismatch above) and the very next call
+                // spawns the walk for the live needle.
+                app.composer.mention_completion_pending = Some(pending);
+                return stale_mention_fallback_entries(app, &key);
+            }
+        }
+    }
+
+    // Cache miss with no matching walk in flight: start one. Without a tokio
+    // runtime (plain unit tests) fall back to the synchronous walk so
+    // results and test semantics are identical to the pre-async behavior.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completion = MentionWalkCompletion { cell: cell.clone() };
+        let walker_key = key.clone();
+        crate::utils::spawn_blocking_supervised("mention-completion", move || {
+            completion.fill(run_mention_completion_walk(&walker_key));
+        });
+        app.composer.mention_completion_pending = Some(MentionCompletionPending {
+            key: key.clone(),
+            cell,
+        });
+        stale_mention_fallback_entries(app, &key)
     } else {
-        find_file_mention_completions(&ws, &partial, limit)
+        let entries = run_mention_completion_walk(&key);
+        app.composer.mention_completion_cache = Some(MentionCompletionCache {
+            key,
+            entries: entries.clone(),
+        });
+        entries
+    }
+}
+
+/// Completion guarantee for a background mention walk: the shared cell is
+/// ALWAYS filled, even if the walk panics. Without this, a panicking walk
+/// would leave `mention_completion_pending` set forever and the Enter-hold
+/// for the pending token would never release (until Esc). On unwind the
+/// `Drop` impl writes an empty result, which drains normally.
+struct MentionWalkCompletion {
+    cell: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>,
+}
+
+impl MentionWalkCompletion {
+    fn fill(self, entries: Vec<String>) {
+        if let Ok(mut guard) = self.cell.lock() {
+            *guard = Some(entries);
+        }
+        // Normal path: `self` drops here with the cell already filled, so
+        // the Drop impl is a no-op.
+    }
+}
+
+impl Drop for MentionWalkCompletion {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.cell.lock()
+            && guard.is_none()
+        {
+            *guard = Some(Vec::new());
+        }
+    }
+}
+
+/// Run the completion walk described by `key`. Called on a background thread
+/// for live keystrokes and synchronously when no runtime is available.
+fn run_mention_completion_walk(key: &MentionCompletionKey) -> Vec<String> {
+    let ws = Workspace::with_cwd_depth_and_follow_links(
+        key.workspace.clone(),
+        key.cwd.clone(),
+        key.walk_depth,
+        key.follow_links,
+    );
+    if key.behavior == "browser" {
+        find_file_mention_browser_completions(&ws, &key.partial, key.limit)
+    } else {
+        find_file_mention_completions(&ws, &key.partial, key.limit)
+    }
+}
+
+/// While a walk is in flight, keep showing the previous keystroke's entries
+/// so the popup stays open and Enter/Up/Down keep routing to it — but only
+/// when the cached results come from the same session context AND the same
+/// token lineage (the live partial extends the cached one, or vice versa
+/// for backspacing), and only the entries that still match the LIVE
+/// needle. Enter/Tab apply the shown list against the live token, so a
+/// fast Enter after a keystroke must never splice an entry the fresh walk
+/// would not have returned (e.g. `docs/apple.md` against `@docs/ab`).
+/// The filter mirrors the walk's case-insensitive substring match, so the
+/// surviving entries are a subset of the fresh walk's results; when it
+/// empties the list, the popup reads as pending and Enter is held instead.
+fn stale_mention_fallback_entries(app: &App, key: &MentionCompletionKey) -> Vec<String> {
+    let needle = key.partial.to_lowercase();
+    app.composer
+        .mention_completion_cache
+        .as_ref()
+        .filter(|cache| cache.key.same_context(key))
+        .filter(|cache| {
+            key.partial.starts_with(&cache.key.partial)
+                || cache.key.partial.starts_with(&key.partial)
+        })
+        .map(|cache| {
+            cache
+                .entries
+                .iter()
+                .filter(|entry| entry.to_lowercase().contains(&needle))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a completion walk is in flight for the mention token under the
+/// cursor while the popup has nothing to show yet. The key router treats
+/// this as popup-open for Enter/Esc: before #3899 the walk ran
+/// synchronously inside the key event, so Enter could never submit a
+/// half-typed mention — swallowing Enter for the walk's duration preserves
+/// that guarantee without blocking the UI thread.
+#[must_use]
+pub fn mention_walk_pending(app: &App) -> bool {
+    !app.mention_menu_hidden
+        && app.composer.mention_completion_pending.is_some()
+        && partial_file_mention_at_cursor(&app.input, app.cursor_position).is_some()
+}
+
+/// Drain a completed background completion walk outside the render path.
+/// Called once per event-loop iteration (next to the workspace-context
+/// refresh) so a finished walk repaints the popup without waiting for an
+/// input event. Sets `needs_redraw` only when the drained result changes
+/// what the popup would show — never while merely waiting (#3899).
+pub fn poll_mention_completion(app: &mut App) {
+    if app.composer.mention_completion_pending.is_none() {
+        return;
+    }
+    // Cursor left the mention token: the walk result can never be shown.
+    if app.mention_menu_hidden
+        || partial_file_mention_at_cursor(&app.input, app.cursor_position).is_none()
+    {
+        app.composer.mention_completion_pending = None;
+        return;
+    }
+    let Some(pending) = app.composer.mention_completion_pending.take() else {
+        return;
     };
-
-    app.composer.mention_completion_cache = Some(MentionCompletionCache {
-        workspace,
-        cwd,
-        partial,
-        limit,
-        walk_depth,
-        behavior,
-        follow_links,
-        entries: entries.clone(),
-    });
-
-    entries
+    let ready = pending.cell.lock().ok().and_then(|mut cell| cell.take());
+    match ready {
+        Some(entries) => {
+            app.composer.mention_completion_cache = Some(MentionCompletionCache {
+                key: pending.key,
+                entries,
+            });
+            app.needs_redraw = true;
+        }
+        None => {
+            app.composer.mention_completion_pending = Some(pending);
+        }
+    }
 }
 
 /// Apply the currently selected `@`-mention popup entry to the composer
@@ -946,6 +1097,28 @@ fn is_media_path(path: &Path) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A background walk must ALWAYS complete its cell — a panicking walk
+    /// otherwise leaves `mention_completion_pending` set forever and the
+    /// Enter-hold for that token never releases.
+    #[test]
+    fn mention_walk_completion_fills_cell_even_on_unwind() {
+        // Normal path: the filled result is preserved.
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completion = MentionWalkCompletion { cell: cell.clone() };
+        completion.fill(vec!["docs/a.md".to_string()]);
+        assert_eq!(
+            cell.lock().unwrap().as_deref(),
+            Some(&["docs/a.md".to_string()][..])
+        );
+
+        // Unwind path: dropping without filling writes an empty result so
+        // the pending walk drains instead of soft-locking.
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completion = MentionWalkCompletion { cell: cell.clone() };
+        drop(completion);
+        assert_eq!(cell.lock().unwrap().as_deref(), Some(&[][..]));
+    }
 
     /// #101 regression — workspace-vs-cwd divergence: `@bar.txt` typed from
     /// the cwd `<root>/sub` MUST resolve to `<root>/sub/bar.txt`, never to

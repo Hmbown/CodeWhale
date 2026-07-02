@@ -1221,9 +1221,11 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
 
     let content_width = area.width.saturating_sub(4) as usize;
     let usable_rows = area.height.saturating_sub(3) as usize;
-    let (lines, row_actions) = task_panel_rows(app, content_width.max(1), usable_rows.max(1));
+    let row_sets = task_panel_row_sets(app);
+    let (lines, row_actions) =
+        task_panel_rows(app, &row_sets, content_width.max(1), usable_rows.max(1));
 
-    let full_texts = task_panel_hover_texts(app, usable_rows.max(1));
+    let full_texts = task_panel_hover_texts(app, &row_sets, usable_rows.max(1));
     render_sidebar_section(f, area, "Tasks", lines, full_texts, row_actions, app);
 }
 
@@ -1235,9 +1237,43 @@ struct SidebarToolRow {
     duration_ms: Option<u64>,
 }
 
+/// Row sets shared by the Tasks panel line renderer and hover-text builder.
+///
+/// Computed once per frame in `render_sidebar_tasks` (#3898): both consumers
+/// previously recomputed `active_tool_rows` / `reasoning_task_rows` /
+/// `background_task_rows` (a clone+sort of `app.task_panel`) independently,
+/// doubling the work and risking the two passes disagreeing across an
+/// `Instant::elapsed` TTL boundary within the same frame.
+struct TaskPanelRowSets {
+    active: Vec<SidebarToolRow>,
+    reasoning: Vec<TaskPanelEntry>,
+    background: Vec<TaskPanelEntry>,
+    recent: Vec<SidebarToolRow>,
+}
+
+fn task_panel_row_sets(app: &App) -> TaskPanelRowSets {
+    let explicit_tasks_focus = app.sidebar_focus == SidebarFocus::Tasks;
+    let active = active_tool_rows(app);
+    let reasoning = reasoning_task_rows(app);
+    // Auto/Pinned mode deliberately skips live-tool dedup (passes an empty
+    // slice), matching the previous per-consumer call sites.
+    let background = background_task_rows(app, if explicit_tasks_focus { &active } else { &[] });
+    let recent = if explicit_tasks_focus {
+        recent_tool_rows(app, 4)
+    } else {
+        Vec::new()
+    };
+    TaskPanelRowSets {
+        active,
+        reasoning,
+        background,
+        recent,
+    }
+}
+
 #[cfg(test)]
 fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Line<'static>> {
-    task_panel_rows(app, content_width, max_rows).0
+    task_panel_rows(app, &task_panel_row_sets(app), content_width, max_rows).0
 }
 
 /// Build the Tasks panel lines together with a parallel per-line click-action
@@ -1245,6 +1281,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
 /// aligned with the rendered lines no matter how the layout evolves.
 fn task_panel_rows(
     app: &App,
+    row_sets: &TaskPanelRowSets,
     content_width: usize,
     max_rows: usize,
 ) -> (Vec<Line<'static>>, Vec<Option<String>>) {
@@ -1273,26 +1310,19 @@ fn task_panel_rows(
         )));
     }
 
-    let active_rows = active_tool_rows(app);
+    let active_rows = &row_sets.active;
     if explicit_tasks_focus && !active_rows.is_empty() && lines.len() < max_rows {
         push_sidebar_label_theme(&mut lines, "Live tools", theme);
-        push_tool_rows(&mut lines, &active_rows, content_width, max_rows, theme);
+        push_tool_rows(&mut lines, active_rows, content_width, max_rows, theme);
     }
 
-    let reasoning_rows = reasoning_task_rows(app);
+    let reasoning_rows = &row_sets.reasoning;
     if explicit_tasks_focus && !reasoning_rows.is_empty() && lines.len() < max_rows {
         push_sidebar_label_theme(&mut lines, "Model reasoning", theme);
-        push_reasoning_rows(&mut lines, &reasoning_rows, content_width, max_rows, theme);
+        push_reasoning_rows(&mut lines, reasoning_rows, content_width, max_rows, theme);
     }
 
-    let background_rows = background_task_rows(
-        app,
-        if explicit_tasks_focus {
-            &active_rows
-        } else {
-            &[]
-        },
-    );
+    let background_rows = &row_sets.background;
     // Lines pushed so far (turn label, Live tools header, live tool rows)
     // are not clickable — backfill their action slots.
     actions.resize(lines.len(), None);
@@ -1391,10 +1421,10 @@ fn task_panel_rows(
     }
 
     if explicit_tasks_focus && lines.len() < max_rows {
-        let recent_rows = recent_tool_rows(app, 4);
+        let recent_rows = &row_sets.recent;
         if !recent_rows.is_empty() {
             push_sidebar_label_theme(&mut lines, "Recent tools", theme);
-            push_tool_rows(&mut lines, &recent_rows, content_width, max_rows, theme);
+            push_tool_rows(&mut lines, recent_rows, content_width, max_rows, theme);
         }
     }
 
@@ -1430,7 +1460,7 @@ fn task_panel_rows(
     (lines, actions)
 }
 
-fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
+fn task_panel_hover_texts(app: &App, row_sets: &TaskPanelRowSets, max_rows: usize) -> Vec<String> {
     let mut texts = Vec::with_capacity(max_rows.max(4));
     let explicit_tasks_focus = app.sidebar_focus == SidebarFocus::Tasks;
 
@@ -1439,26 +1469,19 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
         texts.push(format!("turn {turn_id} ({status})"));
     }
 
-    let active_rows = active_tool_rows(app);
+    let active_rows = &row_sets.active;
     if explicit_tasks_focus && !active_rows.is_empty() && texts.len() < max_rows {
         texts.push("Live tools".to_string());
-        push_tool_row_hover_texts(&mut texts, &active_rows, max_rows);
+        push_tool_row_hover_texts(&mut texts, active_rows, max_rows);
     }
 
-    let reasoning_rows = reasoning_task_rows(app);
+    let reasoning_rows = &row_sets.reasoning;
     if explicit_tasks_focus && !reasoning_rows.is_empty() && texts.len() < max_rows {
         texts.push("Model reasoning".to_string());
-        push_reasoning_row_hover_texts(&mut texts, &reasoning_rows, max_rows);
+        push_reasoning_row_hover_texts(&mut texts, reasoning_rows, max_rows);
     }
 
-    let background_rows = background_task_rows(
-        app,
-        if explicit_tasks_focus {
-            &active_rows
-        } else {
-            &[]
-        },
-    );
+    let background_rows = &row_sets.background;
     if !background_rows.is_empty() && texts.len() < max_rows {
         let running = background_rows
             .iter()
@@ -1510,10 +1533,10 @@ fn task_panel_hover_texts(app: &App, max_rows: usize) -> Vec<String> {
     }
 
     if explicit_tasks_focus && texts.len() < max_rows {
-        let recent_rows = recent_tool_rows(app, 4);
+        let recent_rows = &row_sets.recent;
         if !recent_rows.is_empty() {
             texts.push("Recent tools".to_string());
-            push_tool_row_hover_texts(&mut texts, &recent_rows, max_rows);
+            push_tool_row_hover_texts(&mut texts, recent_rows, max_rows);
         }
     }
 
@@ -2616,28 +2639,36 @@ fn sort_sidebar_agent_rows_as_tree(rows: Vec<SidebarAgentRow>) -> Vec<SidebarAge
         rows: &[SidebarAgentRow],
         children: &std::collections::HashMap<String, Vec<usize>>,
         seen: &mut std::collections::HashSet<usize>,
-        out: &mut Vec<SidebarAgentRow>,
+        order: &mut Vec<usize>,
     ) {
         if !seen.insert(idx) {
             return;
         }
-        out.push(rows[idx].clone());
+        order.push(idx);
         if let Some(child_indices) = children.get(&rows[idx].id) {
             for child_idx in child_indices {
-                push_tree(*child_idx, rows, children, seen, out);
+                push_tree(*child_idx, rows, children, seen, order);
             }
         }
     }
 
-    let mut out = Vec::with_capacity(rows.len());
+    let mut order = Vec::with_capacity(rows.len());
     let mut seen = std::collections::HashSet::new();
     for idx in roots {
-        push_tree(idx, &rows, &children, &mut seen, &mut out);
+        push_tree(idx, &rows, &children, &mut seen, &mut order);
     }
     for idx in 0..rows.len() {
-        push_tree(idx, &rows, &children, &mut seen, &mut out);
+        push_tree(idx, &rows, &children, &mut seen, &mut order);
     }
-    out
+
+    // Materialize by move instead of cloning each row a second time (#3898):
+    // `seen` guarantees every index lands in `order` exactly once, so each
+    // slot is taken exactly once and no row is dropped.
+    let mut slots: Vec<Option<SidebarAgentRow>> = rows.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|idx| slots[idx].take().expect("each row emitted exactly once"))
+        .collect()
 }
 
 fn subagent_status_text(status: &SubAgentStatus) -> &'static str {
@@ -3284,7 +3315,8 @@ mod tests {
         normalize_activity_text, render_sidebar, sidebar_agent_rows, sidebar_hover_rows,
         sidebar_work_summary, sort_sidebar_agent_rows_as_tree, subagent_panel_hover_texts,
         subagent_panel_lines, subagent_panel_rows, task_panel_hover_texts, task_panel_lines,
-        task_panel_rows, work_panel_empty_hint, work_panel_hover_texts, work_panel_lines,
+        task_panel_row_sets, task_panel_rows, work_panel_empty_hint, work_panel_hover_texts,
+        work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette;
@@ -4350,6 +4382,98 @@ mod tests {
     }
 
     #[test]
+    fn task_panel_row_sets_dedup_background_only_when_tasks_focused() {
+        let mut app = create_test_app();
+        let mut active = ActiveCell::new();
+        active.push_tool(
+            "tool-1",
+            HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+                name: "rlm_search".to_string(),
+                status: ToolStatus::Running,
+                input_summary: Some("scanning workspace".to_string()),
+                output: None,
+                prompts: None,
+                spillover_path: None,
+                output_summary: None,
+                is_diff: false,
+            })),
+        );
+        app.active_cell = Some(active);
+        app.task_panel.push(TaskPanelEntry {
+            id: "rlm-123".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "RLM: scanning workspace".to_string(),
+            duration_ms: Some(1_000),
+            kind: TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+        });
+
+        app.sidebar_focus = SidebarFocus::Tasks;
+        let focused = task_panel_row_sets(&app);
+        assert!(
+            focused.background.is_empty(),
+            "Tasks focus dedups background jobs against live tools: {:?}",
+            focused.background
+        );
+
+        app.sidebar_focus = SidebarFocus::Auto;
+        let auto = task_panel_row_sets(&app);
+        assert_eq!(
+            auto.background.len(),
+            1,
+            "Auto mode keeps background jobs even when a live tool matches"
+        );
+    }
+
+    #[test]
+    fn task_panel_rows_and_hover_share_one_snapshot() {
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Tasks;
+        app.runtime_turn_id = Some("turn_abcdef123456".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.turn_counter = 3;
+        app.task_panel.push(TaskPanelEntry {
+            id: "job_123".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cargo test --workspace".to_string(),
+            duration_ms: Some(12_000),
+            kind: TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+        });
+
+        let row_sets = task_panel_row_sets(&app);
+        let (lines, actions) = task_panel_rows(&app, &row_sets, 80, 12);
+        let hover = task_panel_hover_texts(&app, &row_sets, 12);
+        let text = lines_to_text(&lines);
+
+        assert_eq!(lines.len(), actions.len(), "actions align with lines");
+        let job_idx = text
+            .iter()
+            .position(|line| line.contains("Bash running"))
+            .unwrap_or_else(|| panic!("bash job row missing: {text:?}"));
+        assert!(
+            hover[job_idx].contains("cargo test --workspace"),
+            "hover text at the job row index carries the full command: {hover:?}"
+        );
+        assert!(
+            text[0].starts_with("Turn 3"),
+            "line shows stable turn label: {:?}",
+            text[0]
+        );
+        assert!(
+            hover[0].contains("turn_abcdef123456"),
+            "hover carries the full turn id: {:?}",
+            hover[0]
+        );
+    }
+
+    #[test]
     fn tasks_panel_collapses_stale_running_tool_rows() {
         let mut app = create_test_app();
         app.sidebar_focus = SidebarFocus::Tasks;
@@ -4655,7 +4779,7 @@ mod tests {
             owner_agent_name: None,
         });
 
-        let (lines, actions) = task_panel_rows(&app, 80, 12);
+        let (lines, actions) = task_panel_rows(&app, &task_panel_row_sets(&app), 80, 12);
         let text = lines_to_text(&lines);
         assert_eq!(lines.len(), actions.len());
 
@@ -4695,7 +4819,7 @@ mod tests {
             owner_agent_name: None,
         });
 
-        let (lines, actions) = task_panel_rows(&app, 80, 12);
+        let (lines, actions) = task_panel_rows(&app, &task_panel_row_sets(&app), 80, 12);
         let text = lines_to_text(&lines);
 
         assert!(
@@ -4749,7 +4873,7 @@ mod tests {
             owner_agent_name: None,
         });
 
-        let (lines, actions) = task_panel_rows(&app, 96, 16);
+        let (lines, actions) = task_panel_rows(&app, &task_panel_row_sets(&app), 96, 16);
         let text = lines_to_text(&lines);
         assert_eq!(lines.len(), actions.len());
 
@@ -4816,7 +4940,7 @@ mod tests {
             owner_agent_name: None,
         });
 
-        let (lines, actions) = task_panel_rows(&app, 80, 12);
+        let (lines, actions) = task_panel_rows(&app, &task_panel_row_sets(&app), 80, 12);
         let text = lines_to_text(&lines);
 
         let label_idx = text
@@ -4867,7 +4991,7 @@ mod tests {
             owner_agent_name: None,
         });
 
-        let (lines, actions) = task_panel_rows(&app, 96, 16);
+        let (lines, actions) = task_panel_rows(&app, &task_panel_row_sets(&app), 96, 16);
         let text = lines_to_text(&lines);
         assert_eq!(
             lines.len(),
@@ -4971,6 +5095,50 @@ mod tests {
     }
 
     #[test]
+    fn sort_sidebar_agent_rows_as_tree_emits_each_row_exactly_once() {
+        let agent_row = |id: &str, parent: Option<&str>| SidebarAgentRow {
+            id: id.to_string(),
+            parent_run_id: parent.map(str::to_string),
+            spawn_depth: 1,
+            name: id.to_string(),
+            role: "explore".to_string(),
+            status: "running".to_string(),
+            objective: None,
+            git_branch: None,
+            progress: None,
+            steps_taken: 1,
+            duration_ms: None,
+        };
+        // Parent + child + a two-node parent cycle: the cycle has no root, so
+        // only the orphan sweep reaches it. Every row must still come out
+        // exactly once (the move-based materialization panics on a double
+        // take and this pins the drop case too).
+        let rows = vec![
+            agent_row("agent_parent", None),
+            agent_row("agent_child", Some("agent_parent")),
+            agent_row("agent_cycle_a", Some("agent_cycle_b")),
+            agent_row("agent_cycle_b", Some("agent_cycle_a")),
+        ];
+
+        let sorted = sort_sidebar_agent_rows_as_tree(rows);
+
+        assert_eq!(sorted.len(), 4, "no rows dropped or duplicated");
+        let mut ids: Vec<&str> = sorted.iter().map(|row| row.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            vec![
+                "agent_child",
+                "agent_cycle_a",
+                "agent_cycle_b",
+                "agent_parent"
+            ]
+        );
+        assert_eq!(sorted[0].id, "agent_parent");
+        assert_eq!(sorted[1].id, "agent_child");
+    }
+
+    #[test]
     fn subagent_panel_collapses_terminal_non_done_rows() {
         let summary = SidebarSubagentSummary {
             cached_total: 3,
@@ -5054,6 +5222,7 @@ mod tests {
         let sorted = sort_sidebar_agent_rows_as_tree(rows);
         assert_eq!(sorted[0].id, "agent_parent");
         assert_eq!(sorted[1].id, "agent_grandchild");
+        assert_eq!(sorted.len(), 2, "tree sort must not drop or duplicate rows");
 
         let summary = SidebarSubagentSummary {
             cached_total: 2,
@@ -5849,7 +6018,7 @@ mod tests {
             "raw turn UUID must stay out of the compact row: {text:?}"
         );
 
-        let hover = task_panel_hover_texts(&app, 8);
+        let hover = task_panel_hover_texts(&app, &task_panel_row_sets(&app), 8);
         assert!(
             hover[0].contains("0196f0a3-1111-2222-3333-444455556666"),
             "full turn UUID must remain available in hover text: {hover:?}"

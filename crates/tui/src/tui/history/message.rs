@@ -29,12 +29,57 @@ pub(super) fn render_message(
         .collect()
 }
 
+/// Render an assistant cell for the live transcript. While the cell is
+/// streaming, the markdown parse/wrap goes through the incremental streaming
+/// cache so each committed chunk costs O(appended source), not O(whole
+/// message) (#3897); the final render after streaming ends takes the plain
+/// full-parse path, so a finished message is by construction byte-identical
+/// to a full re-parse.
+pub(super) fn render_assistant_message(
+    content: &str,
+    width: u16,
+    streaming: bool,
+    low_motion: bool,
+) -> Vec<Line<'static>> {
+    render_assistant_message_with_copy_metadata(content, width, streaming, low_motion)
+        .into_iter()
+        .map(|rendered| rendered.line)
+        .collect()
+}
+
+pub(super) fn render_assistant_message_with_copy_metadata(
+    content: &str,
+    width: u16,
+    streaming: bool,
+    low_motion: bool,
+) -> Vec<RenderedTranscriptLine> {
+    render_message_with_copy_metadata_impl(
+        ASSISTANT_GLYPH,
+        assistant_label_style_for(streaming, low_motion),
+        message_body_style(),
+        content,
+        width,
+        streaming,
+    )
+}
+
 pub(super) fn render_message_with_copy_metadata(
     prefix: &str,
     label_style: Style,
     body_style: Style,
     content: &str,
     width: u16,
+) -> Vec<RenderedTranscriptLine> {
+    render_message_with_copy_metadata_impl(prefix, label_style, body_style, content, width, false)
+}
+
+fn render_message_with_copy_metadata_impl(
+    prefix: &str,
+    label_style: Style,
+    body_style: Style,
+    content: &str,
+    width: u16,
+    streaming: bool,
 ) -> Vec<RenderedTranscriptLine> {
     // An assistant cell whose content is entirely whitespace (e.g. a stray
     // newline streamed between reasoning and a tool call) would otherwise
@@ -49,8 +94,11 @@ pub(super) fn render_message_with_copy_metadata(
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
     let mut lines = Vec::new();
-    let rendered =
-        markdown_render::render_markdown_tagged(content, content_width as u16, body_style);
+    let rendered = if streaming {
+        markdown_render::render_markdown_tagged_streaming(content, content_width as u16, body_style)
+    } else {
+        markdown_render::render_markdown_tagged(content, content_width as u16, body_style)
+    };
     for (idx, rendered_line) in rendered.into_iter().enumerate() {
         let line = if idx == 0 {
             let mut spans = Vec::new();

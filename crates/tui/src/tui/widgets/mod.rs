@@ -185,10 +185,26 @@ impl ChatWidget {
                 None,
             );
         } else {
-            // Slow path: clone non-collapsed cells into filtered vecs so
-            // collapsed cells are excluded from rendering. Build the
-            // filtered→original index mapping.
-            let mut filtered_cells: Vec<HistoryCell> =
+            // Slow path: borrow non-collapsed cells into a filtered ref list
+            // so collapsed cells are excluded from rendering, and build the
+            // filtered→original index mapping. Collapsed run starts render a
+            // synthetic summary cell; those few summaries are materialized
+            // up front so the ref list can borrow from a stable Vec —
+            // avoiding the per-frame deep clone of every visible cell that
+            // this path used to pay (#3896).
+            let summary_cells: Vec<(usize, HistoryCell)> = tool_runs
+                .iter()
+                .filter(|run| collapsed_run_starts.contains(&run.start))
+                .map(|run| (run.start, tool_run_summary_cell(run)))
+                .collect();
+            let summary_cell_for = |idx: usize| -> Option<&HistoryCell> {
+                summary_cells
+                    .iter()
+                    .find(|(start, _)| *start == idx)
+                    .map(|(_, cell)| cell)
+            };
+
+            let mut filtered_cells: Vec<&HistoryCell> =
                 Vec::with_capacity(history_len + active_entries.len());
             let mut filtered_revs: Vec<u64> =
                 Vec::with_capacity(history_len + active_entries.len());
@@ -206,7 +222,7 @@ impl ChatWidget {
                     .iter()
                     .find(|run| run.start == idx && collapsed_run_starts.contains(&idx))
                 {
-                    filtered_cells.push(tool_run_summary_cell(run));
+                    filtered_cells.push(summary_cell_for(idx).expect("summary cell materialized"));
                     filtered_revs.push(tool_run_summary_revision(
                         run,
                         &app.history_revisions,
@@ -216,7 +232,7 @@ impl ChatWidget {
                     filtered_to_original.push(idx);
                     continue;
                 }
-                filtered_cells.push(cell.clone());
+                filtered_cells.push(cell);
                 filtered_revs.push(app.history_revisions[idx]);
                 filtered_to_original.push(idx);
             }
@@ -234,7 +250,8 @@ impl ChatWidget {
                     if let Some(run) = tool_runs.iter().find(|run| {
                         run.start == original_idx && collapsed_run_starts.contains(&original_idx)
                     }) {
-                        filtered_cells.push(tool_run_summary_cell(run));
+                        filtered_cells
+                            .push(summary_cell_for(original_idx).expect("summary materialized"));
                         filtered_revs.push(tool_run_summary_revision(
                             run,
                             &app.history_revisions,
@@ -244,7 +261,7 @@ impl ChatWidget {
                         filtered_to_original.push(original_idx);
                         continue;
                     }
-                    filtered_cells.push(cell.clone());
+                    filtered_cells.push(cell);
                     let salt = (i as u64).wrapping_add(1);
                     filtered_revs.push(active_entry_revision(active_rev, salt));
                     filtered_to_original.push(original_idx);
@@ -253,9 +270,8 @@ impl ChatWidget {
 
             app.collapsed_cell_map = filtered_to_original;
 
-            let shards: [&[HistoryCell]; 1] = [&filtered_cells];
-            app.viewport.transcript_cache.ensure_split(
-                &shards,
+            app.viewport.transcript_cache.ensure_filtered(
+                &filtered_cells,
                 &filtered_revs,
                 content_area.width.max(1),
                 render_options,
@@ -3564,6 +3580,80 @@ mod tests {
         let _widget = ChatWidget::new(&mut app, area);
 
         assert_eq!(app.collapsed_cell_map, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn chat_widget_collapse_path_stable_across_frames() {
+        let mut app = create_test_app();
+        app.tool_collapse_mode = ToolCollapseMode::Compact;
+        app.tool_collapse_threshold = 3;
+        add_dense_tool_run(&mut app);
+        app.add_message(HistoryCell::User {
+            content: "trailing prompt".to_string(),
+        });
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+
+        let mut first_buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut first_buf);
+        let first = buffer_text(&first_buf, area);
+        let first_map = app.collapsed_cell_map.clone();
+        let first_total = app.viewport.last_transcript_total;
+
+        // Second frame without any app mutation: the borrowed filtered path
+        // must reproduce the identical output and index map.
+        let mut second_buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut second_buf);
+        let second = buffer_text(&second_buf, area);
+
+        assert_eq!(first, second, "collapse path is frame-stable");
+        assert_eq!(first_map, app.collapsed_cell_map);
+        assert_eq!(first_total, app.viewport.last_transcript_total);
+        assert!(first.contains("Explored 2 files, 1 search"), "{first}");
+        assert!(first.contains("trailing prompt"), "{first}");
+    }
+
+    #[test]
+    fn chat_widget_collapses_run_spanning_history_and_active_entries() {
+        let mut app = create_test_app();
+        app.tool_collapse_mode = ToolCollapseMode::Compact;
+        app.tool_collapse_threshold = 3;
+        app.add_message(success_tool_cell("read_file"));
+        app.add_message(success_tool_cell("list_dir"));
+        let active = app.active_cell.get_or_insert_with(ActiveCell::new);
+        active.push_untracked(success_tool_cell("web_search"));
+        app.bump_active_cell_revision();
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 8,
+        };
+        let mut buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert_eq!(app.collapsed_cell_map, vec![0]);
+        assert!(
+            rendered.contains("Explored 2 files, 1 search"),
+            "run spanning the history/active boundary renders one summary: {rendered}"
+        );
+
+        // Mutating the active tail must re-render the summary (its revision
+        // folds in the covered active entries).
+        let rev_before = app.active_cell_revision;
+        app.bump_active_cell_revision();
+        assert_ne!(rev_before, app.active_cell_revision);
+        let mut second_buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut second_buf);
+        let second = buffer_text(&second_buf, area);
+        assert!(second.contains("Explored 2 files, 1 search"), "{second}");
     }
 
     #[test]
