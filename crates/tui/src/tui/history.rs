@@ -42,7 +42,8 @@ use constants::{
 use constants::{TOOL_RUNNING_SYMBOLS, TOOL_STATUS_SYMBOL_MS};
 use message::{
     RenderedTranscriptLine, assistant_label_style_for, hard_break_copy_lines, message_body_style,
-    render_message, render_message_with_copy_metadata, render_plain_message, render_user_message,
+    render_assistant_message, render_assistant_message_with_copy_metadata, render_message,
+    render_message_with_copy_metadata, render_plain_message, render_user_message,
     system_body_style, system_label_style, user_body_style, user_label_style,
 };
 use thinking::{render_hidden_thinking_activity, render_thinking};
@@ -184,13 +185,9 @@ impl HistoryCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
             HistoryCell::User { content } => render_user_message(content, width),
-            HistoryCell::Assistant { content, streaming } => render_message(
-                ASSISTANT_GLYPH,
-                assistant_label_style_for(*streaming, /*low_motion*/ false),
-                message_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::Assistant { content, streaming } => {
+                render_assistant_message(content, width, *streaming, /*low_motion*/ false)
+            }
             HistoryCell::System { content } => {
                 if is_cycle_boundary(content) {
                     render_cycle_boundary(content, width)
@@ -307,13 +304,9 @@ impl HistoryCell {
             }
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
             HistoryCell::User { content } => render_user_message(content, width),
-            HistoryCell::Assistant { content, streaming } => render_message(
-                ASSISTANT_GLYPH,
-                assistant_label_style_for(*streaming, options.low_motion),
-                message_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::Assistant { content, streaming } => {
+                render_assistant_message(content, width, *streaming, options.low_motion)
+            }
             HistoryCell::System { .. } | HistoryCell::Error { .. } => self.lines(width),
             HistoryCell::SubAgent(cell) => cell.lines(width),
             HistoryCell::ArchivedContext { .. } => {
@@ -341,13 +334,14 @@ impl HistoryCell {
             HistoryCell::User { content } => {
                 hard_break_copy_lines(render_user_message(content, width))
             }
-            HistoryCell::Assistant { content, streaming } => render_message_with_copy_metadata(
-                ASSISTANT_GLYPH,
-                assistant_label_style_for(*streaming, options.low_motion),
-                message_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::Assistant { content, streaming } => {
+                render_assistant_message_with_copy_metadata(
+                    content,
+                    width,
+                    *streaming,
+                    options.low_motion,
+                )
+            }
             HistoryCell::System { content } if !is_cycle_boundary(content) => {
                 render_message_with_copy_metadata(
                     "Note",
