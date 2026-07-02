@@ -6679,6 +6679,20 @@ fn apply_slash_menu_selection_appends_space_for_arg_commands() {
 }
 
 #[test]
+fn apply_slash_menu_selection_appends_space_for_voice_subcommands() {
+    let mut app = create_test_app();
+    let entries = vec![crate::tui::widgets::SlashMenuEntry {
+        name: "/voice".to_string(),
+        description: String::new(),
+        is_skill: false,
+        alias_hint: None,
+    }];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "/voice ");
+}
+
+#[test]
 fn apply_slash_menu_selection_keeps_change_executable_without_version() {
     let mut app = create_test_app();
     let entries = vec![crate::tui::widgets::SlashMenuEntry {

@@ -299,6 +299,7 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::traits::{CommandArgumentBehavior, CommandSelectionBehavior};
     use crate::config::{ApiProvider, Config};
     use crate::localization::{Locale, MessageId};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
@@ -720,6 +721,18 @@ mod tests {
                 "/{} palette command spacing must match argument requirement",
                 command.name
             );
+            assert_eq!(
+                command.argument_behavior() == CommandArgumentBehavior::Required,
+                command.requires_required_argument(),
+                "/{} required argument behavior must match usage parsing",
+                command.name
+            );
+            assert_eq!(
+                command.argument_behavior() != CommandArgumentBehavior::None,
+                command.requires_argument(),
+                "/{} argument behavior must match usage parsing",
+                command.name
+            );
 
             for &alias in command.aliases {
                 assert!(
@@ -750,6 +763,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn command_selection_behavior_covers_required_and_optional_commands() {
+        let rename = get_command_info("rename").expect("/rename command info");
+        assert_eq!(
+            rename.argument_behavior(),
+            CommandArgumentBehavior::Required
+        );
+        assert_eq!(
+            rename.selection_behavior(),
+            CommandSelectionBehavior::Prefill
+        );
+        assert!(rename.selection_needs_space());
+
+        let voice = get_command_info("voice").expect("/voice command info");
+        assert_eq!(voice.argument_behavior(), CommandArgumentBehavior::Optional);
+        assert_eq!(
+            voice.selection_behavior(),
+            CommandSelectionBehavior::Execute
+        );
+        assert!(voice.selection_needs_space());
+
+        let change = get_command_info("change").expect("/change command info");
+        assert_eq!(
+            change.argument_behavior(),
+            CommandArgumentBehavior::Optional
+        );
+        assert_eq!(
+            change.selection_behavior(),
+            CommandSelectionBehavior::Execute
+        );
+        assert!(
+            !change.selection_needs_space(),
+            "/change should stay directly executable without forcing a version placeholder"
+        );
     }
 
     #[test]

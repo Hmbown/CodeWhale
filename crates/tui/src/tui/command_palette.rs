@@ -13,6 +13,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands;
+use crate::commands::traits::CommandSelectionBehavior;
 use crate::localization::Locale;
 use crate::palette;
 use crate::skills;
@@ -78,14 +79,13 @@ pub fn build_entries(
                 description.push_str("  ");
                 description.push_str(command.usage);
             }
-            let action = if command_runs_directly(command.name) {
-                CommandPaletteAction::ExecuteCommand {
+            let action = match command.selection_behavior() {
+                CommandSelectionBehavior::Execute => CommandPaletteAction::ExecuteCommand {
                     command: format!("/{}", command.name),
-                }
-            } else {
-                CommandPaletteAction::InsertText {
+                },
+                CommandSelectionBehavior::Prefill => CommandPaletteAction::InsertText {
                     text: command.palette_command(),
-                }
+                },
             };
             entries.push(CommandPaletteEntry {
                 section: PaletteSection::Command,
@@ -480,52 +480,6 @@ fn section_rank(section: PaletteSection) -> usize {
         PaletteSection::Tool => 3,
         PaletteSection::Mcp => 4,
     }
-}
-
-fn command_runs_directly(name: &str) -> bool {
-    matches!(
-        name,
-        "help"
-            | "clear"
-            | "exit"
-            | "provider"
-            | "model"
-            | "models"
-            | "modeldb"
-            | "queue"
-            | "stash"
-            | "hooks"
-            | "subagents"
-            | "links"
-            | "home"
-            | "save"
-            | "sessions"
-            | "compact"
-            | "export"
-            | "config"
-            | "fleet"
-            | "mode"
-            | "statusline"
-            | "yolo"
-            | "agent"
-            | "plan"
-            | "trust"
-            | "voice"
-            | "logout"
-            | "tokens"
-            | "change"
-            | "system"
-            | "context"
-            | "undo"
-            | "retry"
-            | "init"
-            | "settings"
-            | "skills"
-            | "cost"
-            | "jobs"
-            | "mcp"
-            | "task"
-    )
 }
 
 fn format_tool_details(name: &str, description: &str, tags: &[&str]) -> String {
@@ -1465,6 +1419,26 @@ mod tests {
                     command.name,
                     command.usage
                 );
+            }
+            match command.selection_behavior() {
+                CommandSelectionBehavior::Execute => assert!(
+                    matches!(
+                        &entry.action,
+                        CommandPaletteAction::ExecuteCommand { command: action_command }
+                            if action_command == &format!("/{}", command.name)
+                    ),
+                    "/{} palette action should execute directly",
+                    command.name
+                ),
+                CommandSelectionBehavior::Prefill => assert!(
+                    matches!(
+                        &entry.action,
+                        CommandPaletteAction::InsertText { text }
+                            if text == &command.palette_command()
+                    ),
+                    "/{} palette action should prefill the composer",
+                    command.name
+                ),
             }
         }
     }

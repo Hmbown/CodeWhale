@@ -23,6 +23,19 @@ pub enum CommandDiscovery {
     Compatibility,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandArgumentBehavior {
+    None,
+    Optional,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandSelectionBehavior {
+    Execute,
+    Prefill,
+}
+
 impl CommandDiscovery {
     pub fn show_at_root(self) -> bool {
         matches!(self, CommandDiscovery::Primary)
@@ -30,6 +43,16 @@ impl CommandDiscovery {
 }
 
 impl CommandInfo {
+    pub fn argument_behavior(&self) -> CommandArgumentBehavior {
+        if self.requires_required_argument() {
+            CommandArgumentBehavior::Required
+        } else if self.requires_argument() {
+            CommandArgumentBehavior::Optional
+        } else {
+            CommandArgumentBehavior::None
+        }
+    }
+
     pub fn requires_argument(&self) -> bool {
         self.usage.contains('<') || self.usage.contains('[')
     }
@@ -53,6 +76,19 @@ impl CommandInfo {
         } else {
             format!("/{}", self.name)
         }
+    }
+
+    pub fn selection_behavior(&self) -> CommandSelectionBehavior {
+        match self.argument_behavior() {
+            CommandArgumentBehavior::Required => CommandSelectionBehavior::Prefill,
+            CommandArgumentBehavior::None | CommandArgumentBehavior::Optional => {
+                CommandSelectionBehavior::Execute
+            }
+        }
+    }
+
+    pub fn selection_needs_space(&self) -> bool {
+        self.requires_argument() && self.name != "change"
     }
 
     pub fn description_for(&self, locale: Locale) -> Cow<'static, str> {

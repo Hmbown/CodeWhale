@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
+use crate::commands::traits::CommandArgumentBehavior;
 use crate::commands::{self, CommandInfo, CommandResult};
 use crate::config::{ApiProvider, Config, model_completion_names_for_provider};
 use crate::localization::Locale;
@@ -73,12 +74,10 @@ pub enum HotbarArgsBehavior {
 impl HotbarArgsBehavior {
     #[must_use]
     fn for_command(info: &CommandInfo) -> Self {
-        if info.requires_required_argument() {
-            Self::Required
-        } else if info.requires_argument() {
-            Self::Optional
-        } else {
-            Self::None
+        match info.argument_behavior() {
+            CommandArgumentBehavior::None => Self::None,
+            CommandArgumentBehavior::Optional => Self::Optional,
+            CommandArgumentBehavior::Required => Self::Required,
         }
     }
 }
@@ -1705,6 +1704,15 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing slash hotbar action for /{}", info.name));
             assert_eq!(action.category(), "slash");
             assert!(!action.is_active(&test_app()));
+            assert_eq!(
+                action.metadata(Locale::En).args,
+                match info.argument_behavior() {
+                    CommandArgumentBehavior::None => HotbarArgsBehavior::None,
+                    CommandArgumentBehavior::Optional => HotbarArgsBehavior::Optional,
+                    CommandArgumentBehavior::Required => HotbarArgsBehavior::Required,
+                },
+                "{action_id} metadata must mirror command argument behavior"
+            );
             assert!(
                 unicode_width::UnicodeWidthStr::width(action.short_label())
                     <= HOTBAR_COMPACT_LABEL_MAX_WIDTH,
