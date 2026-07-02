@@ -922,6 +922,21 @@ impl ToolRegistryBuilder {
         self
     }
 
+    /// Register the `start_mcp_server` tool for dynamically adding MCP servers
+    /// from conversation context. Does not register MCP tool adapters — those
+    /// are returned by `pool.to_api_tools()` in `engine.mcp_tools()`.
+    #[must_use]
+    pub fn with_runtime_mcp_tool(
+        mut self,
+        mcp_pool: std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>,
+    ) -> Self {
+        self.tools
+            .push(Arc::new(super::runtime_mcp::StartRuntimeMcpServer::new(
+                mcp_pool,
+            )));
+        self
+    }
+
     /// Include all agent tools (file tools + shell + note + search).
     ///
     /// Web and patch tools are NOT registered here — callers must add them
