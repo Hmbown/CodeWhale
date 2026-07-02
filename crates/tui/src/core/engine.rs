@@ -1951,6 +1951,7 @@ impl Engine {
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
+        policy_status: Option<&str>,
         current_text: &str,
     ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -1984,6 +1985,9 @@ impl Engine {
                 }
             ),
         ];
+        if let Some(policy_status) = policy_status {
+            lines.push(format!("Policy narrowing: {policy_status}"));
+        }
         if auto_model {
             lines.push(format!("Auto model route: {routed_model}"));
         }
@@ -2054,6 +2058,27 @@ impl Engine {
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
     ) -> Message {
+        self.user_text_message_with_turn_metadata_for_route_and_provenance_with_policy_status(
+            text,
+            routed_model,
+            auto_model,
+            reasoning_effort,
+            reasoning_effort_auto,
+            provenance,
+            None,
+        )
+    }
+
+    fn user_text_message_with_turn_metadata_for_route_and_provenance_with_policy_status(
+        &self,
+        text: String,
+        routed_model: &str,
+        auto_model: bool,
+        reasoning_effort: Option<&str>,
+        reasoning_effort_auto: bool,
+        provenance: UserInputProvenance,
+        policy_status: Option<&str>,
+    ) -> Message {
         // Place the user text first and turn_meta last so that the leading
         // bytes of each user message stay stable across date / model-route /
         // working-set changes. DeepSeek's KV prefix cache matches byte
@@ -2068,6 +2093,7 @@ impl Engine {
             reasoning_effort,
             reasoning_effort_auto,
             provenance,
+            policy_status,
             &text,
         );
         Message {
@@ -2368,15 +2394,18 @@ impl Engine {
             .observe_user_message(&content, &self.session.workspace);
         let force_update_plan_first = should_force_update_plan_first(input_policy.mode, &content);
 
-        // Add user message to session
-        let user_msg = self.user_text_message_with_turn_metadata_for_route_and_provenance(
-            content,
-            &model,
-            auto_model,
-            reasoning_effort.as_deref(),
-            reasoning_effort_auto,
-            provenance,
-        );
+        // Add user message to session. If the effective policy narrowed the
+        // user's requested mode, keep that visible in the turn metadata too.
+        let user_msg = self
+            .user_text_message_with_turn_metadata_for_route_and_provenance_with_policy_status(
+                content,
+                &model,
+                auto_model,
+                reasoning_effort.as_deref(),
+                reasoning_effort_auto,
+                provenance,
+                input_policy.status.as_deref(),
+            );
         self.session.add_message(user_msg);
 
         let previous_goal_objective = self.config.goal_objective.clone();

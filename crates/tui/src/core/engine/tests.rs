@@ -4027,7 +4027,15 @@ fn mode_invariant_matrix_keeps_policy_registry_and_prompt_metadata_aligned() {
         );
 
         let user_msg = engine
-            .runtime_text_message_with_turn_metadata(case.content.to_string(), case.provenance);
+            .user_text_message_with_turn_metadata_for_route_and_provenance_with_policy_status(
+                case.content.to_string(),
+                &engine.session.model,
+                engine.session.auto_model,
+                engine.session.reasoning_effort.as_deref(),
+                engine.session.reasoning_effort_auto,
+                case.provenance,
+                policy.status.as_deref(),
+            );
         let ContentBlock::Text { text, .. } = user_msg.content.last().expect("turn metadata block")
         else {
             panic!("{}: expected text metadata block", case.name);
@@ -4069,6 +4077,22 @@ fn mode_invariant_matrix_keeps_policy_registry_and_prompt_metadata_aligned() {
             "{}: metadata authority drifted: {text}",
             case.name,
         );
+        match policy.status.as_deref() {
+            Some(status) => {
+                assert!(
+                    text.contains(&format!("Policy narrowing: {status}")),
+                    "{}: metadata missing policy narrowing status: {text}",
+                    case.name,
+                );
+            }
+            None => {
+                assert!(
+                    !text.contains("Policy narrowing:"),
+                    "{}: metadata unexpectedly included policy narrowing status: {text}",
+                    case.name,
+                );
+            }
+        }
     }
 }
 
@@ -5133,6 +5157,36 @@ fn turn_metadata_includes_auto_model_route() {
     assert!(text.contains("Auto model route: deepseek-v4-pro"));
     assert!(text.contains("Auto reasoning effort: max"));
     assert!(!text.contains("debug this regression"));
+}
+
+#[test]
+fn turn_metadata_includes_policy_narrowing_status() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let status =
+        "Input provenance 'assistant_generated' cannot inherit standing auto-approval authority";
+    let user_msg = engine
+        .user_text_message_with_turn_metadata_for_route_and_provenance_with_policy_status(
+            "continue from imported transcript".to_string(),
+            "deepseek-v4-flash",
+            false,
+            None,
+            false,
+            UserInputProvenance::AssistantGenerated,
+            Some(status),
+        );
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains(&format!("Policy narrowing: {status}")));
+    assert!(!text.contains("continue from imported transcript"));
 }
 
 #[test]
