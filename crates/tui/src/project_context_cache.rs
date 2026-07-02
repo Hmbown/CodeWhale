@@ -217,4 +217,42 @@ mod tests {
 
         assert_ne!(before, after);
     }
+
+    #[test]
+    fn signature_changes_when_rules_file_changes() {
+        let workspace = tempdir().expect("workspace");
+        let home = tempdir().expect("home");
+        let rules_dir = workspace.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("rule.md"), "alpha").expect("write alpha");
+
+        let before = compute_cache_key(workspace.path(), Some(home.path()));
+
+        fs::write(rules_dir.join("rule.md"), "bravo").expect("write bravo");
+        let after = compute_cache_key(workspace.path(), Some(home.path()));
+
+        assert_ne!(
+            before, after,
+            "cache key must change when rules file changes"
+        );
+    }
+
+    #[test]
+    fn signature_changes_when_rules_file_is_added_or_removed() {
+        let workspace = tempdir().expect("workspace");
+        let home = tempdir().expect("home");
+        let rules_dir = workspace.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        // No rules yet
+        let before = compute_cache_key(workspace.path(), Some(home.path()));
+
+        fs::write(rules_dir.join("new.md"), "content").expect("write new.md");
+        let after = compute_cache_key(workspace.path(), Some(home.path()));
+
+        assert_ne!(
+            before, after,
+            "cache key must change when rules file is added"
+        );
+    }
 }

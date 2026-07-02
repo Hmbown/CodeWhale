@@ -334,9 +334,14 @@ fn base_source_entries(model: &str, workspace: &Path, skills_dir: Option<&Path>)
             .source_path
             .as_ref()
             .map_or_else(|| "project".to_string(), |p| p.display().to_string());
-        let block = format!(
+        let mut block = format!(
             "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
         );
+        // Include rules in the report when present
+        if let Some(rules) = &project_context.rules_block {
+            block.push('\n');
+            block.push_str(rules);
+        }
         builder.push(SourceEntry::text(
             SourceKind::ProjectContext,
             "Project instructions",
@@ -346,6 +351,17 @@ fn base_source_entries(model: &str, workspace: &Path, skills_dir: Option<&Path>)
                 .map(|path| path.display().to_string()),
             ActivationReason::FilePresent,
             &block,
+            CountingConfidence::High,
+            Some(5),
+        ));
+    } else if let Some(rules) = &project_context.rules_block {
+        // Rules exist without main instructions
+        builder.push(SourceEntry::text(
+            SourceKind::ProjectContext,
+            "Project rules",
+            None::<String>,
+            ActivationReason::FilePresent,
+            rules,
             CountingConfidence::High,
             Some(5),
         ));
