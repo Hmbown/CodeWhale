@@ -1386,6 +1386,21 @@ impl Default for PersistedSubAgentState {
 /// [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`].
 pub const DEFAULT_MAX_SPAWN_DEPTH: u32 = codewhale_config::DEFAULT_SPAWN_DEPTH;
 
+/// Resolve a child runtime's `max_spawn_depth` from its (already-incremented)
+/// `spawn_depth` and the model-supplied per-call `max_depth`, clamped to the
+/// absolute [`codewhale_config::MAX_SPAWN_DEPTH_CEILING`].
+///
+/// Without the absolute clamp, `max_spawn_depth = spawn_depth + max_depth`
+/// makes the recursion gate (`spawn_depth + 1 > max_spawn_depth`) reduce to
+/// `1 > max_depth` at every level — always false when the model re-supplies
+/// `max_depth >= 1` per spawn — so ring depth would grow to the global
+/// admission cap instead of the intended 8-ring ceiling.
+fn clamp_child_max_spawn_depth(child_spawn_depth: u32, requested_max_depth: u32) -> u32 {
+    child_spawn_depth
+        .saturating_add(requested_max_depth)
+        .min(codewhale_config::MAX_SPAWN_DEPTH_CEILING)
+}
+
 /// Terminal-state notification emitted to the immediate parent's completion
 /// inbox when one of its children finishes (issue #756). For root-spawned
 /// agents that inbox is the engine turn loop; for nested agents it is a
@@ -3854,7 +3869,8 @@ async fn spawn_subagent_from_input(
 
     let mut child_runtime = runtime.background_runtime();
     if let Some(max_depth) = spawn_request.max_depth {
-        child_runtime.max_spawn_depth = child_runtime.spawn_depth.saturating_add(max_depth);
+        child_runtime.max_spawn_depth =
+            clamp_child_max_spawn_depth(child_runtime.spawn_depth, max_depth);
     }
     if let Some(workspace) = child_workspace {
         child_runtime.context.workspace = workspace;

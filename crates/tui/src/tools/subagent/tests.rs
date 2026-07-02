@@ -3400,6 +3400,30 @@ fn would_exceed_depth_at_boundary() {
     );
 }
 
+#[test]
+fn clamp_child_max_spawn_depth_enforces_absolute_ceiling() {
+    let ceiling = codewhale_config::MAX_SPAWN_DEPTH_CEILING;
+    // Deep child re-supplying max_depth cannot push the cap past the ceiling —
+    // this is the recursion-ring-limit bypass fix. Once at the ceiling, the
+    // resulting cap equals the ceiling, so `would_exceed_depth` blocks.
+    assert_eq!(clamp_child_max_spawn_depth(ceiling, 5), ceiling);
+    assert_eq!(clamp_child_max_spawn_depth(ceiling - 1, 5), ceiling);
+    // A smaller request below the ceiling is still honored (fewer rings).
+    assert_eq!(clamp_child_max_spawn_depth(1, 2), 3);
+    // Saturating add cannot overflow into a huge cap.
+    assert_eq!(clamp_child_max_spawn_depth(u32::MAX, 5), ceiling);
+
+    // End-to-end: a runtime whose cap was set via the clamp at the ceiling
+    // cannot spawn another ring.
+    let mut rt = stub_runtime();
+    rt.spawn_depth = ceiling;
+    rt.max_spawn_depth = clamp_child_max_spawn_depth(rt.spawn_depth, 5);
+    assert!(
+        rt.would_exceed_depth(),
+        "at the ceiling, a further spawn must be blocked regardless of max_depth"
+    );
+}
+
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn rate_limit_pause_blocks_subagent_spawn() {
