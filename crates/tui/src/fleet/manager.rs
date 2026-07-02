@@ -194,11 +194,6 @@ impl FleetManager {
         self
     }
 
-    /// True when the manager has a sub-agent runtime for headless worker execution.
-    pub fn has_worker_runtime(&self) -> bool {
-        self.sub_agent_manager.is_some()
-    }
-
     pub fn ledger_path(&self) -> &Path {
         self.ledger.path()
     }

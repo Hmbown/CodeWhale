@@ -22,7 +22,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
+use crate::config::{Config, DEFAULT_TEXT_MODEL};
 use crate::runtime_threads::{
     CreateThreadRequest, RuntimeThreadManager, RuntimeThreadManagerConfig, RuntimeTurnStatus,
     SharedRuntimeThreadManager, StartTurnRequest,
@@ -314,8 +314,6 @@ pub struct TaskManagerConfig {
     pub default_mode: String,
     pub allow_shell: bool,
     pub trust_mode: bool,
-    #[allow(dead_code)]
-    pub max_subagents: usize,
 }
 
 impl TaskManagerConfig {
@@ -339,9 +337,6 @@ impl TaskManagerConfig {
             default_mode: "agent".to_string(),
             allow_shell: config.allow_shell(),
             trust_mode: false,
-            max_subagents: config
-                .max_subagents_for_provider(config.api_provider())
-                .clamp(1, MAX_SUBAGENTS),
         }
     }
 }
@@ -1827,7 +1822,6 @@ mod tests {
             default_mode: "agent".to_string(),
             allow_shell: false,
             trust_mode: false,
-            max_subagents: 2,
         }
     }
 

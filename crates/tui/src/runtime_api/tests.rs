@@ -540,7 +540,6 @@ async fn spawn_test_server_with_root_token_mobile_workspace_subagents_and_config
             default_mode: "agent".to_string(),
             allow_shell: false,
             trust_mode: false,
-            max_subagents: 2,
         },
         Arc::new(MockExecutor),
     )

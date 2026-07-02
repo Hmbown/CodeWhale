@@ -987,7 +987,6 @@ mod tests {
             default_mode: "plan".to_string(),
             allow_shell: true,
             trust_mode: true,
-            max_subagents: 2,
         }
     }
 

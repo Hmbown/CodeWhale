@@ -210,23 +210,6 @@ impl FleetLedger {
         })
     }
 
-    /// Mark a task as completed or failed.
-    pub fn complete_or_fail_task(
-        &self,
-        run_id: &FleetRunId,
-        task_id: &str,
-        worker_id: &str,
-        timestamp: &str,
-    ) -> Result<()> {
-        self.append_record(&FleetLedgerRecord::TaskCompletedOrFailed {
-            run_id: run_id.clone(),
-            task_id: task_id.to_string(),
-            worker_id: worker_id.to_string(),
-            timestamp: timestamp.to_string(),
-            status: FleetTaskLedgerStatus::Completed,
-        })
-    }
-
     pub fn mark_task_terminal_status(
         &self,
         run_id: &FleetRunId,
