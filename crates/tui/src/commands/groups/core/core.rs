@@ -480,24 +480,24 @@ pub fn deepseek_links(app: &mut App) -> CommandResult {
         if let Some(key_url) = links.key_url {
             let _ = writeln!(
                 message,
-                "{} {}",
-                tr(locale, MessageId::LinksDashboard),
-                key_url
+                "  {}",
+                tr(locale, MessageId::LinksDashboard)
             );
+            let _ = writeln!(message, "    {key_url}");
         } else {
             let _ = writeln!(
                 message,
-                "{} {}",
+                "  {} {}",
                 tr(locale, MessageId::LinksDashboard),
                 links.note
             );
         }
         let _ = writeln!(
             message,
-            "{}      {}",
-            tr(locale, MessageId::LinksDocs),
-            links.docs_url
+            "  {}",
+            tr(locale, MessageId::LinksDocs)
         );
+        let _ = writeln!(message, "    {}", links.docs_url);
         let env_vars = provider.env_vars();
         if env_vars.is_empty() {
             let _ = writeln!(message, "Env: none");
