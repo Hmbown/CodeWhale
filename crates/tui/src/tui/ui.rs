@@ -10151,6 +10151,14 @@ async fn handle_view_events(
                         Some("Config view opened from /setup runtime posture.".to_string());
                 }
             }
+            ViewEvent::SetupOpenHotbarRequested => {
+                if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {
+                    app.view_stack
+                        .push(crate::tui::hotbar::setup::HotbarSetupView::new(app, config));
+                    app.status_message =
+                        Some("Hotbar setup opened from /setup readiness.".to_string());
+                }
+            }
             ViewEvent::HotbarDisableRequested => {
                 disable_hotbar(app, config);
             }

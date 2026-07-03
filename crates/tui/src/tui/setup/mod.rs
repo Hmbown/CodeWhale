@@ -182,6 +182,12 @@ struct SetupRuntimeFacts {
     project_override_warning: Option<String>,
     constitution_autonomy: String,
     constitution_file: SetupConstitutionFileState,
+    /// Hotbar status summary: off by default, disabled, configured, partial,
+    /// or unknown. Setup reports this state but delegates writes to /hotbar.
+    hotbar_status: String,
+    /// Number of configured hotbar bindings (0 when disabled or off).
+    hotbar_bindings_count: usize,
+    hotbar_off_by_default: bool,
 }
 
 impl Default for SetupRuntimeFacts {
@@ -208,6 +214,9 @@ impl Default for SetupRuntimeFacts {
             project_override_warning: None,
             constitution_autonomy: "not loaded".to_string(),
             constitution_file: SetupConstitutionFileState::NotChecked,
+            hotbar_status: "not loaded".to_string(),
+            hotbar_bindings_count: 0,
+            hotbar_off_by_default: false,
         }
     }
 }
@@ -295,6 +304,10 @@ impl SetupRuntimeFacts {
                 Locale::ZhHans => "未指定或使用内置准则".to_string(),
                 _ => "unspecified or bundled/default".to_string(),
             });
+
+        let (hotbar_status, hotbar_bindings_count, hotbar_off_by_default) =
+            hotbar_status_from_config(app, config);
+
         Self {
             provider,
             model,
@@ -325,7 +338,59 @@ impl SetupRuntimeFacts {
             ),
             constitution_autonomy,
             constitution_file: SetupConstitutionFileState::load(),
+            hotbar_status,
+            hotbar_bindings_count,
+            hotbar_off_by_default,
         }
+    }
+}
+
+fn hotbar_status_from_config(app: &App, config: &Config) -> (String, usize, bool) {
+    let known_action_ids: Vec<&str> = app.hotbar_actions.iter().map(|a| a.id()).collect();
+    let resolution = config.resolve_hotbar_bindings(&known_action_ids);
+    let binding_count = resolution.bindings.len();
+    let warning_count = resolution.warnings.len();
+    let unknown_count = resolution
+        .warnings
+        .iter()
+        .filter(|warning| {
+            matches!(
+                warning,
+                codewhale_config::HotbarConfigWarning::UnknownAction { .. }
+            )
+        })
+        .count();
+
+    match config.hotbar.as_ref() {
+        None => ("off by default".to_string(), 0, true),
+        Some(bindings) if bindings.is_empty() => ("disabled".to_string(), 0, false),
+        Some(_) if unknown_count > 0 => (
+            format!(
+                "unknown: {binding_count} binding(s), {unknown_count} unknown action(s), {warning_count} warning(s)"
+            ),
+            binding_count,
+            false,
+        ),
+        Some(_) if binding_count < usize::from(codewhale_config::HOTBAR_SLOT_COUNT) => {
+            let mut status = format!(
+                "partial: {binding_count} of {} slots",
+                codewhale_config::HOTBAR_SLOT_COUNT
+            );
+            if warning_count > 0 {
+                status.push_str(&format!(", {warning_count} warning(s)"));
+            }
+            (status, binding_count, false)
+        }
+        Some(_) if warning_count > 0 => (
+            format!("configured: {binding_count} binding(s), {warning_count} warning(s)"),
+            binding_count,
+            false,
+        ),
+        Some(_) => (
+            format!("configured: {binding_count} binding(s)"),
+            binding_count,
+            false,
+        ),
     }
 }
 
@@ -1420,6 +1485,9 @@ impl ModalView for SetupWizardView {
             KeyCode::Char('c') if self.selected_step() == SetupStep::TrustSandbox => {
                 ViewAction::EmitAndClose(ViewEvent::SetupOpenConfigRequested)
             }
+            KeyCode::Char('h') if self.selected_step() == SetupStep::Hotbar => {
+                ViewAction::Emit(ViewEvent::SetupOpenHotbarRequested)
+            }
             KeyCode::Char(key @ ('1' | '2' | '3'))
                 if self.selected_step() == SetupStep::TrustSandbox =>
             {
@@ -1548,6 +1616,11 @@ impl ModalView for SetupWizardView {
                 "C",
                 tr(self.locale, MessageId::SetupActionConfig).to_string(),
             ));
+        } else if self.selected_step() == SetupStep::Hotbar {
+            hints.push(ActionHint::new(
+                "H",
+                tr(self.locale, MessageId::SetupActionHotbar).to_string(),
+            ));
         }
         hints.extend([
             ActionHint::new(
@@ -1622,6 +1695,7 @@ impl SetupWizardView {
         match self.selected_step() {
             SetupStep::ProviderModel => self.provider_model_detail_lines(),
             SetupStep::TrustSandbox => self.runtime_posture_detail_lines(),
+            SetupStep::Hotbar => self.hotbar_detail_lines(),
             SetupStep::Constitution => self.constitution_detail_lines(),
             SetupStep::Verification => self.verification_detail_lines(),
             _ => Vec::new(),
@@ -1797,6 +1871,30 @@ impl SetupWizardView {
                 } else {
                     palette::TEXT_MUTED
                 }),
+            )));
+        }
+        lines
+    }
+
+    fn hotbar_detail_lines(&self) -> Vec<Line<'static>> {
+        let binding_count = format!("{}", self.facts.hotbar_bindings_count);
+        let mut lines = vec![
+            self.detail_row(MessageId::SetupCardHotbarLabel, &self.facts.hotbar_status),
+            self.detail_row(MessageId::SetupCardHotbarBindingsLabel, &binding_count),
+            Line::from(""),
+            Line::from(Span::styled(
+                tr(self.locale, MessageId::SetupHotbarLaunchHint).to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            Line::from(Span::styled(
+                tr(self.locale, MessageId::SetupHotbarReturnHint).to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+        ];
+        if self.facts.hotbar_off_by_default {
+            lines.push(Line::from(Span::styled(
+                tr(self.locale, MessageId::SetupHotbarOffHint).to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
         }
         lines
@@ -2358,10 +2456,63 @@ fn step_index(step: SetupStep) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::app::TuiOptions;
+    use crate::tui::hotbar::setup::HotbarSetupView;
+    use crate::tui::views::ViewStack;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn test_app_with_config(config: &Config) -> App {
+        let options = TuiOptions {
+            model: "deepseek-v4-pro".to_string(),
+            workspace: PathBuf::from("."),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: true,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        let mut app = App::new(options, config);
+        app.ui_locale = Locale::En;
+        app
+    }
+
+    fn open_hotbar_from_setup_stack(app: &App, config: &Config) -> ViewStack {
+        let mut stack = ViewStack::new();
+        stack.push(SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            SetupRuntimeFacts::default(),
+        ));
+
+        let events = stack.handle_key(key(KeyCode::Char('h')));
+
+        assert_eq!(stack.top_kind(), Some(ModalKind::SetupWizard));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.as_slice(),
+            [ViewEvent::SetupOpenHotbarRequested]
+        ));
+        stack.push(HotbarSetupView::new(app, config));
+        assert_eq!(stack.top_kind(), Some(ModalKind::HotbarSetup));
+        stack
     }
 
     #[test]
@@ -3523,6 +3674,237 @@ mod tests {
                 .and_then(|entry| entry.result.as_deref())
                 .is_some_and(|result| result.contains("update=ready"))
         );
+    }
+
+    #[test]
+    fn hotbar_detail_lines_show_off_status_when_no_config() {
+        let facts = SetupRuntimeFacts {
+            hotbar_status: "off by default".to_string(),
+            hotbar_bindings_count: 0,
+            hotbar_off_by_default: true,
+            ..SetupRuntimeFacts::default()
+        };
+        let view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            facts,
+        );
+
+        let text = lines_to_text(view.hotbar_detail_lines());
+
+        assert!(text.contains("off by default"));
+        assert!(text.contains("Bindings:"));
+        assert!(text.contains("0"));
+        assert!(text.contains("Press h to customize"));
+        assert!(text.contains("Esc cancels staged changes and returns here"));
+        assert!(text.contains("Hotbar is off by default"));
+    }
+
+    #[test]
+    fn hotbar_detail_lines_show_disabled_status() {
+        let facts = SetupRuntimeFacts {
+            hotbar_status: "disabled".to_string(),
+            hotbar_bindings_count: 0,
+            ..SetupRuntimeFacts::default()
+        };
+        let view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            facts,
+        );
+
+        let text = lines_to_text(view.hotbar_detail_lines());
+
+        assert!(text.contains("disabled"));
+        assert!(text.contains("Press h to customize"));
+        assert!(text.contains("s saves through the Hotbar path"));
+        assert!(!text.contains("Hotbar is off by default"));
+    }
+
+    #[test]
+    fn hotbar_detail_lines_show_configured_status() {
+        let facts = SetupRuntimeFacts {
+            hotbar_status: "configured: 5 binding(s)".to_string(),
+            hotbar_bindings_count: 5,
+            ..SetupRuntimeFacts::default()
+        };
+        let view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            facts,
+        );
+
+        let text = lines_to_text(view.hotbar_detail_lines());
+
+        assert!(text.contains("configured: 5 binding(s)"));
+        assert!(text.contains("Bindings:"));
+        assert!(text.contains("5"));
+        assert!(text.contains("Press h to customize"));
+    }
+
+    #[test]
+    fn hotbar_detail_lines_show_partial_with_warnings() {
+        let facts = SetupRuntimeFacts {
+            hotbar_status: "partial: 3 of 8 slots, 2 warning(s)".to_string(),
+            hotbar_bindings_count: 3,
+            ..SetupRuntimeFacts::default()
+        };
+        let view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            facts,
+        );
+
+        let text = lines_to_text(view.hotbar_detail_lines());
+
+        assert!(text.contains("partial: 3 of 8 slots, 2 warning(s)"));
+        assert!(text.contains("Bindings:"));
+        assert!(text.contains("3"));
+    }
+
+    #[test]
+    fn hotbar_detail_lines_show_unknown_status() {
+        let facts = SetupRuntimeFacts {
+            hotbar_status: "unknown: 1 binding(s), 1 unknown action(s), 1 warning(s)".to_string(),
+            hotbar_bindings_count: 1,
+            ..SetupRuntimeFacts::default()
+        };
+        let view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            facts,
+        );
+
+        let text = lines_to_text(view.hotbar_detail_lines());
+
+        assert!(text.contains("unknown: 1 binding(s), 1 unknown action(s), 1 warning(s)"));
+        assert!(text.contains("Bindings:"));
+        assert!(text.contains("1"));
+    }
+
+    #[test]
+    fn hotbar_runtime_facts_distinguish_config_states() {
+        let config = Config::default();
+        let app = test_app_with_config(&config);
+        let facts = SetupRuntimeFacts::from_app_config(&app, &config);
+        assert_eq!(facts.hotbar_status, "off by default");
+        assert_eq!(facts.hotbar_bindings_count, 0);
+        assert!(facts.hotbar_off_by_default);
+
+        let config = Config {
+            hotbar: Some(Vec::new()),
+            ..Config::default()
+        };
+        let app = test_app_with_config(&config);
+        let facts = SetupRuntimeFacts::from_app_config(&app, &config);
+        assert_eq!(facts.hotbar_status, "disabled");
+        assert_eq!(facts.hotbar_bindings_count, 0);
+        assert!(!facts.hotbar_off_by_default);
+
+        let config = Config {
+            hotbar: Some(codewhale_config::default_hotbar_bindings_toml()),
+            ..Config::default()
+        };
+        let app = test_app_with_config(&config);
+        let facts = SetupRuntimeFacts::from_app_config(&app, &config);
+        assert_eq!(facts.hotbar_status, "configured: 8 binding(s)");
+        assert_eq!(facts.hotbar_bindings_count, 8);
+
+        let config = Config {
+            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                slot: 1,
+                action: "mode.agent".to_string(),
+                label: None,
+            }]),
+            ..Config::default()
+        };
+        let app = test_app_with_config(&config);
+        let facts = SetupRuntimeFacts::from_app_config(&app, &config);
+        assert_eq!(facts.hotbar_status, "partial: 1 of 8 slots");
+        assert_eq!(facts.hotbar_bindings_count, 1);
+
+        let config = Config {
+            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                slot: 1,
+                action: "unknown.custom".to_string(),
+                label: None,
+            }]),
+            ..Config::default()
+        };
+        let app = test_app_with_config(&config);
+        let facts = SetupRuntimeFacts::from_app_config(&app, &config);
+        assert_eq!(
+            facts.hotbar_status,
+            "unknown: 1 binding(s), 1 unknown action(s), 1 warning(s)"
+        );
+        assert_eq!(facts.hotbar_bindings_count, 1);
+    }
+
+    #[test]
+    fn hotbar_key_emits_setup_open_hotbar_requested() {
+        let mut view = SetupWizardView::new_at_with_facts(
+            SetupState::default(),
+            Locale::En,
+            SetupStep::Hotbar,
+            SetupRuntimeFacts::default(),
+        );
+
+        let action = view.handle_key(key(KeyCode::Char('h')));
+
+        assert!(matches!(
+            action,
+            ViewAction::Emit(ViewEvent::SetupOpenHotbarRequested)
+        ));
+    }
+
+    #[test]
+    fn hotbar_setup_cancel_returns_to_setup_without_save_event() {
+        let config = Config::default();
+        let app = test_app_with_config(&config);
+        let mut stack = open_hotbar_from_setup_stack(&app, &config);
+
+        assert!(stack.handle_key(key(KeyCode::Enter)).is_empty());
+        let events = stack.handle_key(key(KeyCode::Esc));
+
+        assert!(events.is_empty());
+        assert_eq!(stack.top_kind(), Some(ModalKind::SetupWizard));
+        assert_eq!(config.hotbar, None);
+    }
+
+    #[test]
+    fn hotbar_setup_save_returns_to_setup_with_existing_save_event() {
+        let config = Config::default();
+        let app = test_app_with_config(&config);
+        let mut stack = open_hotbar_from_setup_stack(&app, &config);
+
+        assert!(stack.handle_key(key(KeyCode::Enter)).is_empty());
+        let events = stack.handle_key(key(KeyCode::Char('s')));
+
+        assert_eq!(stack.top_kind(), Some(ModalKind::SetupWizard));
+        let [ViewEvent::HotbarSetupSaved { bindings }] = events.as_slice() else {
+            panic!("expected HotbarSetupSaved event, got {events:?}");
+        };
+        assert!(!bindings.is_empty());
+    }
+
+    #[test]
+    fn hotbar_setup_disable_returns_to_setup_with_existing_disable_event() {
+        let config = Config::default();
+        let app = test_app_with_config(&config);
+        let mut stack = open_hotbar_from_setup_stack(&app, &config);
+
+        let events = stack.handle_key(key(KeyCode::Char('d')));
+
+        assert_eq!(stack.top_kind(), Some(ModalKind::SetupWizard));
+        assert!(matches!(
+            events.as_slice(),
+            [ViewEvent::HotbarDisableRequested]
+        ));
     }
 
     #[test]

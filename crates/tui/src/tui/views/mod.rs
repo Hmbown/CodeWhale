@@ -687,6 +687,10 @@ pub enum ViewEvent {
     /// Emitted by the setup Runtime Posture card to hand off to the existing
     /// config view for approval/sandbox/network details.
     SetupOpenConfigRequested,
+    /// Emitted by the setup Hotbar card to hand off to the existing hotbar
+    /// setup wizard. The host pushes the hotbar setup view on top of the
+    /// current view stack so closing it returns to the setup wizard.
+    SetupOpenHotbarRequested,
     /// Emitted by the `/hotbar` setup wizard when the user chooses "Disable
     /// Hotbar". The host persists `hotbar = []` and hides the panel.
     HotbarDisableRequested,
