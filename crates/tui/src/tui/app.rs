@@ -2981,9 +2981,16 @@ impl App {
     /// constitution checkpoint is due, and on the next launch for returning
     /// users who haven't seen it (called from `run_tui` after `App::new`).
     /// Plain copy, no marketing language. Stays silent while onboarding is
-    /// still in progress.
+    /// still in progress or when auth is not yet configured (the intro claims
+    /// "setup is ready", which is misleading without a usable API key — #3985).
     pub fn maybe_show_feature_intro(&mut self) {
         if self.onboarding != OnboardingState::None {
+            return;
+        }
+        // Don't show "setup is ready" when no API key is configured yet (#3985).
+        // This covers the --skip-onboarding path where onboarding is None but
+        // the user still has no usable credentials.
+        if self.onboarding_needs_api_key {
             return;
         }
         let mut settings = Settings::load().unwrap_or_default();

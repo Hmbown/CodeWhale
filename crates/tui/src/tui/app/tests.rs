@@ -70,6 +70,23 @@ fn feature_intro_is_silent_while_onboarding_is_in_progress() {
 }
 
 #[test]
+fn feature_intro_is_silent_when_no_api_key_configured() {
+    // (#3985) When onboarding was skipped (onboarding is None) but no API key
+    // is available, the intro must stay silent — "Your setup is ready" is
+    // misleading without usable credentials.
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::None;
+    app.onboarding_needs_api_key = true;
+    let before = app.history.len();
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before,
+        "must not show feature intro when no API key is configured"
+    );
+}
+
+#[test]
 fn feature_intro_shows_once_persists_then_is_idempotent() {
     let _env_lock = lock_test_env();
     let tmp = std::env::temp_dir().join(format!("cw-feature-intro-{}", std::process::id()));
@@ -84,6 +101,9 @@ fn feature_intro_shows_once_persists_then_is_idempotent() {
 
     let mut app = App::new(test_options(false), &Config::default());
     app.onboarding = OnboardingState::None;
+    // Pretend auth is ready so the persistence/idempotence test isn't
+    // blocked by the #3985 onboarding_needs_api_key guard.
+    app.onboarding_needs_api_key = false;
     let before = app.history.len();
 
     app.maybe_show_feature_intro();
