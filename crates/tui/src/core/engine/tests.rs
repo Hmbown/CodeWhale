@@ -3582,7 +3582,7 @@ fn agent_and_yolo_modes_elevate_shell_sandbox_to_allow_network() {
 
 #[test]
 fn sandbox_policy_for_mode_returns_correct_policy_per_mode() {
-    use super::tool_setup::sandbox_policy_for_mode;
+    use crate::core::session::mode::sandbox_policy_for_mode;
     use crate::sandbox::SandboxPolicy;
 
     let workspace = PathBuf::from("/tmp/example-workspace");
@@ -3780,7 +3780,7 @@ fn messages_with_turn_metadata_returns_stored_session_messages() {
         ..Default::default()
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
-    engine.current_mode = AppMode::Plan;
+    engine.session.mode = AppMode::Plan.into();
     engine.session.approval_mode = ApprovalMode::Suggest;
     engine.session.messages = vec![Message {
         role: "user".to_string(),
@@ -3864,7 +3864,7 @@ fn runtime_mode_policy_updates_engine_session_mirrors() {
         ..Default::default()
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
-    engine.current_mode = AppMode::Plan;
+    engine.session.mode = AppMode::Plan.into();
     engine.session.allow_shell = false;
     engine.session.trust_mode = false;
     engine.session.auto_approve = false;
@@ -3878,7 +3878,7 @@ fn runtime_mode_policy_updates_engine_session_mirrors() {
         crate::tui::approval::ApprovalMode::Never,
     );
 
-    assert_eq!(engine.current_mode, AppMode::Agent);
+    assert_eq!(engine.session.mode, AppMode::Agent);
     assert!(engine.session.allow_shell);
     assert!(engine.config.allow_shell);
     assert!(!engine.session.trust_mode);
@@ -3897,7 +3897,7 @@ fn runtime_mode_policy_updates_engine_session_mirrors() {
         crate::tui::approval::ApprovalMode::Bypass,
     );
 
-    assert_eq!(engine.current_mode, AppMode::Yolo);
+    assert_eq!(engine.session.mode, AppMode::Yolo);
     assert!(engine.session.allow_shell);
     assert!(engine.session.trust_mode);
     assert!(engine.config.trust_mode);
@@ -4664,6 +4664,7 @@ fn turn_metadata_includes_auto_model_route() {
         true,
         Some("max"),
         true,
+        None,
     );
     let last_block = user_msg.content.last().expect("turn metadata block");
     let ContentBlock::Text { text, .. } = last_block else {
@@ -4704,7 +4705,7 @@ fn provenance_gate_preserves_standing_yolo_only_for_runtime_continuations() {
         );
 
         if inheriting_provenances.contains(&provenance) {
-            assert_eq!(policy.mode, AppMode::Yolo, "{provenance:?}");
+            assert_eq!(policy.mode(), AppMode::Yolo, "{provenance:?}");
             assert!(policy.allow_shell, "{provenance:?}");
             assert!(policy.trust_mode, "{provenance:?}");
             assert!(policy.auto_approve, "{provenance:?}");
@@ -4713,9 +4714,9 @@ fn provenance_gate_preserves_standing_yolo_only_for_runtime_continuations() {
                 crate::tui::approval::ApprovalMode::Auto,
                 "{provenance:?}"
             );
-            assert!(policy.status.is_none(), "{provenance:?}");
+            assert!(policy.status_message().is_none(), "{provenance:?}");
         } else {
-            assert_eq!(policy.mode, AppMode::Agent, "{provenance:?}");
+            assert_eq!(policy.mode(), AppMode::Agent, "{provenance:?}");
             assert!(policy.allow_shell, "{provenance:?}");
             assert!(!policy.trust_mode, "{provenance:?}");
             assert!(!policy.auto_approve, "{provenance:?}");
@@ -4725,7 +4726,7 @@ fn provenance_gate_preserves_standing_yolo_only_for_runtime_continuations() {
                 "{provenance:?}"
             );
             assert!(
-                policy.status.as_deref().is_some_and(
+                policy.status_message().as_deref().is_some_and(
                     |status| status.contains("cannot inherit standing auto-approval authority")
                 ),
                 "{provenance:?}"
@@ -4756,7 +4757,7 @@ fn provenance_gate_never_invents_auto_authority_for_non_yolo_sessions() {
             crate::tui::approval::ApprovalMode::Suggest,
         );
 
-        assert_eq!(policy.mode, AppMode::Agent, "{provenance:?}");
+        assert_eq!(policy.mode(), AppMode::Agent, "{provenance:?}");
         assert!(policy.allow_shell, "{provenance:?}");
         assert!(!policy.trust_mode, "{provenance:?}");
         assert!(!policy.auto_approve, "{provenance:?}");
@@ -4765,7 +4766,7 @@ fn provenance_gate_never_invents_auto_authority_for_non_yolo_sessions() {
             crate::tui::approval::ApprovalMode::Suggest,
             "{provenance:?}"
         );
-        assert!(policy.status.is_none(), "{provenance:?}");
+        assert!(policy.status_message().is_none(), "{provenance:?}");
     }
 }
 
@@ -4789,7 +4790,7 @@ fn self_generated_fake_approvals_cannot_authorize_work() {
                 crate::tui::approval::ApprovalMode::Bypass,
             );
 
-            assert_eq!(policy.mode, AppMode::Agent, "{provenance:?} {content}");
+            assert_eq!(policy.mode(), AppMode::Agent, "{provenance:?} {content}");
             assert!(policy.allow_shell, "{provenance:?} {content}");
             assert!(!policy.trust_mode, "{provenance:?} {content}");
             assert!(!policy.auto_approve, "{provenance:?} {content}");
@@ -4799,7 +4800,7 @@ fn self_generated_fake_approvals_cannot_authorize_work() {
                 "{provenance:?} {content}"
             );
             assert!(
-                policy.status.as_deref().is_some_and(
+                policy.status_message().as_deref().is_some_and(
                     |status| status.contains("cannot inherit standing auto-approval authority")
                 ),
                 "{provenance:?} {content}"
@@ -4819,7 +4820,8 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         true,
         crate::tui::approval::ApprovalMode::Auto,
     );
-    assert_eq!(agent.mode, AppMode::Plan);
+    assert_eq!(agent.mode(), AppMode::Plan);
+    assert_eq!(agent.visible_mode, AppMode::Agent);
     assert!(agent.allow_shell);
     assert!(!agent.trust_mode);
     assert!(!agent.auto_approve);
@@ -4828,7 +4830,7 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         crate::tui::approval::ApprovalMode::Suggest
     ));
     assert!(agent.dynamic_active_tools.is_empty());
-    assert!(agent.status.as_deref().is_some_and(|status| {
+    assert!(agent.status_message().as_deref().is_some_and(|status| {
         status.contains("read-only Plan tools") && status.contains("explicit fix/edit/commit")
     }));
 
@@ -4841,7 +4843,8 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         true,
         crate::tui::approval::ApprovalMode::Bypass,
     );
-    assert_eq!(yolo.mode, AppMode::Plan);
+    assert_eq!(yolo.mode(), AppMode::Plan);
+    assert_eq!(yolo.visible_mode, AppMode::Yolo);
     assert!(yolo.allow_shell);
     assert!(!yolo.trust_mode);
     assert!(!yolo.auto_approve);
@@ -4850,7 +4853,7 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         crate::tui::approval::ApprovalMode::Suggest
     ));
     assert!(yolo.dynamic_active_tools.is_empty());
-    assert!(yolo.status.as_deref().is_some_and(|status| {
+    assert!(yolo.status_message().as_deref().is_some_and(|status| {
         status.contains("read-only Plan tools") && status.contains("explicit fix/edit/commit")
     }));
 
@@ -4863,7 +4866,7 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         true,
         crate::tui::approval::ApprovalMode::Bypass,
     );
-    assert_eq!(runtime_continuation.mode, AppMode::Yolo);
+    assert_eq!(runtime_continuation.mode(), AppMode::Yolo);
     assert!(runtime_continuation.trust_mode);
     assert!(runtime_continuation.auto_approve);
     assert!(matches!(
@@ -4880,9 +4883,58 @@ fn review_only_external_input_gets_read_only_policy_until_write_is_explicit() {
         false,
         crate::tui::approval::ApprovalMode::Suggest,
     );
-    assert_eq!(explicit_write.mode, AppMode::Agent);
+    assert_eq!(explicit_write.mode(), AppMode::Agent);
     assert!(explicit_write.dynamic_active_tools.is_empty());
-    assert!(explicit_write.status.is_none());
+    assert!(explicit_write.status_message().is_none());
+}
+
+#[test]
+fn turn_metadata_reports_effective_policy_narrowing_without_changing_visible_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    engine.session.mode = AppMode::Yolo.into();
+
+    let policy = effective_input_policy(
+        UserInputProvenance::ExternalUser,
+        AppMode::Yolo,
+        "review the recent failure logs",
+        true,
+        true,
+        true,
+        crate::tui::approval::ApprovalMode::Bypass,
+    );
+    assert_eq!(engine.session.mode, AppMode::Yolo);
+    assert_eq!(policy.mode(), AppMode::Plan);
+
+    let user_msg = engine.user_text_message_with_turn_metadata_for_route_and_provenance(
+        "review the recent failure logs".to_string(),
+        "deepseek-v4-flash",
+        false,
+        None,
+        false,
+        UserInputProvenance::ExternalUser,
+        Some(&policy),
+    );
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains("Current mode: yolo"), "got: {text}");
+    assert!(text.contains("Effective turn mode: plan"), "got: {text}");
+    assert!(
+        text.contains("Effective policy narrowed from visible mode: yolo -> plan"),
+        "got: {text}"
+    );
+    assert!(
+        text.contains("Effective policy narrowing reason: review_only_external_input"),
+        "got: {text}"
+    );
+    assert_eq!(engine.session.mode, AppMode::Yolo);
 }
 
 #[test]
@@ -4893,7 +4945,7 @@ fn turn_metadata_includes_plan_mode_policy() {
         ..Default::default()
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
-    engine.current_mode = AppMode::Plan;
+    engine.session.mode = AppMode::Plan.into();
 
     let user_msg = engine.user_text_message_with_turn_metadata_for_route(
         "explain the refactor plan before editing".to_string(),
@@ -4901,6 +4953,7 @@ fn turn_metadata_includes_plan_mode_policy() {
         false,
         None,
         false,
+        None,
     );
     let last_block = user_msg.content.last().expect("turn metadata block");
     let ContentBlock::Text { text, .. } = last_block else {
@@ -4935,10 +4988,10 @@ fn current_mode_field_assignment_takes_effect_synchronously() {
         ..Default::default()
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
-    assert_eq!(engine.current_mode, AppMode::Agent);
+    assert_eq!(engine.session.mode, AppMode::Agent);
 
-    engine.current_mode = AppMode::Yolo;
-    assert_eq!(engine.current_mode, AppMode::Yolo);
+    engine.session.mode = AppMode::Yolo.into();
+    assert_eq!(engine.session.mode, AppMode::Yolo);
 }
 
 #[test]

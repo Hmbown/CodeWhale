@@ -2,55 +2,10 @@
 //!
 //! This keeps mode/feature-specific registry construction out of the send path.
 
-use std::path::Path;
-
 use super::*;
-use crate::sandbox::SandboxPolicy;
+use crate::core::session::mode::shell_policy_for_mode;
 use crate::tools::AgentToolSurfaceOptions;
 use crate::worker_profile::ShellPolicy;
-
-/// Pick the sandbox policy that gates shell commands for a given UI mode.
-///
-/// - **Plan** (#1077): `ReadOnly` — no writes, no network. The previous
-///   `WorkspaceWrite` policy let `python -c "open('f','w').write('x')"` mutate
-///   files inside the workspace because it whitelisted the workspace as
-///   writable. Plan mode is investigation only; if the user wants to change
-///   files they should switch to Agent.
-/// - **Agent/Auto**: `WorkspaceWrite` with workspace as writable root and
-///   network on. Approval flow gates risky individual commands; the sandbox
-///   handles the rest. Network is allowed because cargo / npm / curl-style
-///   commands are normal during agent work and DNS-deny breaks them silently.
-/// - **YOLO**: `DangerFullAccess` — explicit no-guardrails contract.
-pub(crate) fn sandbox_policy_for_mode(mode: AppMode, workspace: &Path) -> SandboxPolicy {
-    match mode {
-        AppMode::Plan => SandboxPolicy::ReadOnly,
-        AppMode::Agent | AppMode::Auto => SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![workspace.to_path_buf()],
-            network_access: true,
-            exclude_tmpdir: false,
-            exclude_slash_tmp: false,
-        },
-        AppMode::Yolo => SandboxPolicy::DangerFullAccess,
-    }
-}
-
-/// Resolve the effective shell policy for a turn from the legacy shell opt-in
-/// plus the active mode. This is the typed bridge away from passing a bare
-/// `allow_shell` boolean through the runtime.
-pub(crate) fn shell_policy_for_mode(mode: AppMode, allow_shell: bool) -> ShellPolicy {
-    if !allow_shell {
-        return ShellPolicy::None;
-    }
-    match mode {
-        // Plan is read-only planning with no shell execution. The runtime
-        // prompt already reports `shell_access="none"` for Plan, so mapping it
-        // to `ReadOnly` here created a prompt/registry inconsistency (the
-        // registry would expose `exec_shell` while the prompt said there was
-        // no shell). Keep Plan shell-free; switch to Agent to run commands.
-        AppMode::Plan => ShellPolicy::None,
-        AppMode::Agent | AppMode::Auto | AppMode::Yolo => ShellPolicy::Full,
-    }
-}
 
 fn should_register_remember_tool(memory_enabled: bool, moraine_fallback: bool) -> bool {
     memory_enabled && !moraine_fallback

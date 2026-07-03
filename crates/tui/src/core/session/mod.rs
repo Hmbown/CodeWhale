@@ -1,11 +1,15 @@
 //! Session state management for the core engine.
 //!
-//! Tracks conversation history, token usage, and session metadata.
+//! Tracks conversation history, token usage, session metadata, and operating mode.
 
+pub mod mode;
+
+use self::mode::VisibleSessionMode;
 use crate::models::{Message, SystemPrompt, Usage};
 use crate::prefix_cache::PrefixStabilityManager;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
 use crate::prompt_zones::{AppendLog, FrozenPrefix};
+use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use crate::working_set::WorkingSet;
 use std::path::PathBuf;
@@ -90,6 +94,9 @@ pub struct Session {
     /// [`Session::replace_messages`], and at other mutation sites in
     /// `core/engine.rs`.
     pub messages_revision: u64,
+
+    /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
+    pub mode: VisibleSessionMode,
 }
 
 /// Cumulative usage statistics for a session.
@@ -164,6 +171,7 @@ impl Session {
             prefix_stability: None,
             frozen_prefix: None,
             messages_revision: 0,
+            mode: VisibleSessionMode::new(AppMode::Agent),
         }
     }
 

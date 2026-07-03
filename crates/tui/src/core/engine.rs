@@ -66,6 +66,10 @@ use super::ops::{
     Op, ProviderRuntimeStatus, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance,
 };
 use super::session::Session;
+use super::session::mode::{
+    EffectiveInputPolicy, agent_approval_mode_for_turn, effective_input_policy,
+    mode_runtime_instructions, sandbox_policy_for_mode, shell_policy_for_mode,
+};
 use super::tool_parser;
 use super::turn::{TurnContext, post_turn_snapshot, pre_turn_snapshot};
 
@@ -614,8 +618,7 @@ pub struct Engine {
     /// This keeps prompt refreshes cheap while still noticing append/update
     /// writes from slop ledger tools during the same session.
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
-    /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
-    current_mode: AppMode,
+
     /// Process-local cache for `estimated_input_tokens`. Memoizes the most
     /// recent token estimate keyed on `(session.messages_revision,
     /// system_prompt_fingerprint)`. Five call sites per turn consult this
@@ -662,15 +665,6 @@ fn subagent_mailbox_best_effort_send_permitted(
 }
 
 impl Engine {
-    fn mode_runtime_instructions(mode: AppMode) -> &'static str {
-        match mode {
-            AppMode::Agent | AppMode::Auto => prompts::AGENT_MODE,
-            AppMode::Plan => prompts::PLAN_MODE,
-            AppMode::Yolo => prompts::YOLO_MODE,
-        }
-        .trim()
-    }
-
     pub(super) async fn emit_compaction_started(
         &mut self,
         id: String,
@@ -1005,7 +999,6 @@ impl Engine {
             slop_ledger_gate_cache: None,
             workshop_vars,
             sandbox_backend,
-            current_mode: AppMode::Agent,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
         };
@@ -1077,7 +1070,8 @@ impl Engine {
             })
             .await;
 
-        let tool_context = self.build_tool_context(mode, auto_approve);
+        let tool_context =
+            self.build_tool_context_with_policy(mode, allow_shell, trust_mode, auto_approve);
         let registry = ToolRegistryBuilder::new()
             .with_shell_tools()
             .build(tool_context);
@@ -1306,7 +1300,7 @@ impl Engine {
         auto_approve: bool,
         approval_mode: crate::tui::approval::ApprovalMode,
     ) {
-        self.current_mode = mode;
+        self.session.mode = mode.into();
         self.session.allow_shell = allow_shell;
         self.config.allow_shell = allow_shell;
         self.session.trust_mode = trust_mode;
@@ -1452,7 +1446,12 @@ impl Engine {
                             client,
                             self.session.model.clone(),
                             // Sub-agents don't inherit YOLO mode - use Agent mode defaults
-                            self.build_tool_context(AppMode::Agent, self.session.auto_approve),
+                            self.build_tool_context_with_policy(
+                                AppMode::Agent,
+                                self.session.allow_shell,
+                                self.session.trust_mode,
+                                self.session.auto_approve,
+                            ),
                             self.session.allow_shell,
                             Some(self.tx_event.clone()),
                             Arc::clone(&self.subagent_manager),
@@ -1678,7 +1677,7 @@ impl Engine {
                         self.session.auto_model = model.trim().eq_ignore_ascii_case("auto");
                         self.session.model = model;
                         self.session.workspace = workspace.clone();
-                        self.current_mode = mode;
+                        self.session.mode = mode.into();
                         self.config.model.clone_from(&self.session.model);
                         self.config.workspace = workspace.clone();
                         let ctx =
@@ -1707,7 +1706,7 @@ impl Engine {
                             model: self.session.model.clone(),
                             workspace: self.session.workspace.clone(),
                             system_prompt: self.session.system_prompt.clone(),
-                            mode: self.current_mode.as_setting().to_string(),
+                            mode: self.session.mode.as_setting().to_string(),
                         };
                         if let Some(tx) = tx.lock().ok().and_then(|mut g| g.take()) {
                             let _ = tx.send(snapshot);
@@ -1757,7 +1756,7 @@ impl Engine {
                         }
                         // Now dispatch the new message as a normal send,
                         // reusing the engine's stored mode/model config.
-                        let mode = self.current_mode;
+                        let mode = self.session.mode.as_app_mode();
                         self.handle_send_message(
                             new_message,
                             mode,
@@ -1952,6 +1951,7 @@ impl Engine {
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
         current_text: &str,
+        effective_policy: Option<&EffectiveInputPolicy>,
     ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
@@ -1968,11 +1968,11 @@ impl Engine {
             // `render_environment_block` for the prefix-cache rationale).
             format!("Current workspace: {}", self.config.workspace.display()),
             format!("Current model: {routed_model}"),
-            format!("Current mode: {}", self.current_mode.as_setting()),
+            format!("Current mode: {}", self.session.mode.as_setting()),
             "Current mode policy source: runtime".to_string(),
             format!(
                 "Current mode policy:\n{}",
-                Self::mode_runtime_instructions(self.current_mode)
+                mode_runtime_instructions(self.session.mode.as_app_mode())
             ),
             format!("Input provenance: {}", provenance.as_str()),
             format!(
@@ -1984,6 +1984,22 @@ impl Engine {
                 }
             ),
         ];
+        if let Some(policy) = effective_policy {
+            lines.push(format!("Effective turn mode: {}", policy.mode_setting()));
+            if policy.mode() != policy.visible_mode.as_app_mode() {
+                lines.push(format!(
+                    "Effective policy narrowed from visible mode: {} -> {}",
+                    policy.visible_mode.as_setting(),
+                    policy.mode_setting()
+                ));
+            }
+            if let Some(reason) = policy.narrowing {
+                lines.push(format!(
+                    "Effective policy narrowing reason: {}",
+                    reason.as_str()
+                ));
+            }
+        }
         if auto_model {
             lines.push(format!("Auto model route: {routed_model}"));
         }
@@ -2009,6 +2025,7 @@ impl Engine {
             self.session.auto_model,
             self.session.reasoning_effort.as_deref(),
             self.session.reasoning_effort_auto,
+            None,
         )
     }
 
@@ -2019,6 +2036,7 @@ impl Engine {
         auto_model: bool,
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
+        effective_policy: Option<&EffectiveInputPolicy>,
     ) -> Message {
         self.user_text_message_with_turn_metadata_for_route_and_provenance(
             text,
@@ -2027,6 +2045,7 @@ impl Engine {
             reasoning_effort,
             reasoning_effort_auto,
             UserInputProvenance::ExternalUser,
+            effective_policy,
         )
     }
 
@@ -2042,6 +2061,7 @@ impl Engine {
             self.session.reasoning_effort.as_deref(),
             self.session.reasoning_effort_auto,
             provenance,
+            None,
         )
     }
 
@@ -2053,6 +2073,7 @@ impl Engine {
         reasoning_effort: Option<&str>,
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
+        effective_policy: Option<&EffectiveInputPolicy>,
     ) -> Message {
         // Place the user text first and turn_meta last so that the leading
         // bytes of each user message stay stable across date / model-route /
@@ -2069,6 +2090,7 @@ impl Engine {
             reasoning_effort_auto,
             provenance,
             &text,
+            effective_policy,
         );
         Message {
             role: "user".to_string(),
@@ -2104,7 +2126,7 @@ impl Engine {
 
         self.handle_send_message(
             content,
-            self.current_mode,
+            self.session.mode.as_app_mode(),
             Some(self.api_provider),
             self.session.model.clone(),
             self.config.goal_objective.clone(),
@@ -2255,17 +2277,16 @@ impl Engine {
             mode == AppMode::Yolo || auto_approve,
             approval_mode,
         );
-        if let Some(status) = input_policy.status.clone() {
+        if let Some(status) = input_policy.status_message() {
             let _ = self.tx_event.send(Event::status(status)).await;
         }
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
 
-        // Track the complete effective mode policy so mid-turn metadata, `/edit`,
-        // idle worker resumptions, and approval gates cannot read a stale policy
-        // after the UI changed modes (#3568).
+        // Keep the visible session mode stable while the rest of the session
+        // mirrors carry the effective approval authority for this active turn.
         self.apply_runtime_mode_policy(
-            input_policy.mode,
+            mode,
             input_policy.allow_shell,
             input_policy.trust_mode,
             input_policy.auto_approve,
@@ -2366,7 +2387,8 @@ impl Engine {
         self.session
             .working_set
             .observe_user_message(&content, &self.session.workspace);
-        let force_update_plan_first = should_force_update_plan_first(input_policy.mode, &content);
+        let effective_mode = input_policy.mode();
+        let force_update_plan_first = should_force_update_plan_first(effective_mode, &content);
 
         // Add user message to session
         let user_msg = self.user_text_message_with_turn_metadata_for_route_and_provenance(
@@ -2376,6 +2398,7 @@ impl Engine {
             reasoning_effort.as_deref(),
             reasoning_effort_auto,
             provenance,
+            Some(&input_policy),
         );
         self.session.add_message(user_msg);
 
@@ -2417,9 +2440,14 @@ impl Engine {
         let todo_list = self.config.todos.clone();
         let plan_state = self.config.plan_state.clone();
 
-        let tool_context = self.build_tool_context(input_policy.mode, input_policy.auto_approve);
+        let tool_context = self.build_tool_context_with_policy(
+            effective_mode,
+            input_policy.allow_shell,
+            input_policy.trust_mode,
+            input_policy.auto_approve,
+        );
         let builder = self
-            .build_turn_tool_registry_builder(input_policy.mode, todo_list, plan_state)
+            .build_turn_tool_registry_builder(effective_mode, todo_list, plan_state)
             .with_dynamic_tools(&dynamic_tools);
 
         let subagents_available =
@@ -2427,7 +2455,7 @@ impl Engine {
 
         let fork_context_for_runtime = if subagents_available {
             let state = StructuredState::capture(
-                input_policy.mode.label(),
+                input_policy.mode_label(),
                 self.config.workspace.clone(),
                 std::env::current_dir().ok(),
                 &self.session.working_set,
@@ -2497,7 +2525,7 @@ impl Engine {
             None
         };
 
-        let mut tool_registry = match input_policy.mode {
+        let mut tool_registry = match effective_mode {
             AppMode::Agent | AppMode::Auto | AppMode::Yolo => {
                 if subagents_available {
                     let runtime = if let Some(client) = self.deepseek_client.clone() {
@@ -2505,7 +2533,7 @@ impl Engine {
                             client,
                             self.session.model.clone(),
                             tool_context.clone(),
-                            self.session.allow_shell,
+                            input_policy.allow_shell,
                             Some(self.tx_event.clone()),
                             Arc::clone(&self.subagent_manager),
                         )
@@ -2516,7 +2544,7 @@ impl Engine {
                             self.session.reasoning_effort_auto,
                         )
                         .with_agent_tool_surface_options(self.agent_tool_surface_options(
-                            shell_policy_for_mode(AppMode::Agent, self.session.allow_shell),
+                            shell_policy_for_mode(AppMode::Agent, input_policy.allow_shell),
                         ))
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_step_api_timeout(self.config.subagent_api_timeout)
@@ -2580,7 +2608,7 @@ impl Engine {
             let mut catalog = build_model_tool_catalog_with_surface(
                 registry.to_api_tools_with_cache(true),
                 mcp_tools,
-                input_policy.mode,
+                effective_mode,
                 &self.config.tools_always_load,
                 capability.tool_surface_budget,
             );
@@ -2611,7 +2639,7 @@ impl Engine {
             &mut turn,
             tool_registry.as_ref(),
             tools,
-            input_policy.mode,
+            effective_mode,
             force_update_plan_first,
             input_policy.dynamic_active_tools,
         ))
@@ -3034,7 +3062,23 @@ impl Engine {
         false
     }
 
+    #[cfg(test)]
     fn build_tool_context(&self, mode: AppMode, auto_approve: bool) -> ToolContext {
+        self.build_tool_context_with_policy(
+            mode,
+            self.session.allow_shell,
+            self.session.trust_mode,
+            auto_approve,
+        )
+    }
+
+    fn build_tool_context_with_policy(
+        &self,
+        mode: AppMode,
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+    ) -> ToolContext {
         // Load the per-workspace trusted-paths list (#29) on every tool-context
         // build. Cheap (a small JSON file) and always reflects the latest
         // `/trust add` / `/trust remove` mutations without an explicit cache
@@ -3051,7 +3095,7 @@ impl Engine {
         }
         let mut ctx = ToolContext::with_auto_approve(
             self.session.workspace.clone(),
-            self.session.trust_mode,
+            trust_mode,
             self.session.notes_path.clone(),
             self.session.mcp_config_path.clone(),
             mode == AppMode::Yolo || auto_approve,
@@ -3072,7 +3116,7 @@ impl Engine {
             self.session.messages.clone().into(),
         ))
         .with_cancel_token(self.cancel_token.clone())
-        .with_shell_policy(shell_policy_for_mode(mode, self.session.allow_shell))
+        .with_shell_policy(shell_policy_for_mode(mode, allow_shell))
         .with_trusted_external_paths(trusted_external_paths)
         .with_follow_symlinks(self.config.workspace_follow_symlinks);
 
@@ -3475,155 +3519,6 @@ fn goal_objective_for_prompt(
     normalized_goal_objective(configured_goal)
 }
 
-// ── Mode & approval prompts as request-time runtime metadata ─────────
-//
-// Mode contracts and approval policies are not persisted in the session
-// history and are not sent as extra system messages. Instead, each API
-// request projects a transient user-role runtime metadata message at the
-// tail. The stable system prompt remains byte-stable, stored history remains
-// byte-stable, and strict chat-template providers never see a system message
-// outside messages[0].
-
-#[derive(Debug, Clone)]
-struct EffectiveInputPolicy {
-    mode: AppMode,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-    dynamic_active_tools: Vec<&'static str>,
-    status: Option<String>,
-}
-
-fn effective_input_policy(
-    provenance: UserInputProvenance,
-    requested_mode: AppMode,
-    content: &str,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-) -> EffectiveInputPolicy {
-    let mut mode = requested_mode;
-    let mut trust_mode = trust_mode;
-    let mut auto_approve = auto_approve;
-    let mut approval_mode = approval_mode;
-    let dynamic_active_tools = Vec::new();
-    let mut status = None;
-
-    if !provenance_can_inherit_standing_auto_authority(provenance) {
-        let had_auto_authority = matches!(mode, AppMode::Yolo)
-            || trust_mode
-            || auto_approve
-            || matches!(approval_mode, crate::tui::approval::ApprovalMode::Bypass);
-        if matches!(mode, AppMode::Yolo) {
-            mode = AppMode::Agent;
-        }
-        trust_mode = false;
-        auto_approve = false;
-        if matches!(
-            approval_mode,
-            crate::tui::approval::ApprovalMode::Auto | crate::tui::approval::ApprovalMode::Bypass
-        ) {
-            approval_mode = crate::tui::approval::ApprovalMode::Suggest;
-        }
-        if had_auto_authority {
-            status = Some(format!(
-                "Input provenance '{}' cannot inherit standing auto-approval authority; continuing with approvals required.",
-                provenance.as_str()
-            ));
-        }
-    } else if matches!(provenance, UserInputProvenance::ExternalUser)
-        && is_review_only_user_intent(content)
-    {
-        mode = AppMode::Plan;
-        trust_mode = false;
-        auto_approve = false;
-        if matches!(
-            approval_mode,
-            crate::tui::approval::ApprovalMode::Auto | crate::tui::approval::ApprovalMode::Bypass
-        ) {
-            approval_mode = crate::tui::approval::ApprovalMode::Suggest;
-        }
-        status = Some(
-            "Review/inspection request detected; using read-only Plan tools for this turn. Add an explicit fix/edit/commit instruction to allow writes.".to_string(),
-        );
-    }
-
-    EffectiveInputPolicy {
-        mode,
-        allow_shell,
-        trust_mode,
-        auto_approve,
-        approval_mode,
-        dynamic_active_tools,
-        status,
-    }
-}
-
-fn provenance_can_inherit_standing_auto_authority(provenance: UserInputProvenance) -> bool {
-    matches!(
-        provenance,
-        UserInputProvenance::ExternalUser
-            | UserInputProvenance::Runtime
-            | UserInputProvenance::SubAgentHandoff
-    )
-}
-
-fn is_review_only_user_intent(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    let asks_to_inspect = [
-        "look",
-        "check",
-        "review",
-        "inspect",
-        "scan",
-        "audit",
-        "看看",
-        "看一下",
-        "检查",
-        "审查",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-    if !asks_to_inspect {
-        return false;
-    }
-
-    let explicit_write = [
-        "fix",
-        "change",
-        "update",
-        "implement",
-        "apply",
-        "patch",
-        "modify",
-        "edit",
-        "write",
-        "commit",
-        "修",
-        "改",
-        "补",
-        "提交",
-        "写",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-
-    !explicit_write
-}
-
-fn agent_approval_mode_for_turn(
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-) -> crate::tui::approval::ApprovalMode {
-    if auto_approve {
-        crate::tui::approval::ApprovalMode::Bypass
-    } else {
-        approval_mode
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolAskRuleDecision {
     Prompt(String),
@@ -3982,7 +3877,6 @@ use self::tool_catalog::{
     preflight_requested_deferred_tool, should_default_defer_tool,
 };
 use self::tool_execution::emit_tool_audit;
-use self::tool_setup::{sandbox_policy_for_mode, shell_policy_for_mode};
 use crate::tools::js_execution::execute_js_execution_tool;
 
 #[cfg(test)]
