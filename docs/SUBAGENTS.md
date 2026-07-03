@@ -331,6 +331,39 @@ OpenRouter, Novita, SiliconFlow, SGLang, vLLM) route between that pair;
 providers without a known cheap tier (e.g. Ollama, Moonshot) skip the
 network router and keep children on the session model.
 
+## Per-role provider routes (#3965)
+
+`[subagents.routes.<role>]` pins a role (or type — same keys as
+`[subagents.models]`, case-insensitive) to an explicit provider, and
+optionally a model on that provider. A matching spawn builds its own client
+against that provider's endpoint/auth, regardless of the parent session's
+active provider. Roles without a route inherit the parent as before.
+
+`provider` accepts any built-in provider id (`deepseek`, `ollama`, …) or the
+name of a `[providers.<name>]` custom entry — which is how LM Studio's
+OpenAI-compatible endpoint plugs in:
+
+```toml
+[providers.lm-studio]
+kind     = "openai-compatible"
+base_url = "http://localhost:1234/v1"
+api_key  = "lm-studio"            # LM Studio ignores it, but a value must exist
+
+[subagents.routes.explore]
+provider = "lm-studio"            # local for cheap, fast operations
+model    = "qwen-2.5-7b"
+
+[subagents.routes.general]
+provider = "deepseek"             # cloud for complex reasoning
+model    = "deepseek-v4-flash"
+```
+
+A per-call explicit `model` on `agent` still wins over the route's `model`;
+both are validated against the routed provider. A route naming a provider
+that is neither built-in nor configured fails that spawn with a clear error
+(no silent DeepSeek fallback). When a route applies, it takes precedence over
+the `[subagents.models]` map for that role.
+
 ## Per-step API timeout (#1806, #1808)
 
 Each sub-agent step wraps its DeepSeek `create_message` call in a

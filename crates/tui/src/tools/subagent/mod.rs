@@ -1429,6 +1429,19 @@ pub struct SubAgentForkContext {
     pub structured_state_block: Option<String>,
 }
 
+/// Explicit per-role/type provider routing for sub-agents (#3965). Bundles
+/// the raw `[subagents.routes]` map with the `Config` snapshot needed to
+/// construct a client for a routed provider at spawn time. Shared via `Arc`
+/// so per-child runtime clones stay cheap.
+pub struct SubagentProviderRouting {
+    /// Lowercased role/type keys → route, from
+    /// `Config::subagent_provider_routes`.
+    pub routes: HashMap<String, crate::config::SubagentRouteConfig>,
+    /// Config snapshot used to resolve provider endpoints/auth for routed
+    /// clients.
+    pub config: crate::config::Config,
+}
+
 /// Runtime configuration for spawning sub-agents.
 ///
 /// Carries everything a child needs to (a) build its own tool registry —
@@ -1444,6 +1457,10 @@ pub struct SubAgentRuntime {
     pub reasoning_effort: Option<String>,
     pub reasoning_effort_auto: bool,
     pub role_models: HashMap<String, String>,
+    /// Explicit per-role/type provider routes (#3965). `None` when no
+    /// `[subagents.routes]` are configured; matching roles then inherit the
+    /// parent's client as before.
+    pub provider_routing: Option<Arc<SubagentProviderRouting>>,
     pub context: ToolContext,
     pub allow_shell: bool,
     /// Native Agent-mode tool surface inherited from the parent turn. Carries
@@ -1532,6 +1549,7 @@ impl SubAgentRuntime {
             reasoning_effort: None,
             reasoning_effort_auto: false,
             role_models: HashMap::new(),
+            provider_routing: None,
             context,
             allow_shell,
             agent_tool_surface_options: AgentToolSurfaceOptions::new(
@@ -1657,6 +1675,15 @@ impl SubAgentRuntime {
         self
     }
 
+    /// Attach explicit per-role/type provider routes (#3965). Route provider
+    /// names are validated at spawn time so bad config fails that spawn with
+    /// a clear error instead of poisoning engine construction.
+    #[must_use]
+    pub fn with_provider_routing(mut self, routing: Option<Arc<SubagentProviderRouting>>) -> Self {
+        self.provider_routing = routing;
+        self
+    }
+
     /// Preserve whether the parent session is using per-turn model routing.
     #[must_use]
     pub fn with_auto_model(mut self, auto_model: bool) -> Self {
@@ -1709,6 +1736,7 @@ impl SubAgentRuntime {
             reasoning_effort: self.reasoning_effort.clone(),
             reasoning_effort_auto: self.reasoning_effort_auto,
             role_models: self.role_models.clone(),
+            provider_routing: self.provider_routing.clone(),
             context: child_context,
             allow_shell: self.allow_shell,
             agent_tool_surface_options: self.agent_tool_surface_options.clone(),
@@ -3888,17 +3916,33 @@ async fn spawn_subagent_from_input(
     if let Some(workspace) = child_workspace {
         child_runtime.context.workspace = workspace;
     }
-    let configured_model = match spawn_request.model.clone() {
-        Some(model) => Some(normalize_requested_subagent_model(
-            &model,
-            "model",
-            runtime.client.api_provider(),
-        )?),
-        None => configured_model_for_role_or_type(
-            &runtime,
-            spawn_request.assignment.role.as_deref(),
-            &spawn_request.agent_type,
-        )?,
+    let provider_route = configured_provider_route_for_role_or_type(
+        &runtime,
+        spawn_request.assignment.role.as_deref(),
+        &spawn_request.agent_type,
+    );
+    let configured_model = if let Some((route, base_config)) = provider_route {
+        // #3965: explicit per-role provider routing. The per-call `model`
+        // still wins over the route's configured model; either selector is
+        // validated against the routed provider by the route resolver.
+        let selector = spawn_request.model.as_deref().or(route.model.as_deref());
+        let (client, model) =
+            subagent_client_for_provider_route(base_config, &route.provider, selector)?;
+        child_runtime.client = client;
+        Some(model)
+    } else {
+        match spawn_request.model.clone() {
+            Some(model) => Some(normalize_requested_subagent_model(
+                &model,
+                "model",
+                runtime.client.api_provider(),
+            )?),
+            None => configured_model_for_role_or_type(
+                &runtime,
+                spawn_request.assignment.role.as_deref(),
+                &spawn_request.agent_type,
+            )?,
+        }
     };
     let (effective_prompt, _resident_conflict) =
         if let Some(ref file_path) = spawn_request.resident_file {
@@ -3930,8 +3974,11 @@ async fn spawn_subagent_from_input(
             (spawn_request.prompt, None)
         };
 
+    // Resolve against `child_runtime`: identical to `runtime` on the inherit
+    // path, but carries the routed client when a provider route applied so
+    // reasoning-effort rules see the provider the child will actually use.
     let route = resolve_subagent_assignment_route(
-        &runtime,
+        &child_runtime,
         configured_model,
         &effective_prompt,
         &spawn_request.agent_type,
@@ -5807,6 +5854,64 @@ pub(crate) fn configured_model_for_role_or_type(
         }
     }
     Ok(None)
+}
+
+/// Look up an explicit `[subagents.routes]` provider route for a spawn,
+/// using the same role → type → `default` key precedence as
+/// `configured_model_for_role_or_type` (#3965).
+pub(crate) fn configured_provider_route_for_role_or_type<'a>(
+    runtime: &'a SubAgentRuntime,
+    role: Option<&str>,
+    agent_type: &SubAgentType,
+) -> Option<(&'a crate::config::SubagentRouteConfig, &'a crate::config::Config)> {
+    let routing = runtime.provider_routing.as_deref()?;
+    let mut keys = Vec::new();
+    if let Some(role) = role.map(str::trim).filter(|role| !role.is_empty()) {
+        keys.push(role.to_ascii_lowercase());
+    }
+    keys.push(agent_type.as_str().to_string());
+    keys.push("default".to_string());
+
+    keys.into_iter()
+        .find_map(|key| routing.routes.get(&key))
+        .map(|route| (route, &routing.config))
+}
+
+/// Build a client bound to an explicitly routed provider (#3965). The route
+/// resolver validates the model against the target provider and binds the
+/// endpoint/auth from that provider's config, so a routed sub-agent talks to
+/// its own provider regardless of the parent session's active one.
+pub(crate) fn subagent_client_for_provider_route(
+    base_config: &crate::config::Config,
+    provider_name: &str,
+    model_selector: Option<&str>,
+) -> Result<(DeepSeekClient, String), ToolError> {
+    let mut route_config = base_config.clone();
+    route_config.provider = Some(provider_name.to_string());
+    let provider = route_config.api_provider();
+    // An unknown provider name silently falls back to DeepSeek inside
+    // api_provider(); reject it here so a typo'd route fails loudly instead
+    // of misrouting to the wrong provider.
+    if crate::config::ApiProvider::parse(provider_name).is_none()
+        && provider != crate::config::ApiProvider::Custom
+    {
+        return Err(ToolError::invalid_input(format!(
+            "subagents route provider '{provider_name}' is not a built-in provider or a \
+             configured [providers.{provider_name}] custom entry"
+        )));
+    }
+    let route = crate::route_runtime::resolve_runtime_route(&route_config, provider, model_selector)
+        .map_err(|reason| {
+            ToolError::invalid_input(format!(
+                "subagents route provider '{provider_name}' failed to resolve: {reason}"
+            ))
+        })?;
+    let client = DeepSeekClient::from_candidate(&route.config, &route.candidate).map_err(|err| {
+        ToolError::execution_failed(format!(
+            "subagents route provider '{provider_name}' client failed to initialize: {err}"
+        ))
+    })?;
+    Ok((client, route.model))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

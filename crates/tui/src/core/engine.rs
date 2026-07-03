@@ -763,6 +763,22 @@ impl Engine {
         format!("{message}\n\n{hint}")
     }
 
+    /// Bundle `[subagents.routes]` with the current API config for sub-agent
+    /// runtimes (#3965). Rebuilt at each runtime construction so provider or
+    /// route changes made mid-session are picked up by the next spawn.
+    fn subagent_provider_routing(
+        &self,
+    ) -> Option<Arc<crate::tools::subagent::SubagentProviderRouting>> {
+        let routes = self.api_config.subagent_provider_routes();
+        if routes.is_empty() {
+            return None;
+        }
+        Some(Arc::new(crate::tools::subagent::SubagentProviderRouting {
+            routes,
+            config: self.api_config.clone(),
+        }))
+    }
+
     fn activate_runtime_route(&mut self, provider: ApiProvider, model: &str) -> Result<(), String> {
         if self.api_provider == provider
             && self
@@ -1458,6 +1474,7 @@ impl Engine {
                             Arc::clone(&self.subagent_manager),
                         )
                         .with_role_models(self.config.subagent_model_overrides.clone())
+                        .with_provider_routing(self.subagent_provider_routing())
                         .with_auto_model(self.session.auto_model)
                         .with_reasoning_effort(
                             self.session.reasoning_effort.clone(),
@@ -2510,6 +2527,7 @@ impl Engine {
                             Arc::clone(&self.subagent_manager),
                         )
                         .with_role_models(self.config.subagent_model_overrides.clone())
+                        .with_provider_routing(self.subagent_provider_routing())
                         .with_auto_model(self.session.auto_model)
                         .with_reasoning_effort(
                             self.session.reasoning_effort.clone(),

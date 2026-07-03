@@ -1886,6 +1886,36 @@ fn max_subagents_clamps_subagents_max_concurrent() {
 }
 
 #[test]
+fn subagent_provider_routes_parse_and_normalize() {
+    // #3965: [subagents.routes.<role>] assigns a role/type to an explicit
+    // provider (and optional model), independent of the active provider.
+    let config: Config = toml::from_str(
+        r#"
+        provider = "deepseek"
+
+        [subagents.routes.Explore]
+        provider = "lm-studio"
+        model = " qwen-2.5-7b "
+
+        [subagents.routes.general]
+        provider = "deepseek"
+        "#,
+    )
+    .expect("routes table parses");
+
+    let routes = config.subagent_provider_routes();
+    let explore = routes.get("explore").expect("key is lowercased");
+    assert_eq!(explore.provider, "lm-studio");
+    assert_eq!(explore.model.as_deref(), Some("qwen-2.5-7b"));
+    let general = routes.get("general").expect("general route present");
+    assert_eq!(general.provider, "deepseek");
+    assert_eq!(general.model, None);
+
+    // No [subagents.routes] → empty map (sub-agents inherit the parent).
+    assert!(Config::default().subagent_provider_routes().is_empty());
+}
+
+#[test]
 fn subagents_enabled_reports_disable_precedence() {
     assert!(Config::default().subagents_enabled());
 

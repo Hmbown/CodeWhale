@@ -4008,6 +4008,7 @@ fn stub_runtime() -> SubAgentRuntime {
         reasoning_effort: None,
         reasoning_effort_auto: false,
         role_models: std::collections::HashMap::new(),
+        provider_routing: None,
         context,
         allow_shell: true,
         agent_tool_surface_options: AgentToolSurfaceOptions::new(ShellPolicy::Full),
@@ -4863,6 +4864,122 @@ fn role_model_validation_accepts_provider_native_ids() {
     let model = configured_model_for_role_or_type(&runtime, Some("worker"), &SubAgentType::General)
         .expect("provider-native id is accepted");
     assert_eq!(model.as_deref(), Some("kimi-k2.5"));
+}
+
+// ---- #3965 per-role explicit provider routing ----
+
+fn lm_studio_route_config() -> crate::config::Config {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut custom = std::collections::HashMap::new();
+    custom.insert(
+        "lm-studio".to_string(),
+        crate::config::ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("http://localhost:1234/v1".to_string()),
+            api_key: Some("lm-studio".to_string()),
+            ..Default::default()
+        },
+    );
+    crate::config::Config {
+        provider: Some("deepseek".to_string()),
+        api_key: Some("test-key".to_string()),
+        providers: Some(crate::config::ProvidersConfig {
+            custom,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+fn runtime_with_explore_route() -> SubAgentRuntime {
+    let mut runtime = stub_runtime();
+    let mut routes = std::collections::HashMap::new();
+    routes.insert(
+        "explore".to_string(),
+        crate::config::SubagentRouteConfig {
+            provider: "lm-studio".to_string(),
+            model: Some("qwen-2.5-7b".to_string()),
+        },
+    );
+    runtime.provider_routing = Some(Arc::new(SubagentProviderRouting {
+        routes,
+        config: lm_studio_route_config(),
+    }));
+    runtime
+}
+
+#[test]
+fn role_provider_route_builds_client_on_routed_provider() {
+    // AC (#3965): [subagents.routes.explore] provider = "lm-studio" builds the
+    // child's client against the LM Studio custom endpoint — with the route's
+    // model — while the parent session stays on DeepSeek.
+    let runtime = runtime_with_explore_route();
+
+    let (route, base_config) = configured_provider_route_for_role_or_type(
+        &runtime,
+        Some("Explore"),
+        &SubAgentType::General,
+    )
+    .expect("role has an explicit provider route (case-insensitive key)");
+    assert_eq!(route.provider, "lm-studio");
+
+    let (client, model) =
+        subagent_client_for_provider_route(base_config, &route.provider, route.model.as_deref())
+            .expect("routed client builds against the custom endpoint");
+    assert_eq!(client.api_provider(), crate::config::ApiProvider::Custom);
+    assert_eq!(client.base_url(), "http://localhost:1234/v1");
+    assert_eq!(model, "qwen-2.5-7b");
+    assert_eq!(
+        runtime.client.api_provider(),
+        crate::config::ApiProvider::Deepseek,
+        "parent client is untouched by the child's route"
+    );
+}
+
+#[test]
+fn role_without_provider_route_inherits_parent() {
+    // Fallback AC (#3965): roles without a route keep the legacy behavior —
+    // no route resolves, so the spawn path inherits the parent's client.
+    let runtime = runtime_with_explore_route();
+    assert!(
+        configured_provider_route_for_role_or_type(
+            &runtime,
+            Some("general"),
+            &SubAgentType::General,
+        )
+        .is_none()
+    );
+
+    let unrouted = stub_runtime();
+    assert!(
+        configured_provider_route_for_role_or_type(
+            &unrouted,
+            Some("explore"),
+            &SubAgentType::Explore,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn provider_route_with_unknown_provider_fails_clearly() {
+    // Graceful-error AC (#3965): a route naming a provider that is neither
+    // built-in nor a configured [providers.<name>] entry must fail the spawn
+    // with a clear error instead of silently falling back to DeepSeek.
+    let err = match subagent_client_for_provider_route(
+        &lm_studio_route_config(),
+        "no-such-provider",
+        None,
+    ) {
+        Ok(_) => panic!("unknown provider must be rejected"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("no-such-provider"), "names the bad provider: {msg}");
+    assert!(
+        msg.contains("[providers.no-such-provider]"),
+        "points at the custom-provider config path: {msg}"
+    );
 }
 
 #[test]

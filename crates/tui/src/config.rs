@@ -1758,6 +1758,12 @@ pub struct SubagentsConfig {
     /// provider names such as `deepseek`, `zai`, `openrouter`, or `anthropic`.
     #[serde(default)]
     pub providers: Option<HashMap<String, SubagentProviderConfig>>,
+    /// Explicit per-role/type provider routes (#3965). Keys accept the same
+    /// role/type names as `models`. A matching sub-agent spawns on the named
+    /// provider instead of inheriting the parent session's active provider;
+    /// roles without a route keep the legacy inherit behavior.
+    #[serde(default)]
+    pub routes: Option<HashMap<String, SubagentRouteConfig>>,
 }
 
 /// Provider-specific sub-agent limit overrides.
@@ -1782,6 +1788,19 @@ pub struct SubagentProviderConfig {
     pub api_timeout_secs: Option<u64>,
     #[serde(default)]
     pub heartbeat_timeout_secs: Option<u64>,
+}
+
+/// One `[subagents.routes.<role>]` entry (#3965): pins a sub-agent role or
+/// type to a specific provider, and optionally a model on that provider.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SubagentRouteConfig {
+    /// Built-in provider id (`deepseek`, `ollama`, …) or the name of a
+    /// `[providers.<name>]` custom entry (e.g. an LM Studio endpoint).
+    pub provider: String,
+    /// Optional model on that provider. Unset uses the provider's saved or
+    /// default model.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// `[auto]` table — knobs for the `--model auto` / `/model auto` router.
@@ -3964,6 +3983,37 @@ impl Config {
         }
 
         overrides
+    }
+
+    /// Raw per-role/type sub-agent provider routes from `[subagents.routes]`
+    /// (#3965). Keys are normalized to lowercase; provider names are validated
+    /// at spawn time so a bad route fails that spawn, not the session.
+    #[must_use]
+    pub fn subagent_provider_routes(&self) -> HashMap<String, SubagentRouteConfig> {
+        let mut routes = HashMap::new();
+        let Some(configured) = self.subagents.as_ref().and_then(|cfg| cfg.routes.as_ref()) else {
+            return routes;
+        };
+        for (key, route) in configured {
+            let key = key.trim().to_ascii_lowercase();
+            let provider = route.provider.trim();
+            if key.is_empty() || provider.is_empty() {
+                continue;
+            }
+            routes.insert(
+                key,
+                SubagentRouteConfig {
+                    provider: provider.to_string(),
+                    model: route
+                        .model
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|model| !model.is_empty())
+                        .map(str::to_string),
+                },
+            );
+        }
+        routes
     }
 
     /// Return the configured DeepSeek reasoning-effort tier, if any.
