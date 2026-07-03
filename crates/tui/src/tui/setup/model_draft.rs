@@ -24,7 +24,7 @@ use crate::llm_client::LlmClient;
 use crate::localization::Locale;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
-use super::{GuidedConstitutionDraft, autonomy_label};
+use super::guided::{GuidedConstitutionDraft, autonomy_label};
 
 /// Output budget for the one-shot draft. Roomy enough for a full constitution
 /// (bounds cap the persisted form far below this), small enough to be a real
