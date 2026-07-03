@@ -40,7 +40,6 @@ use crate::models::{
 };
 use crate::prompts;
 use crate::purge::{emit_purge_completed, emit_purge_failed, emit_purge_started, run_purge};
-use crate::resource_telemetry::ResourceTelemetry;
 use crate::route_runtime::resolve_runtime_route;
 use crate::seam_manager::{SeamConfig, SeamManager};
 use crate::tools::goal::{GoalSnapshot, GoalStatus, SharedGoalState, new_shared_goal_state};
@@ -662,15 +661,6 @@ fn subagent_mailbox_best_effort_send_permitted(
 }
 
 impl Engine {
-    fn mode_runtime_instructions(mode: AppMode) -> &'static str {
-        match mode {
-            AppMode::Agent | AppMode::Auto => prompts::AGENT_MODE,
-            AppMode::Plan => prompts::PLAN_MODE,
-            AppMode::Yolo => prompts::YOLO_MODE,
-        }
-        .trim()
-    }
-
     pub(super) async fn emit_compaction_started(
         &mut self,
         id: String,
@@ -1893,76 +1883,31 @@ impl Engine {
         estimate_input_tokens_conservative(&messages, self.session.system_prompt.as_ref())
     }
 
-    fn append_resource_metadata_lines(
-        &self,
-        lines: &mut Vec<String>,
-        routed_model: &str,
-        current_text: &str,
-    ) {
+    fn context_pressure_line(&self, routed_model: &str, current_text: &str) -> Option<String> {
         let input_tokens = self.active_input_tokens_with_current_text(current_text);
-        if let Some(budget) = route_context_budget_for_route(
+        let budget = route_context_budget_for_route(
             self.api_provider,
             routed_model,
             self.active_route_limits,
             input_tokens,
-        ) {
-            lines.push(format!(
-                "Context pressure: {} ({:.1}% used, {} / {} tokens; {} input tokens available)",
-                budget.pressure.label(),
-                budget.usage_percent(),
-                budget.input_tokens,
-                budget.window_tokens,
-                budget.available_input_tokens,
-            ));
-        }
-
-        if let Some(line) = self.session_token_usage_line() {
-            lines.push(line);
-        }
-        if let Some(line) = self.active_goal_resource_line() {
-            lines.push(line);
-        }
+        )?;
+        Some(format!(
+            "Context pressure: {} ({:.1}% used, {} / {} tokens; {} input tokens available)",
+            budget.pressure.label(),
+            budget.usage_percent(),
+            budget.input_tokens,
+            budget.window_tokens,
+            budget.available_input_tokens,
+        ))
     }
 
     fn session_token_usage_line(&self) -> Option<String> {
-        let usage = &self.session.total_usage;
-        let total = usage.input_tokens.saturating_add(usage.output_tokens);
-        if total == 0 {
-            return None;
-        }
-
-        let mut line = format!(
-            "Session token usage: {total} total ({} input, {} output)",
-            usage.input_tokens, usage.output_tokens,
-        );
-        if let Some(hit_tokens) = usage.cache_read_input_tokens {
-            line.push_str(&format!(", cache hits {hit_tokens}"));
-        }
-        if let Some(miss_tokens) = usage.cache_creation_input_tokens {
-            line.push_str(&format!(", cache misses {miss_tokens}"));
-        }
-        Some(line)
+        prompt_metadata::session_token_usage_line(&self.session.total_usage)
     }
 
     fn active_goal_resource_line(&self) -> Option<String> {
         let snapshot = self.config.goal_state.lock().ok()?.snapshot();
-        if !snapshot.is_active() {
-            return None;
-        }
-
-        let mut telemetry =
-            ResourceTelemetry::new(snapshot.tokens_used, snapshot.time_used_seconds);
-        if let Some(token_budget) = snapshot.token_budget {
-            telemetry = telemetry.with_token_budget(u64::from(token_budget));
-        }
-
-        let mut line = format!("Active goal resource usage: {}", telemetry.human_summary());
-        if snapshot.tokens_used > 0 && snapshot.time_used_seconds > 0 {
-            let rate = snapshot.tokens_used as f64 / snapshot.time_used_seconds as f64;
-            line.push_str(&format!("; {rate:.1} tok/s"));
-        }
-        line.push_str(&format!("; {} continuations", snapshot.continuation_count));
-        Some(line)
+        prompt_metadata::goal_resource_line(&snapshot)
     }
 
     async fn add_session_message(&mut self, message: Message) {
@@ -1979,7 +1924,6 @@ impl Engine {
         provenance: UserInputProvenance,
         current_text: &str,
     ) -> ContentBlock {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
             .session
             .working_set
@@ -1987,45 +1931,20 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let mut lines = vec![
-            format!("Current local date: {today}"),
-            // Workspace path moved here from the static `## Environment` block so
-            // the static system prefix stays byte-stable across sessions (see
-            // `render_environment_block` for the prefix-cache rationale).
-            format!("Current workspace: {}", self.config.workspace.display()),
-            format!("Current model: {routed_model}"),
-            format!("Current mode: {}", self.current_mode.as_setting()),
-            "Current mode policy source: runtime".to_string(),
-            format!(
-                "Current mode policy:\n{}",
-                Self::mode_runtime_instructions(self.current_mode)
-            ),
-            format!("Input provenance: {}", provenance.as_str()),
-            format!(
-                "Input authority: {}",
-                if provenance.can_authorize_work() {
-                    "external_current_turn"
-                } else {
-                    "non_authoritative"
-                }
-            ),
-        ];
-        if auto_model {
-            lines.push(format!("Auto model route: {routed_model}"));
-        }
-        if reasoning_effort_auto && let Some(reasoning_effort) = reasoning_effort {
-            lines.push(format!("Auto reasoning effort: {reasoning_effort}"));
-        }
-        self.append_resource_metadata_lines(&mut lines, routed_model, current_text);
-        if let Some(working_set_summary) = working_set_summary {
-            lines.push(working_set_summary);
-        }
-        let summary = lines.join("\n");
-
-        ContentBlock::Text {
-            text: format!("<turn_meta>\n{summary}\n</turn_meta>"),
-            cache_control: None,
-        }
+        let input = prompt_metadata::TurnMetadataInput {
+            mode: self.current_mode,
+            provenance,
+            routed_model: routed_model.to_string(),
+            auto_model,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+            reasoning_effort_auto,
+            workspace_path: self.config.workspace.clone(),
+            working_set_summary,
+            context_pressure_line: self.context_pressure_line(routed_model, current_text),
+            token_usage_line: self.session_token_usage_line(),
+            goal_resource_line: self.active_goal_resource_line(),
+        };
+        prompt_metadata::build_turn_metadata(&input)
     }
 
     fn user_text_message_with_turn_metadata(&self, text: String) -> Message {
@@ -3887,6 +3806,7 @@ use context::{
 use context::{context_input_budget_for_provider, effective_max_output_tokens};
 mod dispatch;
 mod lsp_hooks;
+mod prompt_metadata;
 mod streaming;
 mod token_estimate_cache;
 mod tool_catalog;
