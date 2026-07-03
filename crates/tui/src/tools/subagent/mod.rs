@@ -5863,7 +5863,10 @@ pub(crate) fn configured_provider_route_for_role_or_type<'a>(
     runtime: &'a SubAgentRuntime,
     role: Option<&str>,
     agent_type: &SubAgentType,
-) -> Option<(&'a crate::config::SubagentRouteConfig, &'a crate::config::Config)> {
+) -> Option<(
+    &'a crate::config::SubagentRouteConfig,
+    &'a crate::config::Config,
+)> {
     let routing = runtime.provider_routing.as_deref()?;
     let mut keys = Vec::new();
     if let Some(role) = role.map(str::trim).filter(|role| !role.is_empty()) {
@@ -5900,17 +5903,19 @@ pub(crate) fn subagent_client_for_provider_route(
              configured [providers.{provider_name}] custom entry"
         )));
     }
-    let route = crate::route_runtime::resolve_runtime_route(&route_config, provider, model_selector)
-        .map_err(|reason| {
-            ToolError::invalid_input(format!(
-                "subagents route provider '{provider_name}' failed to resolve: {reason}"
+    let route =
+        crate::route_runtime::resolve_runtime_route(&route_config, provider, model_selector)
+            .map_err(|reason| {
+                ToolError::invalid_input(format!(
+                    "subagents route provider '{provider_name}' failed to resolve: {reason}"
+                ))
+            })?;
+    let client =
+        DeepSeekClient::from_candidate(&route.config, &route.candidate).map_err(|err| {
+            ToolError::execution_failed(format!(
+                "subagents route provider '{provider_name}' client failed to initialize: {err}"
             ))
         })?;
-    let client = DeepSeekClient::from_candidate(&route.config, &route.candidate).map_err(|err| {
-        ToolError::execution_failed(format!(
-            "subagents route provider '{provider_name}' client failed to initialize: {err}"
-        ))
-    })?;
     Ok((client, route.model))
 }
 

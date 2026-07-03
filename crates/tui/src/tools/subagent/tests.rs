@@ -4975,7 +4975,10 @@ fn provider_route_with_unknown_provider_fails_clearly() {
         Err(err) => err,
     };
     let msg = err.to_string();
-    assert!(msg.contains("no-such-provider"), "names the bad provider: {msg}");
+    assert!(
+        msg.contains("no-such-provider"),
+        "names the bad provider: {msg}"
+    );
     assert!(
         msg.contains("[providers.no-such-provider]"),
         "points at the custom-provider config path: {msg}"
