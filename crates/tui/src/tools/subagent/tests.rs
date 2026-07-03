@@ -3,6 +3,7 @@ use crate::tools::{AgentToolSurfaceOptions, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
 use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
 use std::collections::HashSet;
+use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
@@ -417,10 +418,14 @@ fn headless_worker_records_persist_with_subagent_state() {
 
 fn init_subagent_git_repo() -> tempfile::TempDir {
     let dir = tempdir().expect("tempdir");
+    init_subagent_git_repo_at(dir.path());
+    dir
+}
 
+fn init_subagent_git_repo_at(path: &Path) {
     let init = Command::new("git")
         .arg("init")
-        .current_dir(dir.path())
+        .current_dir(path)
         .output()
         .expect("git init should run");
     assert!(
@@ -431,7 +436,7 @@ fn init_subagent_git_repo() -> tempfile::TempDir {
 
     let autocrlf = Command::new("git")
         .args(["config", "core.autocrlf", "false"])
-        .current_dir(dir.path())
+        .current_dir(path)
         .output()
         .expect("git config core.autocrlf should run");
     assert!(
@@ -453,7 +458,7 @@ fn init_subagent_git_repo() -> tempfile::TempDir {
             "-m",
             "init",
         ])
-        .current_dir(dir.path())
+        .current_dir(path)
         .output()
         .expect("git commit should run");
     assert!(
@@ -461,8 +466,6 @@ fn init_subagent_git_repo() -> tempfile::TempDir {
         "git commit failed: {}",
         String::from_utf8_lossy(&commit.stderr)
     );
-
-    dir
 }
 
 fn git(repo: &Path, args: &[&str]) {
@@ -3147,6 +3150,67 @@ fn create_isolated_worktree_creates_branch_checkout_outside_parent_repo() {
     assert_eq!(
         current_git_branch(&path).as_deref(),
         Some("codex/agent-isolated-test")
+    );
+}
+
+#[test]
+fn create_isolated_worktree_resolves_single_repo_child_from_container_workspace() {
+    let container = tempdir().expect("container");
+    let repo = container.path().join("codewhale");
+    fs::create_dir_all(&repo).expect("create repo child");
+    init_subagent_git_repo_at(&repo);
+    let worktree_home = tempdir().expect("worktree home");
+    let request = SubAgentWorktreeRequest {
+        branch: Some("codex/agent-container-child".to_string()),
+        path: Some(worktree_home.path().join("isolated")),
+        base_ref: None,
+    };
+
+    let path = create_isolated_worktree(
+        container.path(),
+        &request,
+        Some("container-child"),
+        &SubAgentType::Implementer,
+    )
+    .expect("worktree should resolve the single repo child");
+
+    assert!(path.exists(), "worktree path should exist");
+    assert!(
+        !path.starts_with(&repo),
+        "generated worktree must be outside the child checkout"
+    );
+    assert_eq!(
+        current_git_branch(&path).as_deref(),
+        Some("codex/agent-container-child")
+    );
+}
+
+#[test]
+fn create_isolated_worktree_rejects_ambiguous_container_workspace() {
+    let container = tempdir().expect("container");
+    for child in ["codewhale", "cwc"] {
+        let repo = container.path().join(child);
+        fs::create_dir_all(&repo).expect("create repo child");
+        init_subagent_git_repo_at(&repo);
+    }
+    let worktree_home = tempdir().expect("worktree home");
+    let request = SubAgentWorktreeRequest {
+        branch: Some("codex/agent-ambiguous".to_string()),
+        path: Some(worktree_home.path().join("isolated")),
+        base_ref: None,
+    };
+
+    let err = create_isolated_worktree(
+        container.path(),
+        &request,
+        Some("ambiguous"),
+        &SubAgentType::Implementer,
+    )
+    .expect_err("multiple child repos should not be guessed");
+
+    assert!(
+        err.to_string().contains("multiple git repositories"),
+        "unexpected error: {err}"
     );
 }
 

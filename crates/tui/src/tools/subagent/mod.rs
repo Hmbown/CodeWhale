@@ -6182,6 +6182,18 @@ fn create_isolated_worktree(
 }
 
 fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
+    match git_repo_root_from(workspace) {
+        Ok(root) => return Ok(root),
+        Err(primary_error) => {
+            if let Some(root) = single_child_git_repo_root(workspace)? {
+                return Ok(root);
+            }
+            Err(primary_error)
+        }
+    }
+}
+
+fn git_repo_root_from(workspace: &Path) -> Result<PathBuf, ToolError> {
     let output = run_git_checked(
         workspace,
         &["rev-parse".to_string(), "--show-toplevel".to_string()],
@@ -6194,6 +6206,32 @@ fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
         ));
     }
     Ok(PathBuf::from(root))
+}
+
+fn single_child_git_repo_root(workspace: &Path) -> Result<Option<PathBuf>, ToolError> {
+    let Ok(entries) = fs::read_dir(workspace) else {
+        return Ok(None);
+    };
+    let mut roots = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Ok(root) = git_repo_root_from(&path) {
+            roots.push(root);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    match roots.len() {
+        0 => Ok(None),
+        1 => Ok(roots.pop()),
+        _ => Err(ToolError::invalid_input(format!(
+            "worktree=true found multiple git repositories under '{}'; set cwd to the intended repository or run from that checkout",
+            workspace.display()
+        ))),
+    }
 }
 
 fn validate_git_branch_name(repo_root: &Path, branch: &str) -> Result<(), ToolError> {
