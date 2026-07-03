@@ -258,7 +258,7 @@
     "OnboardApiKeyTitle": "Kết nối khóa API DeepSeek của bạn",
     "OnboardApiKeyStep1": "Bước 1. Truy cập https://platform.deepseek.com/api_keys và tạo một khóa.",
     "OnboardApiKeyStep2": "Bước 2. Dán khóa vào bên dưới và nhấn Enter.",
-    "OnboardApiKeySavedHint": "Được lưu vào ~/.codewhale/config.toml để có thể hoạt động từ mọi thư mục.",
+    "OnboardApiKeySavedHint": "Được lưu vào cấu hình CodeWhale hiện hành để có thể hoạt động từ mọi thư mục.",
     "OnboardApiKeyFormatHint": "Dán chính xác toàn bộ khóa (không chứa khoảng trắng hoặc xuống dòng).",
     "OnboardApiKeyPlaceholder": "(dán khóa vào đây)",
     "OnboardApiKeyLabel": "Khóa: ",

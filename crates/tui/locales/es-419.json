@@ -262,7 +262,7 @@
     "OnboardApiKeyTitle": "Conecta tu clave de API DeepSeek",
     "OnboardApiKeyStep1": "Paso 1.  Abre https://platform.deepseek.com/api_keys y crea una clave.",
     "OnboardApiKeyStep2": "Paso 2.  Pégala abajo y presiona Enter.",
-    "OnboardApiKeySavedHint": "Guardada en ~/.codewhale/config.toml para funcionar en cualquier carpeta.",
+    "OnboardApiKeySavedHint": "Guardada en la configuración activa de CodeWhale para funcionar en cualquier carpeta.",
     "OnboardApiKeyFormatHint": "Pega la clave completa tal como fue emitida (sin espacios ni saltos de línea).",
     "OnboardApiKeyPlaceholder": "(pega la clave acá)",
     "OnboardApiKeyLabel": "Clave: ",

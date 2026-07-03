@@ -264,7 +264,7 @@
   "OnboardApiKeyTitle": "连接你的 DeepSeek API 密钥",
   "OnboardApiKeyStep1": "步骤 1.  打开 https://platform.deepseek.com/api_keys 创建一个密钥。",
   "OnboardApiKeyStep2": "步骤 2.  把密钥粘贴到下方并按 Enter。",
-  "OnboardApiKeySavedHint": "保存到 ~/.codewhale/config.toml，因此在任何目录下都生效。",
+  "OnboardApiKeySavedHint": "已保存到当前生效的 CodeWhale 配置，因此在任何目录下都生效。",
   "OnboardApiKeyFormatHint": "请完整粘贴密钥（不要含空格或换行）。",
   "OnboardApiKeyPlaceholder": "（在此粘贴密钥）",
   "OnboardApiKeyLabel": "密钥: ",
