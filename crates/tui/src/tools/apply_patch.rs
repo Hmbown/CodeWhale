@@ -245,6 +245,10 @@ impl ToolSpec for ApplyPatchTool {
                 "create_if_missing": {
                     "type": "boolean",
                     "description": "Create the file if it doesn't exist (for new file patches)"
+                },
+                "expected_hash": {
+                    "type": "string",
+                    "description": "Optional expected SHA-256 hash of the file (from read_file's content_hash). If provided, the patch is rejected if the hash doesn't match, preventing race-condition edits. Applies to the file specified by 'path' or the first file in the patch."
                 }
             },
             "oneOf": [
@@ -270,7 +274,36 @@ impl ToolSpec for ApplyPatchTool {
         let fuzz = optional_u64(&input, "fuzz", DEFAULT_FUZZ as u64).min(MAX_FUZZ as u64);
         let fuzz = usize::try_from(fuzz).unwrap_or(DEFAULT_FUZZ);
         let create_if_missing = optional_bool(&input, "create_if_missing", false);
+        let expected_hash = optional_str(&input, "expected_hash");
         let preflight = preflight_apply_patch_plan(&input)?;
+
+        if let Some(expected) = expected_hash {
+            // Validate hash for the file being patched.
+            if let Some(path) = preflight.summary.path_override.as_deref() {
+                let resolved = context.resolve_path(path)?;
+                if resolved.exists() {
+                    let contents = read_file_content(&resolved)?;
+                    let actual = format!("sha256:{}", crate::hashing::sha256_hex(contents.as_bytes()));
+                    if actual != expected {
+                        return Err(ToolError::execution_failed(
+                            "File content has changed since last read. Expected hash does not match current content. Re-read the file with read_file before applying the patch."
+                        ));
+                    }
+                }
+            } else if preflight.summary.touched_files.len() == 1 {
+                let path = &preflight.summary.touched_files[0];
+                let resolved = context.resolve_path(path)?;
+                if resolved.exists() {
+                    let contents = read_file_content(&resolved)?;
+                    let actual = format!("sha256:{}", crate::hashing::sha256_hex(contents.as_bytes()));
+                    if actual != expected {
+                        return Err(ToolError::execution_failed(
+                            "File content has changed since last read. Expected hash does not match current content. Re-read the file with read_file before applying the patch."
+                        ));
+                    }
+                }
+            }
+        }
 
         if let Some(changes_value) = input.get("changes") {
             let (pending, stats) = build_pending_writes_from_changes(changes_value, context)?;
@@ -1963,5 +1996,94 @@ diff --git a/b.txt b/b.txt
         assert_eq!(fuzz2, 0);
         assert!(lines.contains(&"modified5".to_string()));
         assert!(!lines.contains(&"line5".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_content_hash_guard_passes_with_path_override() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("hash_me.txt");
+        fs::write(&test_file, "hello world\n").expect("write");
+
+        let actual_hash = format!(
+            "sha256:{}",
+            crate::hashing::sha256_hex("hello world\n".as_bytes())
+        );
+
+        let patch = "@@ -1 +1 @@\n-hello world\n+hi world\n";
+
+        let result = ApplyPatchTool
+            .execute(
+                json!({
+                    "path": "hash_me.txt",
+                    "patch": patch,
+                    "expected_hash": actual_hash
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute with matching hash should succeed");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_content_hash_guard_rejects_mismatch() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("hash_me.txt");
+        fs::write(&test_file, "hello world\n").expect("write");
+
+        let wrong_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+        let patch = "@@ -1 +1 @@\n-hello world\n+hi world\n";
+
+        let err = ApplyPatchTool
+            .execute(
+                json!({
+                    "path": "hash_me.txt",
+                    "patch": patch,
+                    "expected_hash": wrong_hash
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("mismatched hash should fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("File content has changed since last read"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_content_hash_guard_no_path_matches_first_file() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("single.txt");
+        fs::write(&test_file, "hello world\n").expect("write");
+
+        let actual_hash = format!(
+            "sha256:{}",
+            crate::hashing::sha256_hex("hello world\n".as_bytes())
+        );
+
+        let patch = format!(
+            "--- a/single.txt\n+++ b/single.txt\n@@ -1 +1 @@\n-hello world\n+hi world\n"
+        );
+
+        let result = ApplyPatchTool
+            .execute(
+                json!({
+                    "patch": patch,
+                    "expected_hash": actual_hash
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute with matching hash should succeed");
+        assert!(result.success);
     }
 }

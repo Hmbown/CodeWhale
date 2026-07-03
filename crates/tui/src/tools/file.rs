@@ -94,6 +94,7 @@ impl ToolSpec for ReadFileTool {
         let contents = fs::read_to_string(&file_path).map_err(|e| {
             ToolError::execution_failed(format!("Failed to read {}: {}", file_path.display(), e))
         })?;
+        let content_hash = format!("sha256:{}", crate::hashing::sha256_hex(contents.as_bytes()));
         context.note_file_read(&file_path);
 
         let total_lines = contents.lines().count();
@@ -107,7 +108,10 @@ impl ToolSpec for ReadFileTool {
         // explicit range — otherwise an explicit `start_line = 5` on a
         // tiny file would silently ignore the request.
         if !explicit_range && total_lines <= SMALL_FILE_LINES && total_bytes <= SMALL_FILE_BYTES {
-            return Ok(ToolResult::success(contents));
+            return Ok(
+                ToolResult::success(contents)
+                    .with_metadata(json!({"content_hash": content_hash})),
+            );
         }
 
         let start_line = match input.get("start_line").and_then(Value::as_u64) {
@@ -146,7 +150,7 @@ impl ToolSpec for ReadFileTool {
         // sentinel so subsequent reads can stop.
         if start_line > total_lines {
             let output = format!(
-                "<file path=\"{path_str}\" total_lines=\"{total_lines}\" shown_lines=\"none\" truncated=\"false\">\n\
+                "<file path=\"{path_str}\" total_lines=\"{total_lines}\" shown_lines=\"none\" truncated=\"false\" content_hash=\"{content_hash}\">\n\
                  \n\
                  [NO CONTENT] start_line {start_line} is beyond total_lines {total_lines}.\n\
                  </file>"
@@ -183,7 +187,7 @@ impl ToolSpec for ReadFileTool {
         let next_start = zero_based_end + 1;
 
         let mut attrs = format!(
-            "path=\"{path_str}\" total_lines=\"{total_lines}\" shown_lines=\"{shown_first}-{shown_last}\" truncated=\"{truncated}\""
+            "path=\"{path_str}\" total_lines=\"{total_lines}\" shown_lines=\"{shown_first}-{shown_last}\" truncated=\"{truncated}\" content_hash=\"{content_hash}\""
         );
         if truncated_by_lines {
             attrs.push_str(&format!(" next_start_line=\"{next_start}\""));
@@ -609,6 +613,10 @@ impl ToolSpec for EditFileTool {
                 "fuzz": {
                     "type": "boolean",
                     "description": "Deprecated: fuzzy fallback is now automatic. Accepted for backward compatibility but ignored."
+                },
+                "expected_hash": {
+                    "type": "string",
+                    "description": "Optional expected SHA-256 hash of the file (from read_file's content_hash). If provided, the edit is rejected if the hash doesn't match, preventing race-condition edits."
                 }
             },
             "required": ["path", "search", "replace"]
@@ -632,6 +640,7 @@ impl ToolSpec for EditFileTool {
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
         let _fuzz = optional_bool(&input, "fuzz", false);
+        let expected_hash = optional_str(&input, "expected_hash");
 
         if search == replace {
             return Err(ToolError::invalid_input(
@@ -645,6 +654,15 @@ impl ToolSpec for EditFileTool {
         let contents = fs::read_to_string(&file_path).map_err(|e| {
             ToolError::execution_failed(format!("Failed to read {}: {}", file_path.display(), e))
         })?;
+
+        if let Some(expected) = expected_hash {
+            let actual = format!("sha256:{}", crate::hashing::sha256_hex(contents.as_bytes()));
+            if actual != expected {
+                return Err(ToolError::execution_failed(
+                    "File content has changed since last read. Expected hash does not match current content. Re-read the file with read_file before editing."
+                ));
+            }
+        }
 
         let count = contents.matches(search).count();
         let (updated, count, fuzz_kind) = if count == 0 {
@@ -2068,6 +2086,103 @@ mod tests {
         assert!(read_tool.supports_parallel());
         assert!(list_tool.supports_parallel());
         assert!(!write_tool.supports_parallel());
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_content_hash_guard_passes() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("hash_me.txt");
+        fs::write(&test_file, "hello world").expect("write");
+        read_before_edit(&ctx, "hash_me.txt").await;
+
+        let actual_hash = format!(
+            "sha256:{}",
+            crate::hashing::sha256_hex("hello world".as_bytes())
+        );
+
+        let result = EditFileTool
+            .execute(
+                json!({"path": "hash_me.txt", "search": "hello", "replace": "hi", "expected_hash": actual_hash}),
+                &ctx,
+            )
+            .await
+            .expect("execute with matching hash should succeed");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_content_hash_guard_rejects_mismatch() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("hash_me.txt");
+        fs::write(&test_file, "hello world").expect("write");
+        read_before_edit(&ctx, "hash_me.txt").await;
+
+        let wrong_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+        let err = EditFileTool
+            .execute(
+                json!({"path": "hash_me.txt", "search": "hello", "replace": "hi", "expected_hash": wrong_hash}),
+                &ctx,
+            )
+            .await
+            .expect_err("mismatched hash should fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("File content has changed since last read"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_file_includes_content_hash_in_metadata() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("small.txt");
+        fs::write(&test_file, "short content").expect("write");
+
+        let result = ReadFileTool
+            .execute(json!({"path": "small.txt"}), &ctx)
+            .await
+            .expect("execute");
+        assert!(result.success);
+        // Small file goes through fast path — hash is in metadata.
+        let metadata = result.metadata.expect("should have metadata");
+        let content_hash = metadata["content_hash"].as_str().expect("should have content_hash");
+        assert!(content_hash.starts_with("sha256:"));
+        assert_eq!(content_hash.len(), 71); // "sha256:" + 64 hex chars
+    }
+
+    #[tokio::test]
+    async fn test_read_file_large_includes_content_hash_in_attrs() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("large.txt");
+        // Generate content that's large enough to go through the paged path.
+        let long_line = "a".repeat(80);
+        let mut content = String::new();
+        for _ in 0..201 {
+            content.push_str(&long_line);
+            content.push('\n');
+        }
+        fs::write(&test_file, &content).expect("write");
+
+        let result = ReadFileTool
+            .execute(json!({"path": "large.txt"}), &ctx)
+            .await
+            .expect("execute");
+        assert!(result.success);
+        // Large file goes through paged path — hash is in the <file> tag.
+        assert!(
+            result.content.contains("content_hash=\"sha256:"),
+            "expected content_hash in tag, got: {}",
+            result.content
+        );
     }
 
     #[test]
