@@ -59,6 +59,7 @@ pub enum OnboardingState {
     Language,
     ApiKey,
     TrustDirectory,
+    ToolsMcp,
     Tips,
     None,
 }

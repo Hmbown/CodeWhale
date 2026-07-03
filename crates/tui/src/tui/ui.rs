@@ -611,7 +611,7 @@ fn complete_trust_directory_onboarding(app: &mut App, config: &Config) -> Result
         app.onboarding_workspace_trust_gate = false;
         app.onboarding = OnboardingState::None;
     } else {
-        app.onboarding = OnboardingState::Tips;
+        app.onboarding = OnboardingState::ToolsMcp;
     }
     Ok(())
 }
@@ -621,6 +621,17 @@ fn back_from_api_key_onboarding(app: &mut App) {
     app.api_key_input.clear();
     app.api_key_cursor = 0;
     app.status_message = None;
+}
+
+fn back_from_tools_mcp_onboarding(app: &mut App) {
+    app.status_message = None;
+    if !app.trust_mode && onboarding::needs_trust(&app.workspace) {
+        app.onboarding = OnboardingState::TrustDirectory;
+    } else if app.onboarding_needs_api_key {
+        app.onboarding = OnboardingState::ApiKey;
+    } else {
+        app.onboarding = OnboardingState::Language;
+    }
 }
 
 fn surface_prompt_override_notices(app: &mut App) {
@@ -3821,6 +3832,9 @@ async fn run_event_loop(
                     KeyCode::Esc if app.onboarding == OnboardingState::ApiKey => {
                         back_from_api_key_onboarding(app);
                     }
+                    KeyCode::Esc if app.onboarding == OnboardingState::ToolsMcp => {
+                        back_from_tools_mcp_onboarding(app);
+                    }
                     KeyCode::Esc if app.onboarding == OnboardingState::Language => {
                         app.onboarding = OnboardingState::Welcome;
                         app.status_message = None;
@@ -3917,7 +3931,7 @@ async fn run_event_loop(
                                             .await;
                                     }
 
-                                    onboarding::advance_onboarding_after_language(app);
+                                    onboarding::advance_onboarding_after_api_key(app);
                                 }
                                 Err(e) => {
                                     app.status_message = Some(e.to_string());
@@ -3929,6 +3943,9 @@ async fn run_event_loop(
                                 app.status_message =
                                     Some(format!("Failed to trust workspace: {err}"));
                             }
+                        }
+                        OnboardingState::ToolsMcp => {
+                            app.onboarding = OnboardingState::Tips;
                         }
                         OnboardingState::Tips => {
                             app.finish_onboarding_without_feature_intro();

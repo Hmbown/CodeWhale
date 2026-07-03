@@ -2,6 +2,7 @@
 
 pub mod api_key;
 pub mod language;
+pub mod tools_mcp;
 pub mod trust_directory;
 pub mod welcome;
 
@@ -39,6 +40,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         OnboardingState::Language => language::lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
+        OnboardingState::ToolsMcp => tools_mcp::lines(app),
         OnboardingState::Tips => tips_lines(app),
         OnboardingState::None => Vec::new(),
     };
@@ -73,8 +75,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
 fn onboarding_step(app: &App) -> (usize, usize) {
     let needs_trust = !app.trust_mode && needs_trust(&app.workspace);
-    // Welcome + Language + Tips are always shown.
-    let mut total = 3;
+    // Welcome + Language + ToolsMcp + Tips are always shown.
+    let mut total = 4;
     if app.onboarding_needs_api_key {
         total += 1;
     }
@@ -89,6 +91,16 @@ fn onboarding_step(app: &App) -> (usize, usize) {
         OnboardingState::TrustDirectory => {
             // Welcome (1) + Language (2) + optional ApiKey
             if app.onboarding_needs_api_key { 4 } else { 3 }
+        }
+        OnboardingState::ToolsMcp => {
+            let mut pos = 3;
+            if app.onboarding_needs_api_key {
+                pos += 1;
+            }
+            if needs_trust {
+                pos += 1;
+            }
+            pos
         }
         OnboardingState::Tips => total,
         OnboardingState::None => total,
@@ -234,15 +246,36 @@ pub fn advance_onboarding_from_welcome(app: &mut App) {
 }
 
 /// Language → next step. Routes to ApiKey when the session lacks a key,
-/// to TrustDirectory when the workspace is untrusted, otherwise to Tips.
+/// to TrustDirectory when the workspace is untrusted, otherwise to ToolsMcp.
 pub fn advance_onboarding_after_language(app: &mut App) {
     app.status_message = None;
+    if app.onboarding == OnboardingState::ApiKey {
+        if !app.trust_mode && needs_trust(&app.workspace) {
+            app.onboarding = OnboardingState::TrustDirectory;
+        } else {
+            app.onboarding = OnboardingState::Tips;
+        }
+        return;
+    }
+
     if app.onboarding_needs_api_key {
         app.onboarding = OnboardingState::ApiKey;
     } else if !app.trust_mode && needs_trust(&app.workspace) {
         app.onboarding = OnboardingState::TrustDirectory;
     } else {
-        app.onboarding = OnboardingState::Tips;
+        app.onboarding = OnboardingState::ToolsMcp;
+    }
+}
+
+/// ApiKey → next step. The legacy language helper is still used by a few tests
+/// and callers as a "resume after key" shim, so the event-loop path uses this
+/// explicit helper to include the optional tools/MCP inventory step.
+pub fn advance_onboarding_after_api_key(app: &mut App) {
+    app.status_message = None;
+    if !app.trust_mode && needs_trust(&app.workspace) {
+        app.onboarding = OnboardingState::TrustDirectory;
+    } else {
+        app.onboarding = OnboardingState::ToolsMcp;
     }
 }
 
@@ -325,6 +358,20 @@ mod tests {
         assert!(body.contains("/model"));
         assert!(body.contains("open setup if it needs attention"));
         assert!(!body.contains("open the workspace"));
+    }
+
+    #[test]
+    fn api_key_completion_routes_to_tools_inventory_when_trusted() {
+        let mut app = test_app_with_locale(Locale::En);
+        app.onboarding = OnboardingState::ApiKey;
+        app.onboarding_needs_api_key = false;
+        app.trust_mode = true;
+        app.status_message = Some("saved".to_string());
+
+        advance_onboarding_after_api_key(&mut app);
+
+        assert_eq!(app.onboarding, OnboardingState::ToolsMcp);
+        assert_eq!(app.status_message, None);
     }
 
     #[test]
