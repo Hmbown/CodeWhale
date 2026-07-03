@@ -28,6 +28,7 @@ pub enum HotbarDispatch {
 #[allow(dead_code)]
 pub enum HotbarActionCategory {
     App,
+    Mode,
     Route,
     Slash,
     Mcp,
@@ -40,6 +41,7 @@ impl HotbarActionCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::App => "app",
+            Self::Mode => "mode",
             Self::Route => "route",
             Self::Slash => "slash",
             Self::Mcp => "mcp",
@@ -53,6 +55,7 @@ impl HotbarActionCategory {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "app" => Some(Self::App),
+            "mode" => Some(Self::Mode),
             "route" => Some(Self::Route),
             "slash" => Some(Self::Slash),
             "mcp" => Some(Self::Mcp),
@@ -232,6 +235,7 @@ impl HotbarSourceDescriptor {
 }
 
 const HOTBAR_DIRECT_APP_SAFETY: &[HotbarSourceSafetyMode] = &[HotbarSourceSafetyMode::DirectFire];
+const HOTBAR_MODE_SAFETY: &[HotbarSourceSafetyMode] = &[HotbarSourceSafetyMode::DirectFire];
 const HOTBAR_ROUTE_SAFETY: &[HotbarSourceSafetyMode] = &[HotbarSourceSafetyMode::DirectFire];
 const HOTBAR_SLASH_SAFETY: &[HotbarSourceSafetyMode] = &[
     HotbarSourceSafetyMode::DirectFire,
@@ -248,6 +252,13 @@ const HOTBAR_SOURCE_DESCRIPTORS: &[HotbarSourceDescriptor] = &[
         boundary: HotbarSourceDispatchBoundary::DirectApp,
         safety_modes: HOTBAR_DIRECT_APP_SAFETY,
         dispatch_path: "AppHotbarAction::dispatch",
+        status: "dispatchable",
+    },
+    HotbarSourceDescriptor {
+        category: HotbarActionCategory::Mode,
+        boundary: HotbarSourceDispatchBoundary::DirectApp,
+        safety_modes: HOTBAR_MODE_SAFETY,
+        dispatch_path: "ModeHotbarAction::dispatch -> AppAction::ModeChanged",
         status: "dispatchable",
     },
     HotbarSourceDescriptor {
@@ -275,14 +286,14 @@ const HOTBAR_SOURCE_DESCRIPTORS: &[HotbarSourceDescriptor] = &[
         category: HotbarActionCategory::Skill,
         boundary: HotbarSourceDispatchBoundary::Deferred,
         safety_modes: HOTBAR_DEFERRED_SAFETY,
-        dispatch_path: "command palette / skill command until activation receipts are wired",
+        dispatch_path: "skill activation receipts / command palette until approval gates are wired",
         status: "exploratory",
     },
     HotbarSourceDescriptor {
         category: HotbarActionCategory::Plugin,
         boundary: HotbarSourceDispatchBoundary::Deferred,
         safety_modes: HOTBAR_DEFERRED_SAFETY,
-        dispatch_path: "plugin command/tool registry until plugin approval gates are wired",
+        dispatch_path: "plugin registry until tool args, approvals, and receipts are wired",
         status: "exploratory",
     },
 ];
@@ -444,6 +455,20 @@ impl HotbarActionRegistry {
     }
 
     #[must_use]
+    pub fn with_all_sources(
+        config: &Config,
+        active_provider: ApiProvider,
+        active_model: &str,
+        provider_models: &HashMap<String, String>,
+    ) -> Self {
+        let mut registry = Self::with_builtins();
+        registry.register_configured_routes(config, active_provider, active_model, provider_models);
+        registry.register_deferred_sources();
+        registry
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
     pub fn with_configured_routes(
         config: &Config,
         active_provider: ApiProvider,
@@ -490,10 +515,21 @@ impl HotbarActionRegistry {
 
     pub(crate) fn register_builtins(&mut self) {
         self.register_source(&BuiltinHotbarActionSource);
+        self.register_source(&ModeHotbarActionSource);
     }
 
     pub(crate) fn register_slash_commands(&mut self) {
         self.register_source(&SlashCommandHotbarActionSource);
+    }
+
+    pub(crate) fn register_deferred_sources(&mut self) {
+        self.register_source(&DeferredHotbarActionSource::new(HotbarActionCategory::Mcp));
+        self.register_source(&DeferredHotbarActionSource::new(
+            HotbarActionCategory::Skill,
+        ));
+        self.register_source(&DeferredHotbarActionSource::new(
+            HotbarActionCategory::Plugin,
+        ));
     }
 
     pub(crate) fn register_configured_routes(
@@ -540,27 +576,6 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             AppHotbarKind::SessionCompact,
         ));
         registry.register(AppHotbarAction::new(
-            "mode.plan",
-            "plan",
-            "Plan mode",
-            "Switch the conversation into Plan mode.",
-            AppHotbarKind::Mode(AppMode::Plan),
-        ));
-        registry.register(AppHotbarAction::new(
-            "mode.agent",
-            "agent",
-            "Agent mode",
-            "Switch the conversation into Agent mode.",
-            AppHotbarKind::Mode(AppMode::Agent),
-        ));
-        registry.register(AppHotbarAction::new(
-            "mode.yolo",
-            "yolo",
-            "YOLO mode",
-            "Switch the conversation into YOLO mode.",
-            AppHotbarKind::Mode(AppMode::Yolo),
-        ));
-        registry.register(AppHotbarAction::new(
             "reasoning.cycle",
             "reason",
             "Cycle reasoning",
@@ -594,6 +609,42 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "Toggle trust",
             "Enable or disable workspace trust mode.",
             AppHotbarKind::TrustToggle,
+        ));
+    }
+}
+
+struct ModeHotbarActionSource;
+
+impl HotbarActionSource for ModeHotbarActionSource {
+    fn descriptor(&self) -> HotbarSourceDescriptor {
+        HOTBAR_SOURCE_DESCRIPTORS
+            .iter()
+            .copied()
+            .find(|descriptor| descriptor.category == HotbarActionCategory::Mode)
+            .expect("mode hotbar source descriptor exists")
+    }
+
+    fn register_actions(&self, registry: &mut HotbarActionRegistry) {
+        registry.register(ModeHotbarAction::new(
+            "mode.agent",
+            "agent",
+            "Agent mode",
+            "Switch the conversation into Agent mode.",
+            AppMode::Agent,
+        ));
+        registry.register(ModeHotbarAction::new(
+            "mode.plan",
+            "plan",
+            "Plan mode",
+            "Switch the conversation into Plan mode.",
+            AppMode::Plan,
+        ));
+        registry.register(ModeHotbarAction::new(
+            "mode.yolo",
+            "yolo",
+            "YOLO mode",
+            "Switch the conversation into YOLO mode.",
+            AppMode::Yolo,
         ));
     }
 }
@@ -650,6 +701,108 @@ impl HotbarActionSource for ConfiguredRouteHotbarActionSource<'_> {
             ) {
                 registry.register(RouteHotbarAction::new(provider, model));
             }
+        }
+    }
+}
+
+struct DeferredHotbarActionSource {
+    category: HotbarActionCategory,
+}
+
+impl DeferredHotbarActionSource {
+    const fn new(category: HotbarActionCategory) -> Self {
+        Self { category }
+    }
+}
+
+impl HotbarActionSource for DeferredHotbarActionSource {
+    fn descriptor(&self) -> HotbarSourceDescriptor {
+        HOTBAR_SOURCE_DESCRIPTORS
+            .iter()
+            .copied()
+            .find(|descriptor| descriptor.category == self.category)
+            .unwrap_or_else(|| {
+                panic!(
+                    "deferred hotbar source descriptor exists: {:?}",
+                    self.category
+                )
+            })
+    }
+
+    fn register_actions(&self, _registry: &mut HotbarActionRegistry) {}
+}
+
+// ---------------------------------------------------------------------------
+// Mode action
+// ---------------------------------------------------------------------------
+
+struct ModeHotbarAction {
+    id: &'static str,
+    short_label: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+    mode: AppMode,
+}
+
+impl ModeHotbarAction {
+    const fn new(
+        id: &'static str,
+        short_label: &'static str,
+        display_name: &'static str,
+        description: &'static str,
+        mode: AppMode,
+    ) -> Self {
+        Self {
+            id,
+            short_label,
+            display_name,
+            description,
+            mode,
+        }
+    }
+}
+
+impl HotbarAction for ModeHotbarAction {
+    fn id(&self) -> &str {
+        self.id
+    }
+
+    fn metadata(&self, _locale: Locale) -> HotbarActionMetadata {
+        HotbarActionMetadata {
+            id: self.id.to_string(),
+            source_id: "builtin".to_string(),
+            display_name: self.display_name.to_string(),
+            compact_label: self.short_label.to_string(),
+            description: self.description.to_string(),
+            category: HotbarActionCategory::Mode,
+            args: HotbarArgsBehavior::None,
+            safety: HotbarSafetyClass::LocalUi,
+            recommendation: if codewhale_config::DEFAULT_HOTBAR_ACTIONS.contains(&self.id) {
+                HotbarRecommendation::Default
+            } else {
+                HotbarRecommendation::Eligible
+            },
+        }
+    }
+
+    fn short_label(&self) -> &str {
+        self.short_label
+    }
+
+    fn category(&self) -> &str {
+        "mode"
+    }
+
+    fn is_active(&self, app: &App) -> bool {
+        app.mode == self.mode
+    }
+
+    fn dispatch(&self, app: &mut App) -> Result<HotbarDispatch> {
+        let changed = app.set_mode(self.mode);
+        if changed {
+            Ok(HotbarDispatch::AppAction(AppAction::ModeChanged(self.mode)))
+        } else {
+            Ok(HotbarDispatch::Handled)
         }
     }
 }
@@ -730,7 +883,6 @@ fn dispatch_command_result(app: &mut App, result: CommandResult) -> HotbarDispat
 enum AppHotbarKind {
     VoiceToggle,
     SessionCompact,
-    Mode(AppMode),
     ReasoningCycle,
     SidebarToggle,
     FileTreeToggle,
@@ -771,8 +923,7 @@ impl AppHotbarAction {
             AppHotbarKind::SessionCompact | AppHotbarKind::ReasoningCycle => {
                 HotbarSafetyClass::LocalState
             }
-            AppHotbarKind::Mode(_)
-            | AppHotbarKind::SidebarToggle
+            AppHotbarKind::SidebarToggle
             | AppHotbarKind::FileTreeToggle
             | AppHotbarKind::PaletteOpen => HotbarSafetyClass::LocalUi,
         }
@@ -818,7 +969,6 @@ impl HotbarAction for AppHotbarAction {
         match self.kind {
             AppHotbarKind::VoiceToggle => app.voice_enabled,
             AppHotbarKind::SessionCompact => app.is_compacting,
-            AppHotbarKind::Mode(mode) => app.mode == mode,
             AppHotbarKind::ReasoningCycle => {
                 !app.auto_model && app.reasoning_effort != crate::tui::app::ReasoningEffort::Off
             }
@@ -850,14 +1000,6 @@ impl HotbarAction for AppHotbarAction {
                     return Ok(HotbarDispatch::Handled);
                 }
                 Ok(HotbarDispatch::AppAction(AppAction::CompactContext))
-            }
-            AppHotbarKind::Mode(mode) => {
-                let changed = app.set_mode(mode);
-                if changed {
-                    Ok(HotbarDispatch::AppAction(AppAction::ModeChanged(mode)))
-                } else {
-                    Ok(HotbarDispatch::Handled)
-                }
             }
             AppHotbarKind::ReasoningCycle => {
                 if app.auto_model {
@@ -1282,6 +1424,7 @@ mod tests {
             categories,
             BTreeSet::from([
                 HotbarActionCategory::App,
+                HotbarActionCategory::Mode,
                 HotbarActionCategory::Route,
                 HotbarActionCategory::Slash,
                 HotbarActionCategory::Mcp,
@@ -1301,6 +1444,21 @@ mod tests {
             Some((
                 HotbarSourceDispatchBoundary::DirectApp,
                 HOTBAR_DIRECT_APP_SAFETY,
+                true
+            ))
+        );
+        assert_eq!(
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor.category == HotbarActionCategory::Mode)
+                .map(|descriptor| (
+                    descriptor.boundary,
+                    descriptor.safety_modes,
+                    descriptor.registers_dispatchable_actions()
+                )),
+            Some((
+                HotbarSourceDispatchBoundary::DirectApp,
+                HOTBAR_MODE_SAFETY,
                 true
             ))
         );
@@ -1361,9 +1519,28 @@ mod tests {
     }
 
     #[test]
+    fn deferred_source_adapters_do_not_register_actions() {
+        let mut registry = HotbarActionRegistry::new();
+        for category in [
+            HotbarActionCategory::Mcp,
+            HotbarActionCategory::Skill,
+            HotbarActionCategory::Plugin,
+        ] {
+            let before = registry.len();
+            registry.register_source(&DeferredHotbarActionSource::new(category));
+            assert_eq!(
+                registry.len(),
+                before,
+                "deferred {category:?} adapter must not add bindable hotbar actions"
+            );
+        }
+    }
+
+    #[test]
     fn source_adapters_register_previous_default_registry_surface() {
         let mut registry = HotbarActionRegistry::new();
         registry.register_source(&BuiltinHotbarActionSource);
+        registry.register_source(&ModeHotbarActionSource);
         registry.register_source(&SlashCommandHotbarActionSource);
 
         let adapter_ids = registry
@@ -1379,6 +1556,10 @@ mod tests {
         assert_eq!(
             BuiltinHotbarActionSource.descriptor().category,
             HotbarActionCategory::App
+        );
+        assert_eq!(
+            ModeHotbarActionSource.descriptor().category,
+            HotbarActionCategory::Mode
         );
         assert_eq!(
             SlashCommandHotbarActionSource.descriptor().category,
@@ -1418,6 +1599,40 @@ mod tests {
     }
 
     #[test]
+    fn all_sources_keep_deferred_categories_non_bindable() {
+        let registry = HotbarActionRegistry::with_all_sources(
+            &Config::default(),
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro",
+            &HashMap::new(),
+        );
+        let categories = registry
+            .metadata(Locale::En)
+            .into_iter()
+            .map(|metadata| metadata.category)
+            .collect::<BTreeSet<_>>();
+
+        assert!(categories.contains(&HotbarActionCategory::App));
+        assert!(categories.contains(&HotbarActionCategory::Mode));
+        assert!(categories.contains(&HotbarActionCategory::Route));
+        assert!(categories.contains(&HotbarActionCategory::Slash));
+        for deferred in [
+            HotbarActionCategory::Mcp,
+            HotbarActionCategory::Skill,
+            HotbarActionCategory::Plugin,
+        ] {
+            assert!(
+                !categories.contains(&deferred),
+                "{deferred:?} must stay descriptor-only until dispatch safety is wired"
+            );
+        }
+        assert!(
+            registry.metadata_validation_errors(Locale::En).is_empty(),
+            "all-source metadata must remain valid"
+        );
+    }
+
+    #[test]
     fn default_hotbar_actions_have_registered_default_metadata() {
         let registry = HotbarActionRegistry::with_builtins();
 
@@ -1426,7 +1641,12 @@ mod tests {
                 .get(id)
                 .unwrap_or_else(|| panic!("missing default hotbar action {id}"));
             let metadata = action.metadata(Locale::En);
-            assert_eq!(metadata.category, HotbarActionCategory::App);
+            let expected_category = if id.starts_with("mode.") {
+                HotbarActionCategory::Mode
+            } else {
+                HotbarActionCategory::App
+            };
+            assert_eq!(metadata.category, expected_category);
             assert_eq!(metadata.args, HotbarArgsBehavior::None);
             assert_eq!(metadata.recommendation, HotbarRecommendation::Default);
             assert!(
@@ -1625,7 +1845,12 @@ mod tests {
         );
         assert!(registry.get("missing.action").is_none());
         for action in registry.iter() {
-            assert_eq!(action.category(), "app");
+            let expected_category = if action.id().starts_with("mode.") {
+                "mode"
+            } else {
+                "app"
+            };
+            assert_eq!(action.category(), expected_category);
             assert!(
                 unicode_width::UnicodeWidthStr::width(action.short_label())
                     <= HOTBAR_COMPACT_LABEL_MAX_WIDTH,

@@ -19,7 +19,7 @@ use crate::tui::views::{
 
 use super::actions::{
     HotbarActionCategory, HotbarActionMetadata, HotbarArgsBehavior, HotbarRecommendationOptions,
-    HotbarSafetyClass, recommend_hotbar_actions,
+    HotbarSafetyClass, hotbar_source_descriptors, recommend_hotbar_actions,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,12 +84,12 @@ impl HotbarSetupView {
                 .then_with(|| a.metadata.id.cmp(&b.metadata.id))
         });
 
-        let sources = actions
+        let mut source_set = hotbar_source_descriptors()
             .iter()
-            .map(|row| row.metadata.category)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
+            .map(|descriptor| descriptor.category)
+            .collect::<BTreeSet<_>>();
+        source_set.extend(actions.iter().map(|row| row.metadata.category));
+        let sources = source_set.iter().copied().collect::<Vec<_>>();
         let recommended_action_ids =
             recommend_hotbar_actions(app, HotbarRecommendationOptions::for_setup_wizard())
                 .into_iter()
@@ -557,13 +557,26 @@ impl HotbarSetupView {
         };
         let rows = self.actions_for_source(source);
         if rows.is_empty() {
-            EmptyState::new(
-                "No matching actions",
-                "Clear the filter or switch categories to find another bindable action.",
-            )
-            .primary_action("/", "filter")
-            .secondary_action("Esc", "clear filter")
-            .render(area, buf);
+            let (title, body) = if self.query.trim().is_empty()
+                && hotbar_source_descriptors()
+                    .iter()
+                    .find(|descriptor| descriptor.category == source)
+                    .is_some_and(|descriptor| !descriptor.registers_dispatchable_actions())
+            {
+                (
+                    "Source not bindable yet",
+                    "This source is exploratory until approval-gated activation is wired.",
+                )
+            } else {
+                (
+                    "No matching actions",
+                    "Clear the filter or switch categories to find another bindable action.",
+                )
+            };
+            EmptyState::new(title, body)
+                .primary_action("/", "filter")
+                .secondary_action("Esc", "clear filter")
+                .render(area, buf);
             return;
         }
         let mut lines = vec![Line::from(Span::styled(
@@ -943,18 +956,25 @@ mod tests {
     #[test]
     fn wizard_sources_follow_registered_action_categories() {
         let app = test_app();
-        let view = HotbarSetupView::new(&app, &Config::default());
+        let mut view = HotbarSetupView::new(&app, &Config::default());
 
+        // Deferred sources are visible as adapter boundaries, but they have no
+        // bindable rows until their approval/receipt paths are wired.
         assert_eq!(
             view.source_categories(),
             &[
                 HotbarActionCategory::App,
+                HotbarActionCategory::Mode,
                 HotbarActionCategory::Route,
                 HotbarActionCategory::Slash,
+                HotbarActionCategory::Mcp,
+                HotbarActionCategory::Skill,
+                HotbarActionCategory::Plugin,
             ]
         );
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::App));
         assert!(view.recommended_action_ids().contains("mode.agent"));
+        assert!(!view.select_action_by_id("skill.example"));
         // #3807: a fresh config seeds no bindings, so the wizard opens with
         // nothing checked until the user opts in.
         assert!(view.checked_action_ids().is_empty());
@@ -1130,6 +1150,8 @@ mod tests {
 
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::App));
         view.handle_key(key(KeyCode::Tab));
+        assert_eq!(view.selected_source(), Some(HotbarActionCategory::Mode));
+        view.handle_key(key(KeyCode::Tab));
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::Route));
         view.handle_key(key(KeyCode::Tab));
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::Slash));
@@ -1158,6 +1180,8 @@ mod tests {
         let app = test_app();
         let mut view = HotbarSetupView::new(&app, &Config::default());
 
+        view.handle_key(key(KeyCode::Tab));
+        assert_eq!(view.selected_source(), Some(HotbarActionCategory::Mode));
         view.handle_key(key(KeyCode::Tab));
         assert_eq!(view.selected_source(), Some(HotbarActionCategory::Route));
         let route_label = view

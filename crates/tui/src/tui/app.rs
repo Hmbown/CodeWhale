@@ -2641,12 +2641,8 @@ impl App {
             crate::mcp::load_config_with_workspace(&mcp_config_path, &workspace)
                 .map(|cfg| cfg.servers.len())
                 .unwrap_or(0);
-        let hotbar_actions = HotbarActionRegistry::with_configured_routes(
-            config,
-            provider,
-            &model,
-            &provider_models,
-        );
+        let hotbar_actions =
+            HotbarActionRegistry::with_all_sources(config, provider, &model, &provider_models);
         Self {
             mode: initial_mode,
             hotbar_actions,
