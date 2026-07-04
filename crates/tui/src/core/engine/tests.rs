@@ -4045,6 +4045,142 @@ fn turn_authority_limits_auto_inheritance_to_runtime_continuations() {
     }
 }
 
+fn resolve_yolo_policy_for_provenance(
+    provenance: UserInputProvenance,
+    content: &str,
+) -> turn_policy::EffectiveInputPolicy {
+    effective_input_policy(
+        provenance,
+        AppMode::Yolo,
+        Path::new("."),
+        content,
+        true,
+        true,
+        true,
+        crate::tui::approval::ApprovalMode::Bypass,
+    )
+}
+
+#[test]
+fn turn_policy_resolver_preserves_external_user_authority_despite_review_wording() {
+    let policy = resolve_yolo_policy_for_provenance(
+        UserInputProvenance::ExternalUser,
+        "check the failing tests and review the logs",
+    );
+
+    assert_eq!(policy.mode, AppMode::Yolo);
+    assert!(policy.allow_shell);
+    assert!(policy.trust_mode);
+    assert!(policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Bypass
+    );
+    assert!(policy.status.is_none());
+    assert_eq!(
+        policy.intent_advisory,
+        Some(turn_policy::TurnIntentAdvisory::ReviewOrInspection)
+    );
+}
+
+#[test]
+fn turn_policy_resolver_preserves_runtime_continuation_authority() {
+    let policy = resolve_yolo_policy_for_provenance(UserInputProvenance::Runtime, "continue");
+
+    assert_eq!(policy.mode, AppMode::Yolo);
+    assert!(policy.allow_shell);
+    assert!(policy.trust_mode);
+    assert!(policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Bypass
+    );
+    assert!(policy.status.is_none());
+    assert!(policy.intent_advisory.is_none());
+}
+
+#[test]
+fn turn_policy_resolver_preserves_subagent_handoff_authority() {
+    let policy =
+        resolve_yolo_policy_for_provenance(UserInputProvenance::SubAgentHandoff, "child result");
+
+    assert_eq!(policy.mode, AppMode::Yolo);
+    assert!(policy.allow_shell);
+    assert!(policy.trust_mode);
+    assert!(policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Bypass
+    );
+    assert!(policy.status.is_none());
+    assert!(policy.intent_advisory.is_none());
+}
+
+#[test]
+fn turn_policy_resolver_strips_imported_transcript_auto_authority() {
+    let policy =
+        resolve_yolo_policy_for_provenance(UserInputProvenance::ImportedTranscript, "continue");
+
+    assert_eq!(policy.mode, AppMode::Agent);
+    assert!(policy.allow_shell);
+    assert!(!policy.trust_mode);
+    assert!(!policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Suggest
+    );
+    assert!(
+        policy
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("cannot inherit standing auto-approval"))
+    );
+    assert!(policy.intent_advisory.is_none());
+}
+
+#[test]
+fn turn_policy_resolver_strips_memory_recall_auto_authority() {
+    let policy = resolve_yolo_policy_for_provenance(UserInputProvenance::MemoryRecall, "continue");
+
+    assert_eq!(policy.mode, AppMode::Agent);
+    assert!(policy.allow_shell);
+    assert!(!policy.trust_mode);
+    assert!(!policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Suggest
+    );
+    assert!(
+        policy
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("cannot inherit standing auto-approval"))
+    );
+    assert!(policy.intent_advisory.is_none());
+}
+
+#[test]
+fn turn_policy_resolver_strips_assistant_generated_auto_authority() {
+    let policy =
+        resolve_yolo_policy_for_provenance(UserInputProvenance::AssistantGenerated, "continue");
+
+    assert_eq!(policy.mode, AppMode::Agent);
+    assert!(policy.allow_shell);
+    assert!(!policy.trust_mode);
+    assert!(!policy.auto_approve);
+    assert_eq!(
+        policy.approval_mode,
+        crate::tui::approval::ApprovalMode::Suggest
+    );
+    assert!(
+        policy
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("cannot inherit standing auto-approval"))
+    );
+    assert!(policy.intent_advisory.is_none());
+}
+
 #[tokio::test]
 async fn sync_session_restores_current_mode() {
     let tmp = tempdir().expect("tempdir");

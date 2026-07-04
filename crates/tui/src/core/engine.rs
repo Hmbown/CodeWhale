@@ -3519,49 +3519,6 @@ fn goal_objective_for_prompt(
 // byte-stable, and strict chat-template providers never see a system message
 // outside messages[0].
 
-#[derive(Debug, Clone)]
-struct EffectiveInputPolicy {
-    mode: AppMode,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-    dynamic_active_tools: Vec<&'static str>,
-    status: Option<String>,
-}
-
-fn effective_input_policy(
-    provenance: UserInputProvenance,
-    requested_mode: AppMode,
-    workspace: &Path,
-    _content: &str,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-) -> EffectiveInputPolicy {
-    let authority = TurnAuthority::for_input(
-        provenance,
-        requested_mode,
-        workspace,
-        allow_shell,
-        trust_mode,
-        auto_approve,
-        approval_mode,
-    );
-    let dynamic_active_tools = Vec::new();
-
-    EffectiveInputPolicy {
-        mode: authority.posture.mode,
-        allow_shell: authority.posture.allow_shell,
-        trust_mode: authority.posture.trust_mode,
-        auto_approve: authority.posture.auto_approve,
-        approval_mode: authority.posture.approval_mode,
-        dynamic_active_tools,
-        status: authority.narrowing_reason,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolAskRuleDecision {
     Prompt(String),
@@ -3922,8 +3879,10 @@ use self::tool_catalog::{
 };
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::{sandbox_policy_for_mode, shell_policy_for_mode};
+use self::turn_policy::effective_input_policy;
 use crate::tools::js_execution::execute_js_execution_tool;
 
 mod authority;
 #[cfg(test)]
 mod tests;
+mod turn_policy;
