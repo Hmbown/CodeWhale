@@ -3311,7 +3311,7 @@ fn stamp_subagent_summary_truncates_when_over_budget() {
 
 #[test]
 fn subagent_failed_sentinel_format_is_well_formed() {
-    let sentinel = subagent_failed_sentinel("agent_zzz", "boom");
+    let sentinel = subagent_failed_sentinel("agent_zzz", &SubAgentType::General, 2, 1, false);
     let inner = sentinel
         .trim_start_matches("<codewhale:subagent.done>")
         .trim_end_matches("</codewhale:subagent.done>");
@@ -3319,6 +3319,9 @@ fn subagent_failed_sentinel_format_is_well_formed() {
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
     assert_eq!(parsed["error_location"], "previous_line");
+    assert_eq!(parsed["artifact_refs"]["transcript"], "agent:agent_zzz");
+    assert_eq!(parsed["key_stats"]["steps"], 2);
+    assert_eq!(parsed["key_stats"]["spawn_depth"], 1);
     assert!(parsed.get("details").is_none());
     assert!(parsed.get("next_action").is_none());
     // Stays lean — the error text lives on the previous line, not the sentinel.
@@ -4745,9 +4748,8 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     let mut snap = make_snapshot(SubAgentStatus::Completed);
     snap.result = Some("Found three errors.".to_string());
 
-    let summary = summarize_subagent_result(&snap);
-    let sentinel = subagent_done_sentinel("agent_test", &snap, false);
-    let payload = format!("{summary}\n{sentinel}");
+    let completion = subagent_completion_from_result(&snap);
+    let payload = completion.payload;
 
     let mut lines = payload.lines();
     let first = lines.next().expect("first line is summary");
@@ -4766,8 +4768,79 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
         "sentinel JSON includes agent_id"
     );
     assert!(
+        second.contains("\"artifact_refs\""),
+        "sentinel JSON includes retrieval refs"
+    );
+    assert!(
+        second.contains("\"files_changed\":[]"),
+        "sentinel is honest when file changes have not been independently measured"
+    );
+    assert!(
         !second.contains("Found three errors."),
         "sentinel should not duplicate the human summary line"
+    );
+}
+
+#[test]
+fn subagent_completion_payload_compacts_large_reports_and_keeps_retrieval_refs() {
+    let mut snap = make_snapshot(SubAgentStatus::Completed);
+    snap.result = Some("line with lots of detail ".repeat(600));
+    snap.steps_taken = 42;
+    snap.spawn_depth = 2;
+
+    let completion = subagent_completion_from_result(&snap);
+
+    assert!(completion.payload.contains("preview="));
+    assert!(
+        completion
+            .payload
+            .contains("retrieve_full=handle_read agent:agent_test")
+    );
+    assert!(
+        completion
+            .payload
+            .contains("\"transcript\":\"agent:agent_test\"")
+    );
+    assert!(completion.payload.contains("\"steps\":42"));
+    assert!(completion.payload.contains("\"spawn_depth\":2"));
+    assert!(
+        !completion.payload.contains(
+            "line with lots of detail line with lots of detail line with lots of detail line"
+        ),
+        "large child self-report should not be copied into the parent completion payload"
+    );
+    assert!(
+        completion.payload.len() < 700,
+        "single compact completion payload was {} bytes",
+        completion.payload.len()
+    );
+}
+
+#[test]
+fn thirty_subagent_completion_payloads_stay_under_ten_kb() {
+    let payloads = (0..30)
+        .map(|index| {
+            let mut snap = make_snapshot(SubAgentStatus::Completed);
+            snap.agent_id = format!("agent_{index:02}");
+            snap.name = snap.agent_id.clone();
+            snap.result = Some(format!(
+                "worker {index} produced a very large self-report. {}",
+                "details ".repeat(500)
+            ));
+            subagent_completion_from_result(&snap).payload
+        })
+        .collect::<Vec<_>>();
+    let total_bytes: usize = payloads.iter().map(String::len).sum();
+
+    assert!(
+        total_bytes < 10_000,
+        "30 compact completion payloads should stay under 10KB, got {total_bytes}"
+    );
+    assert!(
+        payloads
+            .iter()
+            .all(|payload| payload.contains("retrieve_full=handle_read agent:agent_")),
+        "each compact payload should retain a retrieval pointer"
     );
 }
 

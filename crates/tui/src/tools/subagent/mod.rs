@@ -4122,7 +4122,7 @@ async fn run_subagent_task(task: SubAgentTask) {
     let result = run_subagent(
         &task.runtime,
         task.agent_id.clone(),
-        task.agent_type,
+        task.agent_type.clone(),
         task.prompt,
         task.assignment,
         task.allowed_tools,
@@ -4162,7 +4162,13 @@ async fn run_subagent_task(task: SubAgentTask) {
             let annotated = annotate_child_model_error(&subagent_failure_message(err), &model_id);
             (
                 format!("Failed: {annotated}"),
-                subagent_failed_sentinel(&task.agent_id, &annotated),
+                subagent_failed_sentinel(
+                    &task.agent_id,
+                    &task.agent_type,
+                    0,
+                    task.runtime.spawn_depth,
+                    annotated.chars().count() > SUBAGENT_COMPLETION_PREVIEW_CHARS,
+                ),
             )
         }
     };
@@ -4285,9 +4291,15 @@ pub(crate) fn emit_parent_completion(
 
 pub(crate) fn subagent_completion_from_result(result: &SubAgentResult) -> SubAgentCompletion {
     let raw = summarize_subagent_result(result);
-    let (summary, truncated) = stamp_subagent_summary(&raw);
+    let (summary, truncated) = compact_subagent_completion_summary(result, &raw);
     let sentinel = match &result.status {
-        SubAgentStatus::Failed(error) => subagent_failed_sentinel(&result.agent_id, error),
+        SubAgentStatus::Failed(_) => subagent_failed_sentinel(
+            &result.agent_id,
+            &result.agent_type,
+            result.steps_taken,
+            result.spawn_depth,
+            truncated,
+        ),
         _ => subagent_done_sentinel(&result.agent_id, result, truncated),
     };
     SubAgentCompletion {
@@ -4305,23 +4317,24 @@ pub(crate) fn subagent_completion_from_result(result: &SubAgentResult) -> SubAge
 /// parent request's cache-miss tail. Wall-clock duration is useful UI
 /// telemetry, but it is volatile and not useful for model coordination.
 ///
-/// `truncated` reflects whether the previous-line summary was length-gated by
-/// [`stamp_subagent_summary`] (issue #2652); it surfaces as `summary_kind` so
-/// the parent model can tell a complete self-report from a clipped one and
-/// verify material claims accordingly.
-fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult, truncated: bool) -> String {
+/// `truncated` reflects whether the previous-line summary was length-gated.
+fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult, _truncated: bool) -> String {
     let mut payload = json!({
         "agent_id": agent_id,
-        // Whale name — a stable, human-friendly handle the orchestrator can use
-        // to refer to this child in its own reasoning/output.
-        "name": res.nickname,
-        "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
-        "summary_location": "previous_line",
-        // issue #2652: lets the parent branch on whether the previous-line
-        // summary is the full child report or a head+tail excerpt.
-        "summary_kind": if truncated { "truncated" } else { "complete" },
+        "verdict": subagent_status_name(&res.status),
+        "artifact_refs": compact_completion_artifact_refs(agent_id),
+        "files_changed": [],
+        "key_stats": {
+            "steps": res.steps_taken,
+        },
     });
+    if res.spawn_depth > 0 {
+        payload["key_stats"]["spawn_depth"] = json!(res.spawn_depth);
+    }
+    if let Some(name) = res.nickname.clone() {
+        payload["name"] = json!(name);
+    }
     if let Some(needs_input) = res.needs_input.clone() {
         payload["needs_input"] = json!(needs_input);
     }
@@ -4333,13 +4346,34 @@ fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult, truncated: bool)
 /// Kept lean: the (annotated) error is on the previous line (`error_location`)
 /// so the sentinel only signals completion state rather than re-embedding the
 /// error text.
-fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
-    let payload = json!({
+fn subagent_failed_sentinel(
+    agent_id: &str,
+    _agent_type: &SubAgentType,
+    steps_taken: u32,
+    spawn_depth: u32,
+    _truncated: bool,
+) -> String {
+    let mut payload = json!({
         "agent_id": agent_id,
         "status": "failed",
+        "verdict": "failed",
         "error_location": "previous_line",
+        "artifact_refs": compact_completion_artifact_refs(agent_id),
+        "files_changed": [],
+        "key_stats": {
+            "steps": steps_taken,
+        },
     });
+    if spawn_depth > 0 {
+        payload["key_stats"]["spawn_depth"] = json!(spawn_depth);
+    }
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
+}
+
+fn compact_completion_artifact_refs(agent_id: &str) -> serde_json::Value {
+    json!({
+        "transcript": format!("agent:{agent_id}"),
+    })
 }
 
 fn response_was_truncated(response: &MessageResponse) -> bool {
@@ -6894,6 +6928,7 @@ const SUBAGENT_SUMMARY_CHAR_BUDGET: usize = 12_000;
 /// (`TOOL_RESULT_HEAD_CHARS`/`TOOL_RESULT_TAIL_CHARS`, chat.rs:703-704).
 const SUBAGENT_SUMMARY_HEAD_CHARS: usize = 4_000;
 const SUBAGENT_SUMMARY_TAIL_CHARS: usize = 4_000;
+const SUBAGENT_COMPLETION_PREVIEW_CHARS: usize = 16;
 
 /// One-line provenance suffix reinforcing that a sub-agent summary is a
 /// self-report (issue #2652). Appended only when the summary was NOT
@@ -6934,6 +6969,28 @@ the spillover store and cannot be retrieved via retrieve_tool_result. Re-open th
 read changed files directly to verify material claims.]\n\n{tail}",
     );
     (stamped, true)
+}
+
+fn compact_subagent_completion_summary(result: &SubAgentResult, raw: &str) -> (String, bool) {
+    let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let total = normalized.chars().count();
+    let preview = normalized
+        .chars()
+        .take(SUBAGENT_COMPLETION_PREVIEW_CHARS)
+        .collect::<String>();
+    let truncated = total > SUBAGENT_COMPLETION_PREVIEW_CHARS;
+    let suffix = if truncated { "..." } else { "" };
+    (
+        format!(
+            "agent_id={} status={} preview=\"{}{}\" retrieve_full=handle_read agent:{}",
+            result.agent_id,
+            subagent_status_name(&result.status),
+            preview.replace('"', "'"),
+            suffix,
+            result.agent_id
+        ),
+        truncated,
+    )
 }
 
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
