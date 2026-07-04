@@ -907,6 +907,68 @@ fn test_parse_spawn_request_accepts_items_payload() {
 }
 
 #[test]
+fn test_parse_spawn_request_accepts_resume_checkpoint_object() {
+    let checkpoint = make_checkpoint(
+        "agent_old",
+        3,
+        vec![
+            text_message("user", "fix the parser timeout"),
+            text_message("assistant", "I patched the parser and still need tests"),
+        ],
+    );
+    let input = json!({
+        "prompt": "Continue from the checkpoint and finish verification",
+        "resume_from_checkpoint": checkpoint,
+    });
+
+    let parsed = parse_spawn_request(&input).expect("checkpoint resume should parse");
+    let parsed_checkpoint = parsed
+        .resume_checkpoint
+        .expect("checkpoint should be retained");
+    assert_eq!(parsed_checkpoint.agent_id, "agent_old");
+    assert_eq!(parsed_checkpoint.steps_taken, 3);
+    assert_eq!(parsed_checkpoint.messages.len(), 2);
+    assert_eq!(
+        message_text(&parsed_checkpoint.messages[1]),
+        "I patched the parser and still need tests"
+    );
+}
+
+#[test]
+fn test_parse_spawn_request_rejects_non_continuable_resume_checkpoint() {
+    let mut checkpoint = make_checkpoint(
+        "agent_old",
+        1,
+        vec![text_message("assistant", "partial work")],
+    );
+    checkpoint.continuable = false;
+    let input = json!({
+        "prompt": "Continue",
+        "resume_from_checkpoint": checkpoint,
+    });
+
+    let err = parse_spawn_request(&input).expect_err("non-continuable checkpoint should fail");
+    assert!(
+        err.to_string().contains("must be continuable"),
+        "clear resume error: {err}"
+    );
+}
+
+#[test]
+fn test_parse_spawn_request_rejects_resume_checkpoint_handle_string() {
+    let input = json!({
+        "prompt": "Continue",
+        "resume_from_checkpoint": "agent:old:checkpoint:id",
+    });
+
+    let err = parse_spawn_request(&input).expect_err("checkpoint handle string should fail");
+    assert!(
+        err.to_string().contains("checkpoint object"),
+        "clear resume error: {err}"
+    );
+}
+
+#[test]
 fn test_parse_spawn_request_accepts_fork_context() {
     let input = json!({
         "prompt": "continue from here",
@@ -1289,6 +1351,27 @@ fn fresh_subagent_messages_keep_existing_single_turn_shape() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].role, "user");
     assert!(message_text(&messages[0]).contains("list files"));
+}
+
+#[test]
+fn resume_checkpoint_prompt_includes_checkpoint_tail_and_continuation_task() {
+    let checkpoint = make_checkpoint(
+        "agent_resume",
+        4,
+        vec![
+            text_message("user", "Investigate timeout checkpointing"),
+            text_message("assistant", "Partial patch is staged in the parser module"),
+        ],
+    );
+
+    let prompt = prompt_with_resume_checkpoint("Finish the tests", &checkpoint);
+
+    assert!(prompt.contains("Sub-agent checkpoint resume context"));
+    assert!(prompt.contains(&checkpoint.continuation_handle));
+    assert!(prompt.contains("original_agent_id: agent_resume"));
+    assert!(prompt.contains("Partial patch is staged in the parser module"));
+    assert!(prompt.contains("--- continue task ---"));
+    assert!(prompt.contains("Finish the tests"));
 }
 
 #[test]

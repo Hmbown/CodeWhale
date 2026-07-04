@@ -1265,6 +1265,10 @@ struct SpawnRequest {
     /// locality. A global ownership table prevents two agents from holding
     /// a resident lease on the same file simultaneously.
     resident_file: Option<String>,
+    /// Optional continuable checkpoint from a prior interrupted child. The
+    /// status/peek projection exposes this object; passing it back into start
+    /// seeds the replacement child with the bounded checkpoint tail.
+    resume_checkpoint: Option<SubAgentCheckpoint>,
     /// When true, seed the child with the parent's system prompt and message
     /// prefix before appending the child task.
     fork_context: bool,
@@ -3661,6 +3665,10 @@ impl ToolSpec for AgentTool {
                     "type": "boolean",
                     "description": "false (default): fresh child context. true: include the current parent context prefix when the child needs it."
                 },
+                "resume_from_checkpoint": {
+                    "type": "object",
+                    "description": "For action=start, optional checkpoint object from a prior interrupted child status/peek response. Seeds the new child with checkpoint metadata and the bounded message tail before the continuation prompt."
+                },
                 "max_depth": {
                     "type": "integer",
                     "minimum": 0,
@@ -3900,35 +3908,39 @@ async fn spawn_subagent_from_input(
             &spawn_request.agent_type,
         )?,
     };
-    let (effective_prompt, _resident_conflict) =
-        if let Some(ref file_path) = spawn_request.resident_file {
-            let abs_path = if std::path::Path::new(file_path).is_absolute() {
-                std::path::PathBuf::from(file_path)
-            } else {
-                runtime.context.workspace.join(file_path)
-            };
-            let file_contents = std::fs::read_to_string(&abs_path)
-                .unwrap_or_else(|e| format!("<!-- resident_file read error: {e} -->"));
-            let prefixed = format!(
-                "<!-- resident_file: {file_path} -->\n```\n{file_contents}\n```\n\n{}",
-                spawn_request.prompt
-            );
-            let conflict = {
-                let leases = RESIDENT_LEASES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-                let mut guard = leases.lock().unwrap_or_else(|p| p.into_inner());
-                if let Some(owner) = guard.get(file_path) {
-                    Some(format!(
-                        "Warning: agent {owner} already holds a resident lease on {file_path}"
-                    ))
-                } else {
-                    guard.insert(file_path.clone(), "pending".to_string());
-                    None
-                }
-            };
-            (prefixed, conflict)
+    let (base_prompt, _resident_conflict) = if let Some(ref file_path) = spawn_request.resident_file
+    {
+        let abs_path = if std::path::Path::new(file_path).is_absolute() {
+            std::path::PathBuf::from(file_path)
         } else {
-            (spawn_request.prompt, None)
+            runtime.context.workspace.join(file_path)
         };
+        let file_contents = std::fs::read_to_string(&abs_path)
+            .unwrap_or_else(|e| format!("<!-- resident_file read error: {e} -->"));
+        let prefixed = format!(
+            "<!-- resident_file: {file_path} -->\n```\n{file_contents}\n```\n\n{}",
+            spawn_request.prompt
+        );
+        let conflict = {
+            let leases = RESIDENT_LEASES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+            let mut guard = leases.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(owner) = guard.get(file_path) {
+                Some(format!(
+                    "Warning: agent {owner} already holds a resident lease on {file_path}"
+                ))
+            } else {
+                guard.insert(file_path.clone(), "pending".to_string());
+                None
+            }
+        };
+        (prefixed, conflict)
+    } else {
+        (spawn_request.prompt, None)
+    };
+    let effective_prompt = match spawn_request.resume_checkpoint.as_ref() {
+        Some(checkpoint) => prompt_with_resume_checkpoint(&base_prompt, checkpoint),
+        None => base_prompt,
+    };
 
     let route = resolve_subagent_assignment_route(
         &runtime,
@@ -4067,6 +4079,87 @@ fn system_text_message(text: String) -> Message {
             cache_control: None,
         }],
     }
+}
+
+fn prompt_with_resume_checkpoint(prompt: &str, checkpoint: &SubAgentCheckpoint) -> String {
+    let mut text = format!(
+        concat!(
+            "Sub-agent checkpoint resume context.\n",
+            "Treat the checkpoint message tail below as your own prior state, ",
+            "then continue from the latest safe point. Verify untrusted claims ",
+            "before relying on them.\n\n",
+            "Checkpoint metadata:\n",
+            "- checkpoint_id: {}\n",
+            "- continuation_handle: {}\n",
+            "- original_agent_id: {}\n",
+            "- reason: {}\n",
+            "- steps_taken: {}\n",
+            "- message_count: {}\n",
+            "- omitted_messages: {}\n\n",
+            "--- checkpoint message tail ---\n"
+        ),
+        checkpoint.checkpoint_id,
+        checkpoint.continuation_handle,
+        checkpoint.agent_id,
+        checkpoint.reason,
+        checkpoint.steps_taken,
+        checkpoint.message_count,
+        checkpoint.omitted_messages
+    );
+
+    for (index, message) in checkpoint.messages.iter().enumerate() {
+        text.push_str(&format!(
+            "\n[message {} | role={}]\n{}",
+            index + 1,
+            message.role,
+            render_checkpoint_message(message)
+        ));
+    }
+
+    text.push_str("\n\n--- continue task ---\n");
+    text.push_str(prompt);
+    text
+}
+
+fn render_checkpoint_message(message: &Message) -> String {
+    let mut rendered = Vec::new();
+    for block in &message.content {
+        match block {
+            ContentBlock::Text { text, .. } => rendered.push(text.clone()),
+            ContentBlock::Thinking { thinking, .. } => {
+                rendered.push(format!("[thinking]\n{thinking}"));
+            }
+            ContentBlock::ToolUse { name, input, .. }
+            | ContentBlock::ServerToolUse { name, input, .. } => {
+                rendered.push(format!("[tool_use:{name}]\n{input}"));
+            }
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+                ..
+            } => {
+                let error_marker = if is_error.unwrap_or(false) {
+                    " error=true"
+                } else {
+                    ""
+                };
+                rendered.push(format!(
+                    "[tool_result:{tool_use_id}{error_marker}]\n{content}"
+                ));
+            }
+            ContentBlock::ToolSearchToolResult {
+                tool_use_id,
+                content,
+            } => rendered.push(format!("[tool_search_result:{tool_use_id}]\n{content}")),
+            ContentBlock::CodeExecutionToolResult {
+                tool_use_id,
+                content,
+            } => rendered.push(format!("[code_execution_result:{tool_use_id}]\n{content}")),
+            ContentBlock::ImageUrl { .. } => rendered.push("[image_url omitted]".to_string()),
+        }
+    }
+    rendered.join("\n")
 }
 
 struct SubAgentTask {
@@ -5649,6 +5742,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty());
+    let resume_checkpoint = parse_resume_checkpoint(input)?;
     let fork_context =
         parse_optional_bool(input, &["fork_context", "forkContext", "inherit_context"])
             .unwrap_or(false);
@@ -5689,10 +5783,45 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         cwd,
         worktree,
         resident_file,
+        resume_checkpoint,
         fork_context,
         max_depth,
         token_budget,
     })
+}
+
+fn parse_resume_checkpoint(input: &Value) -> Result<Option<SubAgentCheckpoint>, ToolError> {
+    let Some(value) = input
+        .get("resume_from_checkpoint")
+        .or_else(|| input.get("resumeFromCheckpoint"))
+        .or_else(|| input.get("checkpoint"))
+    else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if value.is_string() {
+        return Err(ToolError::invalid_input(
+            "resume_from_checkpoint must be a checkpoint object from agent status/peek, not a continuation handle string".to_string(),
+        ));
+    }
+    let checkpoint: SubAgentCheckpoint = serde_json::from_value(value.clone()).map_err(|err| {
+        ToolError::invalid_input(format!(
+            "resume_from_checkpoint must be a valid checkpoint object: {err}"
+        ))
+    })?;
+    if !checkpoint.continuable {
+        return Err(ToolError::invalid_input(
+            "resume_from_checkpoint must be continuable".to_string(),
+        ));
+    }
+    if checkpoint.messages.is_empty() {
+        return Err(ToolError::invalid_input(
+            "resume_from_checkpoint must include a non-empty checkpoint message tail".to_string(),
+        ));
+    }
+    Ok(Some(checkpoint))
 }
 
 fn validate_session_name(name: &str) -> Result<String, ToolError> {
