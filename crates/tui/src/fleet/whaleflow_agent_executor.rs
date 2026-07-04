@@ -403,6 +403,50 @@ mod tests {
     }
 
     #[test]
+    fn executor_routes_three_stage_pipeline_outputs_in_order() {
+        let mut executor = AgentWorkflowExecutor::new(RecordingSpawner::default());
+        let execution = executor
+            .run(&workflow(vec![WorkflowNode::Sequence(SequenceSpec {
+                id: "pipeline".to_string(),
+                children: vec![
+                    leaf("a"),
+                    leaf_depending_on("b", &["a"]),
+                    leaf_depending_on("c", &["b"]),
+                ],
+            })]))
+            .expect("workflow should execute");
+
+        assert_eq!(
+            executor
+                .spawner
+                .calls
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        assert!(executor.spawner.calls[1].1.contains("output a"));
+        assert!(executor.spawner.calls[2].1.contains("output b"));
+        assert!(
+            !executor.spawner.calls[2].1.contains("output a"),
+            "stage C should receive its declared direct dependency, not every prior output"
+        );
+        assert_eq!(execution.status, WorkflowRunStatus::Succeeded);
+        assert_eq!(
+            execution
+                .leaf_results
+                .iter()
+                .map(|result| result.status)
+                .collect::<Vec<_>>(),
+            vec![
+                WorkflowRunStatus::Succeeded,
+                WorkflowRunStatus::Succeeded,
+                WorkflowRunStatus::Succeeded
+            ]
+        );
+    }
+
+    #[test]
     fn workflow_agent_roles_map_to_existing_subagent_roles() {
         assert_eq!(
             workflow_agent_type_to_subagent_type(WorkflowAgentType::Explore),
