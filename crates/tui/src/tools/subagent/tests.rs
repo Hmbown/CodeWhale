@@ -2250,6 +2250,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         token_budget: None,
         input_rx: task_input_rx,
         launch_gate: None,
+        worktree_lease: None,
     };
     let task_handle = tokio::spawn(run_subagent_task(task));
 
@@ -2430,6 +2431,7 @@ async fn subagent_retries_transient_provider_header_timeout_before_succeeding() 
         token_budget: None,
         input_rx: task_input_rx,
         launch_gate: None,
+        worktree_lease: None,
     };
 
     tokio::time::timeout(
@@ -3134,13 +3136,14 @@ fn create_isolated_worktree_creates_branch_checkout_outside_parent_repo() {
         base_ref: None,
     };
 
-    let path = create_isolated_worktree(
+    let lease = create_isolated_worktree(
         repo.path(),
         &request,
         Some("isolated-test"),
         &SubAgentType::Implementer,
     )
     .expect("worktree should be created");
+    let path = lease.path.clone();
 
     assert!(path.exists(), "worktree path should exist");
     assert!(
@@ -3150,6 +3153,13 @@ fn create_isolated_worktree_creates_branch_checkout_outside_parent_repo() {
     assert_eq!(
         current_git_branch(&path).as_deref(),
         Some("codex/agent-isolated-test")
+    );
+    assert_eq!(
+        lease
+            .shell_env()
+            .get("CARGO_TARGET_DIR")
+            .map(String::as_str),
+        Some(lease.target_dir.to_string_lossy().as_ref())
     );
 }
 
@@ -3166,13 +3176,14 @@ fn create_isolated_worktree_resolves_single_repo_child_from_container_workspace(
         base_ref: None,
     };
 
-    let path = create_isolated_worktree(
+    let lease = create_isolated_worktree(
         container.path(),
         &request,
         Some("container-child"),
         &SubAgentType::Implementer,
     )
     .expect("worktree should resolve the single repo child");
+    let path = lease.path.clone();
 
     assert!(path.exists(), "worktree path should exist");
     assert!(
@@ -3211,6 +3222,69 @@ fn create_isolated_worktree_rejects_ambiguous_container_workspace() {
     assert!(
         err.to_string().contains("multiple git repositories"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn worktree_pool_creates_and_cleans_ten_isolated_worktrees() {
+    let repo = init_subagent_git_repo();
+    let mut pool = SubAgentWorktreePool::new(10, Duration::from_secs(300));
+    let request = SubAgentWorktreeRequest {
+        branch: None,
+        path: None,
+        base_ref: None,
+    };
+    let leases = (0..10)
+        .map(|index| {
+            pool.lease(
+                repo.path(),
+                &request,
+                Some(&format!("pool-worker-{index}")),
+                &SubAgentType::Implementer,
+            )
+            .expect("lease worktree")
+        })
+        .collect::<Vec<_>>();
+
+    let paths = leases
+        .iter()
+        .map(|lease| lease.path.clone())
+        .collect::<HashSet<_>>();
+    let branches = leases
+        .iter()
+        .map(|lease| lease.branch.clone())
+        .collect::<HashSet<_>>();
+    let target_dirs = leases
+        .iter()
+        .map(|lease| lease.target_dir.clone())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(paths.len(), 10, "each worker gets an isolated checkout");
+    assert_eq!(branches.len(), 10, "generated branches avoid collisions");
+    assert_eq!(
+        target_dirs.len(),
+        1,
+        "all leases share one cargo target dir"
+    );
+    assert_eq!(pool.active.len(), 10);
+    assert!(leases.iter().all(|lease| lease.path.exists()));
+
+    let completed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    for lease in leases.clone() {
+        pool.finish(lease, completed_at);
+    }
+    assert_eq!(pool.active.len(), 0);
+    assert_eq!(
+        pool.cleanup_expired(completed_at + Duration::from_secs(299)),
+        0
+    );
+    assert_eq!(
+        pool.cleanup_expired(completed_at + Duration::from_secs(300)),
+        10
+    );
+    assert!(
+        leases.iter().all(|lease| !lease.path.exists()),
+        "clean worktrees should be removed after the inspection TTL"
     );
 }
 
@@ -4652,6 +4726,7 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
         token_budget: None,
         input_rx: task_input_rx,
         launch_gate: None,
+        worktree_lease: None,
     };
 
     let manager_lock = manager.write().await;
@@ -5129,6 +5204,7 @@ async fn launch_gate_queues_extra_direct_children() {
             token_budget: None,
             input_rx,
             launch_gate: gate,
+            worktree_lease: None,
         };
         (agent, task)
     };
@@ -5346,6 +5422,7 @@ async fn spawn_budget_capped_worker(
         token_budget,
         input_rx: task_input_rx,
         launch_gate: None,
+        worktree_lease: None,
     };
     let task_handle = tokio::spawn(run_subagent_task(task));
     (manager, agent_id, calls, task_handle)

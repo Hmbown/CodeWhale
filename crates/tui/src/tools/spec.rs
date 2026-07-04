@@ -147,6 +147,10 @@ pub struct ToolContext {
     pub workspace: PathBuf,
     /// Shared shell manager for background tasks and streaming IO.
     pub shell_manager: SharedShellManager,
+    /// Environment variables injected into shell commands for this context.
+    /// Sub-agent worktree leases use this to share heavyweight build caches
+    /// without relying on process-global environment mutation.
+    pub shell_env: HashMap<String, String>,
     /// Per-session snapshots for files successfully observed by `read_file`.
     /// Mutation tools use this to reject narrow edits against unread or stale
     /// content.
@@ -265,6 +269,7 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            shell_env: HashMap::new(),
             file_read_tracker: new_shared_file_read_tracker(),
             owner_agent_id: None,
             owner_agent_name: None,
@@ -310,6 +315,7 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            shell_env: HashMap::new(),
             file_read_tracker: new_shared_file_read_tracker(),
             owner_agent_id: None,
             owner_agent_name: None,
@@ -355,6 +361,7 @@ impl ToolContext {
         Self {
             workspace,
             shell_manager,
+            shell_env: HashMap::new(),
             file_read_tracker: new_shared_file_read_tracker(),
             owner_agent_id: None,
             owner_agent_name: None,

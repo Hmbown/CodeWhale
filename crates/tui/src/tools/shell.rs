@@ -2494,14 +2494,13 @@ impl ToolSpec for ExecShellTool {
         // synchronously, captures stdout, parses `KEY=VAL` lines, audit-logs
         // the keys (never the values). Empty / no-op when no hook is
         // configured.
-        let extra_env = if let Some(hook_executor) = &context.runtime.hook_executor {
+        let mut extra_env = context.shell_env.clone();
+        if let Some(hook_executor) = &context.runtime.hook_executor {
             let hook_ctx = crate::hooks::HookContext::new()
                 .with_tool_name("exec_shell")
                 .with_tool_args(&input);
-            hook_executor.collect_shell_env(&hook_ctx)
-        } else {
-            std::collections::HashMap::new()
-        };
+            extra_env.extend(hook_executor.collect_shell_env(&hook_ctx));
+        }
 
         // Route through external sandbox backend when configured.
         if let Some(backend) = &context.sandbox_backend {

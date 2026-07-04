@@ -12,7 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
@@ -134,6 +134,9 @@ const SUBAGENT_TRANSCRIPT_MESSAGE_BUDGET_BYTES: usize = 1024 * 1024;
 const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_WORKTREE_ROOT_DIR: &str = ".codewhale-worktrees";
+const SUBAGENT_WORKTREE_TARGET_DIR: &str = ".codewhale-target";
+const SUBAGENT_WORKTREE_POOL_MAX_ACTIVE: usize = 32;
+const SUBAGENT_WORKTREE_CLEANUP_TTL: Duration = Duration::from_secs(5 * 60);
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 const SUBAGENT_QUEUED_LAUNCH_REASON: &str = "queued: waiting for a sub-agent launch slot";
 const SUBAGENT_MODEL_WAIT_REASON: &str = "waiting for model response";
@@ -1182,6 +1185,7 @@ pub(crate) struct SubAgentSpawnOptions {
     pub nickname: Option<String>,
     pub fork_context: bool,
     pub token_budget: Option<u64>,
+    worktree_lease: Option<SubAgentWorktreeLease>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1282,6 +1286,104 @@ struct SubAgentWorktreeRequest {
     branch: Option<String>,
     path: Option<PathBuf>,
     base_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedChildWorkspace {
+    path: PathBuf,
+    shell_env: HashMap<String, String>,
+    worktree_lease: Option<SubAgentWorktreeLease>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubAgentWorktreeLease {
+    repo_root: PathBuf,
+    path: PathBuf,
+    branch: String,
+    target_dir: PathBuf,
+    completed_at: Option<SystemTime>,
+}
+
+impl SubAgentWorktreeLease {
+    fn shell_env(&self) -> HashMap<String, String> {
+        HashMap::from([(
+            "CARGO_TARGET_DIR".to_string(),
+            self.target_dir.to_string_lossy().to_string(),
+        )])
+    }
+
+    fn completed(mut self, now: SystemTime) -> Self {
+        self.completed_at = Some(now);
+        self
+    }
+
+    fn cleanup_due(&self, now: SystemTime, ttl: Duration) -> bool {
+        self.completed_at
+            .and_then(|completed_at| completed_at.checked_add(ttl))
+            .is_some_and(|cleanup_at| cleanup_at <= now)
+    }
+}
+
+#[derive(Debug)]
+struct SubAgentWorktreePool {
+    max_active: usize,
+    cleanup_ttl: Duration,
+    active: HashMap<PathBuf, SubAgentWorktreeLease>,
+    completed: Vec<SubAgentWorktreeLease>,
+}
+
+impl SubAgentWorktreePool {
+    fn new(max_active: usize, cleanup_ttl: Duration) -> Self {
+        Self {
+            max_active: max_active.max(1),
+            cleanup_ttl,
+            active: HashMap::new(),
+            completed: Vec::new(),
+        }
+    }
+
+    fn lease(
+        &mut self,
+        parent_workspace: &Path,
+        request: &SubAgentWorktreeRequest,
+        session_name: Option<&str>,
+        agent_type: &SubAgentType,
+    ) -> Result<SubAgentWorktreeLease, ToolError> {
+        self.cleanup_expired(SystemTime::now());
+        if self.active.len() >= self.max_active {
+            return Err(ToolError::execution_failed(format!(
+                "Sub-agent worktree pool is full ({} active, max {}). Wait for current agents to finish or raise the worktree pool limit.",
+                self.active.len(),
+                self.max_active
+            )));
+        }
+        let lease = create_isolated_worktree(parent_workspace, request, session_name, agent_type)?;
+        self.active.insert(lease.path.clone(), lease.clone());
+        Ok(lease)
+    }
+
+    fn finish(&mut self, lease: SubAgentWorktreeLease, now: SystemTime) {
+        self.active.remove(&lease.path);
+        self.completed.push(lease.completed(now));
+    }
+
+    fn cleanup_expired(&mut self, now: SystemTime) -> usize {
+        let mut retained = Vec::new();
+        let mut cleaned = 0;
+        for lease in self.completed.drain(..) {
+            if lease.cleanup_due(now, self.cleanup_ttl) {
+                if remove_worktree_checkout(&lease).is_ok() {
+                    cleaned += 1;
+                } else {
+                    retained.push(lease);
+                }
+            } else {
+                retained.push(lease);
+            }
+        }
+        self.completed = retained;
+        cleaned
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2824,6 +2926,7 @@ impl SubAgentManager {
             token_budget: options.token_budget,
             input_rx,
             launch_gate,
+            worktree_lease: options.worktree_lease,
         };
         let handle = spawn_supervised(
             "subagent-task",
@@ -3885,8 +3988,14 @@ async fn spawn_subagent_from_input(
         child_runtime.max_spawn_depth =
             clamp_child_max_spawn_depth(child_runtime.spawn_depth, max_depth);
     }
+    let worktree_lease = child_workspace
+        .as_ref()
+        .and_then(|workspace| workspace.worktree_lease.clone());
     if let Some(workspace) = child_workspace {
-        child_runtime.context.workspace = workspace;
+        child_runtime.context.workspace = workspace.path.clone();
+        child_runtime.context.shell_manager =
+            crate::tools::shell::new_shared_shell_manager(workspace.path);
+        child_runtime.context.shell_env.extend(workspace.shell_env);
     }
     let configured_model = match spawn_request.model.clone() {
         Some(model) => Some(normalize_requested_subagent_model(
@@ -3962,6 +4071,7 @@ async fn spawn_subagent_from_input(
                 nickname: None,
                 fork_context: spawn_request.fork_context,
                 token_budget: spawn_request.token_budget,
+                worktree_lease,
             },
         )
         .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;
@@ -4094,6 +4204,7 @@ struct SubAgentTask {
     /// holds it until completion, so a fanout burst beyond the limit queues
     /// with a visible reason instead of executing all at once.
     launch_gate: Option<Arc<Semaphore>>,
+    worktree_lease: Option<SubAgentWorktreeLease>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -4207,6 +4318,10 @@ async fn run_subagent_task(task: SubAgentTask) {
             id: agent_id.clone(),
             result: payload,
         });
+    }
+
+    if let Some(lease) = task.worktree_lease {
+        finish_subagent_worktree_lease(lease);
     }
 }
 
@@ -6089,18 +6204,28 @@ fn parse_optional_bool_strict(input: &Value, names: &[&str]) -> Result<Option<bo
 fn prepare_child_workspace(
     parent_workspace: &Path,
     request: &SpawnRequest,
-) -> Result<Option<PathBuf>, ToolError> {
+) -> Result<Option<PreparedChildWorkspace>, ToolError> {
     if let Some(requested_cwd) = request.cwd.as_ref() {
-        return validate_existing_child_cwd(parent_workspace, requested_cwd).map(Some);
+        return validate_existing_child_cwd(parent_workspace, requested_cwd).map(|path| {
+            Some(PreparedChildWorkspace {
+                path,
+                shell_env: HashMap::new(),
+                worktree_lease: None,
+            })
+        });
     }
     if let Some(worktree) = request.worktree.as_ref() {
-        return create_isolated_worktree(
+        let lease = lease_subagent_worktree(
             parent_workspace,
             worktree,
             request.session_name.as_deref(),
             &request.agent_type,
-        )
-        .map(Some);
+        )?;
+        return Ok(Some(PreparedChildWorkspace {
+            path: lease.path.clone(),
+            shell_env: lease.shell_env(),
+            worktree_lease: Some(lease),
+        }));
     }
     Ok(None)
 }
@@ -6138,7 +6263,7 @@ fn create_isolated_worktree(
     request: &SubAgentWorktreeRequest,
     session_name: Option<&str>,
     agent_type: &SubAgentType,
-) -> Result<PathBuf, ToolError> {
+) -> Result<SubAgentWorktreeLease, ToolError> {
     let repo_root = git_repo_root(parent_workspace)?;
     let branch = request
         .branch
@@ -6168,17 +6293,67 @@ fn create_isolated_worktree(
         "worktree".to_string(),
         "add".to_string(),
         "-b".to_string(),
-        branch,
+        branch.clone(),
         path_arg,
         base_ref,
     ];
     run_git_checked(&repo_root, &args, "create sub-agent worktree")?;
-    worktree_path.canonicalize().map_err(|err| {
+    let path = worktree_path.canonicalize().map_err(|err| {
         ToolError::execution_failed(format!(
             "Created worktree path '{}' could not be resolved: {err}",
             worktree_path.display()
         ))
+    })?;
+    Ok(SubAgentWorktreeLease {
+        target_dir: shared_worktree_target_dir(&repo_root),
+        repo_root,
+        path,
+        branch,
+        completed_at: None,
     })
+}
+
+fn subagent_worktree_pool() -> &'static StdMutex<SubAgentWorktreePool> {
+    static POOL: OnceLock<StdMutex<SubAgentWorktreePool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        StdMutex::new(SubAgentWorktreePool::new(
+            SUBAGENT_WORKTREE_POOL_MAX_ACTIVE,
+            SUBAGENT_WORKTREE_CLEANUP_TTL,
+        ))
+    })
+}
+
+fn lease_subagent_worktree(
+    parent_workspace: &Path,
+    request: &SubAgentWorktreeRequest,
+    session_name: Option<&str>,
+    agent_type: &SubAgentType,
+) -> Result<SubAgentWorktreeLease, ToolError> {
+    let mut pool = subagent_worktree_pool()
+        .lock()
+        .map_err(|_| ToolError::execution_failed("sub-agent worktree pool lock poisoned"))?;
+    pool.lease(parent_workspace, request, session_name, agent_type)
+}
+
+fn finish_subagent_worktree_lease(lease: SubAgentWorktreeLease) {
+    match subagent_worktree_pool().lock() {
+        Ok(mut pool) => {
+            pool.finish(lease, SystemTime::now());
+            pool.cleanup_expired(SystemTime::now());
+            tokio::spawn(async {
+                tokio::time::sleep(SUBAGENT_WORKTREE_CLEANUP_TTL).await;
+                match subagent_worktree_pool().lock() {
+                    Ok(mut pool) => {
+                        pool.cleanup_expired(SystemTime::now());
+                    }
+                    Err(_) => crate::logging::warn(
+                        "sub-agent worktree pool lock poisoned during scheduled cleanup",
+                    ),
+                }
+            });
+        }
+        Err(_) => crate::logging::warn("sub-agent worktree pool lock poisoned during cleanup"),
+    }
 }
 
 fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
@@ -6310,6 +6485,20 @@ fn default_worktree_root(repo_root: &Path) -> PathBuf {
         .unwrap_or_else(|| "repo".to_string());
     let parent = repo_root.parent().unwrap_or(repo_root);
     normalize_path_lexically(&parent.join(SUBAGENT_WORKTREE_ROOT_DIR).join(repo_name))
+}
+
+fn shared_worktree_target_dir(repo_root: &Path) -> PathBuf {
+    normalize_path_lexically(&default_worktree_root(repo_root).join(SUBAGENT_WORKTREE_TARGET_DIR))
+}
+
+fn remove_worktree_checkout(lease: &SubAgentWorktreeLease) -> Result<(), ToolError> {
+    let path_arg = lease.path.to_string_lossy().to_string();
+    run_git_checked(
+        &lease.repo_root,
+        &["worktree".to_string(), "remove".to_string(), path_arg],
+        "remove sub-agent worktree",
+    )
+    .map(|_| ())
 }
 
 fn sanitize_worktree_slug(input: &str) -> String {
