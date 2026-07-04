@@ -117,6 +117,14 @@ pub(super) enum PolicyNarrowingReason {
     NonAuthoritativeInput(UserInputProvenance),
 }
 
+impl PolicyNarrowingReason {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::NonAuthoritativeInput(_) => "non_authoritative_input",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct EffectiveInputPolicy {
     session_mode: SessionMode,

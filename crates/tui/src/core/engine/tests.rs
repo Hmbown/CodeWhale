@@ -4122,6 +4122,54 @@ fn turn_policy_resolver_records_structured_provenance_narrowing() {
 }
 
 #[test]
+fn turn_metadata_includes_policy_narrowing_status() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let policy =
+        resolve_yolo_policy_for_provenance(UserInputProvenance::AssistantGenerated, "continue");
+    let event = policy
+        .narrowing_event()
+        .expect("assistant-generated YOLO input should be narrowed");
+    let status = policy.status().expect("narrowing should produce status");
+
+    engine.apply_runtime_mode_policy(
+        policy.mode(),
+        policy.allow_shell(),
+        policy.trust_mode(),
+        policy.auto_approve(),
+        policy.approval_mode(),
+    );
+    let user_msg = engine
+        .user_text_message_with_turn_metadata_for_route_provenance_and_policy_narrowing(
+            "continue".to_string(),
+            "deepseek-v4-pro",
+            false,
+            None,
+            false,
+            UserInputProvenance::AssistantGenerated,
+            Some(event),
+        );
+    let last_block = user_msg.content.last().expect("turn metadata block");
+    let ContentBlock::Text { text, .. } = last_block else {
+        panic!("expected text metadata block");
+    };
+
+    assert!(text.contains("Current mode: agent"), "got: {text}");
+    assert!(
+        text.contains("Policy narrowing: non_authoritative_input"),
+        "got: {text}"
+    );
+    assert!(
+        text.contains(&format!("Policy narrowing status: {status}")),
+        "got: {text}"
+    );
+}
+
+#[test]
 fn turn_policy_resolver_preserves_external_user_authority_despite_review_wording() {
     let policy = resolve_yolo_policy_for_provenance(
         UserInputProvenance::ExternalUser,

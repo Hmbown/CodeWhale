@@ -1987,6 +1987,7 @@ impl Engine {
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
         current_text: &str,
+        policy_narrowing: Option<&PolicyNarrowingEvent>,
     ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
@@ -2024,6 +2025,10 @@ impl Engine {
         }
         if reasoning_effort_auto && let Some(reasoning_effort) = reasoning_effort {
             lines.push(format!("Auto reasoning effort: {reasoning_effort}"));
+        }
+        if let Some(event) = policy_narrowing {
+            lines.push(format!("Policy narrowing: {}", event.reason().as_str()));
+            lines.push(format!("Policy narrowing status: {}", event.message()));
         }
         self.append_resource_metadata_lines(&mut lines, routed_model, current_text);
         if let Some(working_set_summary) = working_set_summary {
@@ -2089,6 +2094,27 @@ impl Engine {
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
     ) -> Message {
+        self.user_text_message_with_turn_metadata_for_route_provenance_and_policy_narrowing(
+            text,
+            routed_model,
+            auto_model,
+            reasoning_effort,
+            reasoning_effort_auto,
+            provenance,
+            None,
+        )
+    }
+
+    fn user_text_message_with_turn_metadata_for_route_provenance_and_policy_narrowing(
+        &self,
+        text: String,
+        routed_model: &str,
+        auto_model: bool,
+        reasoning_effort: Option<&str>,
+        reasoning_effort_auto: bool,
+        provenance: UserInputProvenance,
+        policy_narrowing: Option<&PolicyNarrowingEvent>,
+    ) -> Message {
         // Place the user text first and turn_meta last so that the leading
         // bytes of each user message stay stable across date / model-route /
         // working-set changes. DeepSeek's KV prefix cache matches byte
@@ -2104,6 +2130,7 @@ impl Engine {
             reasoning_effort_auto,
             provenance,
             &text,
+            policy_narrowing,
         );
         Message {
             role: "user".to_string(),
@@ -2405,14 +2432,16 @@ impl Engine {
         let force_update_plan_first = should_force_update_plan_first(input_policy.mode(), &content);
 
         // Add user message to session
-        let user_msg = self.user_text_message_with_turn_metadata_for_route_and_provenance(
-            content,
-            &model,
-            auto_model,
-            reasoning_effort.as_deref(),
-            reasoning_effort_auto,
-            provenance,
-        );
+        let user_msg = self
+            .user_text_message_with_turn_metadata_for_route_provenance_and_policy_narrowing(
+                content,
+                &model,
+                auto_model,
+                reasoning_effort.as_deref(),
+                reasoning_effort_auto,
+                provenance,
+                input_policy.narrowing_event(),
+            );
         self.session.add_message(user_msg);
 
         let previous_goal_objective = self.config.goal_objective.clone();
@@ -3880,7 +3909,7 @@ use self::tool_catalog::{
 };
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::{sandbox_policy_for_mode, shell_policy_for_mode};
-use self::turn_policy::effective_input_policy;
+use self::turn_policy::{PolicyNarrowingEvent, effective_input_policy};
 use crate::tools::js_execution::execute_js_execution_tool;
 
 mod authority;
