@@ -480,7 +480,7 @@ pub fn deepseek_links(app: &mut App) -> CommandResult {
         if let Some(key_url) = links.key_url {
             let _ = writeln!(
                 message,
-                "{} {}",
+                "{} `{}`",
                 tr(locale, MessageId::LinksDashboard),
                 key_url
             );
@@ -494,7 +494,7 @@ pub fn deepseek_links(app: &mut App) -> CommandResult {
         }
         let _ = writeln!(
             message,
-            "{}      {}",
+            "{}      `{}`",
             tr(locale, MessageId::LinksDocs),
             links.docs_url
         );
@@ -1298,6 +1298,30 @@ mod tests {
         assert!(msg.contains("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"));
         assert!(!msg.contains("https://codewhale.dev/docs/providers"));
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn provider_links_emit_urls_as_inline_code_for_narrow_transcripts() {
+        let mut app = create_test_app();
+        let result = deepseek_links(&mut app);
+        let msg = result.message.expect("links should return a message");
+
+        assert!(msg.contains("`https://platform.openai.com/api-keys`"));
+        assert!(
+            msg.contains(
+                "`https://platform.minimax.io/user-center/basic-information/interface-key`"
+            )
+        );
+
+        for line in msg.lines().filter(|line| line.contains("http")) {
+            let Some(url_start) = line.find("http") else {
+                continue;
+            };
+            assert!(
+                line[..url_start].ends_with('`') && line[url_start..].contains('`'),
+                "provider URL should be inline-code wrapped so narrow TUI renders do not emit oversized OSC8 link payloads: {line}"
+            );
+        }
     }
 
     #[test]

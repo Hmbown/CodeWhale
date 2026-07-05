@@ -67,7 +67,7 @@ tempfile.workspace = true
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 wait-timeout = "0.2"
 webbrowser = "1.0"
 multimap = "0.10.0"
@@ -88,7 +88,7 @@ rust-i18n = "4.1.0"
 cucumber = "0.23.0"
 wiremock = "0.6"
 pretty_assertions = "1.4"
-vt100 = "0.15"
+vt100 = "0.16"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -975,6 +975,7 @@ mod tests {
     #[test]
     fn constitution_default_opens_manager_pager() {
         let mut app = test_app();
+        app.ui_locale = Locale::En;
 
         let result = ConstitutionCmd::execute(&mut app, None);
 
@@ -988,6 +989,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("WHALE.md"), "legacy instructions").expect("write whale");
         let mut app = test_app_with_workspace(tmp.path().to_path_buf());
+        app.ui_locale = Locale::En;
 
         let result = ConstitutionCmd::execute(&mut app, None);
 
@@ -1024,6 +1026,7 @@ mod tests {
     #[test]
     fn constitution_help_lists_repair_and_runtime_boundary() {
         let mut app = test_app();
+        app.ui_locale = Locale::En;
 
         let result = ConstitutionCmd::execute(&mut app, Some("help"));
 
@@ -1044,6 +1047,7 @@ mod tests {
         std::fs::write(home.join("constitution.json"), "{not valid json").expect("invalid file");
         let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
         let mut app = test_app();
+        app.ui_locale = Locale::En;
 
         let result = ConstitutionCmd::execute(&mut app, Some("repair"));
 

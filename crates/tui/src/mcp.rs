@@ -1915,7 +1915,13 @@ impl McpPool {
             });
         }
 
-        if !self.config.servers.is_empty() {
+        // Only advertise each resource-listing meta-tool when the servers actually
+        // expose the corresponding kind. Previously both were injected whenever any
+        // MCP server was configured, so tools-only servers left the model with
+        // meta-tools that can only ever return empty results — a wasted tool slot
+        // and prompt tokens. Gate each on its own non-empty collection, mirroring
+        // the `mcp_read_resource` guard below (`!resources.is_empty()`).
+        if !self.all_resources().is_empty() {
             api_tools.push(crate::models::Tool {
                 tool_type: None,
                 name: "list_mcp_resources".to_string(),
@@ -1932,6 +1938,8 @@ impl McpPool {
                 strict: None,
                 cache_control: None,
             });
+        }
+        if !self.all_resource_templates().is_empty() {
             api_tools.push(crate::models::Tool {
                 tool_type: None,
                 name: "list_mcp_resource_templates".to_string(),

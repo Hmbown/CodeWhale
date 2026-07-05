@@ -3901,6 +3901,7 @@ mod tests {
     #[test]
     fn pinned_sidebar_renders_agents_section_when_subagents_are_active() {
         let mut app = create_test_app();
+        app.ui_locale = Locale::En;
         app.sidebar_focus = SidebarFocus::Pinned;
         app.subagent_cache
             .push(cached_agent("agent-active-1", Some("critic")));

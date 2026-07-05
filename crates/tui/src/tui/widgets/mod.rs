@@ -653,8 +653,16 @@ impl Renderable for ComposerWidget<'_> {
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, menu_lines_for_budget);
         let content_width = usize::from(inner_area.width.max(1));
-        let (visible_lines, _cursor_row, _cursor_col, scroll_offset) =
-            layout_input_with_scroll(input_text, input_cursor, content_width, input_rows_budget);
+
+        // Use the extended version that also returns character indices to avoid
+        // redundant wrapping when rendering text selections (issue #3909).
+        let (visible_lines, _cursor_row, _cursor_col, _scroll_offset, visible_char_indices) =
+            layout_input_with_scroll_and_char_indices(
+                input_text,
+                input_cursor,
+                content_width,
+                input_rows_budget,
+            );
         let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let border_color = if input_text.trim().is_empty() {
@@ -795,13 +803,12 @@ impl Renderable for ComposerWidget<'_> {
                 input_lines.push(Line::from(Span::styled(placeholder, style)));
             }
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
-            let line_ranges: Vec<(usize, usize)> =
-                wrap_input_lines_for_mouse(&self.app.input, content_width)
-                    .into_iter()
-                    .skip(scroll_offset)
-                    .take(visible_lines.len())
-                    .map(|(start, text)| (start, start + text.chars().count()))
-                    .collect();
+            // Use the character indices we already computed during layout
+            // to avoid redundant wrapping (issue #3909).
+            let line_ranges: Vec<(usize, usize)> = visible_char_indices
+                .iter()
+                .map(|(start, text)| (*start, *start + text.chars().count()))
+                .collect();
             for (line_text, (line_start, line_end)) in visible_lines.iter().zip(line_ranges.iter())
             {
                 let spans = line_spans_with_selection(
@@ -3127,6 +3134,56 @@ pub fn layout_input_with_scroll(
     )
 }
 
+/// Extended version of `layout_input_with_scroll` that also returns character
+/// indices for each wrapped line. Used by ComposerWidget to avoid redundant
+/// wrapping when rendering text selections.
+fn layout_input_with_scroll_and_char_indices(
+    input: &str,
+    cursor: usize,
+    width: usize,
+    max_height: usize,
+) -> (Vec<String>, usize, usize, usize, Vec<(usize, String)>) {
+    let (all_lines, all_with_indices) = wrap_input_lines_internal(input, width);
+
+    let lines = if all_lines.is_empty() {
+        vec![String::new()]
+    } else {
+        all_lines
+    };
+
+    let (cursor_row, cursor_col) = cursor_row_col(input, cursor, width.max(1));
+
+    let max_height = max_height.max(1);
+    let mut start = 0usize;
+    if cursor_row >= max_height {
+        start = cursor_row + 1 - max_height;
+    }
+    if start + max_height > lines.len() {
+        start = lines.len().saturating_sub(max_height);
+    }
+    let visible = lines
+        .into_iter()
+        .skip(start)
+        .take(max_height)
+        .collect::<Vec<_>>();
+    let visible_cursor_row = cursor_row.saturating_sub(start);
+
+    // Also slice the char indices to match visible lines
+    let visible_with_indices = all_with_indices
+        .into_iter()
+        .skip(start)
+        .take(max_height)
+        .collect();
+
+    (
+        visible,
+        visible_cursor_row,
+        cursor_col.min(width.saturating_sub(1)),
+        start,
+        visible_with_indices,
+    )
+}
+
 fn cursor_row_col(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     let mut row = 0usize;
     let mut col = 0usize;
@@ -3169,24 +3226,53 @@ fn cursor_row_col(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     (row, col)
 }
 
-fn wrap_input_lines(input: &str, width: usize) -> Vec<String> {
+/// Internal helper that returns both wrapped lines and character indices.
+/// Used by `wrap_input_lines`, `wrap_input_lines_for_mouse`, and
+/// `layout_input_with_scroll` to avoid redundant wrapping computations.
+fn wrap_input_lines_internal(input: &str, width: usize) -> (Vec<String>, Vec<(usize, String)>) {
     let mut lines = Vec::new();
+    let mut lines_with_indices = Vec::new();
+    let mut char_idx = 0usize;
+
     if input.is_empty() {
-        return lines;
+        lines_with_indices.push((0, String::new()));
+        return (lines, lines_with_indices);
     }
 
-    for raw in input.split('\n') {
-        let wrapped = wrap_text(raw, width);
+    for raw_line in input.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(String::new());
+            if width != 0 {
+                lines_with_indices.push((char_idx, String::new()));
+            }
+            char_idx += 1; // the '\n'
+            continue;
+        }
+
+        let wrapped = wrap_text(raw_line, width);
         if wrapped.is_empty() {
             lines.push(String::new());
+            if width != 0 {
+                lines_with_indices.push((char_idx, String::new()));
+            }
         } else {
-            lines.extend(wrapped);
+            for wrapped_line in &wrapped {
+                let line_char_len: usize = wrapped_line.chars().count();
+                lines.push(wrapped_line.clone());
+                if width != 0 {
+                    lines_with_indices.push((char_idx, wrapped_line.clone()));
+                }
+                char_idx += line_char_len;
+            }
         }
+        char_idx += 1; // the '\n'
     }
 
-    // Note: No need for ends_with('\n') check - split('\n') already includes
-    // the trailing empty string for inputs ending with newline.
+    (lines, lines_with_indices)
+}
 
+fn wrap_input_lines(input: &str, width: usize) -> Vec<String> {
+    let (lines, _) = wrap_input_lines_internal(input, width);
     lines
 }
 
@@ -3197,25 +3283,8 @@ pub fn wrap_input_lines_for_mouse(input: &str, width: usize) -> Vec<(usize, Stri
         return vec![(0, String::new())];
     }
 
-    let mut result = Vec::new();
-    let mut char_idx = 0usize;
-
-    for raw_line in input.split('\n') {
-        if raw_line.is_empty() {
-            result.push((char_idx, String::new()));
-            char_idx += 1; // the '\n'
-            continue;
-        }
-        let wrapped = wrap_text(raw_line, width);
-        for wrapped_line in &wrapped {
-            let line_char_len: usize = wrapped_line.chars().count();
-            result.push((char_idx, wrapped_line.clone()));
-            char_idx += line_char_len;
-        }
-        char_idx += 1; // the '\n'
-    }
-
-    result
+    let (_, lines_with_indices) = wrap_input_lines_internal(input, width);
+    lines_with_indices
 }
 
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
@@ -3317,7 +3386,8 @@ mod tests {
         apply_send_flash, build_empty_state_lines, composer_height, composer_max_height,
         composer_min_input_rows, composer_top_padding, cursor_row_col, empty_composer_visual_rows,
         layout_input, pad_lines_to_bottom, placeholder_visual_lines, push_command_entry,
-        should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
+        should_render_empty_state, slash_completion_hints, wrap_input_lines,
+        wrap_input_lines_for_mouse, wrap_text,
     };
     use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
@@ -3685,6 +3755,18 @@ mod tests {
     fn wrap_input_lines_trailing_newline() {
         let lines = wrap_input_lines("a\n", 10);
         assert_eq!(lines, vec!["a", ""]);
+    }
+
+    #[test]
+    fn wrap_input_lines_for_mouse_empty_input() {
+        // Empty input should return a single empty line at position 0.
+        // This ensures empty composer mouse selection works correctly (issue #3909).
+        let result = wrap_input_lines_for_mouse("", 10);
+        assert_eq!(result, vec![(0, String::new())]);
+
+        // Also verify with width=0 edge case
+        let result_zero = wrap_input_lines_for_mouse("", 0);
+        assert_eq!(result_zero, vec![(0, String::new())]);
     }
 
     #[test]

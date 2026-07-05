@@ -4035,6 +4035,8 @@ fn openai_codex_default_model_falls_back_to_codex_model() {
 
 #[test]
 fn direct_provider_ignores_foreign_deepseek_root_default_model() {
+    let _lock = lock_test_env();
+
     let config = Config {
         provider: Some("zai".to_string()),
         default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
