@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truthful credential badges and a count line, full catalog by default)
   and a progressive-disclosure model picker (bounded shortlist with a
   details strip for the focused row; Ctrl+A expands to all models).
+- Added Meituan LongCat as a first-class OpenAI-compatible provider (`longcat`
+  with `long-cat`/`meituan-longcat`/`meituan` aliases), `LONGCAT_API_KEY`
+  discovery, the `LongCat-2.0` default model, provider-picker wiring, model
+  completions, provider docs, and web provider facts.
 - Added recovery hints to error messages (context overflow suggests
   `/compact`/`/restore`; auth failures suggest `/provider`) and made
   `codewhale doctor` exit non-zero when checks fail.
@@ -135,6 +139,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed fresh launch/setup testing with an explicit `CODEWHALE_HOME` so config,
   settings, theme prefs, and doctor legacy-state diagnostics do not inherit
   unrelated ambient `~/.deepseek` files.
+- Fixed the onboarding Trust step so plain Enter no longer silently grants
+  workspace trust; users must choose the explicit trust or exit keys.
+- Fixed same-root skill-name collisions being silently shadowed; duplicate
+  normalized skill names now warn while keeping discovery deterministic (#3919).
 
 ### Security
 
