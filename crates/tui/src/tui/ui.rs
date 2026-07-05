@@ -3925,10 +3925,16 @@ async fn run_event_loop(
                             }
                         }
                         OnboardingState::TrustDirectory => {
-                            if let Err(err) = complete_trust_directory_onboarding(app, config) {
-                                app.status_message =
-                                    Some(format!("Failed to trust workspace: {err}"));
-                            }
+                            // Trusting a workspace is a security boundary, so it
+                            // must be a deliberate choice. Enter — the "advance"
+                            // key on every other onboarding screen — must NOT
+                            // grant trust by reflex (accidental-trust risk). Nor
+                            // is it a silent dead key: point the user at the
+                            // explicit keys the footer advertises.
+                            app.status_message = Some(
+                                "Press 1 or Y to trust this workspace, or 2 or N to exit."
+                                    .to_string(),
+                            );
                         }
                         OnboardingState::Tips => {
                             app.finish_onboarding_without_feature_intro();
