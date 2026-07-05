@@ -1517,10 +1517,13 @@ mod tests {
     #[test]
     fn config_override_requires_explicit_opt_in() {
         // A present, non-empty override file must NOT replace the base prompt
-        // unless the explicit opt-in flag is set. When the flag is unset
-        // `load_config_dir_prompt_overrides` applies nothing (and never touches
-        // the global override cell), so this assertion is safe to run in the
-        // shared test binary.
+        // unless the explicit opt-in flag is set. This test drains the shared
+        // process-global PROMPT_OVERRIDE_NOTICES queue, so it must serialize
+        // against the sibling test that also touches it
+        // (`tui::ui::tests::prompt_override_notice_surfaces_in_transcript_and_toast`);
+        // both take `lock_test_env()` for mutual exclusion under the multi-
+        // threaded test binary.
+        let _env_guard = crate::test_support::lock_test_env();
         let tmp = tempdir().expect("tempdir");
         let prompts_dir = tmp.path().join("prompts");
         std::fs::create_dir_all(&prompts_dir).expect("mkdir");
