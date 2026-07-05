@@ -239,7 +239,27 @@ impl SkillRegistry {
                         }
                         skill.path = skill_path.clone();
                         registry.normalize_skill_name(&mut skill, &skill_path);
-                        registry.skills.push(skill);
+                        // Two sibling directories under the same root can
+                        // normalize to the same command name (e.g. `My Skill/`
+                        // and `my_skill/` both slugify to `my-skill`). Keep the
+                        // first (matching the cross-root merge in
+                        // `discover_from_directories`) and warn instead of
+                        // silently pushing an unreachable duplicate (#3919).
+                        let shadowed_by = registry
+                            .skills
+                            .iter()
+                            .find(|s| s.name == skill.name)
+                            .map(|s| s.path.clone());
+                        if let Some(existing_path) = shadowed_by {
+                            registry.push_warning(format!(
+                                "Skill `{}` at {} is shadowed by {}.",
+                                skill.name,
+                                skill.path.display(),
+                                existing_path.display()
+                            ));
+                        } else {
+                            registry.skills.push(skill);
+                        }
                         // This directory IS a skill. Don't descend further:
                         // any nested `SKILL.md` would be a fixture or
                         // example bundled with the parent skill, not a
@@ -1408,6 +1428,39 @@ body";
                 .iter()
                 .any(|warning| warning.contains("shared") && warning.contains("shadowed by")),
             "duplicate shadowing should warn, got {:?}",
+            registry.warnings()
+        );
+    }
+
+    #[test]
+    fn same_root_slug_collision_warns_and_keeps_one() {
+        let tmpdir = TempDir::new().unwrap();
+        let root = tmpdir.path();
+        // Two sibling directories under one root whose frontmatter names
+        // slugify to the same command name ("my-skill"). Only one can be
+        // reachable by name; the other must warn rather than silently coexist
+        // as an unreachable duplicate (#3919 same-root gap).
+        write_skill(root, "My Skill", "first", "body");
+        write_skill(root, "my_skill", "second", "body");
+
+        let registry = super::SkillRegistry::discover(root);
+        let claimants = registry
+            .list()
+            .iter()
+            .filter(|s| s.name == "my-skill")
+            .count();
+        assert_eq!(
+            claimants,
+            1,
+            "exactly one skill should claim `my-skill`, got {:?}",
+            registry.list().iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            registry
+                .warnings()
+                .iter()
+                .any(|w| w.contains("my-skill") && w.contains("shadowed by")),
+            "same-root slug collision should warn, got {:?}",
             registry.warnings()
         );
     }
