@@ -350,6 +350,15 @@ impl Engine {
                 .pinned_message_indices(&self.session.messages, &self.session.workspace);
             let compaction_paths = self.session.working_set.top_paths(24);
 
+            if self.config.compaction.enabled {
+                tracing::trace!(
+                    strategy = ?self.config.harness_compaction_strategy(),
+                    threshold = self.config.compaction.token_threshold,
+                    protected_window = self.config.compaction.protected_window,
+                    "evaluating auto-compaction"
+                );
+            }
+
             if self.config.compaction.enabled
                 && should_compact(
                     &self.session.messages,

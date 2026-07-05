@@ -1,6 +1,7 @@
 //! Context compaction for long conversations.
 
 use anyhow::Result;
+use codewhale_config::HarnessCompactionStrategy;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
@@ -31,6 +32,9 @@ pub struct CompactionConfig {
     pub token_threshold: usize,
     pub model: String,
     pub cache_summary: bool,
+    /// Most-recent messages protected from summarization. Derived from the
+    /// active harness posture; `Default` posture keeps [`KEEP_RECENT_MESSAGES`].
+    pub protected_window: usize,
 }
 
 impl Default for CompactionConfig {
@@ -55,11 +59,28 @@ impl Default for CompactionConfig {
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
             cache_summary: true,
+            protected_window: KEEP_RECENT_MESSAGES,
+        }
+    }
+}
+
+/// Protected message window for a harness compaction strategy.
+#[must_use]
+pub fn protected_window_for_strategy(strategy: HarnessCompactionStrategy) -> usize {
+    match strategy {
+        HarnessCompactionStrategy::PrefixCache => {
+            KEEP_RECENT_MESSAGES.saturating_mul(PREFIX_CACHE_WINDOW_FACTOR)
+        }
+        HarnessCompactionStrategy::Default | HarnessCompactionStrategy::Aggressive => {
+            KEEP_RECENT_MESSAGES
         }
     }
 }
 
 pub const KEEP_RECENT_MESSAGES: usize = 4;
+/// Multiplier applied to [`KEEP_RECENT_MESSAGES`] for
+/// [`HarnessCompactionStrategy::PrefixCache`].
+pub const PREFIX_CACHE_WINDOW_FACTOR: usize = 2;
 const RECENT_WORKING_SET_WINDOW: usize = 12;
 const MAX_WORKING_SET_PATHS: usize = 24;
 const MIN_SUMMARIZE_MESSAGES: usize = 6;
@@ -644,7 +665,7 @@ pub fn should_compact(
     let plan = plan_compaction(
         messages,
         workspace,
-        KEEP_RECENT_MESSAGES,
+        config.protected_window,
         external_pins,
         external_working_set_paths,
     );
@@ -964,7 +985,7 @@ pub async fn compact_messages_safe(
     let mut next_stop_check_bytes = 0usize;
     let pruned_bytes = prune_tool_results_until(
         &mut pruned_messages,
-        KEEP_RECENT_MESSAGES,
+        config.protected_window,
         |candidate_messages, bytes_saved| {
             if !was_over_threshold || bytes_saved < next_stop_check_bytes {
                 return false;
@@ -1112,7 +1133,7 @@ pub async fn compact_messages(
     let plan = plan_compaction(
         messages,
         workspace,
-        KEEP_RECENT_MESSAGES,
+        config.protected_window,
         external_pins,
         external_working_set_paths,
     );
@@ -1627,6 +1648,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::config::ApiProvider;
     use serde_json::json;
 
     fn msg(role: &str, text: &str) -> Message {
@@ -2855,5 +2877,103 @@ mod tests {
             None,
         );
         assert!(plan.pinned_indices.contains(&0)); // src/main.rs mention
+    }
+
+    #[test]
+    fn default_protected_window_matches_legacy() {
+        assert_eq!(
+            protected_window_for_strategy(HarnessCompactionStrategy::Default),
+            KEEP_RECENT_MESSAGES
+        );
+        let config = CompactionConfig::default();
+        assert_eq!(config.protected_window, KEEP_RECENT_MESSAGES);
+    }
+
+    #[test]
+    fn prefix_cache_widens_protected_window() {
+        assert!(
+            protected_window_for_strategy(HarnessCompactionStrategy::PrefixCache)
+                > KEEP_RECENT_MESSAGES
+        );
+    }
+
+    #[test]
+    fn plan_compaction_respects_posture_window() {
+        let messages: Vec<Message> = (0..12)
+            .map(|i| msg("user", &format!("message {i}")))
+            .collect();
+        let default_plan = plan_compaction(&messages, None, KEEP_RECENT_MESSAGES, None, None);
+        let wide_window = protected_window_for_strategy(HarnessCompactionStrategy::PrefixCache);
+        let wide_plan = plan_compaction(&messages, None, wide_window, None, None);
+
+        assert!(wide_plan.pinned_indices.len() > default_plan.pinned_indices.len());
+        assert!(wide_plan.summarize_indices.len() < default_plan.summarize_indices.len());
+    }
+
+    #[test]
+    fn prefix_cache_triggers_later_than_default() {
+        let provider = ApiProvider::Deepseek;
+        let model = "deepseek-v4-pro";
+        let base = 80.0;
+        let default_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            provider,
+            model,
+            None,
+            crate::route_budget::threshold_pct_for_strategy(
+                HarnessCompactionStrategy::Default,
+                base,
+            ),
+        );
+        let prefix_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            provider,
+            model,
+            None,
+            crate::route_budget::threshold_pct_for_strategy(
+                HarnessCompactionStrategy::PrefixCache,
+                base,
+            ),
+        );
+        assert!(prefix_threshold > default_threshold);
+
+        // Same message volume: a higher threshold fires later.
+        let messages: Vec<Message> = (0..10).map(|_| msg("user", &"x".repeat(50))).collect();
+        let default_config = CompactionConfig {
+            enabled: true,
+            token_threshold: 100,
+            ..Default::default()
+        };
+        let prefix_config = CompactionConfig {
+            enabled: true,
+            token_threshold: 150,
+            ..Default::default()
+        };
+        assert!(should_compact(&messages, &default_config, None, None, None));
+        assert!(!should_compact(&messages, &prefix_config, None, None, None));
+    }
+
+    #[test]
+    fn aggressive_triggers_earlier_than_default() {
+        let provider = ApiProvider::Deepseek;
+        let model = "deepseek-v4-pro";
+        let base = 80.0;
+        let default_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            provider,
+            model,
+            None,
+            crate::route_budget::threshold_pct_for_strategy(
+                HarnessCompactionStrategy::Default,
+                base,
+            ),
+        );
+        let aggressive_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            provider,
+            model,
+            None,
+            crate::route_budget::threshold_pct_for_strategy(
+                HarnessCompactionStrategy::Aggressive,
+                base,
+            ),
+        );
+        assert!(aggressive_threshold < default_threshold);
     }
 }

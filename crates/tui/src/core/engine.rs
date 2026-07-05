@@ -303,9 +303,8 @@ pub struct EngineConfig {
     pub auto_review_policy: crate::tui::auto_review::AutoReviewPolicy,
     /// Auto-compaction settings for long conversations.
     pub compaction: CompactionConfig,
-    /// Resolved harness posture for the active route; carried for later PR3
-    /// runtime slices. Unused until those slices consume it.
-    #[allow(dead_code)]
+    /// Resolved harness posture for the active route; drives compaction timing
+    /// and protected-window policy at construction and sync sites.
     pub harness_posture: codewhale_config::HarnessPosture,
     /// Shared Todo list state.
     pub todos: SharedTodoList,
@@ -435,6 +434,12 @@ impl EngineConfig {
         model: &str,
     ) -> codewhale_config::HarnessPosture {
         codewhale_config::resolve_harness_for_profiles(profiles, provider_route, model).posture
+    }
+
+    /// Compaction strategy carried on this engine's resolved posture.
+    #[must_use]
+    pub fn harness_compaction_strategy(&self) -> codewhale_config::HarnessCompactionStrategy {
+        self.harness_posture.compaction_strategy
     }
 }
 

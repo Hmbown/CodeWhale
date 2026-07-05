@@ -7751,6 +7751,15 @@ async fn run_exec_agent(
             active_route_limits,
         )
     };
+    let harness_posture = EngineConfig::resolve_harness_posture(
+        &execution_config.harness_profiles,
+        effective_provider.as_str(),
+        &effective_model,
+    );
+    let effective_compact_percent = crate::route_budget::threshold_pct_for_strategy(
+        harness_posture.compaction_strategy,
+        settings.auto_compact_threshold_percent,
+    );
     let compaction = CompactionConfig {
         enabled: auto_compact_enabled,
         model: effective_model.clone(),
@@ -7758,7 +7767,10 @@ async fn run_exec_agent(
             effective_provider,
             &effective_model,
             active_route_limits,
-            settings.auto_compact_threshold_percent,
+            effective_compact_percent,
+        ),
+        protected_window: crate::compaction::protected_window_for_strategy(
+            harness_posture.compaction_strategy,
         ),
         ..Default::default()
     };
@@ -7808,11 +7820,7 @@ async fn run_exec_agent(
         features: execution_config.features(),
         auto_review_policy: execution_config.auto_review_policy(),
         compaction,
-        harness_posture: EngineConfig::resolve_harness_posture(
-            &execution_config.harness_profiles,
-            effective_provider.as_str(),
-            &effective_model,
-        ),
+        harness_posture,
         todos: new_shared_todo_list(),
         plan_state: new_shared_plan_state(),
         goal_state: crate::tools::goal::new_shared_goal_state(),

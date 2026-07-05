@@ -12425,15 +12425,19 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
-    let configured_threshold = app.auto_compact_threshold_percent.clamp(10.0, 100.0);
-    let warning_threshold = CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(configured_threshold);
+    let effective_threshold = crate::route_budget::threshold_pct_for_strategy(
+        app.active_harness_resolution.posture.compaction_strategy,
+        app.auto_compact_threshold_percent,
+    )
+    .clamp(10.0, 100.0);
+    let warning_threshold = CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(effective_threshold);
     if percent < warning_threshold {
         return;
     }
 
     let recommendation = if !app.auto_compact {
         "Consider enabling auto_compact or use /compact."
-    } else if percent >= configured_threshold {
+    } else if percent >= effective_threshold {
         "Auto-compaction will run before the next send."
     } else {
         "Auto-compaction is enabled."

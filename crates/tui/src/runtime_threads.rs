@@ -940,7 +940,6 @@ impl RuntimeThreadManager {
         let (default_model, compaction_template, stream_chunk_timeout_secs, subagent_cfg) = {
             let cfg = self.read_config();
             let settings = crate::settings::Settings::load().unwrap_or_default();
-            let provider = cfg.api_provider();
             let auto_compact_enabled =
                 if crate::settings::Settings::auto_compact_explicitly_configured() {
                     settings.auto_compact
@@ -949,12 +948,26 @@ impl RuntimeThreadManager {
                         &cfg.default_text_model.clone().unwrap_or_default(),
                     )
                 };
+            let provider = cfg.api_provider();
+            let default_model = cfg.default_text_model.clone().unwrap_or_default();
+            let harness_posture = EngineConfig::resolve_harness_posture(
+                &cfg.harness_profiles,
+                provider.as_str(),
+                &default_model,
+            );
+            let effective_compact_percent = crate::route_budget::threshold_pct_for_strategy(
+                harness_posture.compaction_strategy,
+                settings.auto_compact_threshold_percent,
+            );
             let compaction = crate::compaction::CompactionConfig {
                 enabled: auto_compact_enabled,
                 model: String::new(), // per-engine, filled below
                 token_threshold: compaction_threshold_for_model_at_percent(
-                    &cfg.default_text_model.clone().unwrap_or_default(),
-                    settings.auto_compact_threshold_percent,
+                    &default_model,
+                    effective_compact_percent,
+                ),
+                protected_window: crate::compaction::protected_window_for_strategy(
+                    harness_posture.compaction_strategy,
                 ),
                 ..Default::default()
             };
@@ -2545,18 +2558,31 @@ impl RuntimeThreadManager {
         // Resolve the model-aware auto-compaction default unless the user
         // persisted an explicit preference.
         let settings = crate::settings::Settings::load().unwrap_or_default();
+        let provider = cfg.api_provider();
         let auto_compact_enabled =
             if crate::settings::Settings::auto_compact_explicitly_configured() {
                 settings.auto_compact
             } else {
                 auto_compact_default_for_model(&thread.model)
             };
+        let harness_posture = EngineConfig::resolve_harness_posture(
+            &cfg.harness_profiles,
+            provider.as_str(),
+            &thread.model,
+        );
+        let effective_compact_percent = crate::route_budget::threshold_pct_for_strategy(
+            harness_posture.compaction_strategy,
+            settings.auto_compact_threshold_percent,
+        );
         let compaction = CompactionConfig {
             enabled: auto_compact_enabled,
             model: thread.model.clone(),
             token_threshold: compaction_threshold_for_model_at_percent(
                 &thread.model,
-                settings.auto_compact_threshold_percent,
+                effective_compact_percent,
+            ),
+            protected_window: crate::compaction::protected_window_for_strategy(
+                harness_posture.compaction_strategy,
             ),
             ..Default::default()
         };
@@ -2567,15 +2593,9 @@ impl RuntimeThreadManager {
             .lsp
             .clone()
             .map(crate::config::LspConfigToml::into_runtime);
-        let provider = cfg.api_provider();
         let max_subagents = cfg
             .max_subagents_for_provider(provider)
             .clamp(1, MAX_SUBAGENTS);
-        let harness_posture = EngineConfig::resolve_harness_posture(
-            &cfg.harness_profiles,
-            provider.as_str(),
-            &thread.model,
-        );
         let engine_cfg = EngineConfig {
             model: thread.model.clone(),
             active_route_limits: None,

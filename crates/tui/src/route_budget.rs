@@ -1,3 +1,4 @@
+use codewhale_config::HarnessCompactionStrategy;
 use codewhale_config::route::RouteLimits;
 
 use crate::config::{ApiProvider, provider_capability};
@@ -6,6 +7,40 @@ use crate::models::{
     DEFAULT_AUTO_COMPACT_MAX_CONTEXT_WINDOW_TOKENS, DEFAULT_COMPACTION_TOKEN_THRESHOLD,
     context_window_for_model,
 };
+
+/// Percentage points added to the base auto-compact threshold for
+/// [`HarnessCompactionStrategy::PrefixCache`] (compact later, preserve prefix cache).
+pub(crate) const PREFIX_CACHE_PERCENT_DELTA: f64 = 8.0;
+/// Percentage points subtracted from the base threshold for
+/// [`HarnessCompactionStrategy::Aggressive`] (compact earlier).
+pub(crate) const AGGRESSIVE_PERCENT_DELTA: f64 = 12.0;
+/// Upper clamp for posture-adjusted compaction trigger percentages.
+pub(crate) const COMPACTION_PCT_CEILING: f64 = 95.0;
+/// Lower clamp for posture-adjusted compaction trigger percentages.
+pub(crate) const COMPACTION_PCT_FLOOR: f64 = 50.0;
+
+/// Shift the compaction trigger percent for a harness compaction strategy.
+///
+/// `Default` returns `base_pct` unchanged (zero-regression identity).
+/// `PrefixCache` raises it (compact later, preserve the V4 prefix cache);
+/// `Aggressive` lowers it (compact earlier). Deltas are named constants and
+/// the result is clamped to a safe band; the downstream trigger is already
+/// anchored to the input ceiling, so a higher percent never overflows.
+#[must_use]
+pub(crate) fn threshold_pct_for_strategy(
+    strategy: HarnessCompactionStrategy,
+    base_pct: f64,
+) -> f64 {
+    match strategy {
+        HarnessCompactionStrategy::Default => base_pct,
+        HarnessCompactionStrategy::PrefixCache => {
+            (base_pct + PREFIX_CACHE_PERCENT_DELTA).min(COMPACTION_PCT_CEILING)
+        }
+        HarnessCompactionStrategy::Aggressive => {
+            (base_pct - AGGRESSIVE_PERCENT_DELTA).max(COMPACTION_PCT_FLOOR)
+        }
+    }
+}
 
 /// Preserve only route limits that came from a concrete offering.
 #[must_use]
@@ -289,5 +324,57 @@ mod tests {
         // positive, ceiling-bounded threshold.
         let trigger = compaction_threshold_for_model_at_percent("totally-unknown-xyz", 80.0);
         assert!(trigger > 0);
+    }
+
+    #[test]
+    fn threshold_pct_for_strategy_default_is_identity() {
+        assert_eq!(
+            threshold_pct_for_strategy(HarnessCompactionStrategy::Default, 80.0),
+            80.0
+        );
+    }
+
+    #[test]
+    fn threshold_pct_for_strategy_prefix_cache_is_later() {
+        let adjusted = threshold_pct_for_strategy(HarnessCompactionStrategy::PrefixCache, 80.0);
+        assert!(adjusted > 80.0);
+        assert!(adjusted <= COMPACTION_PCT_CEILING);
+    }
+
+    #[test]
+    fn threshold_pct_for_strategy_aggressive_is_earlier() {
+        let adjusted = threshold_pct_for_strategy(HarnessCompactionStrategy::Aggressive, 80.0);
+        assert!(adjusted < 80.0);
+        assert!(adjusted >= COMPACTION_PCT_FLOOR);
+    }
+
+    #[test]
+    fn default_strategy_compact_threshold_matches_legacy_percent() {
+        let provider = ApiProvider::Deepseek;
+        let model = "deepseek-v4-pro";
+        let base = 80.0;
+        let legacy = compaction_threshold_for_route_at_percent(provider, model, None, base);
+        let adjusted = compaction_threshold_for_route_at_percent(
+            provider,
+            model,
+            None,
+            threshold_pct_for_strategy(HarnessCompactionStrategy::Default, base),
+        );
+        assert_eq!(legacy, adjusted);
+    }
+
+    #[test]
+    fn headless_model_trigger_respects_compaction_strategy() {
+        let model = "deepseek-v4-pro";
+        let base = 80.0;
+        let default_trigger = compaction_threshold_for_model_at_percent(
+            model,
+            threshold_pct_for_strategy(HarnessCompactionStrategy::Default, base),
+        );
+        let aggressive_trigger = compaction_threshold_for_model_at_percent(
+            model,
+            threshold_pct_for_strategy(HarnessCompactionStrategy::Aggressive, base),
+        );
+        assert!(aggressive_trigger < default_trigger);
     }
 }

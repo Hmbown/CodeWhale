@@ -2611,11 +2611,22 @@ impl App {
         } else {
             model.as_str()
         };
+        let boot_harness_strategy = resolve_harness_for_profiles(
+            &config.harness_profiles,
+            provider.as_str(),
+            threshold_model,
+        )
+        .posture
+        .compaction_strategy;
+        let boot_compact_percent = crate::route_budget::threshold_pct_for_strategy(
+            boot_harness_strategy,
+            auto_compact_threshold_percent,
+        );
         let compact_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
             provider,
             threshold_model,
             active_route_limits,
-            auto_compact_threshold_percent,
+            boot_compact_percent,
         );
         let auto_compact = if auto_compact_user_configured {
             settings_auto_compact
@@ -6026,12 +6037,17 @@ impl App {
     }
 
     pub fn update_model_compaction_budget(&mut self) {
+        self.refresh_active_harness_resolution();
         let model = self.effective_model_for_budget().to_string();
+        let effective_percent = crate::route_budget::threshold_pct_for_strategy(
+            self.active_harness_resolution.posture.compaction_strategy,
+            self.auto_compact_threshold_percent,
+        );
         self.compact_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
             self.api_provider,
             &model,
             self.active_route_limits,
-            self.auto_compact_threshold_percent,
+            effective_percent,
         );
         if !self.auto_compact_user_configured {
             self.auto_compact = crate::route_budget::auto_compact_default_for_route(
@@ -6040,13 +6056,12 @@ impl App {
                 self.active_route_limits,
             );
         }
-        self.refresh_active_harness_resolution();
     }
 
     /// Refresh the cached harness resolution for the active provider/model route.
     ///
     /// Pure derived state: does not mutate config, persist settings, or change
-    /// runtime behavior until later PR3 slices consume `active_harness_resolution`.
+    /// unrelated runtime behavior when refreshed.
     pub fn refresh_active_harness_resolution(&mut self) {
         self.active_harness_resolution = self.harness_resolution();
     }
@@ -6181,6 +6196,9 @@ impl App {
             enabled: self.auto_compact,
             token_threshold: self.compact_threshold,
             model: self.effective_model_for_budget().to_string(),
+            protected_window: crate::compaction::protected_window_for_strategy(
+                self.active_harness_resolution.posture.compaction_strategy,
+            ),
             ..Default::default()
         }
     }

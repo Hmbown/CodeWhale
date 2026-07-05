@@ -39,7 +39,7 @@ pub(crate) fn format_harness_status(app: &App) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Harness profile (preview — does not change runtime behavior yet)"
+        "Harness profile (compaction strategy is live; other knobs are preview)"
     );
     let _ = writeln!(out);
     push_row(&mut out, "Provider", app.active_provider_route());
@@ -53,7 +53,7 @@ pub(crate) fn format_harness_status(app: &App) -> String {
     );
     let _ = writeln!(
         out,
-        "             max_subagents={}  compaction={}  tools={}  safety={}",
+        "             max_subagents={}  compaction={} (live)  tools={}  safety={}",
         posture.max_subagents,
         compaction_strategy_label(posture.compaction_strategy),
         tool_surface_label(posture.tool_surface),
@@ -172,7 +172,7 @@ mod tests {
         );
         let output = format_harness_status(&app);
 
-        assert!(output.contains("does not change runtime behavior yet"));
+        assert!(output.contains("compaction strategy is live"));
         assert!(output.contains("Provider"));
         assert!(output.contains("deepseek"));
         assert!(output.contains("cache-heavy"));

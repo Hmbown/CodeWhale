@@ -2184,6 +2184,84 @@ fn test_update_model_compaction_budget() {
 }
 
 #[test]
+fn cache_heavy_route_uses_later_compaction_threshold() {
+    // Isolate the posture variable: keep provider/model (and therefore the
+    // context window / input ceiling) fixed, and compare the wired threshold
+    // against the same route evaluated at the raw base percent. Any difference
+    // is attributable to the PrefixCache posture, not to a different window.
+    let mut app = App::new(test_options(false), &Config::default());
+    app.api_provider = ApiProvider::Deepseek;
+    app.model = "deepseek-v4-pro".to_string();
+    app.auto_model = false;
+    app.auto_compact_threshold_percent = 80.0;
+    app.active_route_limits = None;
+    app.active_context_window_override = None;
+    app.update_model_compaction_budget();
+
+    // Fixture assumption: this route resolves to the cache-heavy posture.
+    assert_eq!(
+        app.active_harness_resolution.posture.compaction_strategy,
+        codewhale_config::HarnessCompactionStrategy::PrefixCache
+    );
+
+    // Baseline = identical route at the unadjusted base percent (Default).
+    let baseline_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+        app.api_provider,
+        &app.model,
+        app.active_route_limits,
+        app.auto_compact_threshold_percent,
+    );
+    // Wiring check: the app threshold equals the route evaluated at the
+    // posture-adjusted percent on the same route.
+    let expected_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+        app.api_provider,
+        &app.model,
+        app.active_route_limits,
+        crate::route_budget::threshold_pct_for_strategy(
+            app.active_harness_resolution.posture.compaction_strategy,
+            app.auto_compact_threshold_percent,
+        ),
+    );
+    assert_eq!(app.compact_threshold, expected_threshold);
+
+    assert!(
+        app.compact_threshold > baseline_threshold,
+        "cache-heavy posture ({}) should compact later than the same route at the base percent ({baseline_threshold})",
+        app.compact_threshold
+    );
+}
+
+#[test]
+fn cache_heavy_route_widens_protected_window() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.api_provider = ApiProvider::Deepseek;
+    app.model = "deepseek-v4-pro".to_string();
+    app.auto_model = false;
+    app.update_model_compaction_budget();
+
+    let config = app.compaction_config();
+    assert!(
+        config.protected_window > crate::compaction::KEEP_RECENT_MESSAGES,
+        "PrefixCache posture should protect more recent messages"
+    );
+}
+
+#[test]
+fn standard_route_keeps_default_protected_window() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.api_provider = ApiProvider::Openai;
+    app.model = "gpt-custom".to_string();
+    app.auto_model = false;
+    app.update_model_compaction_budget();
+
+    let config = app.compaction_config();
+    assert_eq!(
+        config.protected_window,
+        crate::compaction::KEEP_RECENT_MESSAGES
+    );
+}
+
+#[test]
 fn active_harness_posture_tracks_active_route() {
     let mut app = App::new(test_options(false), &Config::default());
     app.api_provider = ApiProvider::Deepseek;
