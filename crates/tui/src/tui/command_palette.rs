@@ -872,7 +872,9 @@ impl ModalView for CommandPaletteView {
 
         render_modal_surface(area, popup_area, buf);
 
-        let block = modal_block().title(" Command Palette ");
+        // Sentence case matches the other modal titles (" Mode ",
+        // " Fleet workers ", " Custom provider ", ...).
+        let block = modal_block().title(" Command palette ");
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 

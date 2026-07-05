@@ -21,6 +21,9 @@ use crate::tui::views::{
 pub struct ModePickerView {
     cursor: usize,
     locale: Locale,
+    /// Content rect of the last render, for mouse hit-testing. Row 0 is the
+    /// prompt line; choice `idx` renders on row `1 + idx`.
+    last_content: std::cell::Cell<Option<Rect>>,
 }
 
 impl ModePickerView {
@@ -30,7 +33,26 @@ impl ModePickerView {
             .iter()
             .position(|mode| *mode == current)
             .unwrap_or(0);
-        Self { cursor, locale }
+        Self {
+            cursor,
+            locale,
+            last_content: std::cell::Cell::new(None),
+        }
+    }
+
+    /// Map a mouse position to a choice index using the last rendered
+    /// content rect.
+    fn choice_at(&self, column: u16, row: u16) -> Option<usize> {
+        let content = self.last_content.get()?;
+        if column < content.x
+            || column >= content.x.saturating_add(content.width)
+            || row <= content.y
+            || row >= content.y.saturating_add(content.height)
+        {
+            return None;
+        }
+        let idx = usize::from(row - content.y - 1);
+        (idx < AppMode::CHOICES.len()).then_some(idx)
     }
 
     fn selected_mode(&self) -> AppMode {
@@ -92,6 +114,28 @@ impl ModalView for ModePickerView {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.move_up(),
+            MouseEventKind::ScrollDown => self.move_down(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Click selects a row; clicking the already-selected row
+                // activates it (mirrors Enter).
+                if let Some(idx) = self.choice_at(mouse.column, mouse.row) {
+                    if idx == self.cursor {
+                        return ViewAction::EmitAndClose(ViewEvent::ModeSelected {
+                            mode: self.selected_mode(),
+                        });
+                    }
+                    self.cursor = idx;
+                }
+            }
+            _ => {}
+        }
+        ViewAction::None
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_height = u16::try_from(AppMode::CHOICES.len()).unwrap_or(3) + 7;
         let popup_area = centered_modal_area(area, 68, popup_height, 44, 8);
@@ -122,6 +166,7 @@ impl ModalView for ModePickerView {
                 ActionHint::new("Esc", "cancel"),
             ],
         );
+        self.last_content.set(Some(content));
 
         let mut lines = Vec::with_capacity(AppMode::CHOICES.len() + 1);
         lines.push(Line::from(Span::styled(

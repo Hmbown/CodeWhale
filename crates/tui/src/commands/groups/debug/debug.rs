@@ -172,7 +172,20 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
         return CommandResult::message(format_cache_zones(app));
     }
 
-    let want = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+    // Only a bare `/cache` or an explicit turn count reaches this point. A
+    // non-numeric leftover is a typo (`/cache warmupp`) — reject it and name
+    // the valid options instead of silently rendering the default history.
+    let want = match arg {
+        None => 10,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(count) => count,
+            Err(_) => {
+                return CommandResult::error(format!(
+                    "unknown /cache argument `{raw}`. Usage: /cache [count|inspect [--verbose|--json]|stats|zones|warmup]"
+                ));
+            }
+        },
+    };
     let cap = app.session.turn_cache_history.len();
     let count = want
         .min(cap)
@@ -1016,6 +1029,24 @@ mod tests {
         let result = cache(&mut app, None);
         let msg = result.message.expect("cache produces a message");
         assert!(msg.contains("no turns recorded yet"), "got: {msg}");
+    }
+
+    /// A typo like `/cache warmupp` must not silently render the default
+    /// 10-turn history; the error names the valid subcommands.
+    #[test]
+    fn cache_command_rejects_unknown_argument_and_names_options() {
+        let mut app = create_test_app();
+        let result = cache(&mut app, Some("warmupp"));
+        assert!(result.is_error);
+        let msg = result.message.expect("error message");
+        assert!(msg.contains("warmupp"), "got: {msg}");
+        for option in ["inspect", "stats", "zones", "warmup", "count"] {
+            assert!(msg.contains(option), "error should name `{option}`: {msg}");
+        }
+
+        // Explicit numeric counts still work.
+        let result = cache(&mut app, Some("5"));
+        assert!(!result.is_error);
     }
 
     #[test]

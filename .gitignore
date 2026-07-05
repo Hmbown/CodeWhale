@@ -48,8 +48,10 @@ docs/*.pdf
 
 # Note: Cargo.lock is intentionally NOT ignored for reproducible builds
 
-# Local dev scripts and temp files
-*.sh
+# Local dev scripts and temp files. `/*.sh` is root-anchored on purpose:
+# a blanket `*.sh` silently swallowed new scripts outside the carve-outs
+# (e.g. crates/**/*.sh, docs/**/*.sh).
+/*.sh
 *.cmd
 !scripts/**
 !.github/scripts/**
@@ -57,7 +59,6 @@ docs/*.pdf
 test.txt
 TODO*.md
 todo*.md
-AGENTS.md
 NEXT_SESSION.md
 AI_HANDOFF.md
 result.json
@@ -115,7 +116,10 @@ docs/*_PLAN.md
 .envrc
 .direnv
 scripts/run_deep_swe.py
-.claude/
+# Ignore user-local Claude state but keep the repo's own .claude/skills/
+# committable — a blanket `.claude/` would drop it from fresh clones.
+.claude/*
+!.claude/skills/
 
 # Local run artifacts and caches re-included by !scripts/**
 results/

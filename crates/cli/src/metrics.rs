@@ -1,10 +1,11 @@
 //! `codewhale metrics` — reads the audit log and session/task stores and prints
 //! a human-readable usage rollup.
 //!
-//! Data sources:
-//! - `~/.deepseek/audit.log`   — one JSON line per event (approvals, credentials)
-//! - `~/.deepseek/sessions/`   — saved session JSON files (tool call history)
-//! - `~/.deepseek/tasks/runtime/events/` — runtime thread JSONL event streams
+//! Data sources (under the CodeWhale home, `~/.codewhale` by default, with a
+//! legacy `~/.deepseek` fallback for pre-rebrand installs):
+//! - `<home>/audit.log`   — one JSON line per event (approvals, credentials)
+//! - `<home>/sessions/`   — saved session JSON files (tool call history)
+//! - `<home>/tasks/runtime/events/` — runtime thread JSONL event streams
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +28,7 @@ pub struct MetricsArgs {
 }
 
 pub fn run(args: MetricsArgs) -> Result<()> {
-    let base = deepseek_home();
+    let base = metrics_home();
 
     // Collect data from every source; treat missing files as empty.
     let mut rollup = Rollup::default();
@@ -822,16 +823,42 @@ fn print_human(rollup: &Rollup) {
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-fn deepseek_home() -> PathBuf {
-    // Respect DEEPSEEK_HOME env override; fall back to ~/.deepseek.
+/// Resolve the home directory metrics data is read from.
+///
+/// Order:
+/// 1. `$CODEWHALE_HOME` (explicit isolation boundary — no legacy fallback);
+/// 2. `$DEEPSEEK_HOME` (legacy env override kept for pre-rebrand scripts);
+/// 3. existence-based resolution between `~/.codewhale` and `~/.deepseek`
+///    via [`resolve_metrics_home`].
+fn metrics_home() -> PathBuf {
+    let primary = codewhale_config::codewhale_home()
+        .unwrap_or_else(|_| PathBuf::from(".").join(codewhale_config::CODEWHALE_APP_DIR));
+    if codewhale_config::codewhale_home_is_explicit() {
+        return primary;
+    }
     if let Ok(v) = std::env::var("DEEPSEEK_HOME")
         && !v.is_empty()
     {
         return PathBuf::from(v);
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".deepseek")
+    let legacy = codewhale_config::legacy_deepseek_home().ok();
+    resolve_metrics_home(primary, legacy)
+}
+
+/// Existence-based resolution: prefer the canonical `~/.codewhale` tree,
+/// falling back to legacy `~/.deepseek` when only the legacy tree exists
+/// (pre-migration installs). When neither exists, return the primary so the
+/// "(no data)" rendering points at the canonical location.
+fn resolve_metrics_home(primary: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
+    if primary.exists() {
+        return primary;
+    }
+    if let Some(legacy) = legacy
+        && legacy.exists()
+    {
+        return legacy;
+    }
+    primary
 }
 
 /// Parse a timestamp from a JSON value field (tries RFC3339).
@@ -924,6 +951,42 @@ mod tests {
         assert_eq!(fmt_num(1_000), "1,000");
         assert_eq!(fmt_num(12_453), "12,453");
         assert_eq!(fmt_num(1_000_000), "1,000,000");
+    }
+
+    // ── Home resolution ──
+
+    #[test]
+    fn metrics_home_prefers_existing_codewhale_tree() {
+        let root = tempfile::TempDir::new().unwrap();
+        let primary = root.path().join(".codewhale");
+        let legacy = root.path().join(".deepseek");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert_eq!(resolve_metrics_home(primary.clone(), Some(legacy)), primary);
+    }
+
+    #[test]
+    fn metrics_home_falls_back_to_legacy_deepseek_tree() {
+        let root = tempfile::TempDir::new().unwrap();
+        let primary = root.path().join(".codewhale");
+        let legacy = root.path().join(".deepseek");
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert_eq!(resolve_metrics_home(primary, Some(legacy.clone())), legacy);
+    }
+
+    #[test]
+    fn metrics_home_defaults_to_primary_when_neither_exists() {
+        let root = tempfile::TempDir::new().unwrap();
+        let primary = root.path().join(".codewhale");
+        let legacy = root.path().join(".deepseek");
+        assert_eq!(resolve_metrics_home(primary.clone(), Some(legacy)), primary);
+    }
+
+    #[test]
+    fn metrics_home_defaults_to_primary_without_legacy_candidate() {
+        let root = tempfile::TempDir::new().unwrap();
+        let primary = root.path().join(".codewhale");
+        assert_eq!(resolve_metrics_home(primary.clone(), None), primary);
     }
 
     // ── Rollup from audit log ──

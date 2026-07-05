@@ -15,6 +15,7 @@ members = [
     "crates/tools",
     "crates/tui",
     "crates/whaleflow",
+    "crates/whaleflow-js",
 ]
 default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
@@ -29,6 +30,15 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/Hmbown/CodeWhale"
+
+# Release binary hygiene: thin LTO + single codegen unit shrink and speed up
+# the shipped binaries; stripping symbols cuts download size. `panic = "abort"`
+# is deliberately NOT set — parts of the runtime may rely on catch_unwind and
+# that has not been audited yet (deferred).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.dependencies]
 anyhow = "1.0.100"

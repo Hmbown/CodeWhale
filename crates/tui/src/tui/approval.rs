@@ -455,7 +455,7 @@ fn build_apply_patch_ask_rules(params: &Value, workspace: &Path) -> Vec<ToolAskR
 
 /// Get the category for a tool by name
 pub fn get_tool_category(name: &str) -> ToolCategory {
-    if name == "agent" {
+    if name == "agent" || name == "whaleflow" {
         ToolCategory::Agent
     } else if matches!(name, "write_file" | "edit_file" | "apply_patch") {
         ToolCategory::FileWrite
@@ -690,6 +690,12 @@ fn build_impact_summary(tool_name: &str, category: ToolCategory, params: &Value)
             impacts
         }
         ToolCategory::Agent => {
+            if tool_name == "whaleflow" {
+                return vec![
+                    "Runs a sandboxed orchestration script.".to_string(),
+                    "May spawn many sub-agents and consume token budget.".to_string(),
+                ];
+            }
             let mut impacts = vec![
                 "Starts or inspects a child agent task; the child's own tool gates still apply."
                     .to_string(),
@@ -777,6 +783,12 @@ fn build_impact_summary_zh_hans(
             impacts
         }
         ToolCategory::Agent => {
+            if tool_name == "whaleflow" {
+                return vec![
+                    "运行沙盒化的编排脚本。".to_string(),
+                    "可能生成大量子代理并消耗令牌预算。".to_string(),
+                ];
+            }
             let mut impacts =
                 vec!["启动或查看子代理任务；子代理仍受其自身工具门控约束。".to_string()];
             if let Some(kind) = param_preview(params, &["type"], 40) {
@@ -804,6 +816,45 @@ fn build_prominent_details(
     params: &Value,
 ) -> Vec<ApprovalDetail> {
     let mut details = Vec::new();
+    // WhaleFlow dynamic-workflow prompt: label, static plan summary
+    // (explicitly a heuristic preview — aliased/computed calls evade it),
+    // bounded script preview (the full script stays one `v` away in the
+    // params pager), and an ALWAYS-rendered capability warning that does not
+    // depend on the scan results. Exactly the widget's 4-detail cap.
+    if tool_name == "whaleflow" {
+        let label = params
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .unwrap_or("(unlabeled script)");
+        details.push(ApprovalDetail {
+            label: "Workflow".to_string(),
+            value: label.to_string(),
+            shell_lines: None,
+        });
+        let script = params.get("script").and_then(Value::as_str).unwrap_or("");
+        let plan_lines = crate::tools::subagent::whaleflow_bridge::whaleflow_plan_summary(script);
+        details.push(ApprovalDetail {
+            label: "Plan".to_string(),
+            value: plan_lines.join("\n"),
+            shell_lines: Some(plan_lines),
+        });
+        let preview_lines = prefixed_preview_lines("script", "  ", script, 5);
+        details.push(ApprovalDetail {
+            label: "Preview".to_string(),
+            value: preview_lines.join("\n"),
+            shell_lines: Some(preview_lines),
+        });
+        details.push(ApprovalDetail {
+            label: "Note".to_string(),
+            value: "May spawn sub-agents and call any tool available to this context; \
+                    normal approval rules apply to each call."
+                .to_string(),
+            shell_lines: None,
+        });
+        return details;
+    }
     match category {
         ToolCategory::Shell => {
             if let Some(command) = param_text(params, &["command", "cmd"]) {
@@ -1093,6 +1144,9 @@ fn localize_detail_label(label: &str, locale: Locale) -> &str {
             "Action" => "操作",
             "Type" => "类型",
             "Prompt" => "提示",
+            "Workflow" => "工作流",
+            "Plan" => "计划",
+            "Note" => "注意",
             _ => label,
         },
         _ => label,
@@ -2120,6 +2174,162 @@ mod tests {
         assert_eq!(details[1].label, "Preview");
         let preview = details[1].shell_lines.as_ref().expect("preview lines");
         assert!(preview.iter().any(|line| line == "+ fn main() {}"));
+    }
+
+    // ── whaleflow: rich dynamic-workflow approval prompt ───────────────
+
+    fn whaleflow_request(script: &str, label: Option<&str>) -> ApprovalRequest {
+        let mut params = json!({ "script": script });
+        if let Some(label) = label {
+            params["label"] = json!(label);
+        }
+        ApprovalRequest::new(
+            "wfcall_test",
+            "whaleflow",
+            "Run a dynamic workflow?",
+            &params,
+            "tool:whaleflow:key",
+        )
+    }
+
+    #[test]
+    fn whaleflow_categorizes_as_agent_destructive_elevated() {
+        assert_eq!(get_tool_category("whaleflow"), ToolCategory::Agent);
+        let request = whaleflow_request("await task({ description: \"x\" });", Some("fanout"));
+        assert_eq!(request.category, ToolCategory::Agent);
+        assert_eq!(
+            request.risk,
+            RiskLevel::Destructive,
+            "no `action` param → explicit-options keymap"
+        );
+        assert_eq!(
+            request.stakes(),
+            ApprovalStakes::Elevated,
+            "a calm approval card, not a red emergency"
+        );
+        assert_eq!(
+            request.impacts,
+            vec![
+                "Runs a sandboxed orchestration script.".to_string(),
+                "May spawn many sub-agents and consume token budget.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn whaleflow_prominent_details_show_workflow_plan_preview_and_note() {
+        let script = "// staged review\n\
+                      const a = await task({ description: \"a\", profile: \"reviewer\" });\n\
+                      await parallel([() => task({ description: \"b\" })]);\n\
+                      const c = await tools.read_file({ path: \"x\" });\n\
+                      await tools.exec_shell({ command: \"cargo test\" });\n\
+                      const d = 1;\n\
+                      const e = 2;\n\
+                      return c;";
+        let request = whaleflow_request(script, Some("review train"));
+        let details = request.prominent_detail_items(Locale::En);
+
+        let labels: Vec<&str> = details.iter().map(|d| d.label.as_str()).collect();
+        assert_eq!(labels, vec!["Workflow", "Plan", "Preview", "Note"]);
+
+        assert_eq!(details[0].value, "review train");
+
+        let plan = details[1].shell_lines.as_ref().expect("plan lines");
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("task() sites") && line.contains("parallel()")),
+            "plan must count spawn call sites: {plan:?}"
+        );
+        assert!(
+            plan.iter().any(|line| line.contains("profiles: reviewer")),
+            "plan must list referenced profiles: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("read_file") && line.contains("exec_shell")),
+            "plan must list referenced tools: {plan:?}"
+        );
+        // The static scan is a heuristic (aliased/computed calls evade it):
+        // the plan must say so, always.
+        assert!(
+            plan.iter()
+                .any(|line| line
+                    .contains("Static preview — aliased or computed calls may not appear")),
+            "plan must be labeled a heuristic preview: {plan:?}"
+        );
+        // The script's own comment appears only as a clearly-quoted
+        // untrusted line, never in the system voice.
+        assert!(
+            plan.iter()
+                .any(|line| line == "Script's own summary (untrusted): \"staged review\""),
+            "leading comment must be quoted and attributed: {plan:?}"
+        );
+
+        let preview = details[2].shell_lines.as_ref().expect("preview lines");
+        assert_eq!(preview.first().map(String::as_str), Some("script"));
+        assert!(
+            preview
+                .last()
+                .is_some_and(|line| line.starts_with("... (+") && line.ends_with("more lines)")),
+            "long scripts must render a bounded preview with a truncation tail: {preview:?}"
+        );
+
+        // The capability warning renders regardless of what the scan found.
+        assert_eq!(
+            details[3].value,
+            "May spawn sub-agents and call any tool available to this context; \
+             normal approval rules apply to each call."
+        );
+
+        // Evasion case: aliasing hides the shell call from the scan, but the
+        // capability warning and the heuristic label still render.
+        let evasive = whaleflow_request(
+            "const t = tools; await t.exec_shell({ command: \"ls\" });",
+            None,
+        );
+        let evasive_details = evasive.prominent_detail_items(Locale::En);
+        let evasive_plan = evasive_details[1].shell_lines.as_ref().expect("plan lines");
+        assert!(
+            evasive_plan
+                .iter()
+                .any(|line| line.contains("no direct task()/tools.* references found")),
+            "an evaded scan claims only DIRECT references: {evasive_plan:?}"
+        );
+        assert!(
+            evasive_plan
+                .iter()
+                .any(|line| line
+                    .contains("Static preview — aliased or computed calls may not appear")),
+            "the heuristic label survives an evaded scan: {evasive_plan:?}"
+        );
+        assert!(
+            evasive_details[3]
+                .value
+                .contains("call any tool available to this context"),
+            "the capability warning is unconditional: {:?}",
+            evasive_details[3].value
+        );
+    }
+
+    #[test]
+    fn whaleflow_unlabeled_script_and_pager_carries_full_script() {
+        let script = "const marker = \"WHALEFLOW_PAGER_MARKER_LINE\";\nreturn marker;";
+        let request = whaleflow_request(script, None);
+        let details = request.prominent_detail_items(Locale::En);
+        assert_eq!(details[0].label, "Workflow");
+        assert_eq!(details[0].value, "(unlabeled script)");
+
+        // The full script stays one `v` away in the params pager.
+        let view = ApprovalView::new(request);
+        match view.emit_params_pager() {
+            ViewAction::Emit(ViewEvent::OpenTextPager { content, .. }) => {
+                assert!(
+                    content.contains("WHALEFLOW_PAGER_MARKER_LINE"),
+                    "pager must contain the entire script: {content}"
+                );
+            }
+            other => panic!("expected pager emit, got {other:?}"),
+        }
     }
 
     #[test]

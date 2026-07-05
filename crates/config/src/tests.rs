@@ -5393,11 +5393,56 @@ concurrency = 3
 }
 
 #[test]
+fn fleet_profile_config_parses_ranked_models_and_heavy_omni_loadouts() {
+    // The ranked preference list (`models`, best first) and the Heavy/Omni
+    // loadout variants parse through the `[fleet.profiles.*]` config table
+    // and round-trip through serde with order preserved.
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleet.profiles.builder]
+slot = "implementer"
+role = "builder"
+loadout = "heavy"
+model = "deepseek-v4-flash"
+models = ["deepseek-v4-pro", "glm-5.2"]
+
+[fleet.profiles.vision]
+role = "reviewer"
+loadout = "multi-modal"
+"#,
+    )
+    .expect("fleet profile config should parse");
+
+    let fleet = config.fleet.expect("fleet config");
+    let builder = fleet.profiles.get("builder").expect("builder profile");
+    assert_eq!(builder.loadout, FleetLoadout::Heavy);
+    // Both fields coexist in config; consumers give `models` precedence.
+    assert_eq!(builder.model.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(
+        builder.models,
+        vec!["deepseek-v4-pro".to_string(), "glm-5.2".to_string()]
+    );
+
+    let vision = fleet.profiles.get("vision").expect("vision profile");
+    assert_eq!(vision.loadout, FleetLoadout::Omni);
+
+    let serialized = toml::to_string_pretty(builder).expect("profile serializes");
+    let round_tripped: FleetProfile =
+        toml::from_str(&serialized).expect("serialized profile parses");
+    assert_eq!(&round_tripped, builder);
+    assert_eq!(round_tripped.models, builder.models);
+}
+
+#[test]
 fn fleet_loadout_accepts_default_model_classes() {
     assert_eq!(FleetLoadout::from_name("strong"), FleetLoadout::Strong);
+    assert_eq!(FleetLoadout::from_name("heavy"), FleetLoadout::Heavy);
     assert_eq!(FleetLoadout::from_name("balanced"), FleetLoadout::Balanced);
     assert_eq!(FleetLoadout::from_name("fast"), FleetLoadout::Fast);
+    assert_eq!(FleetLoadout::from_name("multi-modal"), FleetLoadout::Omni);
     assert_eq!(FleetLoadout::Strong.as_str(), "strong");
+    assert_eq!(FleetLoadout::Heavy.as_str(), "heavy");
+    assert_eq!(FleetLoadout::Omni.as_str(), "omni");
 }
 
 #[test]

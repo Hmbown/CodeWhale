@@ -2262,7 +2262,9 @@ fn apply_send_flash(
         return;
     };
 
-    let flash_bg = Color::Rgb(30, 40, 55); // subtle dark-blue tint
+    // Subtle tint one layer above the surface. A palette token (not a raw
+    // RGB) so the light-mode / community-theme bg remaps restyle the flash.
+    let flash_bg = palette::SURFACE_TOOL;
 
     for (idx, line) in lines.iter_mut().enumerate() {
         let line_index = top + idx;
@@ -2470,7 +2472,8 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     let title = format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"));
     let model = format!("model: {}  /model to switch", app.model);
     let directory = format!("directory: {workspace}");
-    let block_width = [&title, &model, &directory]
+    let help_hint = "/help for commands \u{00B7} Ctrl+K for the palette".to_string();
+    let block_width = [&title, &model, &directory, &help_hint]
         .into_iter()
         .map(|line| UnicodeWidthStr::width(line.as_str()))
         .max()
@@ -2490,6 +2493,11 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         )),
         Line::from(Span::styled(
             format!("{inset}{directory}"),
+            Style::default().fg(palette::TEXT_MUTED),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{inset}{help_hint}"),
             Style::default().fg(palette::TEXT_MUTED),
         )),
     ];
@@ -2514,7 +2522,7 @@ fn composer_top_padding(content_lines: usize, rows_budget: usize) -> usize {
 
 /// Placeholder text shown when the composer input is empty.
 #[cfg(test)]
-const COMPOSER_PLACEHOLDER: &str = "Write a task or use /.";
+const COMPOSER_PLACEHOLDER: &str = "Write a task, or / for commands";
 
 /// How many visual rows the empty-input placeholder occupies after wrapping.
 #[cfg(test)]
@@ -2696,8 +2704,10 @@ pub(crate) fn slash_completion_hints_with_model_candidates(
 
     // ── Phase 1: prefix (starts_with) matches ─────────────────────────
     // Highest priority — preserves existing exact-prefix completion.
+    // This runs per rendered frame while the slash menu is open, so use the
+    // TTL-cached registry lookup instead of re-statting command dirs.
     if completing_skill_arg.is_none() {
-        commands::user_registry::with_registry_for_workspace(workspace, |registry| {
+        commands::user_registry::with_registry_for_workspace_cached(workspace, |registry| {
             let all_user_commands = registry.iter().collect::<Vec<_>>();
             let user_commands = all_user_commands
                 .iter()
@@ -3422,7 +3432,7 @@ mod tests {
 
         apply_send_flash(&mut lines, 0, &history, &line_meta, &original_index_map);
 
-        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Rgb(30, 40, 55)));
+        assert_eq!(lines[0].spans[0].style.bg, Some(palette::SURFACE_TOOL));
     }
 
     #[test]
@@ -4239,15 +4249,15 @@ mod tests {
 
         // inner_area: {x:1, y:1, w:12, h:3}
         // input_rows_budget = 3
-        // placeholder_visual_lines(12) = 2  ("Write a task" / " or use /.")
-        // empty_composer_visual_rows = cursor row + two hint rows = 3
-        // top_padding = 3 - clamp(3, 1, 3) = 0
+        // placeholder_visual_lines(12) = 3  ("Write a task" / ", or / for c" / "ommands")
+        // empty_composer_visual_rows = cursor row + three hint rows = 4
+        // top_padding = 3 - clamp(4, 1, 3) = 0
         // cursor_x = 0 + (1-0) + 0 = 1
         // cursor_y = 0 + (1-0) + (0+0) = 1
-        assert_eq!(placeholder_visual_lines(12), 2);
+        assert_eq!(placeholder_visual_lines(12), 3);
         assert_eq!(
             empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 12, 3),
-            3
+            4
         );
         assert_eq!(widget.cursor_pos(area), Some((1, 1)));
     }
@@ -4518,6 +4528,9 @@ mod tests {
         assert!(rendered.contains(&format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"))));
         assert!(rendered.contains("model: deepseek-v4-pro  /model to switch"));
         assert!(rendered.contains("directory: /tmp/codewhale-test-workspace"));
+        // v0.8.67: the splash advertises the two discovery surfaces.
+        assert!(rendered.contains("/help"));
+        assert!(rendered.contains("Ctrl+K"));
     }
 
     #[test]
@@ -4539,7 +4552,8 @@ mod tests {
         let title = format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"));
         let model = "model: deepseek-v4-pro  /model to switch";
         let directory = "directory: /tmp/codewhale-test-workspace";
-        let block_width = [title.as_str(), model, directory]
+        let help_hint = "/help for commands \u{00B7} Ctrl+K for the palette";
+        let block_width = [title.as_str(), model, directory, help_hint]
             .into_iter()
             .map(UnicodeWidthStr::width)
             .max()

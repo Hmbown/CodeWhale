@@ -100,6 +100,15 @@ impl ModalView for FeedbackPickerView {
         self
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        match mouse.kind {
+            crossterm::event::MouseEventKind::ScrollUp => self.move_up(),
+            crossterm::event::MouseEventKind::ScrollDown => self.move_down(),
+            _ => {}
+        }
+        ViewAction::None
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Esc => ViewAction::Close,

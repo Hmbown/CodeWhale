@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -263,6 +263,12 @@ pub struct RuntimeThreadStore {
     events_dir: PathBuf,
     state_path: PathBuf,
     state: Arc<Mutex<RuntimeStoreState>>,
+    /// Open append handles for per-thread event journals, keyed by journal
+    /// path. Kept open across events so streamed `item.delta` records do not
+    /// pay a fresh `open()` per token. Leaf locks only: a journal lock is
+    /// never held while acquiring `state` (or any other lock), and vice
+    /// versa the `state` lock is released before journal I/O starts.
+    journals: Arc<StdMutex<HashMap<PathBuf, Arc<StdMutex<File>>>>>,
 }
 
 impl RuntimeThreadStore {
@@ -279,7 +285,7 @@ impl RuntimeThreadStore {
 
         let state_path = root.join("state.json");
         reject_symlinked_store_file(&state_path)?;
-        let state = if state_path.exists() {
+        let mut state = if state_path.exists() {
             let raw = read_store_file(&state_path)?;
             serde_json::from_str::<RuntimeStoreState>(&raw)
                 .with_context(|| format!("Failed to parse {}", state_path.display()))?
@@ -289,6 +295,17 @@ impl RuntimeThreadStore {
             default
         };
 
+        // Reconcile `next_seq` with the journal tails: streamed `item.delta`
+        // events are appended without rewriting `state.json` (see
+        // `append_event`), so after a crash the persisted counter can lag
+        // behind seqs already written to a journal. Never reuse a seq.
+        if let Some(max_seq) = max_seq_across_journals(&events_dir)?
+            && max_seq >= state.next_seq
+        {
+            state.next_seq = max_seq.saturating_add(1);
+            write_json_atomic(&state_path, &state)?;
+        }
+
         Ok(Self {
             threads_dir,
             turns_dir,
@@ -296,7 +313,28 @@ impl RuntimeThreadStore {
             events_dir,
             state_path,
             state: Arc::new(Mutex::new(state)),
+            journals: Arc::new(StdMutex::new(HashMap::new())),
         })
+    }
+
+    /// Returns the shared append handle for `path`, opening (and caching) it
+    /// on first use so per-event appends do not re-open the journal.
+    fn journal_handle(&self, path: &Path) -> Result<Arc<StdMutex<File>>> {
+        let mut journals = self
+            .journals
+            .lock()
+            .map_err(|_| anyhow!("event journal registry lock poisoned"))?;
+        if let Some(handle) = journals.get(path) {
+            return Ok(handle.clone());
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .with_context(|| format!("Failed to open {}", path.display()))?;
+        let handle = Arc::new(StdMutex::new(file));
+        journals.insert(path.to_path_buf(), handle.clone());
+        Ok(handle)
     }
 
     fn record_path(base: &Path, id: &str, extension: &str, label: &str) -> Result<PathBuf> {
@@ -543,11 +581,28 @@ impl RuntimeThreadStore {
         reject_symlinked_store_dir(&self.events_dir)?;
         reject_symlinked_store_file(&path)?;
 
-        let mut state = self.state.lock().await;
-        let seq = state.next_seq;
-        state.next_seq = state.next_seq.saturating_add(1);
-        write_json_atomic(&self.state_path, &*state)?;
-        drop(state);
+        let event: String = event.into();
+        // Streamed `item.delta` events arrive roughly once per token; giving
+        // each one the full durability treatment (state-file rewrite + two
+        // fsyncs + a fresh `open()`) turned streaming into a per-token disk
+        // hammer. Deltas are written and flushed immediately — so
+        // `events_since` readers still observe them — but are not fsynced and
+        // do not rewrite `state.json`. The next non-delta event on the same
+        // journal (e.g. `item.completed`) fsyncs the fd, which also makes all
+        // earlier delta lines durable at the same item boundary. Crash
+        // recovery: `open()` reconciles `next_seq` with the journal tails, so
+        // seqs handed to unsynced deltas are never reused after a crash.
+        let durable = event != "item.delta";
+
+        let seq = {
+            let mut state = self.state.lock().await;
+            let seq = state.next_seq;
+            state.next_seq = state.next_seq.saturating_add(1);
+            if durable {
+                write_json_atomic(&self.state_path, &*state)?;
+            }
+            seq
+        };
 
         let record = RuntimeEventRecord {
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -556,21 +611,34 @@ impl RuntimeThreadStore {
             thread_id: thread_id.to_string(),
             turn_id: turn_id.map(ToString::to_string),
             item_id: item_id.map(ToString::to_string),
-            event: event.into(),
+            event,
             payload,
         };
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
-        let line = serde_json::to_string(&record)?;
-        writeln!(file, "{line}").with_context(|| format!("Failed to append {}", path.display()))?;
-        file.flush()
-            .with_context(|| format!("Failed to flush {}", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("Failed to fsync {}", path.display()))?;
+        let mut line = serde_json::to_string(&record)?;
+        line.push('\n');
+        // NOTE: the write is intentionally inline rather than spawn_blocking.
+        // Turn finalization relies on `save_turn` -> `emit_event` -> "clear
+        // active_turn" running without a scheduler yield in between: a
+        // spawned write introduces an await point that lets a poller observe
+        // the terminal turn record and try to start a new turn while
+        // `active_turn` is still set. A non-fsync append to an already-open
+        // fd is a single fast syscall, and the `sync_all` on item boundaries
+        // was always inline here.
+        let journal = self.journal_handle(&path)?;
+        {
+            let mut file = journal
+                .lock()
+                .map_err(|_| anyhow!("event journal lock poisoned"))?;
+            file.write_all(line.as_bytes())
+                .with_context(|| format!("Failed to append {}", path.display()))?;
+            file.flush()
+                .with_context(|| format!("Failed to flush {}", path.display()))?;
+            if durable {
+                file.sync_all()
+                    .with_context(|| format!("Failed to fsync {}", path.display()))?;
+            }
+        }
         Ok(record)
     }
 
@@ -585,17 +653,35 @@ impl RuntimeThreadStore {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let file =
-            File::open(&path).with_context(|| format!("Failed to open {}", path.display()))?;
-        let reader = BufReader::new(file);
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let lines: Vec<&str> = raw.lines().collect();
         let mut out = Vec::new();
-        for line in reader.lines() {
-            let line = line?;
+        for (idx, line) in lines.iter().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
-            let event: RuntimeEventRecord = serde_json::from_str(&line)
-                .with_context(|| format!("Failed to parse event line in {}", path.display()))?;
+            let event: RuntimeEventRecord = match serde_json::from_str(line) {
+                Ok(event) => event,
+                // A truncated *final* line is expected after a crash:
+                // streamed `item.delta` records are flushed but only fsynced
+                // at the next item boundary (see `append_event`), so power
+                // loss can tear the last line. Skip it rather than failing
+                // the whole replay; corruption anywhere else still errors.
+                Err(err) if idx + 1 == lines.len() => {
+                    tracing::warn!(
+                        "Ignoring truncated trailing event line in {}: {}",
+                        path.display(),
+                        err
+                    );
+                    break;
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("Failed to parse event line in {}", path.display())
+                    });
+                }
+            };
             if let Some(since) = since_seq
                 && event.seq <= since
             {
@@ -806,16 +892,19 @@ pub type SharedRuntimeThreadManager = Arc<RuntimeThreadManager>;
 ///
 /// # Lock ordering invariant
 ///
-/// Two `Mutex`es exist across this module:
+/// Three kinds of `Mutex` exist across this module:
 /// - `RuntimeThreadStore::state` — protects the monotonic event sequence counter.
+/// - `RuntimeThreadStore::journals` (and the per-journal file locks inside it)
+///   — protect the cached append handles; these are *leaf* locks, never held
+///   while acquiring any other lock.
 /// - `RuntimeThreadManager::active` — protects the set of loaded engine handles.
 ///
-/// **No code path holds both locks simultaneously.** The `state` lock is only
-/// acquired inside `RuntimeThreadStore::append_event` (where it is explicitly
-/// dropped before any I/O) and `current_seq`. All `emit_event` calls (which
-/// call `append_event`) happen *after* `active` has been released. If you add
-/// new code that touches both, always acquire `state` before `active` to
-/// preserve a consistent ordering.
+/// **No code path holds both `state` and `active` simultaneously.** The
+/// `state` lock is only acquired inside `RuntimeThreadStore::append_event`
+/// (where it is explicitly dropped before any I/O) and `current_seq`. All
+/// `emit_event` calls (which call `append_event`) happen *after* `active` has
+/// been released. If you add new code that touches both, always acquire
+/// `state` before `active` to preserve a consistent ordering.
 #[derive(Clone)]
 pub struct RuntimeThreadManager {
     config: Arc<parking_lot::RwLock<Config>>,
@@ -4156,6 +4245,78 @@ fn ensure_runtime_store_dir(path: &Path) -> Result<()> {
 fn read_store_file(path: &Path) -> Result<String> {
     reject_symlinked_store_file(path)?;
     fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))
+}
+
+/// Highest event `seq` found across the per-thread event journals in
+/// `events_dir`, or `None` when no journal contains a parseable event.
+///
+/// Used by [`RuntimeThreadStore::open`] to reconcile `state.json`'s
+/// `next_seq` after a crash: streamed `item.delta` events are appended
+/// without rewriting the state file, so the persisted counter can lag the
+/// journals. Only the journal *tails* are scanned — seqs are appended in
+/// (near-)increasing order, and only small, recent delta lines can ever be
+/// ahead of the persisted counter.
+fn max_seq_across_journals(events_dir: &Path) -> Result<Option<u64>> {
+    if !events_dir.exists() {
+        return Ok(None);
+    }
+    let mut max_seq: Option<u64> = None;
+    for entry in fs::read_dir(events_dir)
+        .with_context(|| format!("Failed to read {}", events_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "jsonl") {
+            continue;
+        }
+        if let Some(seq) = max_seq_in_journal_tail(&path)? {
+            max_seq = Some(max_seq.map_or(seq, |current| current.max(seq)));
+        }
+    }
+    Ok(max_seq)
+}
+
+/// Max `seq` among the parseable event lines in the tail window of a single
+/// journal. Tolerates a truncated trailing line (crash artifact) and skips
+/// the partial first line when the window starts mid-file.
+fn max_seq_in_journal_tail(path: &Path) -> Result<Option<u64>> {
+    const TAIL_WINDOW_BYTES: u64 = 256 * 1024;
+    reject_symlinked_store_file(path)?;
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let len = file
+        .metadata()
+        .with_context(|| format!("Failed to stat {}", path.display()))?
+        .len();
+    let start = len.saturating_sub(TAIL_WINDOW_BYTES);
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("Failed to seek {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut max_seq: Option<u64> = None;
+    for line in text.lines().skip(usize::from(start > 0)) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<RuntimeEventRecord>(line) {
+            max_seq = Some(max_seq.map_or(record.seq, |current| current.max(record.seq)));
+        }
+    }
+    if max_seq.is_none() && len > TAIL_WINDOW_BYTES {
+        // Extremely defensive fallback: no complete line fit in the tail
+        // window (a single event line larger than the window). Scan the
+        // whole file once rather than under-recovering the counter.
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        for line in raw.lines() {
+            if let Ok(record) = serde_json::from_str::<RuntimeEventRecord>(line) {
+                max_seq = Some(max_seq.map_or(record.seq, |current| current.max(record.seq)));
+            }
+        }
+    }
+    Ok(max_seq)
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {

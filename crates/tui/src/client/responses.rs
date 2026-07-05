@@ -583,6 +583,31 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
                     }
                 }
             }
+            "system" => {
+                // Mid-conversation system messages (sub-agent fork-state and
+                // `<codewhale:subagent_context>` blocks) were silently dropped
+                // here, so forked codex children lost their fork context while
+                // Chat-Completions children kept it. The Responses API accepts
+                // system-role input messages, so pass them through.
+                let content_items: Vec<Value> = msg
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text, .. } => Some(json!({
+                            "type": "input_text",
+                            "text": text,
+                        })),
+                        _ => None,
+                    })
+                    .collect();
+                if !content_items.is_empty() {
+                    items.push(json!({
+                        "type": "message",
+                        "role": "system",
+                        "content": content_items,
+                    }));
+                }
+            }
             _ => {}
         }
     }
@@ -883,6 +908,100 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
+    /// Fake ChatGPT Codex backend: enforces the subscription backend's model
+    /// policy the way the real endpoint does — any model outside the Codex
+    /// family is refused with the exact observed 400 shape:
+    /// `The '<model>' model is not supported when using Codex with a ChatGPT
+    /// account.` Codex-family models get a minimal successful SSE stream.
+    struct StrictChatGptBackend;
+
+    impl Respond for StrictChatGptBackend {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: Value = serde_json::from_slice(&request.body).expect("JSON request body");
+            let model = body["model"].as_str().unwrap_or_default().to_string();
+            if !crate::config::openai_codex_route_can_serve_model(&model) {
+                return ResponseTemplate::new(400).set_body_string(format!(
+                    "{{\"detail\":\"The '{model}' model is not supported when using Codex with a ChatGPT account.\"}}"
+                ));
+            }
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "text/event-stream")
+                .set_body_string("data: [DONE]\n\n")
+        }
+    }
+
+    #[tokio::test]
+    async fn strict_chatgpt_backend_rejects_foreign_child_models_with_observed_400() {
+        // Reproduces the live sub-agent failure: a fleet profile pinned
+        // `deepseek-v4-pro` while the active provider was ChatGPT Codex
+        // OAuth, and the backend answered with the 400 below. The guard
+        // fixes keep such ids from ever reaching the wire; this test pins
+        // the wire-level failure shape so the reproduction stays honest.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(CODEX_RESPONSES_PATH))
+            .respond_with(StrictChatGptBackend)
+            .mount(&server)
+            .await;
+
+        let client = {
+            let _env_lock = crate::test_support::lock_test_env();
+            let _codex_token =
+                crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
+            let _legacy_codex_token =
+                crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+        };
+
+        // Foreign model → the exact observed 400.
+        let mut request = minimal_responses_request();
+        request.model = "deepseek-v4-pro".to_string();
+        let err = match client.handle_responses_stream(request).await {
+            Ok(_) => panic!("foreign models must be refused by the ChatGPT backend"),
+            Err(err) => err,
+        };
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(
+                "The 'deepseek-v4-pro' model is not supported when using Codex with a ChatGPT account."
+            ),
+            "{message}"
+        );
+
+        // The parent's own model family passes the same strict backend.
+        for model in ["gpt-5.5", "gpt-5.5-codex"] {
+            let mut request = minimal_responses_request();
+            request.model = model.to_string();
+            let mut stream = client
+                .handle_responses_stream(request)
+                .await
+                .unwrap_or_else(|err| panic!("{model} must be accepted: {err:#}"));
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(event) = stream.next().await {
+                    event.unwrap();
+                }
+            })
+            .await
+            .expect("codex-family stream should finish after [DONE]");
+        }
+
+        // And the guard the fix installs agrees with the backend: every id a
+        // child could now resolve to on the codex route is one the backend
+        // serves; the foreign ids are known-foreign before the wire.
+        assert!(crate::config::model_is_foreign_to_provider(
+            crate::config::ApiProvider::OpenaiCodex,
+            "deepseek-v4-pro"
+        ));
+        assert!(crate::config::model_is_foreign_to_provider(
+            crate::config::ApiProvider::OpenaiCodex,
+            "glm-5.2"
+        ));
+        assert!(!crate::config::model_is_foreign_to_provider(
+            crate::config::ApiProvider::OpenaiCodex,
+            "gpt-5.5"
+        ));
+    }
+
     #[tokio::test]
     async fn responses_stream_fails_fast_on_non_retryable_provider_error() {
         let server = MockServer::start().await;
@@ -1094,6 +1213,55 @@ mod tests {
         assert_eq!(input[1]["type"], "function_call_output");
         assert_eq!(input[1]["call_id"], "call_abc");
         assert_eq!(input[1]["output"], "<6 items>");
+    }
+
+    #[test]
+    fn responses_input_keeps_system_role_messages() {
+        // Sub-agent fork context injects mid-conversation `role:"system"`
+        // messages (fork state + subagent context). The Responses converter
+        // used to drop them silently, so forked codex children lost context
+        // that Chat-Completions children kept.
+        let request = MessageRequest {
+            model: "gpt-5.5".to_string(),
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "<codewhale:fork_state>state</codewhale:fork_state>".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "do the task".to_string(),
+                        cache_control: None,
+                    }],
+                },
+            ],
+            max_tokens: 128,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let input = convert_messages_to_responses_input(&request);
+
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["role"], "system");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert_eq!(
+            input[0]["content"][0]["text"],
+            "<codewhale:fork_state>state</codewhale:fork_state>"
+        );
+        assert_eq!(input[1]["role"], "user");
     }
 
     #[test]

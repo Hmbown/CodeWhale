@@ -249,6 +249,34 @@ impl ToolRegistry {
         self.api_cache = OnceLock::new();
     }
 
+    /// Re-sample tools whose model-facing surface reports drift via
+    /// [`ToolSpec::refreshed_spec`] (today: the `agent` tool's fleet-party
+    /// roster, so profiles created or edited mid-session reach a registry
+    /// that outlives its construction — e.g. the sub-agent step loop).
+    ///
+    /// Returns `true` when anything was replaced; the memoised catalog is
+    /// invalidated so the next `to_api_tools` re-freezes the prefix once —
+    /// correct, because the description genuinely changed. When nothing
+    /// drifted the memo is left untouched and the catalog stays
+    /// byte-identical across reads (the deliberate anti-drift pinning above).
+    pub fn refresh_model_surface(&mut self) -> bool {
+        let replacements: Vec<Arc<dyn ToolSpec>> = self
+            .tools
+            .values()
+            .filter_map(|tool| tool.refreshed_spec())
+            .collect();
+        if replacements.is_empty() {
+            return false;
+        }
+        for tool in replacements {
+            // Silent same-name swap: `register`'s overwrite warning is for
+            // accidental collisions, not deliberate surface refreshes.
+            self.tools.insert(tool.name().to_string(), tool);
+        }
+        self.invalidate_api_cache();
+        true
+    }
+
     /// Convert tools to API Tool format with optional cache control on the last tool.
     #[must_use]
     pub fn to_api_tools_with_cache(&self, enable_cache: bool) -> Vec<Tool> {
@@ -1093,6 +1121,30 @@ impl ToolRegistryBuilder {
             .with_subagent_tools(manager, runtime)
     }
 
+    /// Like [`Self::with_full_agent_surface_options`], but registers the
+    /// delegation tools scoped to the CALLING context's effective tool
+    /// surface: `caller_agent_type` is the caller's role posture and
+    /// `caller_allowed_tools` its explicit allowlist (`None` = full
+    /// inheritance). WhaleFlow scripts spawned from this registry then see
+    /// exactly the caller's `tools.*` surface minus delegation — never wider.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_full_agent_surface_options_scoped(
+        self,
+        client: Option<DeepSeekClient>,
+        model: String,
+        manager: super::subagent::SharedSubAgentManager,
+        runtime: super::subagent::SubAgentRuntime,
+        options: AgentToolSurfaceOptions,
+        todo_list: super::todo::SharedTodoList,
+        plan_state: super::plan::SharedPlanState,
+        caller_agent_type: super::subagent::SubAgentType,
+        caller_allowed_tools: Option<Vec<String>>,
+    ) -> Self {
+        self.with_agent_runtime_surface(client, model, options, todo_list, plan_state)
+            .with_subagent_tools_scoped(manager, runtime, caller_agent_type, caller_allowed_tools)
+    }
+
     /// Legacy typed-shell wrapper for the full child-inherited Agent surface.
     ///
     /// New production callers should pass resolved [`AgentToolSurfaceOptions`]
@@ -1147,7 +1199,10 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(UpdateGoalTool::new(goal_state)))
     }
 
-    /// Include sub-agent management tools.
+    /// Include sub-agent management tools: the `agent` launcher and the
+    /// `whaleflow` dynamic-script orchestrator (M7). They share one surface
+    /// so subagent enablement, approval posture, and depth gating apply to
+    /// both identically.
     #[must_use]
     pub fn with_subagent_tools(
         self,
@@ -1155,8 +1210,36 @@ impl ToolRegistryBuilder {
         runtime: super::subagent::SubAgentRuntime,
     ) -> Self {
         use super::subagent::AgentTool;
+        use super::subagent::whaleflow_bridge::WhaleFlowTool;
 
-        self.with_tool(Arc::new(AgentTool::new(manager, runtime)))
+        // Root / full-inheritance callers: no explicit allowlist, General
+        // posture, so scripts keep the caller's real full surface.
+        self.with_tool(Arc::new(AgentTool::new(manager.clone(), runtime.clone())))
+            .with_tool(Arc::new(WhaleFlowTool::new(manager, runtime)))
+    }
+
+    /// Sub-agent management tools scoped to the CALLING context's effective
+    /// tool surface (role posture + explicit allowlist). Child registries use
+    /// this so a WhaleFlow script hosted by a restricted child inherits the
+    /// child's own surface instead of the unrestricted default.
+    #[must_use]
+    pub fn with_subagent_tools_scoped(
+        self,
+        manager: super::subagent::SharedSubAgentManager,
+        runtime: super::subagent::SubAgentRuntime,
+        caller_agent_type: super::subagent::SubAgentType,
+        caller_allowed_tools: Option<Vec<String>>,
+    ) -> Self {
+        use super::subagent::AgentTool;
+        use super::subagent::whaleflow_bridge::WhaleFlowTool;
+
+        self.with_tool(Arc::new(AgentTool::new(manager.clone(), runtime.clone())))
+            .with_tool(Arc::new(WhaleFlowTool::new_scoped(
+                manager,
+                runtime,
+                caller_agent_type,
+                caller_allowed_tools,
+            )))
     }
 
     /// Build the registry with the given context.

@@ -1122,6 +1122,14 @@ pub struct FleetProfile {
     /// validates the executable provider/model/wire-model decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Ranked model preference list for this profile (best first).
+    ///
+    /// The first entry the active route can serve wins; unusable entries are
+    /// skipped, and when none can be served the profile falls back to its
+    /// class/loadout route. `model` is the one-element shorthand; when both
+    /// are set, `models` wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
     /// Permission defaults requested by the profile.
     #[serde(default)]
     pub permissions: FleetProfilePermissions,
@@ -1268,7 +1276,9 @@ pub enum FleetLoadout {
     #[default]
     Inherit,
     Strong,
+    Heavy,
     Fast,
+    Omni,
     Balanced,
     DeepReasoning,
     Code,
@@ -1283,7 +1293,9 @@ impl FleetLoadout {
         match self {
             Self::Inherit => "inherit",
             Self::Strong => "strong",
+            Self::Heavy => "heavy",
             Self::Fast => "fast",
+            Self::Omni => "omni",
             Self::Balanced => "balanced",
             Self::DeepReasoning => "deep-reasoning",
             Self::Code => "code",
@@ -1298,7 +1310,9 @@ impl FleetLoadout {
         match value.trim() {
             "inherit" | "default" | "auto" | "" => Self::Inherit,
             "strong" => Self::Strong,
+            "heavy" => Self::Heavy,
             "fast" => Self::Fast,
+            "omni" | "multimodal" | "multi-modal" | "multi_modal" => Self::Omni,
             "balanced" => Self::Balanced,
             "deep-reasoning" | "deep_reasoning" | "reasoning" => Self::DeepReasoning,
             "code" | "coding" => Self::Code,

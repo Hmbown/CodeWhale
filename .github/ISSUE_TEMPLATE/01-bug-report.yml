@@ -1,0 +1,63 @@
+name: "Bug report / 缺陷报告"
+description: "Report a reproducible problem or regression / 报告可复现的问题或回归"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report — real edge cases from real users are how CodeWhale grows.
+        Please keep this focused on **one** bug. You can write in English or 中文.
+
+        感谢反馈！请每个 issue 只报告**一个**问题。可以用英文或中文填写。
+  - type: textarea
+    id: description
+    attributes:
+      label: "What happened? / 发生了什么？"
+      description: "Describe the bug. / 描述这个问题。"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: "Steps to reproduce / 复现步骤"
+      description: "Exact commands, config, or key presses. / 具体的命令、配置或按键。"
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected behavior / 预期行为"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Actual behavior / 实际行为"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Environment / 环境信息"
+      description: "Paste only the relevant lines and redact secrets. / 只粘贴相关行，注意隐去密钥。"
+      value: |
+        - OS:
+        - codewhale version (`codewhale --version`):
+        - Install method (npm / cargo / release binary / source):
+        - `codewhale doctor` summary:
+        - Model/provider:
+        - Terminal app:
+        - Shell:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs, screenshots, or recordings / 日志、截图或录屏"
+      description: "Logs, config snippets, a short recording, or whether it also happens with --no-alt-screen. / 日志、配置片段、录屏，或加 --no-alt-screen 后是否复现。"
+    validations:
+      required: false

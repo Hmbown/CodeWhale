@@ -86,38 +86,28 @@ const ROLES: [Choice; 8] = [
     },
 ];
 
-/// Model-routing classes. `label` is mapped to a profile `model_class_hint` by
-/// [`model_class_hint`]; default is `inherit` (reuse the active route).
-const MODEL_CLASSES: [Choice; 6] = [
-    Choice {
-        label: "inherit",
-        summary: "Same model as now",
-        description: "Reuse the active provider, model, and reasoning for this worker. Recommended default.",
-    },
+/// Model-routing classes. `label` is mapped to a profile `model_class_hint`;
+/// `custom` opens a typed token field instead of being a dead menu row.
+const MODEL_CLASSES: [Choice; 4] = [
     Choice {
         label: "fast",
-        summary: "Low-latency scout",
-        description: "An opt-in low-latency class for wide fan-out and quick reconnaissance.",
+        summary: "Low-latency fan-out",
+        description: "Route toward a faster sibling model for wide fan-out, reconnaissance, and quick checks.",
     },
     Choice {
-        label: "balanced",
-        summary: "Everyday build/review",
-        description: "A balanced class for normal build and review work.",
-    },
-    Choice {
-        label: "strong",
+        label: "heavy",
         summary: "Hard problems",
-        description: "The strongest class for security, release, and architecture work.",
+        description: "Use the heavy reasoning lane for release, architecture, security, and difficult implementation work.",
     },
     Choice {
-        label: "deep-reasoning",
-        summary: "More reasoning",
-        description: "Higher reasoning effort when the active route supports it.",
+        label: "omni",
+        summary: "Multimodal-capable",
+        description: "Prefer an omni/multimodal-capable worker when the task involves images, documents, UI evidence, or mixed media.",
     },
     Choice {
-        label: "tool-heavy",
-        summary: "Operator workflows",
-        description: "Shell- and artifact-heavy operator workflows.",
+        label: "custom",
+        summary: "Type a class token",
+        description: "Type a custom model-class/loadout token. It is sanitized into a safe profile model_class_hint.",
     },
 ];
 
@@ -198,6 +188,8 @@ pub struct FleetSetupView {
     step: Step,
     role_idx: usize,
     model_idx: usize,
+    custom_role: String,
+    custom_model_class: String,
     review_scroll: usize,
     /// A model-drafted profile awaiting ratification (already sanitized and
     /// bounded by the untrusted gate). Cleared when the selection changes so
@@ -219,6 +211,8 @@ impl FleetSetupView {
             step: Step::Role,
             role_idx: 0,
             model_idx: 0,
+            custom_role: String::new(),
+            custom_model_class: String::new(),
             review_scroll: 0,
             model_draft: None,
             model_draft_label: None,
@@ -256,13 +250,52 @@ impl FleetSetupView {
     }
 
     /// The planner role chosen (drives the profile file name and `role_hint`).
-    fn selected_role(&self) -> &'static str {
-        ROLES[self.role_idx.min(ROLES.len() - 1)].label
+    fn selected_role(&self) -> String {
+        let label = ROLES[self.role_idx.min(ROLES.len() - 1)].label;
+        if label == "custom" {
+            custom_token_or(&self.custom_role, "custom")
+        } else {
+            label.to_string()
+        }
     }
 
     /// The model class chosen, mapped to a profile schema `model_class_hint`.
-    fn selected_model_class(&self) -> &'static str {
-        model_class_hint(MODEL_CLASSES[self.model_idx.min(MODEL_CLASSES.len() - 1)].label)
+    fn selected_model_class(&self) -> String {
+        let label = MODEL_CLASSES[self.model_idx.min(MODEL_CLASSES.len() - 1)].label;
+        if label == "custom" {
+            custom_token_or(&self.custom_model_class, "custom")
+        } else {
+            model_class_hint(label).to_string()
+        }
+    }
+
+    fn editing_custom_role(&self) -> bool {
+        self.step == Step::Role && ROLES[self.role_idx.min(ROLES.len() - 1)].label == "custom"
+    }
+
+    fn editing_custom_model_class(&self) -> bool {
+        self.step == Step::Model
+            && MODEL_CLASSES[self.model_idx.min(MODEL_CLASSES.len() - 1)].label == "custom"
+    }
+
+    fn active_custom_input_mut(&mut self) -> Option<&mut String> {
+        if self.editing_custom_role() {
+            Some(&mut self.custom_role)
+        } else if self.editing_custom_model_class() {
+            Some(&mut self.custom_model_class)
+        } else {
+            None
+        }
+    }
+
+    fn active_custom_input_value(&self) -> Option<&str> {
+        if self.editing_custom_role() {
+            Some(&self.custom_role)
+        } else if self.editing_custom_model_class() {
+            Some(&self.custom_model_class)
+        } else {
+            None
+        }
     }
 
     /// Number of selectable rows on the current step (0 on the review step).
@@ -351,11 +384,27 @@ impl FleetSetupView {
 
     /// Build the profile authoring prompt for the current role/model selection.
     fn profile_prompt(&self) -> String {
+        let role = self.selected_role();
+        let model_class = self.selected_model_class();
         profile_authoring_prompt(
             &self.snapshot,
-            self.selected_role(),
-            self.selected_model_class(),
+            &role,
+            &model_class,
+            self.custom_role_note(),
+            self.custom_model_class_note(),
         )
+    }
+
+    fn custom_role_note(&self) -> Option<&str> {
+        (ROLES[self.role_idx.min(ROLES.len() - 1)].label == "custom")
+            .then_some(self.custom_role.trim())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn custom_model_class_note(&self) -> Option<&str> {
+        (MODEL_CLASSES[self.model_idx.min(MODEL_CLASSES.len() - 1)].label == "custom")
+            .then_some(self.custom_model_class.trim())
+            .filter(|value| !value.is_empty())
     }
 
     /// The action hints for the current step's footer (wrapped by the shared
@@ -365,10 +414,18 @@ impl FleetSetupView {
         match self.step {
             Step::Role => {
                 hints.push(ActionHint::new("↑/↓", "choose"));
+                if self.editing_custom_role() {
+                    hints.push(ActionHint::new("type", "custom"));
+                    hints.push(ActionHint::new("⌫", "delete"));
+                }
                 hints.push(ActionHint::new("Enter", "next"));
             }
             Step::Model => {
                 hints.push(ActionHint::new("↑/↓", "choose"));
+                if self.editing_custom_model_class() {
+                    hints.push(ActionHint::new("type", "custom"));
+                    hints.push(ActionHint::new("⌫", "delete"));
+                }
                 hints.push(ActionHint::new("Enter", "next"));
                 hints.push(ActionHint::new("←", "back"));
             }
@@ -400,7 +457,40 @@ impl ModalView for FleetSetupView {
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => ViewAction::Close,
+            KeyCode::Esc => ViewAction::Close,
+            KeyCode::Backspace => {
+                if let Some(input) = self.active_custom_input_mut() {
+                    input.pop();
+                    self.discard_model_draft();
+                }
+                ViewAction::None
+            }
+            KeyCode::Char('h')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                if let Some(input) = self.active_custom_input_mut() {
+                    input.pop();
+                    self.discard_model_draft();
+                }
+                ViewAction::None
+            }
+            KeyCode::Char(c)
+                if self.active_custom_input_value().is_some()
+                    && !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                if let Some(input) = self.active_custom_input_mut()
+                    && !c.is_control()
+                {
+                    input.push(c);
+                    self.discard_model_draft();
+                }
+                ViewAction::None
+            }
+            KeyCode::Char('q') => ViewAction::Close,
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_up();
                 ViewAction::None
@@ -411,8 +501,8 @@ impl ModalView for FleetSetupView {
             }
             KeyCode::Char('m') if self.step == Step::Review && self.snapshot.provider_ready => {
                 ViewAction::Emit(ViewEvent::FleetProfileModelDraftRequested {
-                    role: self.selected_role().to_string(),
-                    model_class: self.selected_model_class().to_string(),
+                    role: self.selected_role(),
+                    model_class: self.selected_model_class(),
                     locale: self.snapshot.locale,
                 })
             }
@@ -453,6 +543,16 @@ impl ModalView for FleetSetupView {
             }
             _ => ViewAction::None,
         }
+    }
+
+    fn handle_paste(&mut self, text: &str) -> bool {
+        let Some(input) = self.active_custom_input_mut() else {
+            return false;
+        };
+        let sanitized = text.replace(['\r', '\n', '\t'], " ");
+        input.push_str(sanitized.trim());
+        self.discard_model_draft();
+        true
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -502,9 +602,10 @@ impl ModalView for FleetSetupView {
                 buf,
                 &ROLES,
                 self.role_idx,
+                self.active_custom_input_value(),
                 &[
                     "Fleet runs sub-agents that delegate work. Pick the role this".to_string(),
-                    "team member should play. It becomes the profile role_hint.".to_string(),
+                    "team member should play. Custom text becomes a safe role_hint.".to_string(),
                 ],
             ),
             Step::Model => render_choice_step(
@@ -512,6 +613,7 @@ impl ModalView for FleetSetupView {
                 buf,
                 &MODEL_CLASSES,
                 self.model_idx,
+                self.active_custom_input_value(),
                 &[
                     format!(
                         "Current route: {} / {}  ·  reasoning {}",
@@ -537,7 +639,7 @@ impl FleetSetupView {
             ),
             Step::Model => (
                 "Choose a model class",
-                "How this worker should be routed. Inherit keeps your current model.",
+                "How this worker should be routed: fast, heavy, omni, or a custom token.",
             ),
             Step::Review => (
                 "Review & start",
@@ -562,8 +664,10 @@ impl FleetSetupView {
     fn render_review(&self, area: Rect, buf: &mut Buffer) {
         let role = &ROLES[self.role_idx.min(ROLES.len() - 1)];
         let model = &MODEL_CLASSES[self.model_idx.min(MODEL_CLASSES.len() - 1)];
+        let role_hint = self.selected_role();
+        let model_class_hint = self.selected_model_class();
         let (profile_value, _) = profile_file_status(&self.snapshot.workspace);
-        let file_stem = profile_file_stem(role.label);
+        let file_stem = profile_file_stem(&role_hint);
         let token_budget = self
             .snapshot
             .token_budget
@@ -586,7 +690,16 @@ impl FleetSetupView {
         section(
             &mut lines,
             "Role",
-            format!("{} — {}", role.label, role.summary),
+            if role.label == "custom" {
+                let typed = self.custom_role.trim();
+                format!(
+                    "{} (role_hint = {})",
+                    if typed.is_empty() { "custom" } else { typed },
+                    role_hint
+                )
+            } else {
+                format!("{} — {}", role.label, role.summary)
+            },
         );
         section(
             &mut lines,
@@ -594,7 +707,7 @@ impl FleetSetupView {
             format!(
                 "{} (model_class_hint = {})  ·  route {} / {}, reasoning {}",
                 model.label,
-                self.selected_model_class(),
+                model_class_hint,
                 self.snapshot.provider,
                 self.snapshot.model,
                 self.snapshot.reasoning
@@ -671,6 +784,7 @@ fn render_choice_step(
     buf: &mut Buffer,
     choices: &[Choice],
     selected: usize,
+    custom_input: Option<&str>,
     context: &[String],
 ) {
     if area.width == 0 || area.height == 0 {
@@ -726,6 +840,25 @@ fn render_choice_step(
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
     ];
+    if let Some(input) = custom_input {
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(vec![
+            Span::styled(
+                "Custom: ",
+                Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+            ),
+            Span::styled(
+                format!("{input}▏"),
+                Style::default()
+                    .fg(palette::SELECTION_TEXT)
+                    .bg(palette::SELECTION_BG),
+            ),
+        ]));
+        detail_lines.push(Line::from(Span::styled(
+            "Type or paste; Backspace/Ctrl-H deletes. Sanitized to a safe token.",
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+    }
     if !context.is_empty() {
         detail_lines.push(Line::from(""));
         for entry in context {
@@ -774,6 +907,8 @@ fn profile_file_status(workspace: &Path) -> (String, String) {
 fn model_class_hint(label: &str) -> &'static str {
     match label {
         "fast" => "fast",
+        "heavy" => "heavy",
+        "omni" => "omni",
         "balanced" => "balanced",
         // "strong" = security/release/architecture → the strongest schema class.
         "strong" => "deep-reasoning",
@@ -783,11 +918,45 @@ fn model_class_hint(label: &str) -> &'static str {
     }
 }
 
-/// Sanitize a planner role label into a safe TOML file stem.
+/// Sanitize typed custom text into the profile loader's token alphabet
+/// (lowercased, `-`/`_`/`.` allowed, bounded) so it always survives
+/// [`crate::fleet::profile`] validation; empty results fall back.
+fn custom_token_or(value: &str, fallback: &str) -> String {
+    let token: String = value
+        .trim()
+        .chars()
+        .map(|ch| ch.to_ascii_lowercase())
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+    let token = token.trim_matches('-');
+    if token.is_empty() {
+        fallback.to_string()
+    } else {
+        token.to_string()
+    }
+}
+
+/// Sanitize a planner role label into a safe TOML file stem. Keeps the
+/// profile loader's token alphabet (`-`/`_`/`.` survive) so a custom role
+/// token and its target file stem stay identical — the ratify path's
+/// `FleetProfileDraft::file_name` derives from the same alphabet.
 fn profile_file_stem(role: &str) -> String {
     let stem: String = role
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let stem = stem.trim_matches('-').to_ascii_lowercase();
     if stem.is_empty() {
@@ -801,24 +970,42 @@ fn profile_authoring_prompt(
     snapshot: &FleetSetupSnapshot,
     role: &str,
     model_class: &str,
+    custom_role_note: Option<&str>,
+    custom_model_class_note: Option<&str>,
 ) -> String {
     let file_stem = profile_file_stem(role);
+    let mut custom_notes = String::new();
+    if let Some(note) = custom_role_note {
+        custom_notes.push_str(&format!(
+            "The user described this custom role in their own words: {note}\n"
+        ));
+    }
+    if let Some(note) = custom_model_class_note {
+        custom_notes.push_str(&format!(
+            "The user described this custom model class in their own words: {note}\n"
+        ));
+    }
+    if !custom_notes.is_empty() {
+        custom_notes.push('\n');
+    }
     format!(
         "Create a safe CodeWhale Fleet agent profile file for this workspace.\n\n\
          Selected planner role: {role}. Selected model class: {model_class}.\n\
          Target path: {PROFILE_DIR}/{file_stem}.toml\n\
          Current route context only: provider = {provider}, model = {model}, reasoning = {reasoning}\n\n\
+         {custom_notes}\
          Write TOML using only this schema:\n\
          - name\n\
          - display_name\n\
          - description\n\
          - role_hint (set to \"{role}\")\n\
-         - model_class_hint (set to \"{model_class}\"; one of inherit, fast, balanced, deep-reasoning, code, review, or tool-heavy)\n\
+         - model_class_hint (set to \"{model_class}\"; one of inherit, fast, heavy, omni, balanced, deep-reasoning, code, review, tool-heavy, or a custom token)\n\
          - model (optional explicit model id on the active/resolved route; omit to inherit the current route)\n\
+         - models (optional ranked model preference list, best first, e.g. models = [\"deepseek-v4-pro\", \"glm-5.2\"]; the first entry the active provider can serve wins, and models wins over model when both are set)\n\
          - [instructions].text\n\
          - [tools].posture = \"read-only\"\n\n\
          Do not include provider, base_url, api_key, auth, secrets, trust, allow_shell, or approval_required=false.\n\
-         If model is present, keep it to a visible model id such as deepseek-v4-pro or glm-5.2.\n\
+         If model or models entries are present, keep each to a visible model id such as deepseek-v4-pro or glm-5.2.\n\
          Fleet product shape:\n\
          - Fleet is the durable sub-agent config surface: slots, profiles, models, tools, and ledger\n\
          - one main orchestrator profile coordinates the Fleet run and verifies returned claims\n\
@@ -990,7 +1177,7 @@ mod tests {
         view.handle_key(key(KeyCode::Down));
         view.handle_key(key(KeyCode::Down));
         view.handle_key(key(KeyCode::Enter)); // -> Model
-        // Model: inherit(0) fast(1) -> fast.
+        // Model: fast(0) heavy(1) -> heavy.
         view.handle_key(key(KeyCode::Down));
         view.handle_key(key(KeyCode::Enter)); // -> Review
 
@@ -1001,7 +1188,11 @@ mod tests {
             }) => {
                 assert!(text.contains("Target path: .codewhale/agents/builder.toml"));
                 assert!(text.contains("role_hint (set to \"builder\")"));
-                assert!(text.contains("model_class_hint (set to \"fast\""));
+                assert!(text.contains("model_class_hint (set to \"heavy\""));
+                // The schema list must cover the ranked preference list the
+                // loader accepts, with the models-over-model precedence rule.
+                assert!(text.contains("models (optional ranked model preference list"));
+                assert!(text.contains("models wins over model when both are set"));
                 assert!(text.contains("provider = DeepSeek"));
                 assert!(text.contains("Do not include provider, base_url"));
                 assert!(text.contains("Fleet is the durable sub-agent config surface"));
@@ -1012,13 +1203,128 @@ mod tests {
     }
 
     #[test]
-    fn default_selection_targets_manager_inherit() {
+    fn default_selection_targets_manager_fast() {
         let view = FleetSetupView::from_snapshot(snapshot());
         let prompt = view.profile_prompt();
         assert!(prompt.contains("Target path: .codewhale/agents/manager.toml"));
-        assert!(prompt.contains("model_class_hint (set to \"inherit\""));
+        assert!(prompt.contains("model_class_hint (set to \"fast\""));
         assert!(prompt.contains("Current route context only"));
         assert!(prompt.contains("permission-narrowing"));
+    }
+
+    fn select_custom_model_class(view: &mut FleetSetupView) {
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        assert_eq!(view.step, Step::Model);
+        // fast(0) heavy(1) omni(2) custom(3)
+        for _ in 0..MODEL_CLASSES.len() {
+            view.handle_key(key(KeyCode::Down));
+        }
+        assert!(view.editing_custom_model_class());
+    }
+
+    #[test]
+    fn custom_model_class_accepts_typed_text_and_backspace() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        select_custom_model_class(&mut view);
+
+        for c in "Long Context!".chars() {
+            view.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(view.custom_model_class, "Long Context!");
+        // Backspace and Ctrl-H both delete.
+        view.handle_key(key(KeyCode::Backspace));
+        view.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(view.custom_model_class, "Long Contex");
+
+        // The typed value is sanitized into a safe hint token.
+        assert_eq!(view.selected_model_class(), "long-contex");
+
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        let prompt = view.profile_prompt();
+        assert!(prompt.contains("model_class_hint (set to \"long-contex\""));
+        assert!(
+            prompt.contains("custom model class in their own words: Long Contex"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn custom_model_class_paste_flows_into_prompt() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        select_custom_model_class(&mut view);
+
+        assert!(view.handle_paste("cheap\tscout\n"));
+        assert_eq!(view.custom_model_class, "cheap scout");
+        assert_eq!(view.selected_model_class(), "cheap-scout");
+        // Paste is ignored when no custom field is being edited.
+        view.handle_key(key(KeyCode::Up));
+        assert!(!view.handle_paste("ignored"));
+    }
+
+    #[test]
+    fn custom_role_types_into_file_stem_and_role_hint() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        // Move to the last role row: custom.
+        for _ in 0..ROLES.len() {
+            view.handle_key(key(KeyCode::Down));
+        }
+        assert!(view.editing_custom_role());
+        for c in "Release Captain".chars() {
+            view.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(view.selected_role(), "release-captain");
+
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        let prompt = view.profile_prompt();
+        assert!(prompt.contains("Target path: .codewhale/agents/release-captain.toml"));
+        assert!(prompt.contains("role_hint (set to \"release-captain\")"));
+        assert!(prompt.contains("custom role in their own words: Release Captain"));
+    }
+
+    #[test]
+    fn custom_role_with_loader_token_punctuation_keeps_stem_and_hint_aligned() {
+        // `_` and `.` are legal in the profile loader's token alphabet; the
+        // target file stem must match the role token instead of mangling it.
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        for _ in 0..ROLES.len() {
+            view.handle_key(key(KeyCode::Down));
+        }
+        assert!(view.editing_custom_role());
+        for c in "db_migrator.v2".chars() {
+            view.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(view.selected_role(), "db_migrator.v2");
+
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        let prompt = view.profile_prompt();
+        assert!(prompt.contains("Target path: .codewhale/agents/db_migrator.v2.toml"));
+        assert!(prompt.contains("role_hint (set to \"db_migrator.v2\")"));
+    }
+
+    #[test]
+    fn empty_custom_input_falls_back_to_custom_token() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        for _ in 0..ROLES.len() {
+            view.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(view.selected_role(), "custom");
+        select_custom_model_class(&mut view);
+        assert_eq!(view.selected_model_class(), "custom");
+    }
+
+    #[test]
+    fn typing_custom_text_discards_stale_model_draft() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        select_custom_model_class(&mut view);
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        let _ = view.install_model_draft(sample_draft(), "GLM-5.2".to_string());
+        assert!(view.model_draft.is_some());
+
+        view.handle_key(key(KeyCode::Left)); // back to Model (custom row)
+        view.handle_key(key(KeyCode::Char('x')));
+        assert!(view.model_draft.is_none());
     }
 
     fn render_through_stack(view_at: impl Fn() -> FleetSetupView, w: u16, h: u16) -> Vec<String> {

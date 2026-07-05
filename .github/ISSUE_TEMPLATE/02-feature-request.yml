@@ -1,0 +1,46 @@
+name: "Feature request / 功能建议"
+description: "Suggest an idea or improvement / 提出想法或改进建议"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If there's a model, provider, endpoint, or feature you don't see that you want,
+        this is exactly the right place. You can write in English or 中文.
+
+        想要的模型、Provider、端点或功能还不存在？这里就是提出它的地方。可以用英文或中文填写。
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem / 想解决的问题"
+      description: "What problem are you trying to solve? Who is affected? / 你想解决什么问题？影响哪些用户？"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Proposed solution / 建议的方案"
+      description: "What should codewhale do differently? Include commands, UI behavior, or config shape if relevant. / codewhale 应该怎么改？如相关请给出命令、界面行为或配置形式。"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: "Use case / 使用场景"
+      description: "When would you use this, and why is the current workflow not enough? / 什么时候会用到？现有流程为何不够？"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered / 考虑过的替代方案"
+      description: "Workarounds or other approaches you have tried. / 尝试过的变通办法或其他思路。"
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: "Additional context / 补充信息"
+      description: "Screenshots, mockups, examples from other tools, links, or config snippets. / 截图、示意图、其他工具的例子、链接或配置片段。"
+    validations:
+      required: false

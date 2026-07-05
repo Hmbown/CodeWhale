@@ -38,6 +38,12 @@ pub struct ErrorEnvelope {
     pub recoverable: bool,
     pub code: String,
     pub message: String,
+    /// Optional next-step hint for the user ("Run /compact …"). Populated
+    /// automatically per category/code by [`suggested_action_for`]; `None`
+    /// when there is no obviously right next step. Skipped on the wire when
+    /// absent so existing serialized envelopes stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_action: Option<String>,
 }
 
 impl fmt::Display for ErrorCategory {
@@ -72,7 +78,11 @@ impl fmt::Display for ErrorSeverity {
 
 impl fmt::Display for ErrorEnvelope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}: {}", self.severity, self.code, self.message)
+        write!(f, "[{}] {}: {}", self.severity, self.code, self.message)?;
+        if let Some(action) = &self.suggested_action {
+            write!(f, " — {action}")?;
+        }
+        Ok(())
     }
 }
 
@@ -87,12 +97,15 @@ impl ErrorEnvelope {
         code: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
+        let code = code.into();
+        let suggested_action = suggested_action_for(category, &code);
         Self {
             category,
             severity,
             recoverable,
-            code: code.into(),
+            code,
             message: message.into(),
+            suggested_action,
         }
     }
 
@@ -292,6 +305,23 @@ impl From<LlmError> for ErrorEnvelope {
             ),
         }
     }
+}
+
+/// Map an error category/code onto a next-step hint for the user.
+///
+/// Context overflow is keyed on code rather than category because it shares
+/// `ErrorCategory::InvalidInput` with unrelated request failures where the
+/// compaction hint would be misleading. Returns `None` when there is no
+/// clearly right action.
+#[must_use]
+pub fn suggested_action_for(category: ErrorCategory, code: &str) -> Option<String> {
+    if matches!(code, "context_overflow" | "llm_context_length") {
+        return Some("Run /compact to free context, or /restore to rewind.".to_string());
+    }
+    if category == ErrorCategory::Authentication {
+        return Some("Check /provider — your API key may be missing or expired.".to_string());
+    }
+    None
 }
 
 /// Classify an error message string into an ErrorCategory.
@@ -505,6 +535,74 @@ mod tests {
 
     fn classify(msg: &str) -> ErrorCategory {
         classify_error_message(msg)
+    }
+
+    // === suggested_action population (quick-fix batch, v0.8.67) ===
+
+    #[test]
+    fn context_overflow_envelope_suggests_compact_or_restore() {
+        let envelope = ErrorEnvelope::context_overflow("prompt too long");
+        assert_eq!(
+            envelope.suggested_action.as_deref(),
+            Some("Run /compact to free context, or /restore to rewind.")
+        );
+    }
+
+    #[test]
+    fn llm_context_length_error_suggests_compact_or_restore() {
+        let envelope: ErrorEnvelope =
+            LlmError::ContextLengthError("maximum context length exceeded".to_string()).into();
+        assert_eq!(
+            envelope.suggested_action.as_deref(),
+            Some("Run /compact to free context, or /restore to rewind.")
+        );
+    }
+
+    #[test]
+    fn auth_failure_envelopes_suggest_provider_check() {
+        let expected = "Check /provider — your API key may be missing or expired.";
+        let fatal = ErrorEnvelope::fatal_auth("Authentication failed: invalid API key");
+        assert_eq!(fatal.suggested_action.as_deref(), Some(expected));
+
+        let classified = ErrorEnvelope::classify("unauthorized: api key rejected", false);
+        assert_eq!(classified.category, ErrorCategory::Authentication);
+        assert_eq!(classified.suggested_action.as_deref(), Some(expected));
+    }
+
+    #[test]
+    fn unrelated_envelopes_have_no_suggested_action() {
+        assert_eq!(ErrorEnvelope::transient("hiccup").suggested_action, None);
+        assert_eq!(ErrorEnvelope::network("dns broke").suggested_action, None);
+        assert_eq!(ErrorEnvelope::tool("tool exploded").suggested_action, None);
+        // Non-overflow invalid input must NOT get the compaction hint.
+        let invalid: ErrorEnvelope = LlmError::InvalidRequest {
+            status: 400,
+            message: "bad payload".to_string(),
+        }
+        .into();
+        assert_eq!(invalid.suggested_action, None);
+    }
+
+    #[test]
+    fn display_appends_suggested_action_when_present() {
+        let envelope = ErrorEnvelope::context_overflow("prompt too long");
+        let rendered = envelope.to_string();
+        assert!(rendered.contains("Run /compact to free context, or /restore to rewind."));
+
+        let plain = ErrorEnvelope::transient("hiccup");
+        assert!(!plain.to_string().contains(" — "));
+    }
+
+    #[test]
+    fn suggested_action_is_skipped_on_the_wire_when_absent() {
+        let plain = ErrorEnvelope::transient("hiccup");
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("suggested_action"));
+
+        // Old envelopes without the field still deserialize.
+        let legacy = r#"{"category":"internal","severity":"warning","recoverable":true,"code":"transient","message":"m"}"#;
+        let parsed: ErrorEnvelope = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.suggested_action, None);
     }
 
     #[test]

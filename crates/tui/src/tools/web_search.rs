@@ -55,6 +55,26 @@ fn check_policy(decider: Option<&NetworkPolicyDecider>, host: &str) -> Result<()
     }
 }
 
+/// Shared HTTP clients for web search, built once instead of per tool call.
+/// Per-call timeouts are applied with `RequestBuilder::timeout` at each send
+/// site. Two configurations exist: the browser-UA client for HTML engines
+/// (DuckDuckGo/Bing/SearXNG) and a plain client for JSON search APIs
+/// (Tavily/Sofya/Bocha/Metaso/Baidu), matching the previous per-call builders.
+static SEARCH_BROWSER_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static SEARCH_API_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_browser_client() -> Result<&'static reqwest::Client, ToolError> {
+    crate::tls::shared_client(&SEARCH_BROWSER_CLIENT, |builder| {
+        builder.user_agent(USER_AGENT)
+    })
+    .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))
+}
+
+fn shared_api_client() -> Result<&'static reqwest::Client, ToolError> {
+    crate::tls::shared_client(&SEARCH_API_CLIENT, |builder| builder)
+        .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))
+}
+
 // Cached regex patterns for HTML parsing
 static TITLE_RE: OnceLock<Regex> = OnceLock::new();
 static SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
@@ -269,13 +289,8 @@ impl ToolSpec for WebSearchTool {
         }
 
         let decider = context.network_policy.as_ref();
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_browser_client()?;
+        let timeout = Duration::from_millis(timeout_ms);
 
         // Track whether Bing was tried and returned zero, so we can surface
         // the fallback in the result message (#2130).
@@ -283,7 +298,7 @@ impl ToolSpec for WebSearchTool {
 
         if matches!(context.search_provider, SearchProvider::Bing) {
             check_policy(decider, BING_HOST)?;
-            let results = run_bing_search(&client, &query, max_results).await?;
+            let results = run_bing_search(client, &query, max_results, timeout).await?;
             if !results.is_empty() {
                 return search_tool_result(query, "bing", results, None);
             }
@@ -304,6 +319,7 @@ impl ToolSpec for WebSearchTool {
 
         let resp = client
             .get(&url)
+            .timeout(timeout)
             .header(
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -351,7 +367,7 @@ impl ToolSpec for WebSearchTool {
             // Bing is a separate host — gate it independently so a deny on
             // DuckDuckGo doesn't silently let Bing through (and vice versa).
             check_policy(decider, BING_HOST)?;
-            match run_bing_search(&client, &query, max_results).await {
+            match run_bing_search(client, &query, max_results, timeout).await {
                 Ok(fallback_results) if !fallback_results.is_empty() => {
                     results = fallback_results;
                     source = "bing".to_string();
@@ -424,16 +440,11 @@ impl WebSearchTool {
         let (url, host) = searxng_search_url(context.search_base_url.as_deref(), query)?;
         check_policy(context.network_policy.as_ref(), &host)?;
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_browser_client()?;
 
         let resp = client
             .get(&url)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Accept", "application/json")
             .send()
             .await
@@ -488,12 +499,7 @@ impl WebSearchTool {
                 )
             })?;
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_api_client()?;
 
         let payload = json!({
             "api_key": api_key, // noqa: api-key-in-body
@@ -504,6 +510,7 @@ impl WebSearchTool {
 
         let resp = client
             .post(TAVILY_ENDPOINT)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()
@@ -591,12 +598,7 @@ impl WebSearchTool {
                 )
             })?;
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_api_client()?;
 
         let payload = json!({
             "query": query,
@@ -605,6 +607,7 @@ impl WebSearchTool {
 
         let resp = client
             .post(SOFYA_ENDPOINT)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Content-Type", "application/json")
             .bearer_auth(api_key)
             .json(&payload)
@@ -667,12 +670,7 @@ impl WebSearchTool {
                 )
             })?;
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_api_client()?;
 
         let payload = json!({
             "query": query,
@@ -682,6 +680,7 @@ impl WebSearchTool {
 
         let resp = client
             .post(BOCHA_ENDPOINT)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {api_key}"))
             .json(&payload)
@@ -748,12 +747,7 @@ impl WebSearchTool {
             .or(env_key.as_deref())
             .unwrap_or(METASO_DEFAULT_API_KEY);
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_api_client()?;
 
         let size = max_results.clamp(1, 100);
         let payload = json!({
@@ -764,6 +758,7 @@ impl WebSearchTool {
 
         let resp = client
             .post(format!("{METASO_ENDPOINT}/search"))
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {api_key}"))
             .json(&payload)
@@ -853,17 +848,13 @@ impl WebSearchTool {
                 )
             })?;
 
-        let client = crate::tls::reqwest_client_builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = shared_api_client()?;
 
         let payload = baidu_search_payload(query, max_results);
 
         let resp = client
             .post(BAIDU_ENDPOINT)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Authorization", format!("Bearer {api_key}"))
             .json(&payload)
             .send()
@@ -1398,11 +1389,13 @@ async fn run_bing_search(
     client: &reqwest::Client,
     query: &str,
     max_results: usize,
+    timeout: Duration,
 ) -> Result<Vec<WebSearchEntry>, ToolError> {
     let encoded = url_encode(query);
     let url = format!("https://www.bing.com/search?q={encoded}");
     let resp = client
         .get(&url)
+        .timeout(timeout)
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

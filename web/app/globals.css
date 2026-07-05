@@ -436,3 +436,115 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   --code-bg: #17181e;
   --code-fg: #e6e8f0;
 }
+
+/* ---------- rendered repo-docs prose (app/[locale]/docs/[slug]) ---------- */
+/* Styles GitHub-flavored Markdown emitted by lib/markdown.ts. Uses the same
+   surface tokens as the rest of the site so the docs dark theme applies. */
+.doc-prose {
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.75;
+  min-width: 0;
+}
+.doc-prose > * + * { margin-top: 0.9rem; }
+.doc-prose h2, .doc-prose h3, .doc-prose h4, .doc-prose h5, .doc-prose h6 {
+  color: var(--ink);
+  margin-top: 2.2rem;
+}
+.doc-prose h2 { font-size: 1.45rem; line-height: 1.2; }
+.doc-prose h3 { font-size: 1.12rem; }
+.doc-prose h4, .doc-prose h5, .doc-prose h6 {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.doc-prose .doc-anchor { color: inherit; text-decoration: none; }
+.doc-prose .doc-anchor:hover::after {
+  content: " #";
+  color: var(--indigo);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8em;
+}
+.doc-prose a:not(.doc-anchor) {
+  color: var(--indigo);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--indigo) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.doc-prose a:not(.doc-anchor):hover { text-decoration-color: var(--indigo); }
+.doc-prose ul, .doc-prose ol { padding-left: 1.4rem; }
+.doc-prose ul { list-style: disc; }
+.doc-prose ol { list-style: decimal; }
+.doc-prose li + li { margin-top: 0.3rem; }
+.doc-prose li > ul, .doc-prose li > ol { margin-top: 0.3rem; }
+.doc-prose blockquote {
+  border-left: 2px solid var(--indigo);
+  padding: 0.15rem 0 0.15rem 1rem;
+  color: var(--ink-mute);
+}
+.doc-prose hr { border: 0; border-top: 1px solid var(--hairline); margin: 2rem 0; }
+.doc-prose code {
+  background: var(--paper-deep);
+  border: 1px solid var(--hairline);
+  padding: 0.05rem 0.32rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.85em;
+  border-radius: 2px;
+  overflow-wrap: anywhere;
+}
+.doc-prose pre {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  max-width: 100%;
+  min-width: 0;
+  padding: 1rem 1.1rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  border: 1px solid var(--hairline);
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+}
+.doc-prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  overflow-wrap: normal;
+}
+.doc-prose table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.doc-prose th, .doc-prose td {
+  border: 1px solid var(--hairline);
+  padding: 0.4rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+.doc-prose th {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: var(--paper-deep);
+}
+.doc-prose img { max-width: 100%; height: auto; border: 1px solid var(--hairline); }
+.doc-prose kbd {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8em;
+  border: 1px solid var(--hairline);
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
+}
+@media (max-width: 640px) {
+  .doc-prose pre { font-size: 0.76rem; padding: 0.85rem 0.95rem; }
+}

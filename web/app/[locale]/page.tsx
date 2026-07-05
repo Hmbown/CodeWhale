@@ -169,7 +169,9 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           <Seal char="法" />
           <h2 className="font-display">{isZh ? "三层法" : "Three layers of law"}</h2>
           <span className="pill pill-new">
-            {isZh ? "v0.8.67 新增：宪法优先设置" : "New in v0.8.67: constitution-first setup"}
+            {isZh
+              ? `v${facts.version ?? "0.8.x"} 新增：宪法优先设置`
+              : `New in v${facts.version ?? "0.8.x"}: constitution-first setup`}
           </span>
         </div>
 
@@ -232,13 +234,13 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           {(isZh
             ? [
                 { n: "01", t: "安装", d: "npm 一行装好，或用 Cargo / Homebrew / 直接下载二进制。中国大陆网络有 CNB 与清华 Tuna 镜像。", cta: "安装指南 →", href: isZh ? "/zh/install" : "/install" },
-                { n: "02", t: "配密钥", d: "codewhale auth set --provider deepseek（或 openrouter、anthropic、zai 等）。本地 vLLM / Ollama 无需密钥。", cta: "提供商列表 →", href: isZh ? "/zh/docs#providers" : "/docs#providers" },
-                { n: "03", t: "运行", d: "在项目目录里敲 codewhale。默认 Plan 只读调查；按 Tab 切到 Agent 执行。", cta: "文档 →", href: isZh ? "/zh/docs" : "/docs" },
+                { n: "02", t: "配密钥", d: "codewhale auth set --provider deepseek（或 openrouter、anthropic、zai 等）。本地 vLLM / Ollama 无需密钥。", cta: "提供商列表 →", href: isZh ? "/zh/docs/providers" : "/docs/providers" },
+                { n: "03", t: "运行", d: "在项目目录里敲 codewhale。默认 Agent 模式，shell 命令逐条审批；按 Tab 可切到只读的 Plan 模式。", cta: "文档 →", href: isZh ? "/zh/docs" : "/docs" },
               ]
             : [
                 { n: "01", t: "Install", d: "One npm line, or Cargo / Homebrew / a direct binary. On mainland China networks, the CNB and Tsinghua Tuna mirrors route around GitHub.", cta: "Install guide →", href: "/install" },
-                { n: "02", t: "Add a key", d: "codewhale auth set --provider deepseek (or openrouter, anthropic, zai, …). A local vLLM or Ollama box needs no key at all.", cta: "Provider list →", href: "/docs#providers" },
-                { n: "03", t: "Run it", d: "Type codewhale in a project. Plan mode is read-only by default; press Tab for Agent mode.", cta: "Docs →", href: "/docs" },
+                { n: "02", t: "Add a key", d: "codewhale auth set --provider deepseek (or openrouter, anthropic, zai, …). A local vLLM or Ollama box needs no key at all.", cta: "Provider list →", href: "/docs/providers" },
+                { n: "03", t: "Run it", d: "Type codewhale in a project. Agent mode is the default, with approval prompts on shell commands; press Tab for read-only Plan mode.", cta: "Docs →", href: "/docs" },
               ]
           ).map((item) => (
             <Link key={item.n} href={item.href} className="block p-6 hover:bg-paper-deep transition-colors">

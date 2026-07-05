@@ -9,6 +9,7 @@
 #![deny(clippy::print_stderr)]
 
 pub mod apply_patch;
+pub mod approval_broker;
 pub mod approval_cache;
 pub mod arg_repair;
 pub mod automation;

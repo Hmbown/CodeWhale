@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
@@ -436,7 +436,9 @@ impl HotbarSetupView {
                 label,
                 Style::default()
                     .fg(if Some(*source) == self.selected_source() {
-                        Color::Cyan
+                        // Palette accent (not named ANSI cyan) so the
+                        // light-mode / community-theme remaps restyle it.
+                        palette::TEXT_ACCENT
                     } else {
                         palette::TEXT_MUTED
                     })

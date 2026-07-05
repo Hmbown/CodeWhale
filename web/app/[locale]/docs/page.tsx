@@ -25,6 +25,7 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
 
 const CATEGORY_LABELS: Record<string, { en: string; zh: string }> = {
   "getting-started": { en: "Getting started", zh: "入门" },
+  workflows: { en: "Workflows", zh: "工作流" },
   "core-concepts": { en: "Core concepts", zh: "核心概念" },
   reference: { en: "Reference", zh: "参考" },
   extending: { en: "Extending", zh: "扩展" },
@@ -67,9 +68,10 @@ export default async function DocsHubPage({ params }: { params: Promise<{ locale
               return (
                 <Link
                   key={t.id}
+                  id={t.id}
                   href={href}
                   target={isExternal ? "_blank" : undefined}
-                  className="hairline-t hairline-b hairline-l hairline-r p-4 hover:bg-paper-deep transition-colors group block"
+                  className="hairline-t hairline-b hairline-l hairline-r p-4 hover:bg-paper-deep transition-colors group block scroll-mt-32"
                 >
                   <div className="flex items-center gap-2 mb-1.5">
                     <span className="font-mono text-[0.62rem] uppercase tracking-widest text-ink-mute">

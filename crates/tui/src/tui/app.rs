@@ -1610,6 +1610,14 @@ pub struct App {
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
+    /// Memoized conservative context-token estimate for the render path
+    /// (`(fingerprint, estimated_tokens)`). The header and footer both read
+    /// the context-usage snapshot every frame; without this cache each frame
+    /// re-walks all of `api_messages` (including a `serde_json::to_string`
+    /// of every ToolUse input). The fingerprint is a cheap length/identity
+    /// hash of `api_messages` + system prompt — see
+    /// `crate::tui::ui::estimated_context_tokens`.
+    pub(crate) context_estimate_cache: std::cell::Cell<Option<(u64, i64)>>,
     pub is_loading: bool,
     /// Whether the once-per-turn provider-wait incident (#3095) has already
     /// been logged for the current turn.
@@ -2456,6 +2464,9 @@ impl App {
         let show_thinking = settings.show_thinking;
         let show_tool_details = settings.show_tool_details;
         let ui_locale = resolve_locale(&settings.locale);
+        // Keep the process-wide rust_i18n locale in sync so view code without
+        // `App` access (e.g. the `/provider` picker) localizes correctly.
+        rust_i18n::set_locale(ui_locale.tag());
         let cost_currency = match (settings.cost_currency.as_str(), ui_locale.tag()) {
             ("usd", "zh-Hans") => CostCurrency::Cny,
             _ => CostCurrency::from_setting(&settings.cost_currency).unwrap_or(CostCurrency::Usd),
@@ -2687,6 +2698,7 @@ impl App {
             history_revisions: Vec::new(),
             next_history_revision: 1,
             api_messages: Vec::new(),
+            context_estimate_cache: std::cell::Cell::new(None),
             is_loading: false,
             provider_wait_incident_logged: false,
             prompt_suggestion: None,
@@ -3023,6 +3035,7 @@ impl App {
         settings.set("locale", tag)?;
         settings.save()?;
         self.ui_locale = crate::localization::resolve_locale(&settings.locale);
+        rust_i18n::set_locale(self.ui_locale.tag());
         self.needs_redraw = true;
         Ok(())
     }

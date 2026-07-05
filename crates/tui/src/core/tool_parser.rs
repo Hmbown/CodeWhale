@@ -49,6 +49,12 @@ static TOOL_CALL_REGEX: OnceLock<Regex> = OnceLock::new();
 static XML_TOOL_CALL_REGEX: OnceLock<Regex> = OnceLock::new();
 static INVOKE_REGEX: OnceLock<Regex> = OnceLock::new();
 static THINKING_REGEX: OnceLock<Regex> = OnceLock::new();
+static PARAM_REGEX: OnceLock<Regex> = OnceLock::new();
+static SIMPLE_TAG_REGEX: OnceLock<Regex> = OnceLock::new();
+static ARROW_TOOL_REGEX: OnceLock<Regex> = OnceLock::new();
+static CLI_ARG_REGEX: OnceLock<Regex> = OnceLock::new();
+static KV_ARG_REGEX: OnceLock<Regex> = OnceLock::new();
+static FLEXIBLE_NAME_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn get_tool_call_regex() -> &'static Regex {
     TOOL_CALL_REGEX.get_or_init(|| {
@@ -78,6 +84,55 @@ fn get_thinking_regex() -> &'static Regex {
     THINKING_REGEX.get_or_init(|| {
         // Match thinking blocks including partial closing tags
         Regex::new(r"(?s)</?(?:think|thinking)[^>]*>").expect("thinking regex pattern is valid")
+    })
+}
+
+fn get_param_regex() -> &'static Regex {
+    PARAM_REGEX.get_or_init(|| {
+        // Match <parameter name="foo">value</parameter> (or <param ...>)
+        Regex::new(
+            "<(?:parameter|param)\\s+name\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</(?:parameter|param)>",
+        )
+        .expect("parameter regex pattern is valid")
+    })
+}
+
+fn get_simple_tag_regex() -> &'static Regex {
+    SIMPLE_TAG_REGEX.get_or_init(|| {
+        // Match <tagname>value</tagname> pairs
+        Regex::new("<([a-zA-Z_][a-zA-Z0-9_]*)>(.*?)</([a-zA-Z_][a-zA-Z0-9_]*)>")
+            .expect("simple tag regex pattern is valid")
+    })
+}
+
+fn get_arrow_tool_regex() -> &'static Regex {
+    ARROW_TOOL_REGEX.get_or_init(|| {
+        // Match the arrow syntax tool name: tool => "name"
+        Regex::new(r#"tool\s*=>\s*"([^"]+)""#).expect("arrow tool regex pattern is valid")
+    })
+}
+
+fn get_cli_arg_regex() -> &'static Regex {
+    CLI_ARG_REGEX.get_or_init(|| {
+        // Match --arg_name "value" or --arg_name 'value' or --arg_name value
+        Regex::new(r#"--([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:"([^"]*)"|'([^']*)'|(\S+))"#)
+            .expect("CLI arg regex pattern is valid")
+    })
+}
+
+fn get_kv_arg_regex() -> &'static Regex {
+    KV_ARG_REGEX.get_or_init(|| {
+        // Match key=value / key: value pairs
+        Regex::new(r#"([a-zA-Z_][a-zA-Z0-9_]*)\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|(\S+))"#)
+            .expect("key-value arg regex pattern is valid")
+    })
+}
+
+fn get_flexible_name_regex() -> &'static Regex {
+    FLEXIBLE_NAME_REGEX.get_or_init(|| {
+        // Match tool/name/function labels: tool: list_dir, name = "grep", ...
+        Regex::new(r#"(?:tool|name|function)\s*[:=]\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?"#)
+            .expect("flexible name regex pattern is valid")
     })
 }
 
@@ -184,48 +239,37 @@ fn parse_invoke_block(content: &str, id_counter: &mut u32) -> Option<ParsedToolC
 
 /// Parse XML-style parameters like <parameter name="foo">value</parameter>
 fn parse_xml_parameters(content: &str) -> Value {
-    let param_regex = Regex::new(
-        "<(?:parameter|param)\\s+name\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</(?:parameter|param)>",
-    )
-    .ok();
-    let simple_tag_regex =
-        Regex::new("<([a-zA-Z_][a-zA-Z0-9_]*)>(.*?)</([a-zA-Z_][a-zA-Z0-9_]*)>").ok();
-
     let mut map = serde_json::Map::new();
 
     // Try parsing <parameter name="...">value</parameter>
-    if let Some(regex) = param_regex {
-        for cap in regex.captures_iter(content) {
-            if let (Some(name), Some(value)) = (cap.get(1), cap.get(2)) {
-                let name_str = name.as_str();
-                let value_str = value.as_str().trim();
+    for cap in get_param_regex().captures_iter(content) {
+        if let (Some(name), Some(value)) = (cap.get(1), cap.get(2)) {
+            let name_str = name.as_str();
+            let value_str = value.as_str().trim();
 
-                // Try to parse as JSON, otherwise use as string
-                let json_value = serde_json::from_str(value_str)
-                    .unwrap_or_else(|_| Value::String(value_str.to_string()));
-                map.insert(name_str.to_string(), json_value);
-            }
+            // Try to parse as JSON, otherwise use as string
+            let json_value = serde_json::from_str(value_str)
+                .unwrap_or_else(|_| Value::String(value_str.to_string()));
+            map.insert(name_str.to_string(), json_value);
         }
     }
 
     // Also try parsing <tagname>value</tagname> format
-    if let Some(regex) = simple_tag_regex {
-        for cap in regex.captures_iter(content) {
-            if let (Some(name), Some(value), Some(close)) = (cap.get(1), cap.get(2), cap.get(3)) {
-                if name.as_str() != close.as_str() {
-                    continue;
-                }
-                let name_str = name.as_str();
-                // Skip known wrapper tags
-                if ["invoke", "tool_call", "parameter", "param"].contains(&name_str) {
-                    continue;
-                }
-                let value_str = value.as_str().trim();
-                if !map.contains_key(name_str) {
-                    let json_value = serde_json::from_str(value_str)
-                        .unwrap_or_else(|_| Value::String(value_str.to_string()));
-                    map.insert(name_str.to_string(), json_value);
-                }
+    for cap in get_simple_tag_regex().captures_iter(content) {
+        if let (Some(name), Some(value), Some(close)) = (cap.get(1), cap.get(2), cap.get(3)) {
+            if name.as_str() != close.as_str() {
+                continue;
+            }
+            let name_str = name.as_str();
+            // Skip known wrapper tags
+            if ["invoke", "tool_call", "parameter", "param"].contains(&name_str) {
+                continue;
+            }
+            let value_str = value.as_str().trim();
+            if !map.contains_key(name_str) {
+                let json_value = serde_json::from_str(value_str)
+                    .unwrap_or_else(|_| Value::String(value_str.to_string()));
+                map.insert(name_str.to_string(), json_value);
             }
         }
     }
@@ -281,8 +325,11 @@ fn parse_from_json(json: &Value, id_counter: &mut u32) -> Option<ParsedToolCall>
 /// Parse the arrow syntax: {tool => "name", args => {...}}
 fn parse_arrow_syntax(inner: &str, id_counter: &mut u32) -> Option<ParsedToolCall> {
     // Extract tool name
-    let tool_regex = Regex::new(r#"tool\s*=>\s*"([^"]+)""#).ok()?;
-    let name = tool_regex.captures(inner)?.get(1)?.as_str().to_string();
+    let name = get_arrow_tool_regex()
+        .captures(inner)?
+        .get(1)?
+        .as_str()
+        .to_string();
 
     // Extract args - try to find the JSON object after "args =>"
     let args = if let Some(args_start) = inner.find("args =>") {
@@ -336,45 +383,36 @@ fn parse_cli_style_args(content: &str) -> Value {
     let mut map = serde_json::Map::new();
 
     // Pattern: --arg_name "value" or --arg_name 'value' or --arg_name value
-    let arg_regex =
-        Regex::new(r#"--([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:"([^"]*)"|'([^']*)'|(\S+))"#).ok();
+    for cap in get_cli_arg_regex().captures_iter(content) {
+        if let Some(arg_name) = cap.get(1) {
+            let arg_name = arg_name.as_str();
+            // Get the value from whichever capture group matched
+            let value = cap
+                .get(2)
+                .or_else(|| cap.get(3))
+                .or_else(|| cap.get(4))
+                .map_or("", |m| m.as_str());
 
-    if let Some(regex) = arg_regex {
-        for cap in regex.captures_iter(content) {
-            if let Some(arg_name) = cap.get(1) {
-                let arg_name = arg_name.as_str();
-                // Get the value from whichever capture group matched
+            // Try to parse as JSON value, otherwise use as string
+            let json_value =
+                serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
+            map.insert(arg_name.to_string(), json_value);
+        }
+    }
+
+    // Also try simple key=value format
+    for cap in get_kv_arg_regex().captures_iter(content) {
+        if let Some(key) = cap.get(1) {
+            let key = key.as_str();
+            if !map.contains_key(key) {
                 let value = cap
                     .get(2)
                     .or_else(|| cap.get(3))
                     .or_else(|| cap.get(4))
                     .map_or("", |m| m.as_str());
-
-                // Try to parse as JSON value, otherwise use as string
                 let json_value = serde_json::from_str(value)
                     .unwrap_or_else(|_| Value::String(value.to_string()));
-                map.insert(arg_name.to_string(), json_value);
-            }
-        }
-    }
-
-    // Also try simple key=value format
-    let kv_regex =
-        Regex::new(r#"([a-zA-Z_][a-zA-Z0-9_]*)\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|(\S+))"#).ok();
-    if let Some(regex) = kv_regex {
-        for cap in regex.captures_iter(content) {
-            if let Some(key) = cap.get(1) {
-                let key = key.as_str();
-                if !map.contains_key(key) {
-                    let value = cap
-                        .get(2)
-                        .or_else(|| cap.get(3))
-                        .or_else(|| cap.get(4))
-                        .map_or("", |m| m.as_str());
-                    let json_value = serde_json::from_str(value)
-                        .unwrap_or_else(|_| Value::String(value.to_string()));
-                    map.insert(key.to_string(), json_value);
-                }
+                map.insert(key.to_string(), json_value);
             }
         }
     }
@@ -389,28 +427,20 @@ fn parse_flexible_format(inner: &str, id_counter: &mut u32) -> Option<ParsedTool
     // name: "list_dir"
     // function: list_dir
 
-    let patterns = [(
-        r#"(?:tool|name|function)\s*[:=]\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?"#,
-        1,
-    )];
+    if let Some(cap) = get_flexible_name_regex().captures(inner)
+        && let Some(name_match) = cap.get(1)
+    {
+        let name = name_match.as_str().to_string();
 
-    for (pattern, group) in patterns {
-        if let Ok(regex) = Regex::new(pattern)
-            && let Some(cap) = regex.captures(inner)
-            && let Some(name_match) = cap.get(group)
-        {
-            let name = name_match.as_str().to_string();
+        // Try to extract args/input as JSON
+        let args = extract_json_object(inner).unwrap_or(json!({}));
 
-            // Try to extract args/input as JSON
-            let args = extract_json_object(inner).unwrap_or(json!({}));
-
-            *id_counter += 1;
-            return Some(ParsedToolCall {
-                name,
-                args,
-                id: format!("text_tool_{id_counter}"),
-            });
-        }
+        *id_counter += 1;
+        return Some(ParsedToolCall {
+            name,
+            args,
+            id: format!("text_tool_{id_counter}"),
+        });
     }
 
     None

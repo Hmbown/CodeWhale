@@ -27,6 +27,13 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<SlashMenuEntry
         let trigger = app.input[byte_start..].chars().next().unwrap_or('/');
         return skill_mention_entries(&partial, trigger, limit, &app.cached_skills);
     }
+    // Cheap early-out before building the model-candidate ID vec: this runs
+    // on every rendered frame, and ordinary (non-slash) input is the common
+    // case. `slash_completion_hints_with_model_candidates` performs the same
+    // check internally, but only after the candidate vec was allocated.
+    if !looks_like_slash_command_input(&app.input) {
+        return Vec::new();
+    }
     let model_candidates = provider_scoped_model_completion_ids(app);
     slash_completion_hints_with_model_candidates(
         &app.input,

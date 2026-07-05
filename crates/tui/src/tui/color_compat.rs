@@ -53,6 +53,9 @@ pub(crate) struct ColorCompatBackend<W: Write> {
 
 impl<W: Write> ColorCompatBackend<W> {
     pub(crate) fn new(writer: W, depth: ColorDepth, palette_mode: PaletteMode) -> Self {
+        // Publish the mode for free-function style helpers (tool/plan card
+        // styling via `deepseek_theme::active_theme`) on the render thread.
+        crate::deepseek_theme::set_active_palette_mode(palette_mode);
         Self {
             inner: CrosstermBackend::new(writer),
             depth,
@@ -83,6 +86,9 @@ impl<W: Write> ColorCompatBackend<W> {
 
     pub(crate) fn set_palette_mode(&mut self, palette_mode: PaletteMode) {
         self.palette_mode = palette_mode;
+        // Keep `deepseek_theme::active_theme()` in lockstep with the mode the
+        // backend will remap against — ui.rs republishes this every frame.
+        crate::deepseek_theme::set_active_palette_mode(palette_mode);
     }
 
     pub(crate) fn set_theme(&mut self, theme_id: ThemeId, ui_theme: UiTheme) {

@@ -29,19 +29,11 @@ fn approval_intent_summary(text: &str) -> Option<String> {
     Some(summary)
 }
 
-pub(super) fn registered_tool_approval_required(
-    tool_name: &str,
-    requirement: ApprovalRequirement,
-    auto_approve: bool,
-) -> bool {
-    if requirement == ApprovalRequirement::Auto {
-        return false;
-    }
-    if registered_tool_requires_non_bypassable_approval(tool_name) {
-        return true;
-    }
-    !auto_approve
-}
+// The shared approval-requirement predicate moved to
+// `crate::tools::approval_broker` so the WhaleFlow script path and this
+// model path decide "does this call need a prompt?" through the same
+// function. Re-exported here so engine-side callers/tests keep their path.
+pub(crate) use crate::tools::approval_broker::registered_tool_approval_required;
 
 pub(super) fn tool_error_degradation_runtime_hint(
     consecutive_tool_error_steps: u32,
@@ -187,10 +179,6 @@ fn normalize_domain_candidate(value: &str) -> Option<String> {
             suffix.len() >= 2 && suffix.chars().any(|c| c.is_ascii_alphabetic())
         });
     if looks_like_domain { Some(host) } else { None }
-}
-
-fn registered_tool_requires_non_bypassable_approval(tool_name: &str) -> bool {
-    matches!(tool_name, "rlm_eval")
 }
 
 impl Engine {
@@ -1722,7 +1710,7 @@ impl Engine {
                         spec.approval_requirement_for(&tool_input),
                         registry.context().auto_approve,
                     );
-                    approval_description = spec.description().to_string();
+                    approval_description = spec.approval_description_for(&tool_input);
                     supports_parallel = spec.supports_parallel_for(&tool_input);
                     read_only = spec.is_read_only_for(&tool_input);
                     detached_start = spec.starts_detached_for(&tool_input);

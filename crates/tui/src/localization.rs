@@ -333,7 +333,9 @@ pub enum MessageId {
     OnboardLanguageFooter,
     // Onboarding screens — API key entry.
     OnboardApiKeyTitle,
+    OnboardApiKeyTitleAnyProvider,
     OnboardApiKeyStep1,
+    OnboardApiKeyStep1AnyProvider,
     OnboardApiKeyStep2,
     OnboardApiKeySavedHint,
     OnboardApiKeyFormatHint,
@@ -349,6 +351,7 @@ pub enum MessageId {
     OnboardTrustFooterPrefix,
     OnboardTrustFooterMiddle,
     OnboardTrustFooterSuffix,
+    OnboardTrustFooterEscBack,
     // Onboarding screens — final tips screen.
     OnboardTipsTitle,
     OnboardTipsLine1,
@@ -498,6 +501,8 @@ pub enum MessageId {
     CtxMenuContextInspectorDesc,
     CtxMenuHelp,
     CtxMenuHelpDesc,
+    CtxMenuOpenLink,
+    CtxMenuCopyLink,
     // Agent fanout card.
     FanoutCounts,
 
@@ -635,6 +640,31 @@ pub enum MessageId {
     VoiceRecording,
     VoiceProcessing,
     VoiceTranscribed,
+    // ProviderPicker — grouped `/provider` list (Active / Ready / Available).
+    ProviderGroupActive,
+    ProviderGroupReady,
+    ProviderGroupAvailable,
+    ProviderBadgeActive,
+    ProviderBadgeKey,
+    ProviderBadgeLogin,
+    ProviderBadgeLocal,
+    ProviderBadgeNeedsKey,
+    ProviderBadgeNeedsLogin,
+    ProviderBadgeNoKey,
+    ProviderBadgeNoLogin,
+    ProviderBadgeLocalRuntime,
+    ProviderCountSummary,
+    // ModelPicker — progressive-disclosure `/model` list.
+    ModelHintCurrent,
+    ModelHintAuto,
+    ModelHintSwitchRoute,
+    ModelHintReasoning,
+    ModelActionAll,
+    ModelActionShortlist,
+    ModelDetailPriced,
+    ModelDetailPriceUnknown,
+    ModelDetailCustomId,
+    ModelDetailAuto,
 }
 
 #[allow(dead_code)]
@@ -909,7 +939,9 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardLanguageBlurb,
     MessageId::OnboardLanguageFooter,
     MessageId::OnboardApiKeyTitle,
+    MessageId::OnboardApiKeyTitleAnyProvider,
     MessageId::OnboardApiKeyStep1,
+    MessageId::OnboardApiKeyStep1AnyProvider,
     MessageId::OnboardApiKeyStep2,
     MessageId::OnboardApiKeySavedHint,
     MessageId::OnboardApiKeyFormatHint,
@@ -924,6 +956,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardTrustFooterPrefix,
     MessageId::OnboardTrustFooterMiddle,
     MessageId::OnboardTrustFooterSuffix,
+    MessageId::OnboardTrustFooterEscBack,
     MessageId::OnboardTipsTitle,
     MessageId::OnboardTipsLine1,
     MessageId::OnboardTipsLine2,
@@ -1071,6 +1104,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuContextInspectorDesc,
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
+    MessageId::CtxMenuOpenLink,
+    MessageId::CtxMenuCopyLink,
     MessageId::FanoutCounts,
     MessageId::ModePickerPrompt,
     MessageId::AppModeAgent,
@@ -1199,10 +1234,42 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::VoiceRecording,
     MessageId::VoiceProcessing,
     MessageId::VoiceTranscribed,
+    MessageId::ProviderGroupActive,
+    MessageId::ProviderGroupReady,
+    MessageId::ProviderGroupAvailable,
+    MessageId::ProviderBadgeActive,
+    MessageId::ProviderBadgeKey,
+    MessageId::ProviderBadgeLogin,
+    MessageId::ProviderBadgeLocal,
+    MessageId::ProviderBadgeNeedsKey,
+    MessageId::ProviderBadgeNeedsLogin,
+    MessageId::ProviderBadgeNoKey,
+    MessageId::ProviderBadgeNoLogin,
+    MessageId::ProviderBadgeLocalRuntime,
+    MessageId::ProviderCountSummary,
+    MessageId::ModelHintCurrent,
+    MessageId::ModelHintAuto,
+    MessageId::ModelHintSwitchRoute,
+    MessageId::ModelHintReasoning,
+    MessageId::ModelActionAll,
+    MessageId::ModelActionShortlist,
+    MessageId::ModelDetailPriced,
+    MessageId::ModelDetailPriceUnknown,
+    MessageId::ModelDetailCustomId,
+    MessageId::ModelDetailAuto,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> Cow<'static, str> {
     rust_i18n::t!(format!("{id:?}"), locale = locale.tag())
+}
+
+/// Translate using the process-wide locale set via `rust_i18n::set_locale`
+/// (which `App` keeps in sync with `ui_locale`). For view code that renders
+/// without access to `App` — e.g. `ProviderPickerView` — and therefore cannot
+/// thread a `Locale` through its constructor. Defaults to English until the
+/// app sets a locale, which is also the deterministic behavior in tests.
+pub fn tr_current(id: MessageId) -> Cow<'static, str> {
+    rust_i18n::t!(format!("{id:?}"))
 }
 
 pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {

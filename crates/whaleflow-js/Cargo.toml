@@ -1,0 +1,23 @@
+[package]
+name = "codewhale-whaleflow-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sandboxed rquickjs runtime for dynamic WhaleFlow scripts (task()/tools.*/budget bridge)"
+
+[dependencies]
+anyhow.workspace = true
+codewhale-tools = { path = "../tools", version = "0.8.67" }
+# NOT the "parallel" feature: the VM stays on one dedicated thread and
+# bridges to the multi-thread engine with Send-only channel types (design
+# §2.2). `futures` enables async host functions + Promise::into_future;
+# `macro` enables async_with!.
+rquickjs = { version = "0.10", features = ["futures", "macro"] }
+serde_json.workspace = true
+tokio = { version = "1.50.0", features = ["rt", "sync", "time", "macros"] }
+tokio-util = { version = "0.7.16" }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["full"] }

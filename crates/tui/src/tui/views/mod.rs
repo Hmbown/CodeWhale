@@ -498,6 +498,11 @@ pub enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    /// Open a hyperlink (OSC 8 target or bare URL under the click) in the
+    /// system browser.
+    OpenLink {
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2048,8 +2053,17 @@ impl ModalView for ConfigView {
         if self.editing.is_some() {
             return ViewAction::None;
         }
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return ViewAction::None;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_selection(-1);
+                return ViewAction::None;
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_selection(1);
+                return ViewAction::None;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {}
+            _ => return ViewAction::None,
         }
 
         let selected = self
@@ -2476,6 +2490,17 @@ impl ModalView for SubAgentsView {
             }
             _ => ViewAction::None,
         }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        // Mirror the k/j scroll keys; render clamps against the content
+        // height, matching the keyboard path.
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_sub(3),
+            MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_add(3),
+            _ => {}
+        }
+        ViewAction::None
     }
 
     fn update_subagents(&mut self, agents: &[SubAgentResult]) -> bool {

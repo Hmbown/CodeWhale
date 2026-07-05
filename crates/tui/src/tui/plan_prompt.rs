@@ -305,6 +305,26 @@ impl ModalView for PlanPromptView {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        // Wheel scrolls the plan body (mirrors Ctrl+U/D); ignored while the
+        // confirm-exit prompt is up so the dialog can't scroll out from
+        // under the user. Render clamps against the effective max.
+        if !self.confirming_exit {
+            match mouse.kind {
+                crossterm::event::MouseEventKind::ScrollUp => {
+                    self.scroll = self.scroll.saturating_sub(3);
+                    self.pending_g = false;
+                }
+                crossterm::event::MouseEventKind::ScrollDown => {
+                    self.scroll = self.scroll.saturating_add(3);
+                    self.pending_g = false;
+                }
+                _ => {}
+            }
+        }
+        ViewAction::None
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // When the user pressed Esc after scrolling, show a confirmation prompt
         // instead of the normal plan + options.  Render it early so we skip the

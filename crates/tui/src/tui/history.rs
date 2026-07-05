@@ -214,7 +214,20 @@ impl HistoryCell {
                 let body_style = error_body_style(*severity);
                 let prefix_width = UnicodeWidthStr::width(label);
                 let content_width = width.saturating_sub(2 + prefix_width as u16).max(1);
-                let mut lines = wrap_plain_line(message, body_style, content_width);
+                // Multi-line messages render one wrapped segment per line.
+                // A segment starting with `↳` is the error taxonomy's
+                // suggested next action (see `apply_engine_error_to_app`);
+                // it renders dim so the recovery hint reads as secondary to
+                // the failure itself.
+                let mut lines = Vec::new();
+                for segment in message.split('\n') {
+                    let style = if segment.starts_with('\u{21B3}') {
+                        Style::default().fg(palette::TEXT_MUTED)
+                    } else {
+                        body_style
+                    };
+                    lines.extend(wrap_plain_line(segment, style, content_width));
+                }
                 // Add the label prefix to the first line
                 if let Some(first) = lines.get_mut(0) {
                     first.spans.insert(0, Span::raw(" "));

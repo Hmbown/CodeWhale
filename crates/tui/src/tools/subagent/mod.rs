@@ -50,6 +50,8 @@ use crate::worker_profile::{ModelRoute, ShellPolicy, ToolScope, WorkerRuntimePro
 pub mod mailbox;
 #[allow(unused_imports)]
 pub use mailbox::{Mailbox, MailboxEnvelope, MailboxMessage, MailboxReceiver};
+pub(crate) mod fleet_party;
+pub mod whaleflow_bridge;
 
 // === Constants ===
 
@@ -114,7 +116,17 @@ const SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF: Duration = Duration::from_mil
 /// default; production runtimes set the field explicitly (#1806, #1808).
 const DEFAULT_STEP_API_TIMEOUT: Duration =
     Duration::from_secs(crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS);
-const COMPLETED_AGENT_RETENTION: Duration = Duration::from_secs(60 * 60);
+/// How long finished agents stay resident in the manager map (and every
+/// persisted snapshot) before `cleanup` drops them. Shortened from 1 h to
+/// 10 min for the WhaleFlow dynamic fan-out lane: with the raised caps a
+/// 1000-agent run would otherwise bloat the `agents` HashMap and each
+/// `subagents.v1.json` rewrite for a full hour (design §4.3).
+const COMPLETED_AGENT_RETENTION: Duration = Duration::from_secs(10 * 60);
+/// Lifetime backstop on agent spawns per manager/session (design §4.2/§4.3).
+/// All instantaneous counts (`admitted`/`running`/`queued`) reset as agents
+/// finish; this monotonic cap is what actually bounds a runaway
+/// script-driven `loop-until-dry` fan-out.
+pub(crate) const SUBAGENT_LIFETIME_SPAWN_CAP: u64 = 1000;
 const MAX_AGENT_WORKER_RECORDS: usize = 256;
 const MAX_AGENT_WORKER_EVENTS_PER_RECORD: usize = 128;
 /// Byte budget for the message tail retained in a [`SubAgentCheckpoint`]
@@ -1182,6 +1194,12 @@ pub(crate) struct SubAgentSpawnOptions {
     pub nickname: Option<String>,
     pub fork_context: bool,
     pub token_budget: Option<u64>,
+    /// Budget reservation debited against the inherited scope at spawn and
+    /// released as the worker's actual usage lands (design §5.3). Prevents a
+    /// parallel `task()` burst from collectively overshooting the pool while
+    /// `spent` lags a report cycle. Ignored when `token_budget` is set (an
+    /// explicit budget forks an isolated pool) or when no scope applies.
+    pub budget_reserve: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1275,6 +1293,17 @@ struct SpawnRequest {
     /// When unset, the child inherits the parent's budget pool or the
     /// configured root default.
     token_budget: Option<u64>,
+    /// Optional workspace fleet-party profile id (`.codewhale/agents/*.toml`).
+    /// Resolved by `fleet_party::apply_fleet_profile_to_spawn` into a role,
+    /// model preference, and instruction overlay before the spawn.
+    profile: Option<String>,
+    /// Whether the caller supplied `type`/`role` explicitly. An applied fleet
+    /// profile only fills the role when the call left it open.
+    type_explicit: bool,
+    /// Whether the caller supplied `model_strength` explicitly. A degraded
+    /// profile pin (falling back to the class route) only adjusts the
+    /// strength when the call left it open.
+    model_strength_explicit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1509,6 +1538,13 @@ pub struct SubAgentRuntime {
     /// Work sidebar live. Without this, each child gets a fresh isolated
     /// list and the parent never sees child progress until completion.
     pub todos: SharedTodoList,
+    /// Broker for script-issued (WhaleFlow PTC) approval round trips.
+    /// `Some` only on the ROOT interactive turn's runtime — deliberately
+    /// cleared by `child_runtime()` (and therefore `background_runtime()`)
+    /// so delegated (child) and headless script hosts never prompt: their
+    /// approval-gated `tools.*` calls throw an honest catchable error
+    /// instead.
+    pub approval_broker: Option<Arc<crate::tools::approval_broker::ToolApprovalBroker>>,
 }
 
 impl SubAgentRuntime {
@@ -1552,7 +1588,21 @@ impl SubAgentRuntime {
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
             speech_output_dir: None,
             todos: crate::tools::todo::new_shared_todo_list(),
+            approval_broker: None,
         }
+    }
+
+    /// Attach the engine's PTC approval broker so WhaleFlow scripts hosted
+    /// by THIS runtime can round-trip approval-gated `tools.*` calls to the
+    /// user. Only the engine's root interactive turn attaches one; children
+    /// derived via `child_runtime()` drop it by design.
+    #[must_use]
+    pub fn with_approval_broker(
+        mut self,
+        broker: Option<Arc<crate::tools::approval_broker::ToolApprovalBroker>>,
+    ) -> Self {
+        self.approval_broker = broker;
+        self
     }
 
     /// Attach the parent's shared todo list so sub-agent `checklist_update`
@@ -1727,6 +1777,11 @@ impl SubAgentRuntime {
             tool_timeout: self.tool_timeout,
             speech_output_dir: self.speech_output_dir.clone(),
             todos: self.todos.clone(),
+            // Deliberately NOT inherited: only the root interactive turn's
+            // runtime may prompt the user for script-issued tool approvals.
+            // A child-hosted (or background/headless) WhaleFlow script gets
+            // the honest-throw fallback instead of a phantom prompt.
+            approval_broker: None,
         }
     }
 
@@ -1854,6 +1909,20 @@ pub struct SubAgentManager {
     max_agents: usize,
     max_admitted_agents: usize,
     default_token_budget: Option<u64>,
+    /// Monotonic count of every spawn this manager admitted, gated by
+    /// [`SUBAGENT_LIFETIME_SPAWN_CAP`] (design §4.3). Never decremented.
+    total_spawned: u64,
+    /// Outstanding spawn-time budget reservations per scope id (design §5.3).
+    /// Debited when a worker is admitted into a shared pool, released as the
+    /// worker's actual token usage is recorded (or fully on terminal state).
+    reserved_tokens: HashMap<String, u64>,
+    /// Per-worker view of `reserved_tokens`: worker id → (scope id,
+    /// still-outstanding reserve) so releases can be attributed.
+    worker_reservations: HashMap<String, (String, u64)>,
+    /// Whether the once-per-session fleet-party hint has been considered.
+    /// Set on the first spawn regardless of outcome so the workspace party
+    /// directory is probed at most once per manager session.
+    fleet_hint_emitted: bool,
     running_heartbeat_timeout: Duration,
     /// Stable id assigned at manager construction (#405). Stamped on
     /// every agent the manager spawns; agents loaded from the
@@ -1897,6 +1966,10 @@ impl SubAgentManager {
             max_agents,
             max_admitted_agents: max_agents,
             default_token_budget: None,
+            total_spawned: 0,
+            reserved_tokens: HashMap::new(),
+            worker_reservations: HashMap::new(),
+            fleet_hint_emitted: false,
             running_heartbeat_timeout: Duration::from_secs(
                 crate::config::DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS,
             ),
@@ -2332,9 +2405,15 @@ impl SubAgentManager {
         };
         let spent = self.aggregate_budget_spent(&scope_id);
         let remaining = limit.saturating_sub(spent);
-        if remaining < MIN_SUBAGENT_SPAWN_TOKEN_RESERVE {
+        // The admission gate also honors outstanding spawn reservations
+        // (design §5.3) so a parallel WhaleFlow `task()` burst cannot admit
+        // past the pool while `spent` lags a report cycle. Reservations only
+        // exist for script-driven spawns; legacy paths see identical math.
+        let reserved = self.reserved_budget_tokens(&scope_id);
+        let admissible = limit.saturating_sub(spent.saturating_add(reserved));
+        if admissible < MIN_SUBAGENT_SPAWN_TOKEN_RESERVE {
             return Err(anyhow!(
-                "Sub-agent token budget exhausted for scope {scope_id}: {spent}/{limit} tokens spent, {remaining} remaining. Wait for the parent/Workflow to summarize results or start a new agent run with an explicit token_budget override."
+                "Sub-agent token budget exhausted for scope {scope_id}: {spent}/{limit} tokens spent ({reserved} reserved by in-flight spawns), {admissible} remaining. Wait for the parent/Workflow to summarize results or start a new agent run with an explicit token_budget override."
             ));
         }
         Ok(Some(AgentUsageBudgetScope {
@@ -2343,6 +2422,101 @@ impl SubAgentManager {
             spent,
             remaining,
         }))
+    }
+
+    /// Outstanding spawn-time reservations against a budget scope.
+    pub(crate) fn reserved_budget_tokens(&self, scope_id: &str) -> u64 {
+        self.reserved_tokens.get(scope_id).copied().unwrap_or(0)
+    }
+
+    /// Validate a requested spawn reservation against the resolved scope
+    /// (design §5.3). Returns the `(scope_id, amount)` to debit after the
+    /// remaining fallible spawn steps succeed, or an error when the
+    /// reservation would overshoot the pool. Reservations only apply when
+    /// the child *inherits* a shared pool: an explicit `token_budget` forks
+    /// an isolated scope whose gate is the budget itself.
+    fn prepare_budget_reservation(
+        &self,
+        scope: Option<&AgentUsageBudgetScope>,
+        requested_budget: Option<u64>,
+        reserve: Option<u64>,
+    ) -> Result<Option<(String, u64)>> {
+        if requested_budget.is_some() {
+            return Ok(None);
+        }
+        let Some(scope) = scope else {
+            return Ok(None);
+        };
+        let Some(reserve) = reserve.filter(|amount| *amount > 0) else {
+            return Ok(None);
+        };
+        let reserved = self.reserved_budget_tokens(&scope.scope_id);
+        let available = scope
+            .limit
+            .saturating_sub(scope.spent.saturating_add(reserved));
+        if reserve > available {
+            return Err(anyhow!(
+                "Sub-agent token budget ceiling for scope {}: {reserve} tokens requested, {available} unreserved remaining ({} spent, {reserved} reserved, limit {}). Wait for running children to report usage or lower the per-task reserve.",
+                scope.scope_id,
+                scope.spent,
+                scope.limit
+            ));
+        }
+        Ok(Some((scope.scope_id.clone(), reserve)))
+    }
+
+    /// Debit a prepared reservation at spawn (design §5.3).
+    fn apply_budget_reservation(&mut self, worker_id: &str, scope_id: &str, amount: u64) {
+        *self
+            .reserved_tokens
+            .entry(scope_id.to_string())
+            .or_default() += amount;
+        self.worker_reservations
+            .insert(worker_id.to_string(), (scope_id.to_string(), amount));
+    }
+
+    /// Release a worker's reservation toward actuals as real tokens land.
+    /// The scope self-heals: each recorded token frees one reserved token
+    /// until the worker's estimate is fully replaced by measured usage.
+    fn release_budget_reservation(&mut self, worker_id: &str, actual_delta: u64) {
+        let Some((scope_id, outstanding)) = self.worker_reservations.get_mut(worker_id) else {
+            return;
+        };
+        let release = actual_delta.min(*outstanding);
+        if release == 0 {
+            return;
+        }
+        *outstanding -= release;
+        if let Some(reserved) = self.reserved_tokens.get_mut(scope_id.as_str()) {
+            *reserved = reserved.saturating_sub(release);
+            if *reserved == 0 {
+                self.reserved_tokens.remove(scope_id.as_str());
+            }
+        }
+        if self
+            .worker_reservations
+            .get(worker_id)
+            .is_some_and(|(_, outstanding)| *outstanding == 0)
+        {
+            self.worker_reservations.remove(worker_id);
+        }
+    }
+
+    /// Drop a worker's whole outstanding reservation (terminal states —
+    /// cancelled/failed workers must not pin pool capacity forever).
+    fn release_budget_reservation_fully(&mut self, worker_id: &str) {
+        let Some((scope_id, outstanding)) = self.worker_reservations.remove(worker_id) else {
+            return;
+        };
+        if outstanding == 0 {
+            return;
+        }
+        if let Some(reserved) = self.reserved_tokens.get_mut(&scope_id) {
+            *reserved = reserved.saturating_sub(outstanding);
+            if *reserved == 0 {
+                self.reserved_tokens.remove(&scope_id);
+            }
+        }
     }
 
     fn attach_budget_scope(&mut self, worker_id: &str, scope: AgentUsageBudgetScope) {
@@ -2392,6 +2566,8 @@ impl SubAgentManager {
     fn record_worker_usage(&mut self, worker_id: &str, usage: &Usage) {
         let now_ms = epoch_millis_now();
         let total_delta = usage_total_tokens(usage);
+        // Actuals landing replace the spawn-time estimate (design §5.3).
+        self.release_budget_reservation(worker_id, total_delta);
         let Some(record) = self.worker_records.get_mut(worker_id) else {
             return;
         };
@@ -2457,6 +2633,17 @@ impl SubAgentManager {
         step: Option<u32>,
         tool_name: Option<String>,
     ) {
+        if matches!(
+            status,
+            AgentWorkerStatus::Completed
+                | AgentWorkerStatus::Failed
+                | AgentWorkerStatus::Cancelled
+                | AgentWorkerStatus::Interrupted
+        ) {
+            // Terminal workers must not pin unspent pool reservations
+            // (design §5.3) — released even when no record survives.
+            self.release_budget_reservation_fully(worker_id);
+        }
         let now_ms = epoch_millis_now();
         let Some(mut record) = self.worker_records.remove(worker_id) else {
             return;
@@ -2691,6 +2878,14 @@ impl SubAgentManager {
         self.cleanup(COMPLETED_AGENT_RETENTION);
 
         self.check_admission_capacity()?;
+        // Lifetime backstop (design §4.3): instantaneous counts reset as
+        // agents finish, so this monotonic cap is what bounds a runaway
+        // script-driven fan-out loop.
+        if self.total_spawned >= SUBAGENT_LIFETIME_SPAWN_CAP {
+            return Err(anyhow!(
+                "Sub-agent lifetime spawn cap ({SUBAGENT_LIFETIME_SPAWN_CAP}) reached for this session. Start a new session (or a new manager) to spawn more agents."
+            ));
+        }
 
         if let Some(model) = options.model.as_deref() {
             runtime.model = model.to_string();
@@ -2701,6 +2896,11 @@ impl SubAgentManager {
             &agent_id,
             runtime.parent_agent_id.as_deref(),
             options.token_budget,
+        )?;
+        let budget_reservation = self.prepare_budget_reservation(
+            budget_scope.as_ref(),
+            options.token_budget,
+            options.budget_reserve,
         )?;
         let active_names: std::collections::HashSet<String> = self
             .agents
@@ -2796,9 +2996,15 @@ impl SubAgentManager {
             max_spawn_depth: runtime.max_spawn_depth,
         };
         self.register_worker(worker_spec);
+        // All fallible spawn steps have passed: debit the pool reservation
+        // now so it can never leak from an aborted spawn (design §5.3).
+        if let Some((scope_id, amount)) = budget_reservation {
+            self.apply_budget_reservation(&agent_id, &scope_id, amount);
+        }
         if let Some(scope) = budget_scope {
             self.attach_budget_scope(&agent_id, scope);
         }
+        self.total_spawned = self.total_spawned.saturating_add(1);
 
         if let Some(event_tx) = runtime.event_tx.clone() {
             let _ = event_tx.try_send(Event::AgentSpawned {
@@ -2807,6 +3013,22 @@ impl SubAgentManager {
                 parent_run_id: runtime.parent_agent_id.clone(),
                 spawn_depth: runtime.spawn_depth,
             });
+        }
+
+        // Once-per-session fleet hint: the first spawn probes the workspace
+        // party; when no profiles exist, suggest /fleet setup exactly once.
+        // A non-empty party changes nothing here (it is advertised on the
+        // agent tool description instead).
+        if !self.fleet_hint_emitted {
+            self.fleet_hint_emitted = true;
+            if fleet_party::load_fleet_party(&self.workspace).is_empty()
+                && let Some(event_tx) = runtime.event_tx.as_ref()
+            {
+                let _ = event_tx.try_send(Event::status(
+                    "Tip: /fleet setup builds reusable party members (roles + model classes) \
+                     that sub-agents and WhaleFlow scripts can use.",
+                ));
+            }
         }
 
         let launch_gate = (runtime.spawn_depth == 1).then(|| self.launch_gate.clone());
@@ -2818,6 +3040,7 @@ impl SubAgentManager {
             prompt,
             assignment,
             allowed_tools: tools,
+            nickname: agent.nickname.clone(),
             fork_context: options.fork_context,
             started_at,
             max_steps,
@@ -3540,12 +3763,47 @@ pub fn new_shared_subagent_manager_with_timeout(
 pub struct AgentTool {
     manager: SharedSubAgentManager,
     runtime: SubAgentRuntime,
+    /// Composed at construction: the base description plus, when the
+    /// workspace fleet party (`.codewhale/agents/`) is non-empty, a compact
+    /// roster so the orchestrator model knows which `profile:"<id>"` values
+    /// exist. Zero profiles ⇒ byte-identical to the legacy description.
+    description: String,
+    /// Fingerprint of `.codewhale/agents` captured when `description` was
+    /// composed. The parent registry is rebuilt every user turn, but a
+    /// sub-agent's registry lives for the whole child: `refreshed_spec`
+    /// compares this against the live dir so mid-session profile
+    /// creation/edit/removal regenerates the roster — and an unchanged
+    /// party keeps the description bytes pinned (prefix-cache stability).
+    party_fingerprint: u64,
 }
+
+/// Base model-facing description for the `agent` tool. The fleet-party
+/// roster (when a party exists) is appended at construction time.
+const AGENT_TOOL_BASE_DESCRIPTION: &str = concat!(
+    "Start, inspect, peek at, or cancel focused child agent tasks through one surface. Use start only for independent work that benefits from a clean context. ",
+    "For several independent targets, call agent separately for each target; CodeWhale runs or queues them under runtime capacity and provider rate-limit backpressure. ",
+    "The child runs in the background and reports back automatically when finished; keep tiny reads/searches local. ",
+    "Use action=status or action=peek with agent_id to inspect progress, and action=cancel with agent_id to stop a running child. Returns session projections with transcript_handle for UI/debug inspection."
+);
 
 impl AgentTool {
     #[must_use]
     pub fn new(manager: SharedSubAgentManager, runtime: SubAgentRuntime) -> Self {
-        Self { manager, runtime }
+        // Fingerprint BEFORE loading: a profile that lands between the two
+        // reads makes the stored fingerprint stale, so the next
+        // `refresh_model_surface` pass picks it up instead of missing it.
+        let party_fingerprint = fleet_party::fleet_party_fingerprint(&runtime.context.workspace);
+        let party = fleet_party::load_fleet_party(&runtime.context.workspace);
+        let description = match fleet_party::fleet_party_roster(&party) {
+            Some(roster) => format!("{AGENT_TOOL_BASE_DESCRIPTION}\n\n{roster}"),
+            None => AGENT_TOOL_BASE_DESCRIPTION.to_string(),
+        };
+        Self {
+            manager,
+            runtime,
+            description,
+            party_fingerprint,
+        }
     }
 }
 
@@ -3585,13 +3843,23 @@ impl ToolSpec for AgentTool {
         "agent"
     }
 
-    fn description(&self) -> &'static str {
-        concat!(
-            "Start, inspect, peek at, or cancel focused child agent tasks through one surface. Use start only for independent work that benefits from a clean context. ",
-            "For several independent targets, call agent separately for each target; CodeWhale runs or queues them under runtime capacity and provider rate-limit backpressure. ",
-            "The child runs in the background and reports back automatically when finished; keep tiny reads/searches local. ",
-            "Use action=status or action=peek with agent_id to inspect progress, and action=cancel with agent_id to stop a running child. Returns session projections with transcript_handle for UI/debug inspection."
-        )
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Fingerprint-gated roster refresh: when `.codewhale/agents` changed
+    /// since this instance composed its description, hand the registry a
+    /// fresh `AgentTool` (which re-reads the party). Unchanged party ⇒
+    /// `None`, keeping the serialized catalog byte-identical across reads.
+    fn refreshed_spec(&self) -> Option<Arc<dyn ToolSpec>> {
+        let current = fleet_party::fleet_party_fingerprint(&self.runtime.context.workspace);
+        if current == self.party_fingerprint {
+            return None;
+        }
+        Some(Arc::new(AgentTool::new(
+            self.manager.clone(),
+            self.runtime.clone(),
+        )))
     }
 
     fn input_schema(&self) -> Value {
@@ -3622,6 +3890,10 @@ impl ToolSpec for AgentTool {
                 "type": {
                     "type": "string",
                     "description": SUBAGENT_TYPE_DESCRIPTION
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Optional fleet party profile id from .codewhale/agents (see the Fleet party roster in this tool's description, if present). Applies the profile's role, ranked model preference, and instruction overlay to the child; explicit type/model/model_strength on this call still win."
                 },
                 "model_strength": {
                     "type": "string",
@@ -3663,9 +3935,9 @@ impl ToolSpec for AgentTool {
                 },
                 "max_depth": {
                     "type": "integer",
-                    "minimum": 0,
+                    "minimum": 1,
                     "maximum": 3,
-                    "description": "Optional remaining nested-agent depth budget for this child. Defaults to the configured runtime budget."
+                    "description": "Optional remaining nested-agent depth budget for this child (>= 1). Defaults to the configured runtime budget. A value of 0 is refused: restrict allowed_tools instead if the child must not spawn its own sub-agents."
                 },
                 "token_budget": {
                     "type": "integer",
@@ -3854,7 +4126,7 @@ async fn spawn_subagent_from_input(
     manager: SharedSubAgentManager,
     runtime: SubAgentRuntime,
 ) -> Result<SubAgentResult, ToolError> {
-    let spawn_request = parse_spawn_request(&input)?;
+    let mut spawn_request = parse_spawn_request(&input)?;
 
     if runtime.would_exceed_depth() {
         return Err(ToolError::execution_failed(format!(
@@ -3878,6 +4150,28 @@ async fn spawn_subagent_from_input(
             .check_admission_capacity()
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
     }
+
+    // Fleet party profile (`profile: "<id>"`): resolve against the workspace
+    // party and fill role / ranked-model / instruction overlay before the
+    // spawn. Explicit fields on the call keep precedence; a degraded pin
+    // surfaces on the event stream as a status warning.
+    if spawn_request.profile.is_some() {
+        let party = fleet_party::load_fleet_party(&runtime.context.workspace);
+        if let Some(application) = fleet_party::apply_fleet_profile_to_spawn(
+            &mut spawn_request,
+            &party,
+            &runtime.model,
+            runtime.client.api_provider(),
+        )? && let (Some(notice), Some(event_tx)) =
+            (application.notice.as_deref(), runtime.event_tx.as_ref())
+        {
+            let _ = event_tx.try_send(Event::status(format!(
+                "Fleet profile '{}': {notice}",
+                application.profile_id
+            )));
+        }
+    }
+
     let child_workspace = prepare_child_workspace(&runtime.context.workspace, &spawn_request)?;
 
     let mut child_runtime = runtime.background_runtime();
@@ -3962,6 +4256,7 @@ async fn spawn_subagent_from_input(
                 nickname: None,
                 fork_context: spawn_request.fork_context,
                 token_budget: spawn_request.token_budget,
+                budget_reserve: None,
             },
         )
         .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;
@@ -4079,6 +4374,9 @@ struct SubAgentTask {
     /// `None` = full registry inheritance. `Some(list)` = explicit narrow.
     /// Approval-gated tools still require an auto-approved parent runtime.
     allowed_tools: Option<Vec<String>>,
+    /// Whale nickname assigned at spawn; stitched into the completion
+    /// result/sentinel so finished children never report `name:null`.
+    nickname: Option<String>,
     fork_context: bool,
     started_at: Instant,
     max_steps: u32,
@@ -4119,7 +4417,7 @@ async fn run_subagent_task(task: SubAgentTask) {
         }
     }
 
-    let result = run_subagent(
+    let mut result = run_subagent(
         &task.runtime,
         task.agent_id.clone(),
         task.agent_type,
@@ -4133,6 +4431,21 @@ async fn run_subagent_task(task: SubAgentTask) {
         task.input_rx,
     )
     .await;
+
+    // Stitch the spawn-assigned whale nickname into the result before the
+    // completion sentinel is built. `run_subagent` constructs its
+    // `SubAgentResult`s with `nickname: None`, so completed children
+    // reported `name:null` in their `<codewhale:subagent.done>` sentinel
+    // even though every spawn is assigned a whale name — only
+    // interrupted/persisted projections, which read the live `SubAgent`,
+    // showed it. The nickname travels on the task (no manager lock here:
+    // the #1961 ordering contract requires the completion emit to happen
+    // before any manager lock is taken).
+    if let Ok(res) = result.as_mut()
+        && res.nickname.is_none()
+    {
+        res.nickname = task.nickname.clone();
+    }
 
     // Emit BOTH a human-friendly summary (rendered in the parent's
     // sidebar / cell) AND a structured sentinel the model can recognize
@@ -4768,7 +5081,7 @@ async fn run_subagent(
             structured_state_block: None,
         },
     );
-    let tool_registry = SubAgentToolRegistry::new_with_owner(
+    let mut tool_registry = SubAgentToolRegistry::new_with_owner(
         runtime_for_tools,
         agent_type.clone(),
         agent_id.clone(),
@@ -4792,7 +5105,7 @@ async fn run_subagent(
             unavailable_tools.join(", ")
         ));
     }
-    let tools = tool_registry.tools_for_model(&agent_type);
+    let mut tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
@@ -4910,6 +5223,16 @@ async fn run_subagent(
                 ),
             );
             messages.push(child_completion_runtime_message(&child_completions));
+        }
+
+        // Mid-life fleet-party refresh: this registry outlives many steps,
+        // so profiles created/edited while the child runs would otherwise
+        // never reach its `agent` tool roster (the spawn path re-reads the
+        // party, but the advertised description stayed at its birth
+        // snapshot). Fingerprint-gated — an unchanged party leaves the
+        // catalog bytes untouched; a real change re-freezes the prefix once.
+        if tool_registry.refresh_model_surface() {
+            tools = tool_registry.tools_for_model(&agent_type);
         }
 
         let request = MessageRequest {
@@ -5582,6 +5905,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         ));
     }
 
+    let type_explicit = parsed_type.is_some() || parsed_role_type.is_some();
     let agent_type = parsed_type
         .or(parsed_role_type)
         .unwrap_or(SubAgentType::General);
@@ -5623,23 +5947,24 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         ));
     }
     let model = parse_optional_subagent_model(input, "model")?;
-    let model_strength = optional_input_str(input, &["model_strength", "modelStrength"])
+    let explicit_model_strength = optional_input_str(input, &["model_strength", "modelStrength"])
         .map(SubAgentModelStrength::parse)
-        .transpose()?
-        .unwrap_or_else(|| {
-            // Default model strength. `type: "explore"` defaults to Faster for
-            // bounded read-only lookup/search/status work — the cheap, fast
-            // same-family sibling is exactly the lossy-breadth job a child
-            // should run. Every other role (and any call that supplies an
-            // explicit `model`) stays conservative at Same. Explicit
-            // model_strength above already wins via .parse(); explicit `model`
-            // wins downstream in assignment_model_route regardless of strength.
-            if agent_type == SubAgentType::Explore && model.is_none() {
-                SubAgentModelStrength::Faster
-            } else {
-                SubAgentModelStrength::Same
-            }
-        });
+        .transpose()?;
+    let model_strength_explicit = explicit_model_strength.is_some();
+    let model_strength = explicit_model_strength.unwrap_or_else(|| {
+        // Default model strength. `type: "explore"` defaults to Faster for
+        // bounded read-only lookup/search/status work — the cheap, fast
+        // same-family sibling is exactly the lossy-breadth job a child
+        // should run. Every other role (and any call that supplies an
+        // explicit `model`) stays conservative at Same. Explicit
+        // model_strength above already wins via .parse(); explicit `model`
+        // wins downstream in assignment_model_route regardless of strength.
+        if agent_type == SubAgentType::Explore && model.is_none() {
+            SubAgentModelStrength::Faster
+        } else {
+            SubAgentModelStrength::Same
+        }
+    });
     let thinking = optional_input_str(input, &["thinking", "reasoning_effort", "reasoningEffort"])
         .map(SubAgentThinking::parse)
         .transpose()?
@@ -5661,14 +5986,25 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
             let ceiling = codewhale_config::MAX_SPAWN_DEPTH_CEILING;
             u32::try_from(depth)
                 .map_err(|_| {
-                    ToolError::invalid_input(format!("max_depth must be between 0 and {ceiling}"))
+                    ToolError::invalid_input(format!("max_depth must be between 1 and {ceiling}"))
                 })
                 .and_then(|depth| {
-                    if depth <= ceiling {
+                    if depth == 0 {
+                        // A zero nested-agent budget is a refused spawn, not a
+                        // silently-admitted leaf child: previously max_depth:0
+                        // sailed through the gate (including the durable task
+                        // path) and ran to completion.
+                        Err(ToolError::invalid_input(format!(
+                            "max_depth must be between 1 and {ceiling}: a max_depth of 0 would \
+                             spawn a child with no nested-agent budget, which is refused. Omit \
+                             max_depth for the configured default, or restrict allowed_tools if \
+                             the child must not spawn its own sub-agents."
+                        )))
+                    } else if depth <= ceiling {
                         Ok(depth)
                     } else {
                         Err(ToolError::invalid_input(format!(
-                            "max_depth must be between 0 and {ceiling}"
+                            "max_depth must be between 1 and {ceiling}"
                         )))
                     }
                 })
@@ -5676,6 +6012,10 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .transpose()?;
     let token_budget =
         parse_optional_positive_u64(input, &["token_budget", "tokenBudget", "max_tokens"])?;
+    let profile = optional_input_str(input, &["profile", "agent_profile", "agentProfile"])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     Ok(SpawnRequest {
         session_name,
@@ -5692,6 +6032,9 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         fork_context,
         max_depth,
         token_budget,
+        profile,
+        type_explicit,
+        model_strength_explicit,
     })
 }
 
@@ -5768,25 +6111,32 @@ pub(crate) fn normalize_requested_subagent_model(
     }
     // #3018: Use provider-aware validation so non-DeepSeek providers can
     // accept their own model IDs instead of failing with "Expected a
-    // DeepSeek model id".
-    crate::config::requested_model_for_provider(provider, trimmed).ok_or_else(|| {
-        let valid_names = crate::config::model_completion_names_for_provider(provider);
-        let valid_hint = if valid_names.is_empty() {
-            String::new()
-        } else {
-            format!(" (accepted: {})", valid_names.join(", "))
-        };
-        ToolError::invalid_input(format!(
-            "Invalid {field} '{trimmed}' for provider {}{valid_hint}",
-            provider_name_for_error(provider)
-        ))
-    })
+    // DeepSeek model id". The full #3227 guard then rejects tuples known to
+    // be wrong before they reach the wire — most importantly a DeepSeek/GLM
+    // id on the ChatGPT Codex route, which the subscription backend refuses
+    // with `Invalid request (400): The '<model>' model is not supported when
+    // using Codex with a ChatGPT account.`
+    crate::config::requested_model_for_provider(provider, trimmed)
+        .filter(|resolved| !crate::config::model_is_foreign_to_provider(provider, resolved))
+        .ok_or_else(|| {
+            let valid_names = crate::config::model_completion_names_for_provider(provider);
+            let valid_hint = if valid_names.is_empty() {
+                String::new()
+            } else {
+                format!(" (accepted: {})", valid_names.join(", "))
+            };
+            ToolError::invalid_input(format!(
+                "Invalid {field} '{trimmed}' for provider {}{valid_hint}",
+                provider_name_for_error(provider)
+            ))
+        })
 }
 
 fn provider_name_for_error(provider: crate::config::ApiProvider) -> &'static str {
     match provider {
         crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => "DeepSeek",
-        crate::config::ApiProvider::Openai | crate::config::ApiProvider::OpenaiCodex => "OpenAI",
+        crate::config::ApiProvider::Openai => "OpenAI",
+        crate::config::ApiProvider::OpenaiCodex => "OpenAI Codex (ChatGPT)",
         crate::config::ApiProvider::Moonshot => "Moonshot",
         crate::config::ApiProvider::Ollama => "Ollama",
         _ => "this provider",
@@ -6521,6 +6871,15 @@ fn routine_agent_progress_can_preserve_event_headroom(status: &str) -> bool {
 ///
 /// `custom` is governed by its explicit `allowed_tools` list, so the posture
 /// check permits it here (the allowlist is the authority for that role).
+/// Delegation-surface tools: `agent` (single child spawn) and `whaleflow`
+/// (script-driven fan-out, M7). Both are governed by the spawn-depth budget
+/// and the allowlist rather than the write/shell posture — a read-only role
+/// may still fan out child work — and both disappear from the model surface
+/// once the depth budget is exhausted.
+fn is_delegation_tool(name: &str) -> bool {
+    matches!(name, "agent" | "whaleflow")
+}
+
 fn role_posture_permits(agent_type: &SubAgentType, approval: ApprovalRequirement) -> bool {
     if matches!(agent_type, SubAgentType::Custom) {
         return true;
@@ -6591,7 +6950,12 @@ impl SubAgentToolRegistry {
         let context = runtime.context.clone();
         let mut surface_options = runtime.agent_tool_surface_options.clone();
         surface_options.shell_policy = ShellPolicy::from_legacy_allow_shell(runtime.allow_shell);
-        let mut registry = ToolRegistryBuilder::new().with_full_agent_surface_options(
+        // The delegation tools (`agent` / `whaleflow`) are registered scoped
+        // to THIS child's role posture and explicit allowlist so a WhaleFlow
+        // script hosted by this child inherits exactly the child's own tool
+        // surface — a restricted child cannot widen its posture by routing
+        // calls through `tools.*` in a script.
+        let mut registry = ToolRegistryBuilder::new().with_full_agent_surface_options_scoped(
             Some(runtime.client.clone()),
             runtime.model.clone(),
             runtime.manager.clone(),
@@ -6599,6 +6963,8 @@ impl SubAgentToolRegistry {
             surface_options,
             todo_list,
             plan_state,
+            agent_type.clone(),
+            explicit_allowed_tools.clone(),
         );
 
         if let Some(pool) = runtime.mcp_pool.as_ref() {
@@ -6635,10 +7001,10 @@ impl SubAgentToolRegistry {
     /// Unregistered names pass through (the allowlist / availability checks
     /// handle those separately).
     fn posture_permits_tool(&self, name: &str) -> bool {
-        // Delegation (`agent`) is governed by the depth budget and the
-        // allowlist (`can_spawn_child` / `is_tool_allowed`), not the write/shell
-        // posture — a read-only role may still fan out child work.
-        if name == "agent" {
+        // Delegation (`agent` / `whaleflow`) is governed by the depth budget
+        // and the allowlist (`can_spawn_child` / `is_tool_allowed`), not the
+        // write/shell posture — a read-only role may still fan out child work.
+        if is_delegation_tool(name) {
             return true;
         }
         match self.registry.get(name) {
@@ -6660,13 +7026,23 @@ impl SubAgentToolRegistry {
     /// Whether a given tool name is permitted under this child's filter.
     /// `None` filter = everything permitted.
     fn is_tool_allowed(&self, name: &str) -> bool {
-        if name == "agent" && !self.can_spawn_child {
+        if is_delegation_tool(name) && !self.can_spawn_child {
             return false;
         }
         match &self.allowed_tools {
             None => true,
             Some(list) => list.iter().any(|t| t == name),
         }
+    }
+
+    /// Re-sample stale model-facing surfaces (the `agent` tool's fleet-party
+    /// roster). The child registry lives for the whole sub-agent, so without
+    /// this a profile created mid-session never reaches the advertised
+    /// roster even though `profile:"<id>"` spawning re-reads the party.
+    /// Returns `true` when the catalog changed and must be re-fetched via
+    /// [`Self::tools_for_model`].
+    fn refresh_model_surface(&mut self) -> bool {
+        self.registry.refresh_model_surface()
     }
 
     fn tools_for_model(&self, agent_type: &SubAgentType) -> Vec<Tool> {
@@ -6681,7 +7057,7 @@ impl SubAgentToolRegistry {
         };
         filtered
             .into_iter()
-            .filter(|tool| tool.name != "agent" || self.can_spawn_child)
+            .filter(|tool| !is_delegation_tool(&tool.name) || self.can_spawn_child)
             // #3217: hide tools the role posture forbids so the model never
             // even sees write/edit/patch (read-only roles) or shell (no-shell
             // roles). Defense-in-depth with the `execute` guard below.
@@ -6700,20 +7076,17 @@ impl SubAgentToolRegistry {
         }
     }
 
-    async fn execute(&self, _agent_id: &str, name: &str, input: Value) -> Result<String> {
-        if !self.is_tool_allowed(name) {
-            return Err(anyhow!("Tool {name} not allowed for this sub-agent"));
-        }
-        // #3217: authoritative per-role posture — read-only roles cannot mutate
-        // and non-`Full`-shell roles cannot run shell, regardless of whether
-        // the parent session is auto-approved. This closes the auto-approve
-        // bypass where a read-only child could quietly write or shell out.
-        if !self.posture_permits_tool(name) {
-            return Err(anyhow!(
-                "Tool {name} is not permitted for the read-only `{role}` sub-agent role. Use an `implementer` or `general` role (or a `custom` role with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
-                role = self.agent_type.as_str()
-            ));
-        }
+    async fn execute(&self, agent_id: &str, name: &str, input: Value) -> Result<String> {
+        self.execute_full(agent_id, name, input)
+            .await
+            .map(|result| result.content)
+    }
+
+    /// Same gate as [`Self::execute`] but returns the full [`ToolResult`]
+    /// (content + metadata) — the WhaleFlow PTC bridge decodes results as
+    /// `metadata ?? JSON.parse(content) ?? String(content)` (design §8).
+    async fn execute_full(&self, _agent_id: &str, name: &str, input: Value) -> Result<ToolResult> {
+        self.availability_gate(name)?;
         if !self.auto_approve {
             let Some(spec) = self.registry.get(name) else {
                 return Err(anyhow!("Tool {name} is not registered"));
@@ -6746,16 +7119,53 @@ impl SubAgentToolRegistry {
                 }
             }
         }
+        self.execute_full_preapproved(name, input, None).await
+    }
+
+    /// Availability checks shared by every execution path: the explicit
+    /// allowlist / depth gate ([`Self::is_tool_allowed`]) and the per-role
+    /// posture gate ([`Self::posture_permits_tool`]). Approval state is
+    /// deliberately NOT consulted here — callers layer that separately.
+    fn availability_gate(&self, name: &str) -> Result<()> {
+        if !self.is_tool_allowed(name) {
+            return Err(anyhow!("Tool {name} not allowed for this sub-agent"));
+        }
+        // #3217: authoritative per-role posture — read-only roles cannot mutate
+        // and non-`Full`-shell roles cannot run shell, regardless of whether
+        // the parent session is auto-approved. This closes the auto-approve
+        // bypass where a read-only child could quietly write or shell out.
+        if !self.posture_permits_tool(name) {
+            return Err(anyhow!(
+                "Tool {name} is not permitted for the read-only `{role}` sub-agent role. Use an `implementer` or `general` role (or a `custom` role with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                role = self.agent_type.as_str()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Execute a tool whose approval has been affirmatively satisfied
+    /// upstream (Auto requirement, auto-approved session, or a real user
+    /// verdict from the WhaleFlow PTC approval round trip). Still enforces
+    /// the allowlist, role posture, and the terminal-takeover guard —
+    /// approval is the only gate skipped.
+    ///
+    /// `context_override` carries an elevated-sandbox context after a
+    /// `RetryWithPolicy` verdict (mirrors the model path's
+    /// `with_elevated_sandbox_policy` flow).
+    async fn execute_full_preapproved(
+        &self,
+        name: &str,
+        input: Value,
+        context_override: Option<ToolContext>,
+    ) -> Result<ToolResult> {
+        self.availability_gate(name)?;
         reject_subagent_terminal_takeover(name, &input)?;
-        let context = self
-            .registry
-            .context()
-            .clone()
+        let context = context_override
+            .unwrap_or_else(|| self.registry.context().clone())
             .with_owner_agent(self.owner_agent_id.clone(), self.owner_agent_name.clone());
         self.registry
             .execute_full_with_context(name, input, Some(&context))
             .await
-            .map(|result| result.content)
             .map_err(|e| anyhow!(e))
     }
 }

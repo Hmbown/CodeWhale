@@ -31,6 +31,16 @@ const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 static WEB_RUN_STATE: OnceLock<WebRunCache> = OnceLock::new();
 
+/// Shared HTTP client for all `web.run` requests. Built once (browser user
+/// agent, default redirect policy) instead of per call; per-call timeouts are
+/// applied with `RequestBuilder::timeout` at each send site.
+static WEB_RUN_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_web_client() -> Result<&'static reqwest::Client, ToolError> {
+    crate::tls::shared_client(&WEB_RUN_CLIENT, |builder| builder.user_agent(USER_AGENT))
+        .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))
+}
+
 #[derive(Default)]
 struct WebRunCache {
     sessions: RwLock<HashMap<String, WebRunSessionState>>,
@@ -775,16 +785,14 @@ async fn run_search(
     timeout_ms: u64,
     domains: &[String],
 ) -> Result<(Vec<SearchEntry>, String, Option<String>), ToolError> {
-    let client = crate::tls::reqwest_client_builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))?;
+    let client = shared_web_client()?;
+    let timeout = Duration::from_millis(timeout_ms);
 
     let encoded = url_encode(query);
     let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
     let resp = client
         .get(&url)
+        .timeout(timeout)
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -813,7 +821,7 @@ async fn run_search(
 
     if results.is_empty() {
         let duckduckgo_blocked = is_duckduckgo_challenge(&body);
-        match run_bing_search(&client, query, max_results).await {
+        match run_bing_search(client, query, max_results, timeout).await {
             Ok(fallback_results) if !fallback_results.is_empty() => {
                 results = fallback_results;
                 source = "bing".to_string();
@@ -860,11 +868,13 @@ async fn run_bing_search(
     client: &reqwest::Client,
     query: &str,
     max_results: usize,
+    timeout: Duration,
 ) -> Result<Vec<SearchEntry>, ToolError> {
     let encoded = url_encode(query);
     let url = format!("https://www.bing.com/search?q={encoded}");
     let resp = client
         .get(&url)
+        .timeout(timeout)
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -971,17 +981,15 @@ async fn run_image_search(
     timeout_ms: u64,
     domains: &[String],
 ) -> Result<(Vec<ImageResultEntry>, Option<String>), ToolError> {
-    let client = crate::tls::reqwest_client_builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))?;
+    let client = shared_web_client()?;
+    let timeout = Duration::from_millis(timeout_ms);
 
     // Step 1: fetch the HTML page to obtain the `vqd` token used by the images API.
     let encoded = url_encode(query);
     let seed_url = format!("https://duckduckgo.com/?q={encoded}&iax=images&ia=images");
     let seed_resp = client
         .get(&seed_url)
+        .timeout(timeout)
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -1013,6 +1021,7 @@ async fn run_image_search(
     let api_url = format!("https://duckduckgo.com/i.js?l=us-en&o=json&q={encoded}&vqd={vqd}&p=1");
     let api_resp = client
         .get(&api_url)
+        .timeout(timeout)
         .header("Accept", "application/json")
         .header("Referer", "https://duckduckgo.com/")
         .send()
@@ -1124,14 +1133,11 @@ fn check_network_policy(url: &str, context: &ToolContext) -> Result<(), ToolErro
 }
 
 async fn fetch_page(url: &str, timeout_ms: u64) -> Result<WebPage, ToolError> {
-    let client = crate::tls::reqwest_client_builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))?;
+    let client = shared_web_client()?;
 
     let resp = client
         .get(url)
+        .timeout(Duration::from_millis(timeout_ms))
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

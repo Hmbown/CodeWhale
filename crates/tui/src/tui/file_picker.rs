@@ -270,6 +270,15 @@ impl ModalView for FilePickerView {
         self
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        match mouse.kind {
+            crossterm::event::MouseEventKind::ScrollUp => self.move_selection(-1),
+            crossterm::event::MouseEventKind::ScrollDown => self.move_selection(1),
+            _ => {}
+        }
+        ViewAction::None
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Esc => ViewAction::Close,

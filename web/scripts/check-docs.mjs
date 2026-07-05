@@ -4,7 +4,11 @@
  *
  * Verifies that:
  *   1. Every doc topic in docs-map.ts points to a real repo source file.
- *   2. Version, command snippets, and tool names referenced on the website
+ *   2. Every topic registered with hasPage: true is actually served — either
+ *      by a hand-authored app/[locale]/docs/<slug>/page.tsx or by the dynamic
+ *      Markdown renderer app/[locale]/docs/[slug]/page.tsx — and, inversely,
+ *      no hand-authored page exists for a topic marked hasPage: false.
+ *   3. Version, command snippets, and tool names referenced on the website
  *      match the current workspace state.
  *
  * Usage:
@@ -34,7 +38,7 @@ function parseDocsMap() {
 
   const topics = [];
   const re =
-    /\{\s*id:\s*"(\w[^"]*)",\s*slug:\s*"(\w[^"]*)",[\s\S]*?repoSource:\s*(\[[^\]]+\]|"[^"]+")/g;
+    /\{\s*id:\s*"(\w[^"]*)",\s*slug:\s*"([\w-][^"]*)",[\s\S]*?repoSource:\s*(\[[^\]]+\]|"[^"]+"),\s*hasPage:\s*(true|false)/g;
   let m;
   while ((m = re.exec(src)) !== null) {
     const id = m[1];
@@ -43,9 +47,34 @@ function parseDocsMap() {
     const sources = rawSource.startsWith("[")
       ? rawSource.match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? []
       : [rawSource.slice(1, -1)];
-    topics.push({ id, slug, repoSource: sources });
+    topics.push({ id, slug, repoSource: sources, hasPage: m[4] === "true" });
   }
   return topics;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Check 2: hasPage topics are actually served (and vice versa)        */
+/* ------------------------------------------------------------------ */
+
+function checkPagesExist(topics) {
+  const docsAppDir = resolve(WEB_DIR, "app", "[locale]", "docs");
+  const hasDynamicRenderer = existsSync(resolve(docsAppDir, "[slug]", "page.tsx"));
+
+  const problems = [];
+  for (const t of topics) {
+    const hasCustomPage = existsSync(resolve(docsAppDir, t.slug, "page.tsx"));
+    if (t.hasPage && !hasCustomPage && !hasDynamicRenderer) {
+      problems.push(
+        `${t.id}: hasPage=true but neither app/[locale]/docs/${t.slug}/page.tsx nor the dynamic [slug] renderer exists`,
+      );
+    }
+    if (!t.hasPage && hasCustomPage) {
+      problems.push(
+        `${t.id}: hasPage=false but app/[locale]/docs/${t.slug}/page.tsx exists — flip hasPage in docs-map.ts`,
+      );
+    }
+  }
+  return problems;
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,7 +95,7 @@ function checkSourcesExist(topics) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Check 2: version matches Cargo.toml                                 */
+/*  Check 3: version matches Cargo.toml                                 */
 /* ------------------------------------------------------------------ */
 
 function deriveVersion() {
@@ -83,7 +112,7 @@ function checkVersion() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Check 3: command snippet freshness (install commands)               */
+/*  Check 4: command snippet freshness (install commands)               */
 /* ------------------------------------------------------------------ */
 
 function checkInstallSnippets() {
@@ -128,7 +157,17 @@ function main() {
   }
   console.log("[check-docs] OK — all repo source files exist");
 
-  // Check 2: version
+  // Check 2: every hasPage topic is served by a real route
+  const pageProblems = checkPagesExist(topics);
+  if (pageProblems.length > 0) {
+    console.error("[check-docs] FAIL — docs-map/page mismatches:");
+    for (const p of pageProblems) console.error(`  ${p}`);
+    process.exit(1);
+  }
+  const pageCount = topics.filter((t) => t.hasPage).length;
+  console.log(`[check-docs] OK — ${pageCount} hasPage topics all have routes`);
+
+  // Check 3: version
   const ver = checkVersion();
   if (!ver.ok) {
     console.error("[check-docs] FAIL — could not derive version from workspace");
@@ -136,7 +175,7 @@ function main() {
   }
   console.log(`[check-docs] OK — version=${ver.version}`);
 
-  // Check 3: install snippets
+  // Check 4: install snippets
   const install = checkInstallSnippets();
   if (!install.ok && !install.note) {
     console.error("[check-docs] FAIL — stale version in install snippets:");

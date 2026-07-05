@@ -437,6 +437,7 @@ mod tests {
                 },
                 loadout: FleetLoadout::Balanced,
                 model: None,
+                models: Vec::new(),
                 permissions: FleetProfilePermissions::default(),
                 delegation: FleetDelegationHints::default(),
             },

@@ -38,10 +38,65 @@ logs and adapter logs are stored under `.codewhale/fleet/` and
 
 ## Authoring agent profiles (`/fleet setup`)
 
-`/fleet setup` (also `/fleet`, or the `roles`/`profiles`/`loadout`/`party`
-aliases) opens an in-TUI wizard for authoring a reusable agent-team profile.
-`/fleet status` opens the worker-status view instead; `/subagents` is a
-compatibility shortcut for that status view.
+`/fleet setup` (also `/fleet`, or the `roles`/`profiles`/`loadout` aliases)
+opens an in-TUI wizard for authoring a reusable agent profile — one party
+member per pass. `/fleet party` prints the saved party roster: every profile
+under `.codewhale/agents/` with its per-slot role, model class, and pinned
+model, alongside the orchestrator (the active session). `/fleet status` opens
+the worker-status view instead; `/subagents` is a compatibility shortcut for
+that status view.
+
+The wizard's model classes are `fast` (low-latency fan-out), `heavy` (hard
+problems), `omni` (multimodal-capable), and `custom` — a typed/pasted token
+that is sanitized into the profile's `model_class_hint`. The role step has the
+same `custom` option for a typed role. Per-slot model selection is a profile
+field: set `model = "<model id>"` in the profile (or via the wizard's model
+draft) to pin a slot to a specific model; otherwise the slot follows its
+class/loadout on the active route.
+
+### Ranked model preferences (`models = [...]`)
+
+A profile may rank several models instead of pinning one:
+
+```toml
+models = ["deepseek-v4-pro", "glm-5.2"]   # best first
+```
+
+`model = "x"` is the one-element shorthand; when both are set, `models` wins.
+At spawn (and in the `/fleet party` roster) the first entry the **active
+provider** can plausibly serve is chosen. The check mirrors the route
+contamination guard (#3227): only tuples *known* to be wrong are skipped —
+official DeepSeek endpoints accept DeepSeek ids, pass-through providers
+(custom/OpenAI-compatible/Ollama, …) accept any id verbatim, and the provider
+API stays the final authority.
+
+Decisions (v0.8.67), chosen so a stale pin never fails silently on the wire:
+
+- **Pinned model the active provider can't serve** (key removed, provider
+  switched, model renamed): the entry is skipped in ranked order. When *no*
+  entry is usable the slot degrades to its class/loadout route (`auto`) —
+  never a hard error, never a known-bad wire call.
+- **Where you see it**: `/fleet party` shows the active pick per member
+  (`models a > b (active: …)`) and a `⚠` line when a pin was skipped or the
+  slot fell back to the class route; the spawn path logs the same notice.
+- **Profiles carry no provider authority**: a member cannot select a provider,
+  only models; cross-provider pins are treated as unusable, not inferred.
+- **Unknown `model_class_hint` tokens** parse as custom loadouts and route as
+  `auto`; the roster labels them `custom token — routes auto` so a typo'd
+  class is visible.
+- **Deferred** (recorded, not implemented): live retry of the next ranked
+  entry after a runtime HTTP failure; per-entry provider tags
+  (`"anthropic:…"` — rejected by design, provider authority stays with the
+  session); profile-load-time validation (validity is provider-relative, so
+  it is checked at spawn/roster time instead); the fleet route receipt's
+  hard-coded DeepSeek resolver scope.
+
+### Fleet visibility ("fleet on")
+
+There is no toggle: the fleet is *on* when at least one profile exists under
+`.codewhale/agents/`. With zero profiles nothing changes about sub-agent
+behavior. `/fleet party` is the roster; `/fleet setup` adds one member per
+pass.
 
 The wizard is progressive: you make one focused choice at a time — a **role**,
 then a **model class** — and then review the full posture (model/route,
@@ -52,13 +107,16 @@ profile-authoring prompt into the composer; it does not write a file itself.
 When a provider is configured, the review step also offers model-assisted
 drafting behind a ratify gate:
 
-- Press **`m`** to have your first configured model draft the profile. The
-  draft arrives sanitized and bounded — permissions stay at the **fleet floor**
-  (no shell, no trust, approval required) regardless of what the model
-  proposes.
+- Press **`m`** to have the active model on the active provider route draft
+  the profile. The draft arrives sanitized and bounded — permissions stay at
+  the **fleet floor** (no shell, no trust, approval required) regardless of
+  what the model proposes.
 - **Drafting is not ratifying.** The exact rendered TOML preview is shown and
   nothing is saved until you press **`g`** to ratify (or press `m` again to
-  redraft). Ratifying writes the profile to `.codewhale/agents/<role>`.
+  redraft). Ratifying writes the profile to `.codewhale/agents/<id>.toml`,
+  where the id derives from the sanitized role token; a draft whose id
+  collides with a *different* existing profile file is refused instead of
+  clobbering it.
 
 ## Naming: Modes, WhaleFlow, Fleet, and Swarm
 

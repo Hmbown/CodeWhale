@@ -1055,12 +1055,31 @@ fn test_parse_spawn_request_accepts_session_name_for_agent() {
         "name": "review.parser",
         "prompt": "inspect parser",
         "fork_context": true,
-        "max_depth": 0
+        "max_depth": 1
     });
     let parsed = parse_spawn_request(&input).expect("agent request should parse");
     assert_eq!(parsed.session_name.as_deref(), Some("review.parser"));
     assert!(parsed.fork_context);
-    assert_eq!(parsed.max_depth, Some(0));
+    assert_eq!(parsed.max_depth, Some(1));
+}
+
+#[test]
+fn test_parse_spawn_request_rejects_zero_max_depth() {
+    // max_depth:0 asks for a child with no nested-agent budget; the spawn is
+    // refused up front (previously it was silently admitted — including on
+    // the durable/whaleflow task path, which shares this parser — and ran to
+    // completion).
+    let input = json!({
+        "prompt": "inspect parser",
+        "max_depth": 0
+    });
+    let err = parse_spawn_request(&input).expect_err("max_depth:0 must be refused");
+    let msg = err.to_string();
+    assert!(msg.contains("max_depth must be between 1 and"), "{msg}");
+    assert!(
+        msg.contains("allowed_tools"),
+        "actionable alternative: {msg}"
+    );
 }
 
 #[test]
@@ -1084,7 +1103,7 @@ fn test_parse_spawn_request_rejects_out_of_range_max_depth() {
     let err = parse_spawn_request(&input).expect_err("max_depth should be capped at schema range");
     assert!(
         err.to_string()
-            .contains(&format!("max_depth must be between 0 and {ceiling}"))
+            .contains(&format!("max_depth must be between 1 and {ceiling}"))
     );
 }
 
@@ -2234,6 +2253,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
     runtime.mailbox = Some(mailbox);
 
     let task = SubAgentTask {
+        nickname: None,
         manager_handle: Arc::clone(&manager),
         runtime: runtime.clone(),
         agent_id: agent_id.clone(),
@@ -2414,6 +2434,7 @@ async fn subagent_retries_transient_provider_header_timeout_before_succeeding() 
     runtime.context = ToolContext::new(tmp.path());
 
     let task = SubAgentTask {
+        nickname: None,
         manager_handle: Arc::clone(&manager),
         runtime,
         agent_id: agent_id.clone(),
@@ -3575,6 +3596,120 @@ async fn subagent_registry_blocks_approval_tools_without_parent_auto_approve() {
     );
 }
 
+// ── execute_full_preapproved: approval satisfied upstream, gates intact ───
+
+#[tokio::test]
+async fn execute_full_preapproved_runs_required_tool_without_auto_approve() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().to_path_buf();
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.clone());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::General,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    // Approval was affirmatively satisfied upstream (real user verdict via
+    // the PTC broker), so the Required-level write lands even though the
+    // plain `execute_full` gate would have refused it.
+    let result = registry
+        .execute_full_preapproved(
+            "write_file",
+            json!({"path": "preapproved.txt", "content": "landed"}),
+            None,
+        )
+        .await
+        .expect("preapproved gated tool must execute");
+    assert!(result.success, "write should succeed: {}", result.content);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("preapproved.txt")).expect("file written"),
+        "landed"
+    );
+}
+
+#[tokio::test]
+async fn execute_full_preapproved_still_enforces_allowlist_and_posture() {
+    let tmp = tempdir().expect("tempdir");
+
+    // Explicit allowlist without the tool → rejected even preapproved.
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let narrowed = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::General,
+        Some(vec!["read_file".to_string()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+    let err = narrowed
+        .execute_full_preapproved("exec_shell", json!({"command": "echo hi"}), None)
+        .await
+        .expect_err("allowlist must still gate preapproved calls");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "allowlist error expected: {err}"
+    );
+
+    // Read-only role posture → rejected even preapproved.
+    let mut explore_runtime = stub_runtime();
+    explore_runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    explore_runtime.context.auto_approve = false;
+    explore_runtime.worker_profile = WorkerRuntimeProfile::for_role(SubAgentType::Explore);
+    let explore = SubAgentToolRegistry::new(
+        explore_runtime,
+        SubAgentType::Explore,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+    let err = explore
+        .execute_full_preapproved(
+            "write_file",
+            json!({"path": "posture.txt", "content": "no"}),
+            None,
+        )
+        .await
+        .expect_err("read-only posture must still gate preapproved calls");
+    assert!(
+        err.to_string().contains("not permitted"),
+        "posture error expected: {err}"
+    );
+    assert!(!tmp.path().join("posture.txt").exists());
+}
+
+#[tokio::test]
+async fn execute_full_preapproved_still_rejects_terminal_takeover() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::General,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute_full_preapproved(
+            "exec_shell",
+            json!({"command": "vim", "interactive": true}),
+            None,
+        )
+        .await
+        .expect_err("interactive terminal takeover must stay rejected");
+    assert!(
+        err.to_string().contains("interactive=true"),
+        "takeover guard expected: {err}"
+    );
+}
+
 #[tokio::test]
 async fn implementer_delegation_allows_suggest_write_without_parent_auto_approve() {
     // Issue #1828: implementer agents could not write files even when their
@@ -4088,6 +4223,7 @@ fn stub_runtime() -> SubAgentRuntime {
         tool_timeout: DEFAULT_TOOL_TIMEOUT,
         speech_output_dir: None,
         todos: crate::tools::todo::new_shared_todo_list(),
+        approval_broker: None,
     }
 }
 
@@ -4575,6 +4711,7 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
     runtime.manager = Arc::clone(&manager);
 
     let task = SubAgentTask {
+        nickname: None,
         manager_handle: manager.clone(),
         runtime,
         agent_id: agent_id.clone(),
@@ -4614,6 +4751,65 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
             .expect("completed agent should be present")
     };
     assert_eq!(snapshot.status, SubAgentStatus::Completed);
+}
+
+#[tokio::test]
+async fn run_subagent_task_completion_sentinel_carries_whale_nickname() {
+    // Completed tool/profile spawns previously reported `name:null` in the
+    // `<codewhale:subagent.done>` sentinel: `run_subagent` builds its
+    // results with `nickname: None` and only interrupted/persisted
+    // projections read the live `SubAgent`. The spawn-assigned whale name
+    // now travels on the task and is stitched into the completion.
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent_id = "agent_whale".to_string();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "noop".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("蓝鲸".to_string()),
+        None,
+        task_input_tx,
+        PathBuf::from("."),
+        "boot_test".to_string(),
+    );
+    agent.status = SubAgentStatus::Running;
+    manager.write().await.agents.insert(agent_id.clone(), agent);
+
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<SubAgentCompletion>();
+    let mut runtime = runtime_with_depth(1, Some(completion_tx));
+    runtime.manager = Arc::clone(&manager);
+
+    let task = SubAgentTask {
+        nickname: Some("蓝鲸".to_string()),
+        manager_handle: manager.clone(),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "no-op child run".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: None,
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 0,
+        token_budget: None,
+        input_rx: task_input_rx,
+        launch_gate: None,
+    };
+    run_subagent_task(task).await;
+
+    let completion = completion_rx
+        .recv()
+        .await
+        .expect("completion should be emitted");
+    assert_eq!(completion.agent_id, agent_id);
+    assert!(
+        completion.payload.contains("\"name\":\"蓝鲸\""),
+        "completed sentinel must carry the whale nickname: {}",
+        completion.payload
+    );
 }
 
 #[test]
@@ -4975,6 +5171,61 @@ fn normalize_requested_subagent_model_is_provider_aware() {
     );
 }
 
+#[test]
+fn normalize_requested_subagent_model_rejects_foreign_ids_on_codex_route() {
+    // The ChatGPT Codex OAuth backend serves only its own model family and
+    // rejects everything else with "Invalid request (400): The '<model>'
+    // model is not supported when using Codex with a ChatGPT account."
+    // Catch that locally, before the wire, with an actionable error.
+    let err = normalize_requested_subagent_model(
+        "deepseek-v4-pro",
+        "model",
+        crate::config::ApiProvider::OpenaiCodex,
+    )
+    .expect_err("DeepSeek ids are foreign to the Codex backend");
+    let msg = err.to_string();
+    assert!(msg.contains("deepseek-v4-pro"), "names the bad id: {msg}");
+    assert!(
+        msg.contains("OpenAI Codex (ChatGPT)"),
+        "names the codex route: {msg}"
+    );
+    assert!(
+        msg.contains("gpt-5.5"),
+        "lists the accepted codex model hint: {msg}"
+    );
+
+    assert!(
+        normalize_requested_subagent_model(
+            "glm-5.2",
+            "model",
+            crate::config::ApiProvider::OpenaiCodex
+        )
+        .is_err(),
+        "GLM ids are foreign to the Codex backend"
+    );
+
+    // The codex family itself still validates (live-verified: an explicit
+    // model:"gpt-5.5" child completes fine on the ChatGPT backend).
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "gpt-5.5",
+            "model",
+            crate::config::ApiProvider::OpenaiCodex
+        )
+        .expect("gpt-5.5 is served by the ChatGPT backend"),
+        "gpt-5.5"
+    );
+    assert_eq!(
+        normalize_requested_subagent_model(
+            "gpt-5.5-codex",
+            "model",
+            crate::config::ApiProvider::OpenaiCodex
+        )
+        .expect("gpt-5.5-codex is served by the ChatGPT backend"),
+        "gpt-5.5-codex"
+    );
+}
+
 // ── #3030: step-counter formatting ──────────────────────────────────────────
 
 #[test]
@@ -5052,6 +5303,7 @@ async fn launch_gate_queues_extra_direct_children() {
             "boot_test".to_string(),
         );
         let task = SubAgentTask {
+            nickname: None,
             manager_handle: Arc::clone(&manager),
             runtime: runtime.clone(),
             agent_id: agent_id.to_string(),
@@ -5269,6 +5521,7 @@ async fn spawn_budget_capped_worker(
     runtime.context = ToolContext::new(workspace.to_path_buf());
 
     let task = SubAgentTask {
+        nickname: None,
         manager_handle: Arc::clone(&manager),
         runtime: runtime.clone(),
         agent_id: agent_id.clone(),

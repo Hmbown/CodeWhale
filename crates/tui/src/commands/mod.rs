@@ -574,6 +574,81 @@ mod tests {
                 assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
             }
         }
+
+        // `execute` reserves these words outside the registry: legacy
+        // migration hints (`set`, `deepseek`, `doctor`) and permanent
+        // pre-registry aliases (`slop`, `canzha`). A registry name or alias
+        // reusing one of them would either be shadowed (pre-registry match
+        // runs first) or would never fire (migration hints come after the
+        // registry lookup but promise retired behaviour). `jihua`/`zidong`
+        // are excluded: they are deliberately both pre-registry aliases and
+        // registry aliases of /mode, verified separately below.
+        for reserved in ["set", "deepseek", "doctor", "slop", "canzha"] {
+            assert!(
+                !names.contains(reserved),
+                "reserved legacy word /{reserved} must not be a command name"
+            );
+            assert!(
+                !aliases.contains(reserved),
+                "reserved legacy word /{reserved} must not be a command alias"
+            );
+        }
+
+        // The pre-registry matches for /jihua and /zidong dispatch into the
+        // config group; the registry must agree they belong to /mode so the
+        // two paths cannot drift apart.
+        for mode_alias in ["jihua", "zidong"] {
+            let info = get_command_info(mode_alias)
+                .unwrap_or_else(|| panic!("/{mode_alias} should resolve in the registry"));
+            assert_eq!(
+                info.name, "mode",
+                "/{mode_alias} must stay an alias of /mode to match the pre-registry dispatch"
+            );
+        }
+    }
+
+    /// Every registered command's description must resolve to a real string
+    /// in English and Simplified Chinese. rust_i18n falls back silently: a
+    /// key missing from en.json renders as the raw MessageId debug name, and
+    /// a key missing from zh-Hans.json leaks the English text into the
+    /// Chinese UI. Both failure modes are invisible to the compiler, so this
+    /// test pins them. (Caught live: CmdSidebarDescription, CmdSlopDescription,
+    /// and CmdPluginDescription were missing from zh-Hans.json.)
+    #[test]
+    fn command_descriptions_are_localized_in_english_and_simplified_chinese() {
+        for command in command_infos() {
+            let raw_key = format!("{:?}", command.description_id);
+
+            let english = command.description_for(Locale::En);
+            assert!(
+                !english.trim().is_empty(),
+                "/{} English description must not be empty",
+                command.name
+            );
+            assert_ne!(
+                english, raw_key,
+                "/{} description key {raw_key} is missing from en.json (raw key leaked)",
+                command.name
+            );
+
+            let chinese = command.description_for(Locale::ZhHans);
+            assert!(
+                !chinese.trim().is_empty(),
+                "/{} zh-Hans description must not be empty",
+                command.name
+            );
+            assert_ne!(
+                chinese, raw_key,
+                "/{} description key {raw_key} is missing from every locale",
+                command.name
+            );
+            assert_ne!(
+                chinese, english,
+                "/{} description key {raw_key} is missing from zh-Hans.json \
+                 (English text leaked through the fallback chain)",
+                command.name
+            );
+        }
     }
 
     /// AT-009: Command ownership contract — top-level `commands/mod.rs` only
@@ -983,12 +1058,16 @@ mod tests {
         let mut app = create_test_app();
         let result = execute("/sidebar maybe", &mut app);
         assert!(result.is_error);
+        let message = result.message.as_deref().unwrap_or_default();
+        assert!(message.contains("Usage: /sidebar"));
+        // The error must advertise the same options as the registered usage
+        // string so `/help sidebar` and the failure path cannot drift apart.
+        let usage = get_command_info("sidebar")
+            .expect("sidebar command should exist")
+            .usage;
         assert!(
-            result
-                .message
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Usage: /sidebar")
+            message.contains(usage),
+            "sidebar error {message:?} should quote registered usage {usage:?}"
         );
     }
 

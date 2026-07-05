@@ -623,6 +623,19 @@ fn back_from_api_key_onboarding(app: &mut App) {
     app.status_message = None;
 }
 
+/// TrustDirectory → previous onboarding step (Esc). Mirrors the forward
+/// routing in [`onboarding::advance_onboarding_after_language`]: the step
+/// before the trust screen is ApiKey when the session still needs a key,
+/// otherwise Language.
+pub(crate) fn back_from_trust_directory_onboarding(app: &mut App) {
+    app.status_message = None;
+    app.onboarding = if app.onboarding_needs_api_key {
+        OnboardingState::ApiKey
+    } else {
+        OnboardingState::Language
+    };
+}
+
 fn surface_prompt_override_notices(app: &mut App) {
     for notice in prompts::take_prompt_override_notices() {
         app.add_message(HistoryCell::System {
@@ -3952,8 +3965,16 @@ async fn run_event_loop(
                         return Ok(());
                     }
                     KeyCode::Esc if app.onboarding == OnboardingState::TrustDirectory => {
-                        let _ = engine_handle.send(Op::Shutdown).await;
-                        return Ok(());
+                        // KEYBINDINGS.md promises "Esc — step back one screen"
+                        // during onboarding. Quitting stays on `n`/`N`/`2` (and
+                        // Ctrl+C). When the trust screen is a standalone gate
+                        // (no previous onboarding screen exists), Esc keeps its
+                        // historical quit behavior.
+                        if app.onboarding_workspace_trust_gate {
+                            let _ = engine_handle.send(Op::Shutdown).await;
+                            return Ok(());
+                        }
+                        back_from_trust_directory_onboarding(app);
                     }
                     KeyCode::Backspace if app.onboarding == OnboardingState::ApiKey => {
                         app.delete_api_key_char();
@@ -4772,11 +4793,25 @@ async fn run_event_loop(
                     app.status_message = Some("No next tool output".to_string());
                 }
                 // `Alt+?` opens the searchable help overlay (#93). F1 and
-                // Ctrl+/ are also bound; bare `?` is reserved as text input
-                // so users can start a message with "?" without losing the
-                // first character.
+                // Ctrl+/ are also bound.
                 KeyCode::Char('?')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
+                        && app.input.is_empty()
+                        && !slash_menu_open =>
+                {
+                    if app.view_stack.top_kind() != Some(ModalKind::Help) {
+                        app.view_stack.push(HelpView::new_for_locale(app.ui_locale));
+                    }
+                    continue;
+                }
+                // Bare `?` on an EMPTY composer also opens help — the in-app
+                // catalog and docs advertise it. With any text present `?`
+                // stays ordinary input, so questions can still be typed; a
+                // message *starting* with "?" can be pasted or typed after
+                // any other character.
+                KeyCode::Char('?')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
                         && app.input.is_empty()
                         && !slash_menu_open =>
                 {
@@ -6043,8 +6078,16 @@ pub(crate) fn apply_engine_error_to_app(
         let _ = app.execute_hooks(crate::hooks::HookEvent::OnError, &context);
     }
 
+    // Surface the taxonomy's suggested next action (e.g. "Run /compact to
+    // free context" or the /provider hint on auth failures) as a dim `↳`
+    // line under the error message. `HistoryCell::Error` renders `↳`
+    // segments muted — see the Error arm in `HistoryCell::lines`.
+    let transcript_message = match envelope.suggested_action.as_deref() {
+        Some(action) if !action.trim().is_empty() => format!("{message}\n\u{21B3} {action}"),
+        _ => message.clone(),
+    };
     app.add_message(HistoryCell::Error {
-        message: message.clone(),
+        message: transcript_message,
         severity,
     });
     app.is_loading = false;
@@ -7841,7 +7884,10 @@ async fn apply_command_result(
                 }
             }
             AppAction::CacheWarmup => {
-                app.status_message = Some("Warming DeepSeek cache...".to_string());
+                app.status_message = Some(format!(
+                    "Warming {} cache...",
+                    app.api_provider.display_name()
+                ));
                 match run_cache_warmup(app, config).await {
                     Ok((usage, base_url, inspection)) => {
                         app.session.last_base_url = Some(base_url.clone());
@@ -11584,12 +11630,83 @@ fn jump_to_adjacent_tool_cell(app: &mut App, direction: SearchDirection) -> bool
     false
 }
 
+/// Cheap fingerprint of the inputs that determine the conservative context
+/// estimate. The estimator is (almost) purely a function of block *lengths*:
+/// `Text`/`Thinking`/`ToolResult` cost `len / 4`, images cost a flat
+/// constant, and `ToolUse` costs the serialized-input length — the input
+/// `Value` is immutable once the message is in `api_messages`, so its
+/// `(id, name)` identity stands in for its serialized length. Hashing lengths
+/// and identities is O(#blocks) with no serialization, so recomputing the
+/// fingerprint every frame is trivially cheap.
+fn context_estimate_fingerprint(app: &App) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app.api_messages.len().hash(&mut hasher);
+    for message in &app.api_messages {
+        message.role.hash(&mut hasher);
+        message.content.len().hash(&mut hasher);
+        for block in &message.content {
+            match block {
+                ContentBlock::Text { text, .. } => {
+                    0u8.hash(&mut hasher);
+                    text.len().hash(&mut hasher);
+                }
+                ContentBlock::Thinking { thinking, .. } => {
+                    1u8.hash(&mut hasher);
+                    thinking.len().hash(&mut hasher);
+                }
+                ContentBlock::ToolUse { id, name, .. } => {
+                    2u8.hash(&mut hasher);
+                    id.hash(&mut hasher);
+                    name.hash(&mut hasher);
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    3u8.hash(&mut hasher);
+                    content.len().hash(&mut hasher);
+                }
+                ContentBlock::ImageUrl { .. } => 4u8.hash(&mut hasher),
+                ContentBlock::ServerToolUse { .. } => 5u8.hash(&mut hasher),
+                ContentBlock::ToolSearchToolResult { .. } => 6u8.hash(&mut hasher),
+                ContentBlock::CodeExecutionToolResult { .. } => 7u8.hash(&mut hasher),
+            }
+        }
+    }
+    match app.system_prompt.as_ref() {
+        None => 0usize.hash(&mut hasher),
+        Some(crate::models::SystemPrompt::Text(text)) => {
+            1usize.hash(&mut hasher);
+            text.len().hash(&mut hasher);
+        }
+        Some(crate::models::SystemPrompt::Blocks(blocks)) => {
+            2usize.hash(&mut hasher);
+            blocks.len().hash(&mut hasher);
+            for block in blocks {
+                block.text.len().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
 fn estimated_context_tokens(app: &App) -> Option<i64> {
-    i64::try_from(estimate_input_tokens_conservative(
+    // Memoized: the header and footer both request the context snapshot on
+    // every rendered frame, and the full estimate serializes every ToolUse
+    // input in `api_messages`. Recompute only when the cheap fingerprint of
+    // the inputs changes (message appended, compaction, /clear, system-prompt
+    // swap, ...).
+    let fingerprint = context_estimate_fingerprint(app);
+    if let Some((cached_fingerprint, cached_tokens)) = app.context_estimate_cache.get()
+        && cached_fingerprint == fingerprint
+    {
+        return Some(cached_tokens);
+    }
+    let tokens = i64::try_from(estimate_input_tokens_conservative(
         &app.api_messages,
         app.system_prompt.as_ref(),
     ))
-    .ok()
+    .ok()?;
+    app.context_estimate_cache.set(Some((fingerprint, tokens)));
+    Some(tokens)
 }
 
 pub(crate) fn context_usage_snapshot(app: &App) -> Option<(i64, u32, f64)> {

@@ -1564,9 +1564,14 @@ impl EnvGuard {
 }
 
 #[test]
-fn max_subagents_defaults_to_twenty() {
-    assert_eq!(Config::default().max_subagents(), DEFAULT_MAX_SUBAGENTS);
-    assert_eq!(DEFAULT_MAX_SUBAGENTS, 20);
+fn max_subagents_defaults_to_cores_scaled_value() {
+    // WhaleFlow dynamic fan-out (design §4.2): the unconfigured default is
+    // cores-scaled, clamped to [16, 64], and always within the hard ceiling.
+    assert_eq!(Config::default().max_subagents(), default_max_subagents());
+    assert!((16..=64).contains(&default_max_subagents()));
+    assert!(default_max_subagents() <= MAX_SUBAGENTS);
+    assert_eq!(MAX_SUBAGENTS, 256);
+    assert_eq!(MAX_SUBAGENT_ADMISSION, 1000);
 }
 
 #[test]
@@ -1579,7 +1584,9 @@ fn launch_concurrency_defaults_and_clamps_to_max_subagents() {
 
     let mut config = Config {
         subagents: Some(SubagentsConfig {
-            launch_concurrency: Some(50),
+            // Above every possible cores-scaled default (clamped ≤ 64) and
+            // the hard ceiling, so this must clamp on any machine.
+            launch_concurrency: Some(1000),
             ..SubagentsConfig::default()
         }),
         ..Config::default()
@@ -1816,8 +1823,8 @@ max_depth = 5
 api_timeout_secs = 300
 
 [subagents.providers.deepseek_api]
-max_concurrent = 30
-launch_concurrency = 30
+max_concurrent = 300
+launch_concurrency = 300
 max_admitted = 1
 
 [subagents.providers.anthropic]
@@ -7249,4 +7256,109 @@ fn custom_provider_base_url_and_model_resolve_from_named_table() {
     assert_eq!(config.api_provider(), ApiProvider::Custom);
     assert_eq!(config.deepseek_base_url(), "https://api.example.com/v1");
     assert_eq!(config.default_model(), "custom-model-v1");
+}
+
+#[test]
+fn model_foreignness_guard_covers_codex_and_direct_providers() {
+    // ChatGPT Codex OAuth backend serves only its own model family; a
+    // DeepSeek or GLM id there is a guaranteed
+    // "Invalid request (400): The '<model>' model is not supported when
+    // using Codex with a ChatGPT account."
+    assert!(model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "deepseek-v4-pro"
+    ));
+    assert!(model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "glm-5.2"
+    ));
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "gpt-5.5"
+    ));
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "gpt-5.5-codex"
+    ));
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "auto"
+    ));
+    // Unknown-but-plausible future family ids stay permissive; the backend
+    // remains the final authority for those.
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::OpenaiCodex,
+        "gpt-6-codex"
+    ));
+
+    // Original #3227 tuple: DeepSeek-only id on a direct non-DeepSeek
+    // provider.
+    assert!(model_is_foreign_to_provider(
+        ApiProvider::Zai,
+        "deepseek-v4-pro"
+    ));
+    assert!(!model_is_foreign_to_provider(ApiProvider::Zai, "glm-5.2"));
+
+    // Pass-through and DeepSeek-aggregator providers stay permissive.
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::Custom,
+        "deepseek-v4-pro"
+    ));
+    assert!(!model_is_foreign_to_provider(
+        ApiProvider::Openrouter,
+        "deepseek/deepseek-v4-pro"
+    ));
+}
+
+#[test]
+fn codex_subagent_api_timeout_defaults_to_stream_quiet_time() {
+    let _env_lock = lock_test_env();
+    let _idle = EnvVarGuard::remove("DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS");
+    let config: Config =
+        toml::from_str(r#"provider = "openai-codex""#).expect("parse codex provider config");
+    // Unconfigured codex children inherit the parent's stream quiet-time
+    // budget (#3998) instead of the flat 120s total cap that killed long
+    // reasoning turns with "API call timed out after 120000ms".
+    assert_eq!(
+        config.subagent_api_timeout_secs_for_provider(ApiProvider::OpenaiCodex),
+        DEFAULT_STREAM_CHUNK_TIMEOUT_SECS
+    );
+    // Other providers keep the legacy 120s default.
+    assert_eq!(
+        config.subagent_api_timeout_secs_for_provider(ApiProvider::Deepseek),
+        DEFAULT_SUBAGENT_API_TIMEOUT_SECS
+    );
+}
+
+#[test]
+fn codex_subagent_api_timeout_explicit_config_still_wins() {
+    let _env_lock = lock_test_env();
+    let _idle = EnvVarGuard::remove("DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS");
+    let global: Config = toml::from_str(
+        r#"
+provider = "openai-codex"
+
+[subagents]
+api_timeout_secs = 240
+"#,
+    )
+    .expect("parse codex + global subagent timeout");
+    assert_eq!(
+        global.subagent_api_timeout_secs_for_provider(ApiProvider::OpenaiCodex),
+        240
+    );
+
+    let provider_scoped: Config = toml::from_str(
+        r#"
+provider = "openai-codex"
+
+[subagents.providers.openai_codex]
+api_timeout_secs = 60
+"#,
+    )
+    .expect("parse codex provider-scoped subagent timeout");
+    assert_eq!(
+        provider_scoped.subagent_api_timeout_secs_for_provider(ApiProvider::OpenaiCodex),
+        60
+    );
 }

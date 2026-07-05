@@ -40,6 +40,9 @@ pub struct FleetManager {
     /// When set, fleet workers spawn real sub-agents; when None,
     /// the manager falls back to local simulation.
     sub_agent_manager: Option<SharedSubAgentManager>,
+    /// Active provider, when the host resolved one. Used to pre-flight
+    /// per-slot pinned/ranked models; `None` keeps legacy verbatim routing.
+    api_provider: Option<crate::config::ApiProvider>,
 }
 
 impl std::fmt::Debug for FleetManager {
@@ -174,7 +177,15 @@ impl FleetManager {
             stale_after: Duration::from_secs(DEFAULT_STALE_AFTER_SECONDS),
             exec_config: codewhale_config::FleetExecConfig::default(),
             sub_agent_manager: None,
+            api_provider: None,
         })
+    }
+
+    /// Record the active provider so per-slot pinned/ranked models can be
+    /// pre-flighted against it instead of failing on the wire.
+    pub fn with_api_provider(mut self, provider: crate::config::ApiProvider) -> Self {
+        self.api_provider = Some(provider);
+        self
     }
 
     pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
@@ -710,6 +721,7 @@ impl FleetManager {
                 &self.workspace,
                 &agent_profiles,
                 None,
+                self.api_provider,
             )?;
             Some(worker_runtime::apply_exec_hardening(
                 worker,

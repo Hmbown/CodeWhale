@@ -726,11 +726,109 @@ pub(crate) fn open_context_menu(app: &mut App, mouse: MouseEvent) {
     app.needs_redraw = true;
 }
 
-pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEntry> {
-    let mut entries = Vec::new();
-    let on_sidebar = mouse_hits_rect(mouse, app.viewport.last_sidebar_area);
+/// What sits under the cursor when the context menu opens. Captured once at
+/// open time so menu construction is a pure function of this snapshot.
+struct MenuContext {
+    on_sidebar: bool,
+    /// The click landed on the composer (an editable paste target).
+    on_composer: bool,
+    /// A composer or transcript selection with copyable content exists.
+    has_selection: bool,
+    /// Hyperlink target under the cursor (OSC 8 region or bare URL text).
+    link: Option<String>,
+    /// Original history index of the transcript cell under the cursor.
+    cell_index: Option<usize>,
+}
 
-    if on_sidebar {
+impl MenuContext {
+    fn snapshot(app: &App, mouse: MouseEvent) -> Self {
+        let on_sidebar = mouse_hits_rect(mouse, app.viewport.last_sidebar_area);
+        let on_composer = !on_sidebar && mouse_hits_rect(mouse, app.viewport.last_composer_area);
+        let on_transcript = !on_sidebar && !on_composer;
+        Self {
+            on_sidebar,
+            on_composer,
+            has_selection: selection_has_content(app),
+            link: on_transcript
+                .then(|| link_under_mouse(app, mouse))
+                .flatten(),
+            cell_index: on_transcript
+                .then(|| transcript_cell_index_from_mouse(app, mouse))
+                .flatten()
+                .map(|filtered| app.original_cell_index_for_rendered(filtered)),
+        }
+    }
+}
+
+/// Resolve the hyperlink under the cursor: prefer the OSC 8 link regions from
+/// the last drawn frame, then fall back to scanning the transcript line's
+/// plain text for a bare URL spanning the clicked column.
+fn link_under_mouse(app: &App, mouse: MouseEvent) -> Option<String> {
+    if let Some(target) = crate::tui::osc8::link_target_at(mouse.column, mouse.row) {
+        return Some(target);
+    }
+    let point = selection_point_from_mouse(app, mouse)?;
+    let line = app
+        .viewport
+        .transcript_cache
+        .lines()
+        .get(point.line_index)?;
+    url_at_display_column(&line_to_plain(line), point.column)
+}
+
+/// Find a bare `http(s)://` URL in `line` whose rendered columns span
+/// `column` (a display-column offset from the line start). Trailing
+/// punctuation that commonly follows a URL in prose is not treated as part
+/// of the link.
+pub(crate) fn url_at_display_column(line: &str, column: usize) -> Option<String> {
+    for (byte_idx, _) in line.match_indices("http") {
+        let rest = &line[byte_idx..];
+        if !rest.starts_with("http://") && !rest.starts_with("https://") {
+            continue;
+        }
+        let end = rest
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | '}')
+            })
+            .unwrap_or(rest.len());
+        let token = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        // Require something after the scheme.
+        if token
+            .split_once("://")
+            .is_none_or(|(_, tail)| tail.is_empty())
+        {
+            continue;
+        }
+        let start_col = text_display_width(&line[..byte_idx]);
+        let end_col = start_col + text_display_width(token);
+        if column >= start_col && column < end_col {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEntry> {
+    let ctx = MenuContext::snapshot(app, mouse);
+    let mut entries = Vec::new();
+
+    let paste_entry = || ContextMenuEntry {
+        label: app.tr(MessageId::CtxMenuPaste).to_string(),
+        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
+        action: ContextMenuAction::Paste,
+    };
+    let palette_entry = || ContextMenuEntry {
+        label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
+        description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),
+        action: ContextMenuAction::OpenCommandPalette,
+    };
+    let help_entry = || ContextMenuEntry {
+        label: app.tr(MessageId::CtxMenuHelp).to_string(),
+        description: app.tr(MessageId::CtxMenuHelpDesc).to_string(),
+        action: ContextMenuAction::OpenHelp,
+    };
+
+    if ctx.on_sidebar {
         if let Some(command) = sidebar_click_action(app, mouse)
             .and_then(|action| action.as_command().map(str::to_string))
         {
@@ -749,17 +847,22 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
                 action: ContextMenuAction::CopyText { text },
             });
         }
-    } else {
-        // Paste first — the most common action when right-clicking in the
-        // composer or transcript after copying text from the output area.
-        entries.push(ContextMenuEntry {
-            label: app.tr(MessageId::CtxMenuPaste).to_string(),
-            description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
-            action: ContextMenuAction::Paste,
-        });
+        if ctx.has_selection {
+            entries.push(ContextMenuEntry {
+                label: app.tr(MessageId::CtxMenuCopySelection).to_string(),
+                description: app.tr(MessageId::CtxMenuCopySelectionDesc).to_string(),
+                action: ContextMenuAction::CopySelection,
+            });
+        }
+        entries.push(palette_entry());
+        entries.push(help_entry());
+        return entries;
     }
 
-    if selection_has_content(app) {
+    // (a) Active selection: Copy is the first entry and thus the default
+    // Enter action. Paste is offered only when the click is over an editable
+    // target (the composer), never while pasting is impossible.
+    if ctx.has_selection {
         entries.push(ContextMenuEntry {
             label: app.tr(MessageId::CtxMenuCopySelection).to_string(),
             description: app.tr(MessageId::CtxMenuCopySelectionDesc).to_string(),
@@ -777,9 +880,30 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
-    if !on_sidebar && let Some(filtered_cell_index) = transcript_cell_index_from_mouse(app, mouse) {
-        let cell_index = app.original_cell_index_for_rendered(filtered_cell_index);
+    // (b) Composer: an editable target. Paste leads when nothing is
+    // selected; with a selection it follows the copy block.
+    if ctx.on_composer {
+        entries.push(paste_entry());
+    }
 
+    // (c) Hyperlink under the cursor: open / copy the target.
+    if let Some(url) = ctx.link.as_ref() {
+        entries.push(ContextMenuEntry {
+            label: app.tr(MessageId::CtxMenuOpenLink).to_string(),
+            description: truncate_line_to_width(url, 28),
+            action: ContextMenuAction::OpenLink { url: url.clone() },
+        });
+        entries.push(ContextMenuEntry {
+            label: app.tr(MessageId::CtxMenuCopyLink).to_string(),
+            description: truncate_line_to_width(url, 28),
+            action: ContextMenuAction::CopyText { text: url.clone() },
+        });
+    }
+
+    // (d) Transcript cell under the cursor. Details/copy always; the less
+    // common per-cell actions only when no more specific context (selection
+    // or link) is already occupying the menu, to keep it small.
+    if let Some(cell_index) = ctx.cell_index {
         let target = detail_target_label(app, cell_index)
             .map(|label| truncate_line_to_width(label.as_str(), 28))
             .unwrap_or_else(|| "message".to_string());
@@ -793,29 +917,36 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
             description: app.tr(MessageId::CtxMenuCopyMessageDesc).to_string(),
             action: ContextMenuAction::CopyCell { cell_index },
         });
-        entries.push(ContextMenuEntry {
-            label: app.tr(MessageId::CtxMenuOpenInEditor).to_string(),
-            description: app.tr(MessageId::CtxMenuOpenInEditorDesc).to_string(),
-            action: ContextMenuAction::OpenFileAtLine { cell_index },
-        });
-        // Hide/show cell toggle.
-        if app.collapsed_cells.contains(&cell_index) {
+        if !ctx.has_selection && ctx.link.is_none() {
             entries.push(ContextMenuEntry {
-                label: app.tr(MessageId::CtxMenuShowCell).to_string(),
-                description: app.tr(MessageId::CtxMenuShowCellDesc).to_string(),
-                action: ContextMenuAction::ShowCell { cell_index },
+                label: app.tr(MessageId::CtxMenuOpenInEditor).to_string(),
+                description: app.tr(MessageId::CtxMenuOpenInEditorDesc).to_string(),
+                action: ContextMenuAction::OpenFileAtLine { cell_index },
             });
-        } else {
-            entries.push(ContextMenuEntry {
-                label: app.tr(MessageId::CtxMenuHideCell).to_string(),
-                description: app.tr(MessageId::CtxMenuHideCellDesc).to_string(),
-                action: ContextMenuAction::HideCell { cell_index },
-            });
+            if app.collapsed_cells.contains(&cell_index) {
+                entries.push(ContextMenuEntry {
+                    label: app.tr(MessageId::CtxMenuShowCell).to_string(),
+                    description: app.tr(MessageId::CtxMenuShowCellDesc).to_string(),
+                    action: ContextMenuAction::ShowCell { cell_index },
+                });
+            } else {
+                entries.push(ContextMenuEntry {
+                    label: app.tr(MessageId::CtxMenuHideCell).to_string(),
+                    description: app.tr(MessageId::CtxMenuHideCellDesc).to_string(),
+                    action: ContextMenuAction::HideCell { cell_index },
+                });
+            }
         }
     }
 
+    // Paste stays reachable from transcript/idle right-clicks (it targets
+    // the composer), but only when no selection makes it read as a mistake.
+    if !ctx.on_composer && !ctx.has_selection {
+        entries.push(paste_entry());
+    }
+
     // When cells are hidden, offer a way to show them all.
-    if !app.collapsed_cells.is_empty() {
+    if !app.collapsed_cells.is_empty() && !ctx.has_selection {
         let count = app.collapsed_cells.len();
         let label = app.tr(MessageId::CtxMenuShowHidden).to_string();
         entries.push(ContextMenuEntry {
@@ -825,21 +956,19 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         });
     }
 
-    entries.push(ContextMenuEntry {
-        label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
-        description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),
-        action: ContextMenuAction::OpenCommandPalette,
-    });
-    entries.push(ContextMenuEntry {
-        label: app.tr(MessageId::CtxMenuContextInspector).to_string(),
-        description: app.tr(MessageId::CtxMenuContextInspectorDesc).to_string(),
-        action: ContextMenuAction::OpenContextInspector,
-    });
-    entries.push(ContextMenuEntry {
-        label: app.tr(MessageId::CtxMenuHelp).to_string(),
-        description: app.tr(MessageId::CtxMenuHelpDesc).to_string(),
-        action: ContextMenuAction::OpenHelp,
-    });
+    // Global tail: the command palette is always reachable (it is the
+    // gateway to everything else); the inspector and help fill out the menu
+    // only in idle contexts so busy contexts stay compact.
+    entries.push(palette_entry());
+    let idle = !ctx.has_selection && ctx.cell_index.is_none() && ctx.link.is_none();
+    if idle {
+        entries.push(ContextMenuEntry {
+            label: app.tr(MessageId::CtxMenuContextInspector).to_string(),
+            description: app.tr(MessageId::CtxMenuContextInspectorDesc).to_string(),
+            action: ContextMenuAction::OpenContextInspector,
+        });
+        entries.push(help_entry());
+    }
 
     entries
 }
@@ -889,6 +1018,13 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
                 app.status_message = Some("Copied".to_string());
             } else {
                 app.status_message = Some("Copy failed".to_string());
+            }
+        }
+        ContextMenuAction::OpenLink { url } => {
+            if crate::utils::open_url(&url).is_ok() {
+                app.status_message = Some(format!("Opening {url}"));
+            } else {
+                app.status_message = Some("Failed to open link".to_string());
             }
         }
         ContextMenuAction::OpenCommandPalette => {
@@ -1218,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_keeps_paste_first_outside_sidebar() {
+    fn idle_context_keeps_paste_first_and_offers_no_copy() {
         let mut app = create_test_app();
         app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
 
@@ -1228,6 +1364,194 @@ mod tests {
             entries.first().map(|entry| &entry.action),
             Some(ContextMenuAction::Paste)
         ));
+        assert!(
+            !entries.iter().any(|entry| matches!(
+                entry.action,
+                ContextMenuAction::CopySelection
+                    | ContextMenuAction::CopyCell { .. }
+                    | ContextMenuAction::CopyText { .. }
+            )),
+            "idle menu must not offer copy entries: {entries:?}"
+        );
+        // Idle context carries the full global tail.
+        assert!(
+            entries
+                .iter()
+                .any(|entry| matches!(entry.action, ContextMenuAction::OpenCommandPalette))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| matches!(entry.action, ContextMenuAction::OpenContextInspector))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| matches!(entry.action, ContextMenuAction::OpenHelp))
+        );
+    }
+
+    /// Table-driven coverage for the context snapshot: which entry leads and
+    /// whether Paste is offered, per (selection, composer-click) combination.
+    #[test]
+    fn context_menu_orders_entries_by_selection_and_paste_target() {
+        struct Case {
+            name: &'static str,
+            with_selection: bool,
+            click_composer: bool,
+            expect_paste: bool,
+            first_is_copy: bool,
+        }
+        let cases = [
+            Case {
+                name: "selection over transcript: copy first, no paste",
+                with_selection: true,
+                click_composer: false,
+                expect_paste: false,
+                first_is_copy: true,
+            },
+            Case {
+                name: "selection + composer click: copy first, paste offered",
+                with_selection: true,
+                click_composer: true,
+                expect_paste: true,
+                first_is_copy: true,
+            },
+            Case {
+                name: "no selection + composer click: paste first",
+                with_selection: false,
+                click_composer: true,
+                expect_paste: true,
+                first_is_copy: false,
+            },
+            Case {
+                name: "no selection over transcript: paste offered, no copy",
+                with_selection: false,
+                click_composer: false,
+                expect_paste: true,
+                first_is_copy: false,
+            },
+        ];
+
+        for case in cases {
+            let mut app = create_test_app();
+            app.viewport.last_composer_area = Some(Rect::new(0, 20, 40, 3));
+            if case.with_selection {
+                // Composer selection: "hel" of "hello".
+                app.input = "hello".to_string();
+                app.selection_anchor = Some(0);
+                app.cursor_position = 3;
+            }
+            let mouse = if case.click_composer {
+                right_click(5, 21)
+            } else {
+                right_click(10, 4)
+            };
+
+            let entries = build_context_menu_entries(&app, mouse);
+
+            assert_eq!(
+                entries
+                    .iter()
+                    .any(|entry| matches!(entry.action, ContextMenuAction::Paste)),
+                case.expect_paste,
+                "paste presence wrong for case: {}: {entries:?}",
+                case.name
+            );
+            if case.first_is_copy {
+                assert!(
+                    matches!(
+                        entries.first().map(|entry| &entry.action),
+                        Some(ContextMenuAction::CopySelection)
+                    ),
+                    "copy should lead for case: {}: {entries:?}",
+                    case.name
+                );
+            } else {
+                assert!(
+                    matches!(
+                        entries.first().map(|entry| &entry.action),
+                        Some(ContextMenuAction::Paste)
+                    ),
+                    "paste should lead for case: {}: {entries:?}",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn link_context_offers_open_and_copy_link() {
+        use crate::tui::osc8;
+
+        let app = create_test_app();
+        // Publish a frame link and let the backend "consume" it so the
+        // retained snapshot (what mouse hit-testing reads) is populated.
+        osc8::set_frame_links(vec![osc8::LinkRegion {
+            row: 4,
+            col_start: 8,
+            col_end: 15,
+            target: "https://example.com/docs".to_string(),
+        }]);
+        let _ = osc8::take_frame_links();
+
+        let entries = build_context_menu_entries(&app, right_click(10, 4));
+
+        assert!(
+            matches!(
+                entries.first().map(|entry| &entry.action),
+                Some(ContextMenuAction::OpenLink { url }) if url == "https://example.com/docs"
+            ),
+            "open link should lead: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|entry| matches!(
+                &entry.action,
+                ContextMenuAction::CopyText { text } if text == "https://example.com/docs"
+            )),
+            "copy link should be offered: {entries:?}"
+        );
+
+        // A click outside the link region gets no link entries.
+        let entries = build_context_menu_entries(&app, right_click(30, 4));
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| matches!(entry.action, ContextMenuAction::OpenLink { .. })),
+            "no link entries away from the region: {entries:?}"
+        );
+
+        // Clean the thread-local snapshot for other tests on this thread.
+        osc8::set_frame_links(Vec::new());
+        let _ = osc8::take_frame_links();
+    }
+
+    #[test]
+    fn url_at_display_column_hit_tests_bare_urls() {
+        use super::url_at_display_column;
+
+        let line = "see https://example.com/a?x=1, then more";
+        // "see " is 4 columns; URL spans columns 4..29 (trailing comma trimmed).
+        assert_eq!(
+            url_at_display_column(line, 4).as_deref(),
+            Some("https://example.com/a?x=1")
+        );
+        assert_eq!(
+            url_at_display_column(line, 28).as_deref(),
+            Some("https://example.com/a?x=1")
+        );
+        // The trimmed comma and the prose around the URL do not hit.
+        assert_eq!(url_at_display_column(line, 29), None);
+        assert_eq!(url_at_display_column(line, 0), None);
+        // Parenthesised URL stops at the closing paren.
+        assert_eq!(
+            url_at_display_column("(http://a.io/b) tail", 1).as_deref(),
+            Some("http://a.io/b")
+        );
+        // Scheme-only tokens don't count as links.
+        assert_eq!(url_at_display_column("https:// nothing", 2), None);
+        // No URL at all.
+        assert_eq!(url_at_display_column("plain text only", 3), None);
     }
 
     #[test]

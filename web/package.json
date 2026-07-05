@@ -19,6 +19,7 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
+    "marked": "^18.0.5",
     "mermaid": "^11.16.0",
     "next": "^15.5.18",
     "react": "^19.0.0",

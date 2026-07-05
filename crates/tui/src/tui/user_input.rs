@@ -320,6 +320,23 @@ impl ModalView for UserInputView {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        // Wheel moves the option highlight, mirroring Up/Down. Free-text
+        // entry mode has nothing to scroll.
+        if matches!(self.mode, InputMode::Selecting) {
+            match mouse.kind {
+                crossterm::event::MouseEventKind::ScrollUp => {
+                    self.selected = self.selected.saturating_sub(1);
+                }
+                crossterm::event::MouseEventKind::ScrollDown => {
+                    self.selected = (self.selected + 1).min(self.option_count().saturating_sub(1));
+                }
+                _ => {}
+            }
+        }
+        ViewAction::None
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let question = self.current_question();
         let total = self.request.questions.len();

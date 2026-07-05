@@ -83,6 +83,12 @@ thread_local! {
     /// Populated by the render closure after scanning the ratatui buffer;
     /// consumed and cleared by `ColorCompatBackend::draw()`.
     pub static FRAME_LINKS: RefCell<Vec<LinkRegion>> = const { RefCell::new(Vec::new()) };
+
+    /// Snapshot of the most recently drawn frame's link regions, retained by
+    /// [`take_frame_links`] after the backend consumes them. Mouse handlers
+    /// use this to hit-test a click against the links currently on screen
+    /// (e.g. the right-click context menu's "Open link" entry).
+    static LAST_FRAME_LINKS: RefCell<Vec<LinkRegion>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Replace the thread-local frame link buffer with `links`.
@@ -101,8 +107,31 @@ pub fn append_frame_links(links: Vec<LinkRegion>) {
 }
 
 /// Take the thread-local frame links, leaving an empty vec behind.
+///
+/// A copy of the taken regions is retained in a `LAST_FRAME_LINKS` snapshot
+/// so mouse handlers can hit-test clicks against the links that are actually
+/// on screen (see [`link_target_at`]).
 pub fn take_frame_links() -> Vec<LinkRegion> {
-    FRAME_LINKS.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+    let links = FRAME_LINKS.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    LAST_FRAME_LINKS.with(|cell| {
+        let mut last = cell.borrow_mut();
+        last.clear();
+        last.extend(links.iter().cloned());
+    });
+    links
+}
+
+/// Look up the hyperlink target under a terminal cell in the most recently
+/// drawn frame, if any. Coordinates are absolute buffer coordinates, matching
+/// crossterm mouse events. `col_end` is inclusive, mirroring
+/// `ColorCompatBackend`'s own region test.
+pub fn link_target_at(column: u16, row: u16) -> Option<String> {
+    LAST_FRAME_LINKS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .find(|link| link.row == row && column >= link.col_start && column <= link.col_end)
+            .map(|link| link.target.clone())
+    })
 }
 
 // --- In-band payload extraction (#3029) ---
@@ -682,5 +711,29 @@ mod tests {
         assert!(regions.is_empty(), "no close -> no region");
         let text = row_text(&buf, 0, 0, 12);
         assert!(!text.contains(']'), "open payload blanked");
+    }
+
+    #[test]
+    fn take_frame_links_retains_snapshot_for_hit_testing() {
+        set_frame_links(vec![LinkRegion {
+            row: 3,
+            col_start: 5,
+            col_end: 9,
+            target: "https://example.com".to_string(),
+        }]);
+        let taken = take_frame_links();
+        assert_eq!(taken.len(), 1);
+
+        // Inside the region (col_end is inclusive).
+        assert_eq!(link_target_at(5, 3).as_deref(), Some("https://example.com"));
+        assert_eq!(link_target_at(9, 3).as_deref(), Some("https://example.com"));
+        // Outside: column past the inclusive end, or wrong row.
+        assert_eq!(link_target_at(10, 3), None);
+        assert_eq!(link_target_at(5, 4), None);
+
+        // A later empty frame clears the snapshot (links scrolled away).
+        set_frame_links(Vec::new());
+        let _ = take_frame_links();
+        assert_eq!(link_target_at(5, 3), None);
     }
 }

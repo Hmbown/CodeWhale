@@ -34,6 +34,7 @@ use crate::config::{
     provider_is_configured,
 };
 use crate::core::ops::ProviderRuntimeStatus;
+use crate::localization::{MessageId, tr_current};
 use crate::model_profile::{SupportState, resolved_capability_profile};
 use crate::palette;
 use crate::tui::app::ReasoningEffort;
@@ -64,9 +65,10 @@ enum CustomProviderField {
     ApiKeyEnv,
 }
 
-/// Which subset of `rows` the list stage shows (#3830). `Configured` is the
-/// default; `A` toggles to `Catalog` to add a new provider or look at one
-/// that hasn't been set up yet.
+/// Which subset of `rows` the list stage shows. `Catalog` — the full grouped
+/// list (Active → Ready → Available) — is the default; `A` toggles down to
+/// `Configured` (Active + Ready only, #3830) to focus on the providers the
+/// user has actually set up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderListView {
     Configured,
@@ -157,6 +159,35 @@ pub enum ProviderReadiness {
     LocalReady,
     Legacy,
     Invalid,
+}
+
+/// Which of the three list sections a provider row belongs to. The list is
+/// always presented in this order so provider *state* is obvious at a glance:
+/// the one in use, the ones you have set up, and everything else you could
+/// still add (the user complaint behind this grouping was "it's not clear if
+/// it's the ones you've set up ever, or just the ones you've set up, or all
+/// of them").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProviderGroup {
+    /// The provider currently routing requests — exactly one row.
+    Active,
+    /// Set up and usable: working credentials/OAuth, an explicit
+    /// `[providers.<name>]` entry, or a configured custom endpoint. Same
+    /// definition as `provider_is_configured`, so this picker and the
+    /// `/model` picker never disagree about what "set up" means.
+    Ready,
+    /// Everything else — selectable, but Enter leads to key setup first.
+    Available,
+}
+
+impl ProviderGroup {
+    fn header(self) -> MessageId {
+        match self {
+            Self::Active => MessageId::ProviderGroupActive,
+            Self::Ready => MessageId::ProviderGroupReady,
+            Self::Available => MessageId::ProviderGroupAvailable,
+        }
+    }
 }
 
 /// How battle-tested a provider integration is, independent of whether the
@@ -535,6 +566,53 @@ impl ProviderDashboardRow {
                 configured,
                 provider == ApiProvider::Custom && provider_id_override.is_some(),
             ),
+        }
+    }
+
+    /// Which list section this row belongs to (see [`ProviderGroup`]).
+    pub(crate) fn group(&self) -> ProviderGroup {
+        if self.is_active {
+            ProviderGroup::Active
+        } else if self.is_configured {
+            ProviderGroup::Ready
+        } else {
+            ProviderGroup::Available
+        }
+    }
+
+    /// Compact per-row state badge: `● active`, `✓ key`, `— no key`, etc.
+    /// Never fabricates: a Ready-group row with an explicit config entry but
+    /// a missing credential says `! needs key`, not `✓ key`.
+    fn state_badge(&self) -> MessageId {
+        if self.is_active {
+            return MessageId::ProviderBadgeActive;
+        }
+        match self.auth_status {
+            ProviderAuthStatus::Configured => MessageId::ProviderBadgeKey,
+            ProviderAuthStatus::OAuthReady => MessageId::ProviderBadgeLogin,
+            ProviderAuthStatus::Local | ProviderAuthStatus::Optional => {
+                if self.is_configured {
+                    MessageId::ProviderBadgeLocal
+                } else {
+                    MessageId::ProviderBadgeLocalRuntime
+                }
+            }
+            ProviderAuthStatus::OAuthMissing => {
+                if self.is_configured {
+                    MessageId::ProviderBadgeNeedsLogin
+                } else {
+                    MessageId::ProviderBadgeNoLogin
+                }
+            }
+            ProviderAuthStatus::Missing | ProviderAuthStatus::Legacy => {
+                if self.has_key {
+                    MessageId::ProviderBadgeKey
+                } else if self.is_configured {
+                    MessageId::ProviderBadgeNeedsKey
+                } else {
+                    MessageId::ProviderBadgeNoKey
+                }
+            }
         }
     }
 
@@ -1110,10 +1188,17 @@ impl ProviderPickerView {
             })
             .collect();
         rows.extend(custom_rows);
+        // Group-first ordering: Active, then Ready ("you've set these up"),
+        // then Available; alphabetical (the existing #3076 neutral order)
+        // within each group.
         rows.sort_by(|a, b| {
-            a.display_name
-                .to_ascii_lowercase()
-                .cmp(&b.display_name.to_ascii_lowercase())
+            a.group()
+                .cmp(&b.group())
+                .then_with(|| {
+                    a.display_name
+                        .to_ascii_lowercase()
+                        .cmp(&b.display_name.to_ascii_lowercase())
+                })
                 .then_with(|| a.provider_id.cmp(&b.provider_id))
         });
         let selected_idx = rows
@@ -1121,14 +1206,12 @@ impl ProviderPickerView {
             .position(|row| row.is_active)
             .or_else(|| rows.iter().position(|row| row.provider == active))
             .unwrap_or(0);
-        // Default to the configured-only view (#3830); if nothing is
-        // configured yet (a fresh install), open straight on the full
-        // catalog instead of an empty list with no obvious next step.
-        let view = if rows.iter().any(|row| row.is_configured) {
-            ProviderListView::Configured
-        } else {
-            ProviderListView::Catalog
-        };
+        // Default to the FULL grouped catalog: with the Active / Ready /
+        // Available group headers and truthful badges there is no ambiguity
+        // about which providers are set up, and opening on a filtered subset
+        // was exactly what made the old list read as "is this all of them?".
+        // `A` still toggles down to the configured-only view (#3830).
+        let view = ProviderListView::Catalog;
         Self {
             rows,
             selected_idx,
@@ -1171,8 +1254,28 @@ impl ProviderPickerView {
     fn row_visible(&self, idx: usize) -> bool {
         match self.view {
             ProviderListView::Catalog => true,
-            ProviderListView::Configured => self.rows[idx].is_configured,
+            ProviderListView::Configured => self.rows[idx].group() != ProviderGroup::Available,
         }
+    }
+
+    /// Localized `1 active · 3 ready · 29 available` summary over *all* rows
+    /// (not just the visible subset), so even the configured-only view makes
+    /// clear how many more providers exist behind `A`.
+    fn count_summary(&self) -> String {
+        let mut active = 0usize;
+        let mut ready = 0usize;
+        let mut available = 0usize;
+        for row in &self.rows {
+            match row.group() {
+                ProviderGroup::Active => active += 1,
+                ProviderGroup::Ready => ready += 1,
+                ProviderGroup::Available => available += 1,
+            }
+        }
+        tr_current(MessageId::ProviderCountSummary)
+            .replace("{active}", &active.to_string())
+            .replace("{ready}", &ready.to_string())
+            .replace("{available}", &available.to_string())
     }
 
     fn visible_row_count(&self) -> usize {
@@ -1437,69 +1540,104 @@ impl ProviderPickerView {
             return;
         }
 
-        let layout = ListDetailLayout::split(content, 34);
-        let selected_pos = filtered
+        // A one-line state summary sits above the list so it is always clear
+        // how many providers are in use / set up / still available, even when
+        // the configured-only view hides the Available group.
+        let (summary_area, body) = if content.height > 1 {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(1)])
+                .split(content);
+            (Some(split[0]), split[1])
+        } else {
+            (None, content)
+        };
+        if let Some(area) = summary_area {
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {}", self.count_summary()),
+                Style::default().fg(palette::TEXT_MUTED),
+            )))
+            .render(area, buf);
+        }
+
+        let layout = ListDetailLayout::split(body, 34);
+
+        // Interleave group headers with the visible rows so the three states
+        // read as distinct sections of one list.
+        enum ListItem<'a> {
+            Header(ProviderGroup),
+            Row(usize, &'a ProviderDashboardRow),
+        }
+        let mut items: Vec<ListItem> = Vec::with_capacity(filtered.len() + 3);
+        let mut last_group: Option<ProviderGroup> = None;
+        for (idx, row) in &filtered {
+            let group = row.group();
+            if last_group != Some(group) {
+                items.push(ListItem::Header(group));
+                last_group = Some(group);
+            }
+            items.push(ListItem::Row(*idx, row));
+        }
+
+        let selected_pos = items
             .iter()
-            .position(|(idx, _)| *idx == self.selected_idx)
+            .position(|item| matches!(item, ListItem::Row(idx, _) if *idx == self.selected_idx))
             .unwrap_or(0);
         let visible_rows = usize::from(layout.list.height);
-        let visible_start = Self::visible_start(selected_pos, filtered.len(), visible_rows);
+        let visible_start = Self::visible_start(selected_pos, items.len(), visible_rows);
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
-        for (pos, (idx, row)) in filtered
-            .iter()
-            .enumerate()
-            .skip(visible_start)
-            .take(visible_rows)
-        {
-            let is_selected = *idx == self.selected_idx;
-            debug_assert_eq!(is_selected, pos == selected_pos);
-            let is_active = row.is_active;
-            let arrow = if is_selected { "▸" } else { " " };
-            let active_dot = if is_active { " *" } else { "  " };
-            let spacer_style = if is_selected {
-                Self::selected_row_bg_style()
-            } else {
-                Style::default()
-            };
-            let label_style = if is_selected {
-                Self::selected_row_style(palette::TEXT_PRIMARY)
-            } else {
-                Style::default().fg(palette::TEXT_PRIMARY)
-            };
-            let hint_style = if is_selected {
-                let hint_fg = if row.has_key {
-                    palette::TEXT_MUTED
-                } else {
-                    palette::STATUS_WARNING
-                };
-                Self::selected_row_style(hint_fg)
-            } else if row.has_key {
-                Style::default().fg(palette::TEXT_MUTED)
-            } else {
-                Style::default().fg(palette::STATUS_WARNING)
-            };
-            let hint = row.compact_hint();
-            let mut line = Line::from(vec![
-                Span::styled(" ", spacer_style),
-                Span::styled(arrow, label_style),
-                Span::styled(" ", spacer_style),
-                Span::styled(row.display_name.as_str(), label_style),
-                Span::styled(active_dot, label_style),
-                Span::styled("  ", spacer_style),
-                Span::styled(hint, hint_style),
-            ]);
-            if is_selected {
-                line.style = Self::selected_row_bg_style();
-                let target_width = usize::from(layout.list.width);
-                let line_width = line.width();
-                if line_width < target_width {
-                    line.spans.push(Span::styled(
-                        " ".repeat(target_width - line_width),
-                        Self::selected_row_bg_style(),
-                    ));
+        for item in items.iter().skip(visible_start).take(visible_rows) {
+            match item {
+                ListItem::Header(group) => {
+                    lines.push(Line::from(Span::styled(
+                        format!(" {}", tr_current(group.header())),
+                        Style::default()
+                            .fg(palette::TEXT_MUTED)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                }
+                ListItem::Row(idx, row) => {
+                    let is_selected = *idx == self.selected_idx;
+                    let arrow = if is_selected { "▸" } else { " " };
+                    let spacer_style = if is_selected {
+                        Self::selected_row_bg_style()
+                    } else {
+                        Style::default()
+                    };
+                    let label_style = if is_selected {
+                        Self::selected_row_style(palette::TEXT_PRIMARY)
+                    } else {
+                        Style::default().fg(palette::TEXT_PRIMARY)
+                    };
+                    let badge_id = row.state_badge();
+                    let badge_fg = badge_color(badge_id);
+                    let badge_style = if is_selected {
+                        Self::selected_row_style(badge_fg)
+                    } else {
+                        Style::default().fg(badge_fg)
+                    };
+                    let mut line = Line::from(vec![
+                        Span::styled(" ", spacer_style),
+                        Span::styled(arrow, label_style),
+                        Span::styled("  ", spacer_style),
+                        Span::styled(row.display_name.as_str(), label_style),
+                        Span::styled("  ", spacer_style),
+                        Span::styled(tr_current(badge_id).into_owned(), badge_style),
+                    ]);
+                    if is_selected {
+                        line.style = Self::selected_row_bg_style();
+                        let target_width = usize::from(layout.list.width);
+                        let line_width = line.width();
+                        if line_width < target_width {
+                            line.spans.push(Span::styled(
+                                " ".repeat(target_width - line_width),
+                                Self::selected_row_bg_style(),
+                            ));
+                        }
+                    }
+                    lines.push(line);
                 }
             }
-            lines.push(line);
         }
         Paragraph::new(lines).render(layout.list, buf);
         self.render_provider_detail(layout.detail, buf, &self.rows[self.selected_idx]);
@@ -1530,21 +1668,16 @@ impl ProviderPickerView {
                 row.default_route.logical_model, row.default_route.wire_model
             )
         };
+        // The dense state summary that used to crowd every list row renders
+        // exactly once here, for the focused row. It wraps to several lines,
+        // so it comes after the fixed Route/Endpoint lines to keep those
+        // visible in short panes.
         let mut lines = vec![
             Line::from(Span::styled(
                 row.display_name.clone(),
                 Style::default()
                     .fg(palette::TEXT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!(
-                    "{} | {} | {}",
-                    row.readiness.label(),
-                    row.auth_status.label(),
-                    row.catalog_label()
-                ),
-                Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
                 format!("Route: {route}"),
@@ -1555,28 +1688,10 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
-                format!(
-                    "Protocol: {} | Usage: {}",
-                    row.supported_protocols.join("+"),
-                    row.usage_meter
-                ),
-                Style::default().fg(palette::TEXT_MUTED),
-            )),
-            Line::from(Span::styled(
-                format!("Capabilities: {}", row.capabilities.label()),
-                Style::default().fg(palette::TEXT_MUTED),
-            )),
-            Line::from(Span::styled(
-                format!("Reasoning: {}", row.reasoning.label()),
+                row.compact_hint(),
                 Style::default().fg(palette::TEXT_MUTED),
             )),
         ];
-        if let Some(concurrency) = row.request_concurrency.label() {
-            lines.push(Line::from(Span::styled(
-                concurrency,
-                Style::default().fg(palette::TEXT_MUTED),
-            )));
-        }
         for message in row.messages.iter().take(2) {
             lines.push(Line::from(Span::styled(
                 format!("Note: {message}"),
@@ -1768,6 +1883,21 @@ impl ProviderPickerView {
             line.style = Self::selected_row_bg_style();
         }
         Paragraph::new(line).render(area, buf);
+    }
+}
+
+/// Badge color mirrors its meaning: active = accent, ready = success,
+/// needs-attention = warning, not-set-up = muted.
+fn badge_color(badge: MessageId) -> Color {
+    match badge {
+        MessageId::ProviderBadgeActive => palette::DEEPSEEK_SKY,
+        MessageId::ProviderBadgeKey
+        | MessageId::ProviderBadgeLogin
+        | MessageId::ProviderBadgeLocal => palette::STATUS_SUCCESS,
+        MessageId::ProviderBadgeNeedsKey | MessageId::ProviderBadgeNeedsLogin => {
+            palette::STATUS_WARNING
+        }
+        _ => palette::TEXT_MUTED,
     }
 }
 
@@ -1989,7 +2119,9 @@ impl ModalView for ProviderPickerView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let preferred_height = match self.stage {
-            Stage::List => (self.rows.len() as u16).saturating_add(2),
+            // Rows plus up to three group headers, the count-summary line, and
+            // the chrome (borders + footer).
+            Stage::List => (self.rows.len() as u16).saturating_add(7),
             Stage::KeyEntry => 10,
             Stage::CustomForm => 12,
         };
@@ -2094,9 +2226,9 @@ mod tests {
     }
 
     fn move_to_provider(picker: &mut ProviderPickerView, provider: ApiProvider) {
-        // The target may be hidden by the default configured-only view
-        // (#3830); switch to the full catalog so navigation can still reach
-        // it, matching what a user pressing `A` would do.
+        // The default view is the full grouped catalog, so every provider is
+        // normally reachable; if a test has filtered down to the
+        // configured-only view, toggle back like a user pressing `A` would.
         if let Some(idx) = picker.rows.iter().position(|row| row.provider == provider)
             && !picker.row_visible(idx)
         {
@@ -2126,9 +2258,8 @@ mod tests {
     fn type_ahead_jumps_to_provider_by_first_letter() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // Z.ai isn't configured, so it's hidden by the default view (#3830);
-        // browse the full catalog like a user pressing `A` would.
-        picker.toggle_view();
+        // The default view is the full grouped catalog, so type-ahead reaches
+        // unconfigured providers without any toggle.
         // `z` is unique to Z.ai among provider display names.
         picker.handle_key(key(KeyCode::Char('z')));
         assert_eq!(picker.selected_provider(), ApiProvider::Zai);
@@ -2158,9 +2289,8 @@ mod tests {
     fn mouse_scroll_moves_selection_in_list_stage() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // Scroll across the full catalog (#3830), not just the configured
-        // subset, which would only contain the active provider here.
-        picker.toggle_view();
+        // The default view is already the full grouped catalog, so scrolling
+        // has somewhere to go even with only the active provider set up.
         let before = picker.selected_idx;
         picker.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -2184,61 +2314,246 @@ mod tests {
             .map(|row| row.display_name.as_str())
             .collect();
 
-        // Every built-in provider is present, none dropped (#3076 reorders, it
-        // does not filter).
+        // Every built-in provider is present, none dropped (grouping reorders,
+        // it does not filter).
         assert_eq!(names.len(), ApiProvider::all().len());
         assert!(names.contains(&"DeepSeek"));
 
-        // Providers are presented in neutral case-insensitive alphabetical
-        // order by display name (#3076), not `ApiProvider::all()` order.
-        let mut expected = names.clone();
-        expected.sort_by_key(|name| name.to_ascii_lowercase());
-        assert_eq!(
-            names, expected,
-            "provider picker must list providers in case-insensitive alphabetical order"
-        );
-        // DeepSeek is no longer hard-coded first.
-        assert_ne!(names.first(), Some(&"DeepSeek"));
+        // Rows are grouped Active → Ready → Available, and each group keeps
+        // the neutral case-insensitive alphabetical order (#3076).
+        let groups: Vec<ProviderGroup> = picker
+            .rows
+            .iter()
+            .map(ProviderDashboardRow::group)
+            .collect();
+        let mut sorted_groups = groups.clone();
+        sorted_groups.sort();
+        assert_eq!(groups, sorted_groups, "rows must be grouped in order");
+        for pair in picker.rows.windows(2) {
+            if pair[0].group() == pair[1].group() {
+                assert!(
+                    pair[0].display_name.to_ascii_lowercase()
+                        <= pair[1].display_name.to_ascii_lowercase(),
+                    "within-group order must stay alphabetical: {} then {}",
+                    pair[0].display_name,
+                    pair[1].display_name
+                );
+            }
+        }
+        // The active provider always leads the list.
+        assert_eq!(picker.rows[0].provider, ApiProvider::Deepseek);
+        assert!(picker.rows[0].is_active);
     }
 
     #[test]
-    fn default_view_shows_only_configured_providers() {
-        // #3830: with nothing but the active provider set up, the default
-        // list view excludes the unconfigured catalog noise — even though
-        // `rows` (the underlying data) still has every provider, per
-        // `picker_lists_all_providers` above. Doesn't assert an exact count:
-        // `OpenaiCodex` reads a real OAuth file from disk in
-        // `has_api_key_for`, so it's legitimately "configured" on a machine
-        // with a prior Codex login and must not make this test host-dependent.
+    fn rows_are_grouped_by_key_state() {
+        // Key vs no key decides Ready vs Available; the active provider is a
+        // group of its own.
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let group_of = |provider: ApiProvider| {
+            picker
+                .rows
+                .iter()
+                .find(|row| row.provider == provider)
+                .expect("provider row")
+                .group()
+        };
+
+        assert_eq!(group_of(ApiProvider::Deepseek), ProviderGroup::Active);
+        assert_eq!(group_of(ApiProvider::XiaomiMimo), ProviderGroup::Ready);
+        assert_eq!(group_of(ApiProvider::Openrouter), ProviderGroup::Available);
+        // Untouched self-hosted slots are not "set up" either.
+        assert_eq!(group_of(ApiProvider::Ollama), ProviderGroup::Available);
+    }
+
+    #[test]
+    fn state_badges_match_group_and_auth() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let badge_of = |provider: ApiProvider| {
+            picker
+                .rows
+                .iter()
+                .find(|row| row.provider == provider)
+                .expect("provider row")
+                .state_badge()
+        };
+
+        assert_eq!(
+            badge_of(ApiProvider::Deepseek),
+            MessageId::ProviderBadgeActive
+        );
+        assert_eq!(
+            badge_of(ApiProvider::XiaomiMimo),
+            MessageId::ProviderBadgeKey
+        );
+        assert_eq!(
+            badge_of(ApiProvider::Openrouter),
+            MessageId::ProviderBadgeNoKey
+        );
+        assert_eq!(
+            badge_of(ApiProvider::Ollama),
+            MessageId::ProviderBadgeLocalRuntime
+        );
+        // Explicit config entry without a working key: Ready group, but the
+        // badge must not claim a key exists.
+        let needs_key_config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                openrouter: crate::config::ProviderConfig {
+                    base_url: Some("https://custom.openrouter.example/v1".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &needs_key_config);
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.provider == ApiProvider::Openrouter)
+            .expect("openrouter row");
+        assert_eq!(row.group(), ProviderGroup::Ready);
+        assert_eq!(row.state_badge(), MessageId::ProviderBadgeNeedsKey);
+    }
+
+    #[test]
+    fn count_summary_reports_all_three_groups() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let summary = picker.count_summary();
+        assert!(summary.contains("1 active"), "summary: {summary}");
+        assert!(summary.contains("ready"), "summary: {summary}");
+        assert!(summary.contains("available"), "summary: {summary}");
+        // The three counts always cover every row exactly once.
+        let ready = picker
+            .rows
+            .iter()
+            .filter(|row| row.group() == ProviderGroup::Ready)
+            .count();
+        let available = picker
+            .rows
+            .iter()
+            .filter(|row| row.group() == ProviderGroup::Available)
+            .count();
+        assert_eq!(1 + ready + available, picker.rows.len());
+        assert!(summary.contains(&format!("{available} available")));
+        // The count line renders in the list view — both the default grouped
+        // catalog and the configured-only view behind `A`.
+        let rendered = render_text(&picker, 100, 16);
+        assert!(
+            rendered.contains(&summary),
+            "count line missing in default catalog view: {rendered}"
+        );
+        let mut configured_only = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        configured_only.toggle_view();
+        assert_eq!(configured_only.view, ProviderListView::Configured);
+        let rendered = render_text(&configured_only, 100, 16);
+        assert!(
+            rendered.contains(&summary),
+            "count line missing in configured-only view"
+        );
+    }
+
+    #[test]
+    fn default_view_renders_group_headers_in_order() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                xiaomi_mimo: crate::config::ProviderConfig {
+                    api_key: Some("mimo-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        // The default view is the full grouped catalog: all three headers
+        // show, in order, without any toggle.
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let rendered = render_text(&picker, 80, 20);
+        let active = rendered.find(" Active").expect("Active header");
+        let ready = rendered.find(" Ready").expect("Ready header");
+        let available = rendered.find(" Available").expect("Available header");
+        assert!(active < ready && ready < available, "headers out of order");
+    }
+
+    #[test]
+    fn default_view_is_grouped_full_catalog() {
+        // The picker opens on the full catalog, grouped Active → Ready →
+        // Available, so nothing is hidden and provider state is answered by
+        // the group a row sits in — not by which filter happens to be on.
         let config = Config::default();
         let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
-        assert_eq!(picker.view, ProviderListView::Configured);
+        assert_eq!(picker.view, ProviderListView::Catalog);
         let visible: Vec<ApiProvider> = picker
             .filtered_rows()
             .iter()
             .map(|(_, row)| row.provider)
             .collect();
-        assert!(visible.contains(&ApiProvider::Deepseek), "{visible:?}");
-        assert!(
-            !visible.contains(&ApiProvider::Custom),
-            "the unused custom-provider placeholder slot isn't \"configured\": {visible:?}"
+        assert_eq!(
+            visible.len(),
+            picker.rows.len(),
+            "default view hides nothing"
         );
+        assert!(visible.contains(&ApiProvider::Deepseek), "{visible:?}");
+        // Unconfigured providers are present but sorted into the Available
+        // group after the user's own providers.
         for unconfigured in [
             ApiProvider::Zai,
             ApiProvider::Openrouter,
             ApiProvider::Novita,
             ApiProvider::Ollama,
         ] {
-            assert!(
-                !visible.contains(&unconfigured),
-                "{unconfigured:?} has no credentials and isn't active: {visible:?}"
+            let row = picker
+                .rows
+                .iter()
+                .find(|row| row.provider == unconfigured)
+                .expect("catalog row");
+            assert_eq!(
+                row.group(),
+                ProviderGroup::Available,
+                "{unconfigured:?} has no credentials and isn't active"
             );
         }
-        assert!(
-            picker.rows.len() > visible.len(),
-            "underlying data keeps every provider"
-        );
+        // The active provider still leads the list.
+        assert_eq!(picker.rows[0].provider, ApiProvider::Deepseek);
     }
 
     #[test]
@@ -2299,21 +2614,31 @@ mod tests {
     }
 
     #[test]
-    fn toggle_view_reveals_full_catalog_and_back() {
+    fn toggle_view_filters_to_configured_only_and_back() {
+        // Default is the full grouped catalog; `A` filters down to the
+        // configured-only subset (Active + Ready) and toggles back.
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        let configured_count = picker.filtered_rows().len();
-        assert_eq!(picker.view, ProviderListView::Configured);
+        assert_eq!(picker.view, ProviderListView::Catalog);
+        let catalog_count = picker.filtered_rows().len();
+        assert_eq!(catalog_count, picker.rows.len());
 
         let action = picker.handle_key(key(KeyCode::Char('a')));
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(picker.view, ProviderListView::Catalog);
-        assert_eq!(picker.filtered_rows().len(), picker.rows.len());
-        assert!(picker.filtered_rows().len() > configured_count);
+        assert_eq!(picker.view, ProviderListView::Configured);
+        let configured_count = picker.filtered_rows().len();
+        assert!(configured_count < catalog_count);
+        assert!(
+            picker
+                .filtered_rows()
+                .iter()
+                .all(|(_, row)| row.group() != ProviderGroup::Available),
+            "configured-only view hides the Available group"
+        );
 
         picker.handle_key(key(KeyCode::Char('A')));
-        assert_eq!(picker.view, ProviderListView::Configured);
-        assert_eq!(picker.filtered_rows().len(), configured_count);
+        assert_eq!(picker.view, ProviderListView::Catalog);
+        assert_eq!(picker.filtered_rows().len(), catalog_count);
     }
 
     #[test]
@@ -3053,9 +3378,8 @@ mod tests {
     fn list_navigation_wraps_between_first_and_last_provider() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // Wrap across the full catalog (#3830), not just the configured
-        // subset, which would only contain the active provider here.
-        picker.toggle_view();
+        // The default view is the full grouped catalog, so wrapping spans
+        // every row without any toggle.
         let first = picker.rows.first().expect("non-empty list").provider;
         let last = picker.rows.last().expect("non-empty list").provider;
 
@@ -3236,7 +3560,7 @@ mod tests {
         let rendered = render_text(&picker, 80, 12);
 
         assert!(rendered.contains("Ollama"));
-        assert!(!rendered.contains("DeepSeek *"));
+        assert!(!rendered.contains("DeepSeek"));
     }
 
     #[test]
@@ -3246,19 +3570,22 @@ mod tests {
 
         let rendered = render_text(&picker, 80, 12);
 
-        assert!(rendered.contains("Ollama *"));
+        assert!(rendered.contains("Ollama"));
+        assert!(
+            rendered.contains(tr_current(MessageId::ProviderBadgeActive).as_ref()),
+            "active badge must stay visible: {rendered}"
+        );
     }
 
     #[test]
     fn tall_catalog_render_shows_selected_provider_details() {
         let config = Config::default();
-        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // "All providers" means the full catalog (#3830), not just configured.
-        picker.toggle_view();
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
 
         let rendered = render_text(&picker, 80, 23);
 
-        assert!(rendered.contains("DeepSeek *"));
+        assert!(rendered.contains("DeepSeek"));
+        assert!(rendered.contains(tr_current(MessageId::ProviderBadgeActive).as_ref()));
         assert!(rendered.contains("Details"));
         assert!(rendered.contains("Route:"));
     }

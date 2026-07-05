@@ -27,6 +27,7 @@ codewhale-protocol = { path = "../protocol", version = "0.8.67" }
 codewhale-release = { path = "../release", version = "0.8.67" }
 codewhale-secrets = { path = "../secrets", version = "0.8.67" }
 codewhale-tools = { path = "../tools", version = "0.8.67" }
+codewhale-whaleflow-js = { path = "../whaleflow-js", version = "0.8.67" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -39,7 +40,9 @@ crossterm = "0.28"
 dotenvy = "0.15.7"
 dirs = "6.0.0"
 futures-util = "0.3.31"
-oauth2 = "5"
+# Sole use is the `TokenResponse` trait import in mcp/oauth.rs; default
+# features would drag in a second reqwest (0.12) dependency tree.
+oauth2 = { version = "5", default-features = false }
 ratatui = "0.30"
 regex = "1.11"
 reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls-no-provider", "http2", "gzip", "brotli"] }

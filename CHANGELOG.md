@@ -11,11 +11,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the `whaleflow` tool: the orchestrator model can author and run
+  sandboxed dynamic-workflow scripts (`task()` fan-out, `tools.*`, live
+  `budget`, `parallel`/`pipeline`) with agent-equivalent approval and depth
+  gating, fleet-party profiles via `task({profile})`, and turn-cancel
+  hard-kill of runaway scripts. Script `tools.*` calls run at full posture
+  parity with the calling context: each call inherits that context's tool
+  surface and goes through the same approval decision as a model-issued
+  call, so approval-required tools prompt in manual modes rather than being
+  silently blocked or silently run.
+- Added the WhaleFlow dynamic-workflow bridge: a sandboxed in-process
+  QuickJS runtime (new `codewhale-whaleflow-js` crate) where scripts call
+  `await task({...})` to spawn real sub-agents (recursive, gated by the
+  existing spawn-depth ceiling), `await tools.<name>(args)` against a
+  read-only-by-default tool tier, and read `globalThis.budget`
+  (total/spent/remaining) backed by the live budget scope with
+  reservation-based overshoot protection; includes a `parallel`/`pipeline`/
+  `log` prelude and start/complete/error events on the fan-out panel.
+- Added Fleet party construction: `/fleet party` prints an honest roster of
+  saved worker profiles with per-slot role, model class, and pinned model;
+  `/fleet setup` gains typed custom roles and a `fast`/`heavy`/`omni`/
+  `custom` model-class taxonomy with visible typed/pasted input; profiles
+  support ranked model preferences (`models = ["best", "fallback"]`) that
+  are pre-flighted against the active provider and degrade to the class
+  route instead of failing on the wire; the orchestrator's `agent` tool
+  advertises the party and spawns members via `profile:"<id>"` (WhaleFlow
+  `task({profile})` too), with a one-time `/fleet setup` hint when no party
+  exists.
+- Added typed custom guidance to the Constitution setup step (`T`): free
+  text (typing and paste) is sanitized, bounded, preview-gated, and saved
+  into the user constitution as advisory guidance; expanded the guided
+  choices with three new article-anchored options; `/constitution edit`
+  now preserves previously ratified custom guidance.
+- Added a grouped provider picker (Active / Ready / Available with
+  truthful credential badges and a count line, full catalog by default)
+  and a progressive-disclosure model picker (bounded shortlist with a
+  details strip for the focused row; Ctrl+A expands to all models).
+- Added recovery hints to error messages (context overflow suggests
+  `/compact`/`/restore`; auth failures suggest `/provider`) and made
+  `codewhale doctor` exit non-zero when checks fail.
+- Added `NO_COLOR` / `CODEWHALE_NO_COLOR` / `DEEPSEEK_NO_COLOR` support
+  (forces ANSI-16 with distinguishable named colors).
+- Added a situationally-aware right-click menu (Copy leads during
+  selection, Paste only over editable targets, Open/Copy link over links),
+  wheel-scroll on modals/pickers/overlays that previously ignored it,
+  bare `?` help on an empty composer, an idle-footer key-hint chip, and
+  empty-state action hints.
+- Added docs: CONSTITUTION, FAQ, CREDIT (how credit works), EXTENDING,
+  RESTORE, DIRECTORY_STRUCTURE, ADDING_CONTEXT, SESSIONS, COST, a docs/
+  index, and copy-pasteable workflow recipes; the website now renders repo
+  docs as first-class pages with client-side search and `llms.txt`;
+  bilingual (en/zh-CN) issue forms; README trust block, WhaleFlow section,
+  and contributor wall.
+- Added a weekly `cargo audit` CI job and a `[profile.release]` with thin
+  LTO, one codegen unit, and symbol stripping.
 - Added a website localization matrix with a locale registry and drift checks.
   Harvested from #3763 by @idling11.
 
 ### Changed
 
+- Raised sub-agent capacity for program-driven fan-out: the concurrency
+  default is now cores-scaled (16-64, absolute ceiling 256), admission
+  queue 1000, with a 1000-agent per-session lifetime backstop and a
+  10-minute completed-agent retention window.
+- Reworked hot render paths: transcript markdown parses once per cell via
+  an AST cache (streaming no longer re-parses the whole message per
+  commit), the footer/header context meter memoizes token estimation
+  behind a cheap fingerprint, the runtime event journal batches token
+  deltas instead of double-fsyncing each one, web tools share HTTP
+  connection pools, and tool-parser/hook regexes are compiled once.
+- Made transcript tool/plan cards theme-aware (light themes no longer
+  render dark-theme card colors), tuned all shipped presets to pass
+  contrast floors, and added a guard test that keeps raw RGB literals out
+  of non-palette modules.
+- Onboarding: the trust screen's Esc now steps back (as documented)
+  instead of quitting, and API-key copy is provider-aware instead of
+  DeepSeek-hardcoded.
 - Anchored the guided user-constitution creator to the shipped CodeWhale
   Constitution articles, so the configurable focus axis now maps to Ground
   Truth/Verification, Momentum/Legacy/Help, or Priority/Domain Context/Inquiry
@@ -25,6 +96,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed sub-agent spawns on the ChatGPT Codex OAuth route failing with
+  Responses-API 400s or premature timeouts (#3884 follow-up): foreign model
+  pins (fleet profiles, role config, explicit `model:`) are skipped or
+  rejected before the wire and degrade to the parent Codex model with a
+  notice; unconfigured Codex children inherit the parent's 900s stream
+  quiet-time budget instead of a 120s total cap; forked children keep their
+  system-role fork context on the Responses route; completed children report
+  their whale nickname; and `max_depth: 0` spawn requests are refused up
+  front.
+- Fixed the agent tool's fleet-party roster staying frozen at its spawn-time
+  snapshot in long-lived sub-agent registries: it now refreshes when
+  `.codewhale/agents` profiles are created, edited, or removed mid-session,
+  fingerprint-gated so an unchanged party keeps the tool catalog byte-stable
+  for prefix caching.
+- Fixed `codewhale metrics` reading only the legacy `~/.deepseek` state so
+  new installs silently reported nothing; it now resolves the CodeWhale
+  home with a legacy fallback.
+- Fixed fleet workers pinned to a model the active provider cannot serve
+  spawning anyway and dying as opaque HTTP errors; unusable pins now skip
+  to the next ranked preference or the class route, with the degradation
+  shown in `/fleet party` and logged at spawn. Also fixed `fast`-class
+  profiles without pins not routing to the faster lane.
+- Fixed the wizard's advertised setup hotkeys being case-sensitive, the
+  Constitution card clipping its controls at 80x24, and the keep-existing
+  gate ratifying a constitution file changed on disk after preview.
+- Fixed three command descriptions missing Simplified Chinese
+  translations, `/cache` silently ignoring unknown arguments, `/sidebar`
+  usage/error drift, stale keybinding documentation and in-app catalog
+  entries, and a duplicate reqwest dependency tree pulled in via oauth2.
 - Raised the streamed model-response idle timeout and matched the TUI stall
   watchdog to the configured stream budget so long reasoning pauses are not
   recovered as stalled turns (#2487).
@@ -35,6 +135,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed fresh launch/setup testing with an explicit `CODEWHALE_HOME` so config,
   settings, theme prefs, and doctor legacy-state diagnostics do not inherit
   unrelated ambient `~/.deepseek` files.
+
+### Security
+
+- WhaleFlow scripts inherit exactly the calling context's tool surface
+  (role posture plus explicit allowlist, minus delegation tools): a
+  restricted sub-agent can no longer widen its posture by routing calls
+  through `tools.*` inside a script.
+- The WhaleFlow approval card labels its plan summary a static heuristic
+  preview, always shows the "may spawn sub-agents and call any tool
+  available to this context" capability warning, and quotes a script's own
+  leading comment as untrusted instead of echoing it in the approval
+  headline, desktop notifications, and audit log.
 
 ### Removed
 

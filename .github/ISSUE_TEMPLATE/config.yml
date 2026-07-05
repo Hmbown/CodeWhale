@@ -1,1 +1,11 @@
 blank_issues_enabled: true
+contact_links:
+  - name: "Questions & ideas / 提问与讨论 (GitHub Discussions)"
+    url: https://github.com/Hmbown/CodeWhale/discussions
+    about: "Ask questions, share setups, and discuss ideas that aren't a concrete bug or feature yet. / 提问、分享配置、讨论还不成型的想法。"
+  - name: "FAQ / 常见问题"
+    url: https://codewhale.net/faq
+    about: "Install paths, provider setup, modes, sandboxing, China mirrors, and more. / 安装、Provider 配置、模式、沙箱、国内镜像等常见问题。"
+  - name: "Security reports / 安全问题"
+    url: https://github.com/Hmbown/CodeWhale/blob/main/SECURITY.md
+    about: "Please do not open public issues for vulnerabilities — see the disclosure process. / 安全漏洞请勿公开提 issue，参见披露流程。"

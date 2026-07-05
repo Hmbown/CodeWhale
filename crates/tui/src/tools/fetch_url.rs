@@ -33,6 +33,53 @@ static STYLE_RE: OnceLock<Regex> = OnceLock::new();
 static TAG_RE: OnceLock<Regex> = OnceLock::new();
 static WHITESPACE_RE: OnceLock<Regex> = OnceLock::new();
 
+/// Small cache of HTTP clients keyed by the DNS pin for the request
+/// (`None` = no pin, i.e. IP-literal URLs). The SSRF/TOCTOU protection pins
+/// the validated IP via a client-level `resolve()` override, so a client can
+/// only be reused for the same `(hostname, ip)` pair — but repeated fetches
+/// to the same host (the common case) previously rebuilt the client, its
+/// connection pool, and its TLS context on every call and every redirect hop.
+#[allow(clippy::type_complexity)]
+static FETCH_CLIENTS: OnceLock<
+    std::sync::Mutex<
+        std::collections::HashMap<Option<(String, std::net::IpAddr)>, reqwest::Client>,
+    >,
+> = OnceLock::new();
+
+/// Bound on the pinned-client cache; on overflow the cache is simply
+/// cleared (clients are cheap to rebuild, correctness never depends on the
+/// cache).
+const FETCH_CLIENT_CACHE_CAP: usize = 16;
+
+fn fetch_client(
+    dns_pinning: Option<(String, std::net::IpAddr)>,
+) -> Result<reqwest::Client, ToolError> {
+    let cache = FETCH_CLIENTS.get_or_init(Default::default);
+    if let Ok(guard) = cache.lock()
+        && let Some(client) = guard.get(&dns_pinning)
+    {
+        return Ok(client.clone());
+    }
+    let mut builder = crate::tls::reqwest_client_builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some((hostname, validated_ip)) = &dns_pinning {
+        // Pin validated IP to prevent DNS rebinding (TOCTOU) — reqwest will
+        // connect to the validated IP directly instead of re-resolving.
+        builder = builder.resolve(hostname, std::net::SocketAddr::new(*validated_ip, 0));
+    }
+    let client = builder
+        .build()
+        .map_err(|e| ToolError::execution_failed(format!("failed to build HTTP client: {e}")))?;
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= FETCH_CLIENT_CACHE_CAP {
+            guard.clear();
+        }
+        guard.insert(dns_pinning, client.clone());
+    }
+    Ok(client)
+}
+
 fn script_re() -> &'static Regex {
     SCRIPT_RE.get_or_init(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").expect("script re"))
 }
@@ -163,24 +210,11 @@ impl ToolSpec for FetchUrlTool {
 
         let resp = loop {
             let dns_pinning = validate_fetch_target(&current_url, context).await?;
-            let mut client_builder = crate::tls::reqwest_client_builder()
-                .timeout(Duration::from_millis(timeout_ms))
-                .user_agent(USER_AGENT)
-                .redirect(reqwest::redirect::Policy::none());
-
-            // Pin validated IP to prevent DNS rebinding (TOCTOU) — reqwest will
-            // connect to the validated IP directly instead of re-resolving.
-            if let Some((hostname, validated_ip)) = dns_pinning {
-                client_builder =
-                    client_builder.resolve(&hostname, std::net::SocketAddr::new(validated_ip, 0));
-            }
-
-            let client = client_builder.build().map_err(|e| {
-                ToolError::execution_failed(format!("failed to build HTTP client: {e}"))
-            })?;
+            let client = fetch_client(dns_pinning)?;
 
             let resp = client
                 .get(current_url.clone())
+                .timeout(Duration::from_millis(timeout_ms))
                 .header("Accept", "text/html,text/plain,application/json,*/*;q=0.5")
                 .header("Accept-Language", "en-US,en;q=0.5")
                 .send()

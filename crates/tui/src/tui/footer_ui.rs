@@ -109,10 +109,14 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         if app.fancy_animations {
             props.working_strip_frame = Some(now_ms);
         }
-    } else if matches!(props.state_label.as_str(), "idle" | "ready")
-        && let Some(label) = selected_detail_footer_label(app)
-    {
-        props.state_label = label;
+    } else if matches!(props.state_label.as_str(), "idle" | "ready") {
+        if let Some(label) = selected_detail_footer_label(app) {
+            props.state_label = label;
+        } else {
+            // Discoverability chip: the idle footer otherwise shows zero key
+            // hints, leaving help (?) and the palette (Ctrl+K) docs-only.
+            props.state_label = idle_help_hint_label(&props.state_label);
+        }
         props.state_color = palette::TEXT_MUTED;
     }
 
@@ -268,6 +272,23 @@ pub(crate) fn footer_working_label_frame(now_ms: u64, fancy_animations: bool) ->
     if fancy_animations { now_ms / 400 } else { 0 }
 }
 
+/// Compact discoverability hint for the idle footer.
+const IDLE_HELP_HINT: &str = "? help \u{00B7} ^K commands";
+
+/// Build the idle-footer status label carrying the help/palette hint.
+///
+/// The footer widget hides a bare `"ready"` label entirely, so prefixing the
+/// hint with "ready" would surface a word the design deliberately suppresses;
+/// the hint stands alone in that case. Any other idle label (e.g. `"idle"`)
+/// keeps its label and the hint rides after a separator.
+pub(crate) fn idle_help_hint_label(state_label: &str) -> String {
+    if state_label == "ready" {
+        IDLE_HELP_HINT.to_string()
+    } else {
+        format!("{state_label}  \u{00B7}  {IDLE_HELP_HINT}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -277,6 +298,37 @@ mod tests {
     use crate::config::Config;
     use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
+
+    #[test]
+    fn idle_help_hint_replaces_hidden_ready_label_and_rides_after_idle() {
+        // "ready" is suppressed by the footer widget, so the hint must not
+        // resurrect it.
+        assert_eq!(
+            super::idle_help_hint_label("ready"),
+            "? help \u{00B7} ^K commands"
+        );
+        assert_eq!(
+            super::idle_help_hint_label("idle"),
+            "idle  \u{00B7}  ? help \u{00B7} ^K commands"
+        );
+    }
+
+    #[test]
+    fn idle_help_hint_fits_footer_at_80_cols() {
+        use unicode_width::UnicodeWidthStr;
+        // Left cluster at idle: "agent · <model> · <hint>". With the longest
+        // stock model label this must fit 80 cols so the hint is not the
+        // thing that pushes the footer into its truncation tiers.
+        let line = format!(
+            "agent \u{00B7} deepseek-v4-pro \u{00B7} {}",
+            super::idle_help_hint_label("ready")
+        );
+        assert!(
+            line.width() <= 80,
+            "idle footer line must fit 80 cols: {line:?} ({})",
+            line.width()
+        );
+    }
 
     #[test]
     fn footer_working_label_frame_is_static_without_fancy_animations() {

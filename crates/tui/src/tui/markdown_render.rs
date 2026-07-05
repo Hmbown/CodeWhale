@@ -17,15 +17,24 @@
 //! * [`render_parsed`] takes a `ParsedMarkdown` plus a width and a base style and
 //!   produces `Vec<Line<'static>>`. It only does word-wrap and span styling.
 //!
-//! [`render_markdown`] is kept as a thin convenience that does both — useful for
-//! callers (Thinking body, message body) that don't want to manage the cache.
+//! [`render_markdown`] / [`render_markdown_tagged`] are kept as thin
+//! conveniences that do both. They obtain the AST through [`parse_cached`], a
+//! bounded content-keyed memo, so callers (message body, Thinking body,
+//! system/archived cells) get AST reuse without managing a cache themselves.
 //!
-//! The transcript cache layer (see `tui/transcript.rs`) caches the parsed AST per
-//! cell and re-runs only the render step on width changes. That makes resize a
-//! re-flow operation rather than a re-parse + re-flow operation.
+//! The transcript line caches (see `tui/transcript.rs` and
+//! `tui/live_transcript.rs`) are keyed by `(cell, width, revision)`, so a
+//! terminal resize re-renders every cell even though no cell's source changed.
+//! The memo turns that re-render into a re-wrap rather than a re-parse +
+//! re-wrap: identical source hits the cached AST and skips [`parse`] entirely.
+//! Only content that actually mutated (the streaming tail) misses and
+//! re-parses, once per commit tick.
 
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -185,6 +194,80 @@ pub fn parse(content: &str) -> ParsedMarkdown {
     ParsedMarkdown { blocks }
 }
 
+/// Soft cap on memoized ASTs before insertion-order eviction kicks in.
+/// Sized so a long transcript's markdown cells (Assistant / Thinking /
+/// System) all stay resident across a resize sweep.
+const PARSE_CACHE_MAX_ENTRIES: usize = 1024;
+
+/// Cap on the total source bytes retained by the memo. Streaming inserts a
+/// growing prefix of the live cell on every commit tick; this bound keeps
+/// those short-lived entries from holding unbounded memory.
+const PARSE_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+thread_local! {
+    static PARSE_CACHE: RefCell<ParseCache> = RefCell::new(ParseCache::new());
+}
+
+/// Bounded content-keyed memo of parsed ASTs.
+///
+/// `parse` is a pure function of the source text, so the source itself is a
+/// complete cache key — no revision plumbing required, and any two callers
+/// (the main transcript cache and the live overlay cache render the same
+/// cells independently) share one parse. Rendering happens on the UI thread,
+/// so a thread-local avoids locking. Eviction mirrors `TranscriptCache`:
+/// insertion-order, capped on both entry count and total source bytes.
+struct ParseCache {
+    entries: HashMap<Arc<str>, Arc<ParsedMarkdown>>,
+    insertion_order: VecDeque<Arc<str>>,
+    bytes: usize,
+}
+
+impl ParseCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+
+    fn get_or_parse(&mut self, content: &str) -> Arc<ParsedMarkdown> {
+        if let Some(parsed) = self.entries.get(content) {
+            return Arc::clone(parsed);
+        }
+        let parsed = Arc::new(parse(content));
+        // A single source larger than the whole byte budget is not worth
+        // churning the cache for; parse it uncached.
+        if content.len() <= PARSE_CACHE_MAX_BYTES {
+            let key: Arc<str> = Arc::from(content);
+            self.bytes += key.len();
+            self.entries.insert(Arc::clone(&key), Arc::clone(&parsed));
+            self.insertion_order.push_back(key);
+            while self.entries.len() > PARSE_CACHE_MAX_ENTRIES || self.bytes > PARSE_CACHE_MAX_BYTES
+            {
+                let Some(oldest) = self.insertion_order.pop_front() else {
+                    break;
+                };
+                self.bytes -= oldest.len();
+                self.entries.remove(&oldest);
+            }
+        }
+        parsed
+    }
+}
+
+/// Parse markdown through the bounded content-keyed memo.
+///
+/// Identical source returns the cached `Arc<ParsedMarkdown>` without
+/// re-running [`parse`]; changed source (a streaming delta) misses and
+/// parses once. This is what makes a completed transcript cell's markdown
+/// parse exactly once for its lifetime — resize and scroll re-wrap the
+/// cached AST instead of re-parsing the source.
+#[must_use]
+pub fn parse_cached(content: &str) -> Arc<ParsedMarkdown> {
+    PARSE_CACHE.with(|cache| cache.borrow_mut().get_or_parse(content))
+}
+
 /// Render a parsed-markdown AST at the given terminal width.
 ///
 /// This is the width-dependent half: word-wrapping, link styling, code-block
@@ -319,23 +402,25 @@ pub fn render_parsed_tagged(
 
 /// Convenience wrapper: parse + render in one call.
 ///
-/// Equivalent to `render_parsed(&parse(content), width, base_style)`. Callers
-/// that don't manage their own cache (the Thinking body, the immediate message
-/// body) use this.
+/// Equivalent to `render_parsed(&parse(content), width, base_style)`, except
+/// the AST comes from [`parse_cached`], so repeated renders of unchanged
+/// source (scroll, resize, the second of the two transcript caches) skip the
+/// parse step entirely.
 #[must_use]
 pub fn render_markdown(content: &str, width: u16, base_style: Style) -> Vec<Line<'static>> {
-    let parsed = parse(content);
+    let parsed = parse_cached(content);
     render_parsed(&parsed, width, base_style)
 }
 
 /// Convenience wrapper: parse + render while keeping per-line source metadata.
+/// Uses [`parse_cached`], like [`render_markdown`].
 #[must_use]
 pub fn render_markdown_tagged(
     content: &str,
     width: u16,
     base_style: Style,
 ) -> Vec<RenderedMarkdownLine> {
-    let parsed = parse(content);
+    let parsed = parse_cached(content);
     render_parsed_tagged(&parsed, width, base_style)
 }
 
@@ -1426,6 +1511,77 @@ mod tests {
             0,
             "render_parsed must not call parse"
         );
+    }
+
+    #[test]
+    fn parse_cached_reuses_ast_for_identical_content() {
+        // Repeated renders of the same source — at any width, tagged or not —
+        // must parse exactly once. This is the per-cell AST cache the module
+        // docs promise: scroll and resize re-wrap, they never re-parse.
+        let source = "# cached\n\nbody text with **bold**\n- item one\n- item two\n";
+        reset_parse_invocation_count();
+        let _ = render_markdown(source, 80, Style::default());
+        let _ = render_markdown(source, 40, Style::default());
+        let _ = render_markdown_tagged(source, 80, Style::default());
+        let _ = render_markdown_tagged(source, 20, Style::default());
+        assert_eq!(
+            parse_invocation_count(),
+            1,
+            "identical content must be parsed exactly once across renders"
+        );
+    }
+
+    #[test]
+    fn parse_cached_content_mutation_invalidates() {
+        // Changed source (a streaming delta) must miss the memo and re-parse;
+        // both versions then stay resident so re-rendering either is free.
+        let v1 = "streaming reply prefix";
+        let v2 = "streaming reply prefix plus delta";
+        reset_parse_invocation_count();
+        let _ = render_markdown(v1, 80, Style::default());
+        assert_eq!(parse_invocation_count(), 1);
+        let _ = render_markdown(v2, 80, Style::default());
+        assert_eq!(parse_invocation_count(), 2, "mutated content must re-parse");
+        let _ = render_markdown(v2, 40, Style::default());
+        let _ = render_markdown(v1, 40, Style::default());
+        assert_eq!(
+            parse_invocation_count(),
+            2,
+            "both versions should now be served from the memo"
+        );
+    }
+
+    #[test]
+    fn parse_cached_output_matches_uncached_parse() {
+        // The memo must be invisible to rendering: byte-identical AST.
+        let source = "# Title\n\npara with https://example.com\n\n| a | b |\n|---|---|\n| c | d |\n```\ncode\n```";
+        let cached = parse_cached(source);
+        let direct = parse(source);
+        assert_eq!(*cached, direct);
+    }
+
+    #[test]
+    fn parse_cache_eviction_keeps_bounds() {
+        // Overflow the entry cap and confirm the memo still serves correct
+        // ASTs (evicted entries simply re-parse).
+        let filler: Vec<String> = (0..PARSE_CACHE_MAX_ENTRIES + 8)
+            .map(|i| format!("filler paragraph number {i}"))
+            .collect();
+        for source in &filler {
+            let _ = parse_cached(source);
+        }
+        // The earliest entry has been evicted; re-requesting it re-parses.
+        reset_parse_invocation_count();
+        let again = parse_cached(&filler[0]);
+        assert_eq!(parse_invocation_count(), 1, "evicted entry must re-parse");
+        assert_eq!(*again, parse(&filler[0]));
+        // Cache bookkeeping stays within bounds.
+        PARSE_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert!(cache.entries.len() <= PARSE_CACHE_MAX_ENTRIES);
+            assert!(cache.bytes <= PARSE_CACHE_MAX_BYTES);
+            assert_eq!(cache.entries.len(), cache.insertion_order.len());
+        });
     }
 
     #[test]

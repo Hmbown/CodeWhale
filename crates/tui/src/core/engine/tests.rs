@@ -556,6 +556,66 @@ fn generic_required_tools_keep_auto_approve_behavior() {
     ));
 }
 
+// ── PTC approval broker: handle resolves script-issued ids out-of-band ────
+
+#[tokio::test]
+async fn approve_tool_call_resolves_broker_id_without_engine_channel() {
+    use crate::tools::approval_broker::BrokerVerdict;
+
+    let mut mock = mock_engine_handle();
+    let broker = mock.handle.approval_broker.clone();
+    let mut rx = broker.register("wfcall_test_1");
+
+    mock.handle
+        .approve_tool_call("wfcall_test_1")
+        .await
+        .expect("broker-resolved approval must succeed");
+
+    match rx.try_recv() {
+        Ok(BrokerVerdict::Approved) => {}
+        other => panic!("broker waiter must observe Approved, got {other:?}"),
+    }
+    assert!(
+        mock.rx_approval.try_recv().is_err(),
+        "a broker-resolved id must NOT be enqueued on the engine approval channel"
+    );
+}
+
+#[tokio::test]
+async fn deny_tool_call_resolves_broker_id_without_engine_channel() {
+    use crate::tools::approval_broker::BrokerVerdict;
+
+    let mut mock = mock_engine_handle();
+    let broker = mock.handle.approval_broker.clone();
+    let mut rx = broker.register("wfcall_test_2");
+
+    mock.handle
+        .deny_tool_call("wfcall_test_2")
+        .await
+        .expect("broker-resolved denial must succeed");
+
+    match rx.try_recv() {
+        Ok(BrokerVerdict::Denied) => {}
+        other => panic!("broker waiter must observe Denied, got {other:?}"),
+    }
+    assert!(mock.rx_approval.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn approve_tool_call_for_unbrokered_id_still_reaches_engine_channel() {
+    let mut mock = mock_engine_handle();
+    // No broker registration for this id: the model path must be unaffected.
+    mock.handle
+        .approve_tool_call("toolu_model_issued")
+        .await
+        .expect("model-issued approval must flow to the engine channel");
+
+    match mock.recv_approval_event().await {
+        Some(MockApprovalEvent::Approved { id }) => assert_eq!(id, "toolu_model_issued"),
+        other => panic!("engine channel must receive the model-issued approval, got {other:?}"),
+    }
+}
+
 #[test]
 fn auto_review_policy_does_not_change_generic_destructive_auto_approval_yet() {
     let (decision, audit) = auto_review_plan_decision(
@@ -6331,6 +6391,7 @@ fn engine_handle_try_send_does_not_block_when_op_channel_is_full() {
         cancel_token: Arc::new(StdMutex::new(cancel_token)),
         cancel_reason: Arc::new(StdMutex::new(None)),
         tx_approval: mpsc::channel(1).0,
+        approval_broker: Arc::new(crate::tools::approval_broker::ToolApprovalBroker::new()),
         tx_user_input: mpsc::channel(1).0,
         tx_steer: mpsc::channel(1).0,
         shared_paused: Arc::new(StdMutex::new(false)),

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Seal } from "@/components/seal";
+import { DocsSearch } from "@/components/docs-search";
 import { getTopicsByCategory, REPO_DOCS_BASE, type DocTopic } from "@/lib/docs-map";
 
 /* ------------------------------------------------------------------ */
@@ -8,6 +9,7 @@ import { getTopicsByCategory, REPO_DOCS_BASE, type DocTopic } from "@/lib/docs-m
 
 const CATEGORY_LABELS: Record<string, { en: string; zh: string }> = {
   "getting-started": { en: "Getting started", zh: "入门" },
+  workflows: { en: "Workflows", zh: "工作流" },
   "core-concepts": { en: "Core concepts", zh: "核心概念" },
   reference: { en: "Reference", zh: "参考" },
   extending: { en: "Extending", zh: "扩展" },
@@ -38,6 +40,7 @@ function DocsSidebar({ locale, currentId }: { locale: string; currentId?: string
     <aside className="lg:col-span-3 min-w-0">
       <div className="lg:sticky lg:top-32">
         <div className="eyebrow mb-3">{isZh ? "文档目录" : "Docs index"}</div>
+        <DocsSearch locale={locale} />
         <nav className="hairline-t hairline-b py-3 space-y-4">
           {[...byCategory.entries()].map(([cat, topics]) => (
             <div key={cat}>

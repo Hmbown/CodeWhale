@@ -22,6 +22,10 @@ struct UserCommandRegistryState {
     workspace: Option<PathBuf>,
     command_dirs_snapshot: Vec<CommandDirSnapshot>,
     registry: UserCommandRegistry,
+    /// When the on-disk snapshot was last verified against the filesystem.
+    /// Consumed by [`with_registry_for_workspace_cached`] so render-path
+    /// callers can skip the per-call `read_dir` + `metadata` sweep.
+    last_verified: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -416,6 +420,10 @@ pub fn registry_for_workspace(workspace: Option<&Path>) -> UserCommandRegistry {
     with_registry_for_workspace(workspace, Clone::clone)
 }
 
+/// How long [`with_registry_for_workspace_cached`] trusts the last on-disk
+/// freshness check before re-statting the command directories.
+const REGISTRY_SNAPSHOT_TTL: Duration = Duration::from_secs(2);
+
 pub fn with_registry_for_workspace<R>(
     workspace: Option<&Path>,
     f: impl FnOnce(&UserCommandRegistry) -> R,
@@ -424,8 +432,9 @@ pub fn with_registry_for_workspace<R>(
     let snapshot = command_dirs_snapshot(workspace.as_deref());
     let lock = registry_lock();
     {
-        let guard = lock.read().expect("user command registry lock poisoned");
+        let mut guard = lock.write().expect("user command registry lock poisoned");
         if !registry_needs_reload(&guard, &workspace, &snapshot) {
+            guard.last_verified = Some(std::time::Instant::now());
             return f(&guard.registry);
         }
     }
@@ -438,7 +447,36 @@ pub fn with_registry_for_workspace<R>(
         guard.command_dirs_snapshot = snapshot;
         guard.registry = replacement;
     }
+    guard.last_verified = Some(std::time::Instant::now());
     f(&guard.registry)
+}
+
+/// Render-path variant of [`with_registry_for_workspace`]: skips the
+/// filesystem freshness sweep (`read_dir` + per-file `metadata`) when the
+/// snapshot was verified within [`REGISTRY_SNAPSHOT_TTL`]. The slash-menu
+/// popup sources its entries on every rendered frame while open; statting
+/// every command file per frame was pure waste. Dispatch and command-palette
+/// paths keep the always-fresh variant so a just-edited command file is
+/// still picked up immediately when actually invoked.
+pub fn with_registry_for_workspace_cached<R>(
+    workspace: Option<&Path>,
+    f: impl FnOnce(&UserCommandRegistry) -> R,
+) -> R {
+    let workspace_key = normalize_workspace(workspace);
+    {
+        let guard = registry_lock()
+            .read()
+            .expect("user command registry lock poisoned");
+        if guard.initialized
+            && guard.workspace == workspace_key
+            && guard
+                .last_verified
+                .is_some_and(|at| at.elapsed() < REGISTRY_SNAPSHOT_TTL)
+        {
+            return f(&guard.registry);
+        }
+    }
+    with_registry_for_workspace(workspace, f)
 }
 
 pub fn try_dispatch(app: &mut App, input: &str) -> Option<CommandResult> {

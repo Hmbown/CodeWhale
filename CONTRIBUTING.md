@@ -73,7 +73,10 @@ their work shipped.
 ## How Your Contribution Lands
 
 We follow a deliberate "land what's useful, credit the contributor" model
-that occasionally surprises new contributors. Two paths:
+that occasionally surprises new contributors. The full credit machinery —
+harvest credit lines, `.github/AUTHOR_MAP` graph attribution, the co-author
+CI gate, and retroactive reconciliation — is documented in
+[docs/CREDIT.md](docs/CREDIT.md). Two paths:
 
 ### Path 1 — Direct merge
 

@@ -45,7 +45,13 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
+    // In the full onboarding flow Esc steps back one screen (per
+    // KEYBINDINGS.md), so the quit chord is `2/N` and an extra Esc hint is
+    // shown. When the trust screen is a standalone gate there is no previous
+    // screen: Esc quits, matching the historical `2/N/Esc` hint.
+    let standalone_gate = app.onboarding_workspace_trust_gate;
+    let deny_chord = if standalone_gate { "2/N/Esc" } else { "2/N" };
+    let mut footer = vec![
         Span::styled(
             app.tr(MessageId::OnboardTrustFooterPrefix).to_string(),
             Style::default().fg(palette::TEXT_MUTED),
@@ -61,7 +67,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
-            "2/N/Esc",
+            deny_chord,
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -70,6 +76,13 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             app.tr(MessageId::OnboardTrustFooterSuffix).to_string(),
             Style::default().fg(palette::TEXT_MUTED),
         ),
-    ]));
+    ];
+    if !standalone_gate {
+        footer.push(Span::styled(
+            app.tr(MessageId::OnboardTrustFooterEscBack).to_string(),
+            Style::default().fg(palette::TEXT_MUTED),
+        ));
+    }
+    lines.push(Line::from(footer));
     lines
 }

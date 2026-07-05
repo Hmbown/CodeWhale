@@ -79,33 +79,57 @@ impl EngineHandle {
         }
     }
 
-    /// Approve a pending tool call
+    /// Approve a pending tool call.
+    ///
+    /// Script-issued (WhaleFlow PTC) approvals resolve through the broker;
+    /// ids not pending there are model-issued and flow to the engine's
+    /// approval channel exactly as before. Front-ends call this one method
+    /// for both, so session-cache auto-approve/deny covers PTC calls too.
     pub async fn approve_tool_call(&self, id: impl Into<String>) -> Result<()> {
+        let id = id.into();
+        if self
+            .approval_broker
+            .resolve(&id, crate::tools::approval_broker::BrokerVerdict::Approved)
+        {
+            return Ok(());
+        }
         self.tx_approval
-            .send(ApprovalDecision::Approved { id: id.into() })
+            .send(ApprovalDecision::Approved { id })
             .await?;
         Ok(())
     }
 
-    /// Deny a pending tool call
+    /// Deny a pending tool call (broker-first; see [`Self::approve_tool_call`]).
     pub async fn deny_tool_call(&self, id: impl Into<String>) -> Result<()> {
+        let id = id.into();
+        if self
+            .approval_broker
+            .resolve(&id, crate::tools::approval_broker::BrokerVerdict::Denied)
+        {
+            return Ok(());
+        }
         self.tx_approval
-            .send(ApprovalDecision::Denied { id: id.into() })
+            .send(ApprovalDecision::Denied { id })
             .await?;
         Ok(())
     }
 
-    /// Retry a tool call with an elevated sandbox policy.
+    /// Retry a tool call with an elevated sandbox policy (broker-first; see
+    /// [`Self::approve_tool_call`]).
     pub async fn retry_tool_with_policy(
         &self,
         id: impl Into<String>,
         policy: crate::sandbox::SandboxPolicy,
     ) -> Result<()> {
+        let id = id.into();
+        if self.approval_broker.resolve(
+            &id,
+            crate::tools::approval_broker::BrokerVerdict::RetryWithPolicy(policy.clone()),
+        ) {
+            return Ok(());
+        }
         self.tx_approval
-            .send(ApprovalDecision::RetryWithPolicy {
-                id: id.into(),
-                policy,
-            })
+            .send(ApprovalDecision::RetryWithPolicy { id, policy })
             .await?;
         Ok(())
     }

@@ -49,6 +49,8 @@ struct AgentProfileToml {
     loadout: Option<String>,
     #[serde(default, alias = "model_hint", alias = "model_id")]
     model: Option<String>,
+    #[serde(default, alias = "model_preferences")]
+    models: Option<Vec<String>>,
     #[serde(default)]
     instructions: Option<AgentProfileInstructions>,
     #[serde(default)]
@@ -155,6 +157,16 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
     .unwrap_or_default();
     let model = non_empty_trimmed(parsed.model.as_deref()).map(str::to_string);
     validate_agent_profile_model_hint(path, model.as_deref())?;
+    let models: Vec<String> = parsed
+        .models
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| non_empty_trimmed(Some(entry.as_str())))
+        .map(str::to_string)
+        .collect();
+    for entry in &models {
+        validate_agent_profile_model_hint(path, Some(entry))?;
+    }
 
     let instructions = parsed
         .instructions
@@ -173,6 +185,7 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
         },
         loadout,
         model,
+        models,
         permissions: FleetProfilePermissions::default(),
         delegation: FleetDelegationHints::default(),
     };
@@ -813,6 +826,52 @@ posture = "read-write"
             r#"
 name = "reviewer"
 model = "deepseek-v4-pro api_key=secret"
+"#,
+        );
+
+        let err = load_agent_profiles_from_dir(tmp.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("model must be a visible model id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn agent_profile_loader_parses_ranked_model_preferences() {
+        let tmp = TempDir::new().unwrap();
+        write_profile(
+            tmp.path(),
+            "builder.toml",
+            r#"
+name = "builder"
+role_hint = "builder"
+model_class_hint = "heavy"
+models = ["deepseek-v4-pro", " glm-5.2 ", ""]
+"#,
+        );
+
+        let profiles = load_agent_profiles_from_dir(tmp.path()).unwrap();
+
+        assert_eq!(profiles.len(), 1);
+        // Entries are trimmed and empties dropped; order (rank) is preserved.
+        assert_eq!(
+            profiles[0].profile.models,
+            vec!["deepseek-v4-pro".to_string(), "glm-5.2".to_string()]
+        );
+    }
+
+    #[test]
+    fn agent_profile_loader_rejects_secret_like_ranked_model_entry() {
+        let tmp = TempDir::new().unwrap();
+        write_profile(
+            tmp.path(),
+            "builder.toml",
+            r#"
+name = "builder"
+models = ["deepseek-v4-pro", "glm-5.2 api_key=secret"]
 "#,
         );
 

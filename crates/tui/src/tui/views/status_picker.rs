@@ -27,7 +27,11 @@ use crate::tui::views::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const STATUS_PICKER_SELECTION_BG: ratatui::style::Color = ratatui::style::Color::Rgb(54, 72, 104);
+/// Cursor-row highlight. Routed through the shared selection token so the
+/// light-mode / community-theme remaps restyle it (the old raw
+/// `Rgb(54, 72, 104)` leaked past both); the cursor row stays distinct from
+/// checked rows via the pointer glyph and bold text.
+const STATUS_PICKER_SELECTION_BG: ratatui::style::Color = palette::SELECTION_BG;
 
 /// Picker state. We hold both the user's working selection AND the original
 /// snapshot so Esc can perfectly revert the live preview.
@@ -127,6 +131,15 @@ impl ModalView for StatusPickerView {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        match mouse.kind {
+            crossterm::event::MouseEventKind::ScrollUp => self.move_up(),
+            crossterm::event::MouseEventKind::ScrollDown => self.move_down(),
+            _ => {}
+        }
+        ViewAction::None
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {

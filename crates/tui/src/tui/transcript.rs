@@ -1055,6 +1055,79 @@ mod tests {
     }
 
     #[test]
+    fn completed_cell_markdown_parses_exactly_once_across_renders() {
+        // A finished assistant cell's markdown must be parsed once for its
+        // lifetime. Repeated ensure() calls (scroll frames) reuse the cached
+        // lines outright; width changes (resize) re-wrap via the cached AST.
+        // Neither may re-run the markdown parser. The parse counter and the
+        // AST memo are both thread-local, so this test is self-contained.
+        let cells = vec![assistant_cell(
+            "# Done\n\nA finished reply with **bold** text\n- alpha\n- beta",
+            false,
+        )];
+        let revisions = vec![1u64];
+
+        let mut cache = TranscriptViewCache::new();
+        crate::tui::markdown_render::reset_parse_invocation_count();
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        assert_eq!(
+            crate::tui::markdown_render::parse_invocation_count(),
+            1,
+            "first render parses the cell exactly once"
+        );
+
+        // Scroll frames: same width, same revision.
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        // Resize: re-wrap is expected, re-parse is not.
+        cache.ensure(&cells, &revisions, 40, TranscriptRenderOptions::default());
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        assert_eq!(
+            crate::tui::markdown_render::parse_invocation_count(),
+            1,
+            "completed cell must never re-parse on scroll or resize"
+        );
+    }
+
+    #[test]
+    fn content_mutation_invalidates_markdown_ast_cache() {
+        // A streaming delta (content change + revision bump) must re-parse
+        // the mutated cell — the memo may not serve a stale AST.
+        let mut cells = vec![assistant_cell("streaming prefix", true)];
+        let mut revisions = vec![1u64];
+
+        let mut cache = TranscriptViewCache::new();
+        crate::tui::markdown_render::reset_parse_invocation_count();
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        assert_eq!(crate::tui::markdown_render::parse_invocation_count(), 1);
+
+        if let HistoryCell::Assistant { content, .. } = &mut cells[0] {
+            content.push_str(" plus delta");
+        }
+        revisions[0] += 1;
+        cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
+        assert_eq!(
+            crate::tui::markdown_render::parse_invocation_count(),
+            2,
+            "mutated content must be re-parsed"
+        );
+        let rendered = plain_lines(&cache).join("\n");
+        assert!(
+            rendered.contains("plus delta"),
+            "render must reflect the mutated content: {rendered}"
+        );
+
+        // Once mutated content has been parsed, a resize re-wraps it from
+        // the memo without another parse.
+        cache.ensure(&cells, &revisions, 40, TranscriptRenderOptions::default());
+        assert_eq!(
+            crate::tui::markdown_render::parse_invocation_count(),
+            2,
+            "resize after mutation must reuse the freshly cached AST"
+        );
+    }
+
+    #[test]
     fn folded_thinking_cache_invalidation() {
         let long_content = "reasoning line\n".repeat(50);
         let cells = [HistoryCell::Thinking {

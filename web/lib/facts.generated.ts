@@ -18,7 +18,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-06-30T05:41:26.332Z",
+  "generatedAt": "2026-07-04T20:16:59.515Z",
   "version": "0.8.67",
   "crates": [
     "agent",
@@ -35,7 +35,8 @@ export const FACTS: RepoFacts = {
     "state",
     "tools",
     "tui",
-    "whaleflow"
+    "whaleflow",
+    "whaleflow-js"
   ],
   "sandboxBackends": [
     "bwrap",

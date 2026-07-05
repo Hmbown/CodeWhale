@@ -489,6 +489,24 @@ impl ModalView for LiveTranscriptOverlay {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> ViewAction {
+        // Wheel scrolls the overlay body like Up/Down; scrolling up pauses
+        // tailing and scrolling back to the bottom re-arms it, matching the
+        // keyboard scroll semantics.
+        match mouse.kind {
+            crossterm::event::MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                self.pending_g = false;
+            }
+            crossterm::event::MouseEventKind::ScrollDown => {
+                self.scroll_down(3);
+                self.pending_g = false;
+            }
+            _ => {}
+        }
+        ViewAction::None
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_width = area.width.saturating_sub(2).max(1);
         let popup_height = area.height.saturating_sub(2).max(1);

@@ -1446,10 +1446,16 @@ fn right_click_menu_includes_selection_and_clicked_cell_actions() {
         .map(|entry| entry.label.as_str())
         .collect::<Vec<_>>();
 
-    assert!(labels.contains(&"Copy selection"));
+    // With an active selection, Copy leads (default Enter action) and the
+    // clicked cell's actions stay reachable; Paste is omitted because the
+    // click is not over an editable target (#context-menu rework).
+    assert_eq!(labels.first(), Some(&"Copy selection"));
     assert!(labels.contains(&"Open selection"));
     assert!(labels.contains(&"Open details"));
-    assert!(labels.contains(&"Paste"));
+    assert!(
+        !labels.contains(&"Paste"),
+        "paste is impossible over the transcript while text is selected: {labels:?}"
+    );
 }
 
 #[test]
@@ -4257,6 +4263,31 @@ fn hotbar_alt_digit_requires_plain_alt_one_through_eight() {
     assert_eq!(
         hotbar_slot_from_key(&app, &KeyEvent::new(KeyCode::Char('9'), KeyModifiers::ALT)),
         None
+    );
+}
+
+/// v0.8.67: KEYBINDINGS.md promises "Esc — step back one screen" during
+/// onboarding, but the trust screen used to quit the app on Esc. Esc now
+/// routes back to the previous step (ApiKey when a key is still needed,
+/// otherwise Language); quitting stays on `n`/`N`/`2`.
+#[test]
+fn trust_screen_esc_steps_back_to_previous_onboarding_screen() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::TrustDirectory;
+    app.onboarding_needs_api_key = false;
+    app.status_message = Some("leftover".to_string());
+    back_from_trust_directory_onboarding(&mut app);
+    assert_eq!(app.onboarding, OnboardingState::Language);
+    assert!(app.status_message.is_none(), "status bar cleared on back");
+
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::TrustDirectory;
+    app.onboarding_needs_api_key = true;
+    back_from_trust_directory_onboarding(&mut app);
+    assert_eq!(
+        app.onboarding,
+        OnboardingState::ApiKey,
+        "back mirrors the forward routing when a key is still needed"
     );
 }
 
@@ -9921,6 +9952,62 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
         "expected HistoryCell::Error, got {last:?}"
     );
     let _ = ErrorEnvelope::transient("");
+}
+
+/// v0.8.67: `ErrorEnvelope::suggested_action` must reach the transcript.
+/// The error cell carries the hint as a `↳` line under the message, and the
+/// renderer styles that segment dim (see the Error arm in `HistoryCell::lines`).
+#[test]
+fn engine_error_appends_suggested_action_as_hint_line() {
+    use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, ErrorSeverity};
+
+    let mut app = create_test_app();
+    let envelope = ErrorEnvelope::new(
+        ErrorCategory::InvalidInput,
+        ErrorSeverity::Error,
+        false,
+        "context_overflow",
+        "maximum context length exceeded",
+    );
+    let expected_action = envelope
+        .suggested_action
+        .clone()
+        .expect("context_overflow must carry a suggested action");
+    apply_engine_error_to_app(&mut app, envelope);
+
+    let last = app.history.last().expect("error cell pushed");
+    let crate::tui::history::HistoryCell::Error { message, .. } = last else {
+        panic!("expected HistoryCell::Error, got {last:?}");
+    };
+    assert!(
+        message.contains("maximum context length exceeded"),
+        "original message kept: {message}"
+    );
+    assert!(
+        message.contains(&format!("\n\u{21B3} {expected_action}")),
+        "suggested action appended as ↳ line: {message}"
+    );
+
+    // The rendered lines carry the hint on its own dim row.
+    let lines = last.lines(80);
+    let hint_line = lines
+        .iter()
+        .find(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains('\u{21B3}'))
+        })
+        .expect("↳ hint line rendered");
+    let hint_span = hint_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains('\u{21B3}'))
+        .expect("hint span present");
+    assert_eq!(
+        hint_span.style.fg,
+        Some(crate::palette::TEXT_MUTED),
+        "suggested action renders dim"
+    );
 }
 
 #[test]

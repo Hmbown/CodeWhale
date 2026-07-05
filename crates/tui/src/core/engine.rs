@@ -27,7 +27,7 @@ use crate::client::DeepSeekClient;
 use crate::compaction::{
     CompactionConfig, compact_messages_safe, merge_system_prompts, should_compact,
 };
-use crate::config::{ApiProvider, Config, DEFAULT_MAX_SUBAGENTS, DEFAULT_TEXT_MODEL};
+use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL, default_max_subagents};
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
 use crate::features::{Feature, Features};
 use crate::llm_client::LlmClient;
@@ -431,9 +431,9 @@ impl Default for EngineConfig {
             // `at_max_steps()`. 1000 stays high enough to never gate real work
             // while still guaranteeing the turn ends.
             max_steps: 1000,
-            max_subagents: DEFAULT_MAX_SUBAGENTS,
-            max_admitted_subagents: DEFAULT_MAX_SUBAGENTS,
-            launch_concurrency: DEFAULT_MAX_SUBAGENTS,
+            max_subagents: default_max_subagents(),
+            max_admitted_subagents: default_max_subagents(),
+            launch_concurrency: default_max_subagents(),
             subagents_enabled: true,
             features: Features::with_defaults(),
             auto_review_policy: crate::tui::auto_review::AutoReviewPolicy::default(),
@@ -535,6 +535,11 @@ pub struct EngineHandle {
     cancel_reason: Arc<StdMutex<Option<CancelReason>>>,
     /// Send approval decisions to the engine
     tx_approval: mpsc::Sender<ApprovalDecision>,
+    /// Out-of-band approvals for script-issued (WhaleFlow PTC) tool calls.
+    /// `approve_tool_call` / `deny_tool_call` / `retry_tool_with_policy`
+    /// consult this first; ids not pending here flow to `tx_approval`
+    /// exactly as before.
+    pub(super) approval_broker: Arc<crate::tools::approval_broker::ToolApprovalBroker>,
     /// Send user input responses to the engine
     tx_user_input: mpsc::Sender<UserInputDecision>,
     /// Send steer input for an in-flight turn.
@@ -566,6 +571,10 @@ pub struct Engine {
     /// (e.g. a goal-continuation `SendMessage` after a turn completes).
     tx_op: mpsc::Sender<Op>,
     rx_approval: mpsc::Receiver<ApprovalDecision>,
+    /// Broker for script-issued (WhaleFlow PTC) approval round trips.
+    /// Cloned into the root interactive turn's `SubAgentRuntime` (never into
+    /// child/background runtimes) so only a UI-backed host can prompt.
+    approval_broker: Arc<crate::tools::approval_broker::ToolApprovalBroker>,
     rx_user_input: mpsc::Receiver<UserInputDecision>,
     rx_steer: mpsc::Receiver<String>,
     tx_event: mpsc::Sender<Event>,
@@ -823,6 +832,7 @@ impl Engine {
         let (tx_op, rx_op) = mpsc::channel(32);
         let (tx_event, rx_event) = mpsc::channel(256);
         let (tx_approval, rx_approval) = mpsc::channel(64);
+        let approval_broker = Arc::new(crate::tools::approval_broker::ToolApprovalBroker::new());
         let (tx_user_input, rx_user_input) = mpsc::channel(32);
         let (tx_steer, rx_steer) = mpsc::channel(64);
         let (tx_subagent_completion, rx_subagent_completion) = mpsc::unbounded_channel();
@@ -988,6 +998,7 @@ impl Engine {
             rx_op,
             tx_op: tx_op.clone(),
             rx_approval,
+            approval_broker: approval_broker.clone(),
             rx_user_input,
             rx_steer,
             tx_event,
@@ -1015,6 +1026,7 @@ impl Engine {
             cancel_token: shared_cancel_token,
             cancel_reason,
             tx_approval,
+            approval_broker,
             tx_user_input,
             tx_steer,
             shared_paused,
@@ -2551,6 +2563,7 @@ impl Engine {
                 .with_speech_output_dir(self.config.speech_output_dir.clone())
                 .with_mcp_pool(mcp_pool.clone())
                 .with_todos(self.config.todos.clone())
+                .with_approval_broker(Some(self.approval_broker.clone()))
                 .with_parent_completion_tx(self.tx_subagent_completion.clone());
                 if matches!(input_policy.mode, AppMode::Plan) {
                     rt.worker_profile = WorkerRuntimeProfile::for_role(SubAgentType::Plan);
@@ -3853,6 +3866,7 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
         cancel_token: shared_cancel_token,
         cancel_reason,
         tx_approval,
+        approval_broker: Arc::new(crate::tools::approval_broker::ToolApprovalBroker::new()),
         tx_user_input,
         tx_steer,
         shared_paused,
@@ -3871,6 +3885,7 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
 mod approval;
 mod context;
 mod handle;
+use crate::compaction::estimate_input_tokens_conservative;
 pub(crate) use context::compact_tool_result_for_context;
 /// Public so external hosts/wrappers can reuse the engine's input-budget math
 /// (see `context_input_budget_for_route`'s doc) instead of re-deriving it.
@@ -3879,9 +3894,8 @@ pub use context::context_input_budget_for_route;
 use context::route_context_budget_for_provider;
 use context::{
     MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    effective_max_output_tokens_for_route, estimate_input_tokens_conservative,
-    extract_compaction_summary_prompt, is_context_length_error_message,
-    route_context_budget_for_route, summarize_text,
+    effective_max_output_tokens_for_route, extract_compaction_summary_prompt,
+    is_context_length_error_message, route_context_budget_for_route, summarize_text,
 };
 #[cfg(test)]
 use context::{context_input_budget_for_provider, effective_max_output_tokens};

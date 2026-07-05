@@ -96,8 +96,11 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
+        // Same 3-line transcript scroll as Alt+↑/↓ — see the SHIFT arms in
+        // `ui.rs` (`KeyCode::Up/Down if …SHIFT`). This used to claim
+        // "browse history", which the handler never did.
         chord: "Shift+↑ / Shift+↓",
-        description_id: crate::localization::MessageId::KbBrowseHistory,
+        description_id: crate::localization::MessageId::KbScrollTranscriptAlt,
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
@@ -111,12 +114,14 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
-        chord: "g / G",
+        // Bare `g`/`G` were retired in v0.8.30 so typed text is never
+        // hijacked; the handlers require Alt (`alt_nav_modifiers`).
+        chord: "Alt+G / Alt+Shift+G",
         description_id: crate::localization::MessageId::KbJumpTopBottomEmpty,
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
-        chord: "[ / ]",
+        chord: "Alt+[ / Alt+]",
         description_id: crate::localization::MessageId::KbJumpToolBlocks,
         section: KeybindingSection::Navigation,
     },
@@ -208,7 +213,8 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "l",
+        // Bare `l` was retired in v0.8.30; the handler requires Alt.
+        chord: "Alt+L",
         description_id: crate::localization::MessageId::KbLastMessagePager,
         section: KeybindingSection::Submission,
     },
@@ -282,7 +288,9 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
     },
     // --- Help ---
     KeybindingEntry {
-        chord: "?",
+        // Bare `?` opens help only on an empty composer (with text present
+        // it types normally); Alt+? works regardless of modifier quirks.
+        chord: "? / Alt+?",
         description_id: crate::localization::MessageId::KbHelpOverlay,
         section: KeybindingSection::Help,
     },

@@ -888,6 +888,14 @@ pub trait ToolSpec: Send + Sync {
         self.approval_requirement()
     }
 
+    /// Short human headline for the approval prompt. Defaults to
+    /// `description()`; tools whose description is a long teaching text
+    /// (e.g. `whaleflow`) override this so the status line, desktop
+    /// notification, and audit log get a one-liner instead of the essay.
+    fn approval_description_for(&self, _input: &Value) -> String {
+        self.description().to_string()
+    }
+
     /// Returns whether this tool is sandboxable.
     #[allow(dead_code)]
     fn is_sandboxable(&self) -> bool {
@@ -937,6 +945,20 @@ pub trait ToolSpec: Send + Sync {
     /// the deprecated spelling.
     fn model_visible(&self) -> bool {
         true
+    }
+
+    /// Returns a replacement spec when this tool's model-facing surface has
+    /// gone stale since construction (today: the `agent` tool's fleet-party
+    /// roster after `.codewhale/agents` profiles are created, edited, or
+    /// removed mid-session). `description()` returns `&str` borrowed from
+    /// `self`, so a stale surface can only be refreshed by swapping in a new
+    /// spec instance via `ToolRegistry::refresh_model_surface`.
+    ///
+    /// Implementations MUST return `None` when nothing actually changed
+    /// (fingerprint-gate the check): an unchanged catalog has to stay
+    /// byte-identical across reads for provider prefix-cache stability.
+    fn refreshed_spec(&self) -> Option<Arc<dyn ToolSpec>> {
+        None
     }
 
     /// Execute the tool with the given input and context.

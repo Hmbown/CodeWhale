@@ -174,7 +174,7 @@ Semantics:
   approval/denial reason names the invariant too.
 
 **Coverage is deliberately limited.** Holds are evaluated only for the write
-tools `write_file`, `edit_file`, and `apply_patch`, and only against the
+tools `write_file`, `edit_file`, `apply_patch`, and `fim_edit`, and only against the
 filesystem targets named in their inputs (`path`/`target`/`destination`/
 `file_path`, `changes[].path`, and unified-diff / `apply_patch`-envelope
 headers). A shell command that writes a protected path is **not** held by

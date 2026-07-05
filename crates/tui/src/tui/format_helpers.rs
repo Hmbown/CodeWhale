@@ -34,18 +34,20 @@ pub(super) fn prefix_stability_chip(app: &App) -> Option<(String, ratatui::style
     let pct = app.prefix_stability_pct?;
     let changes = app.prefix_change_count;
 
+    // Palette status tokens (not named ANSI colors) so every theme's remap
+    // restyles the chip to that theme's success/warning/error slots.
     let color = if changes == 0 {
-        // Perfect stability: green
-        ratatui::style::Color::Green
+        // Perfect stability
+        crate::palette::STATUS_SUCCESS
     } else if pct >= 95 {
-        // Excellent: green
-        ratatui::style::Color::Green
+        // Excellent
+        crate::palette::STATUS_SUCCESS
     } else if pct >= 80 {
-        // Good: yellow
-        ratatui::style::Color::Yellow
+        // Good
+        crate::palette::STATUS_WARNING
     } else {
-        // Poor: red — cache is churning
-        ratatui::style::Color::Red
+        // Poor — cache is churning
+        crate::palette::STATUS_ERROR
     };
 
     let label = if changes == 0 {

@@ -53,12 +53,15 @@ pub const SOLARIZED_BASE1_RGB: (u8, u8, u8) = (0x93, 0xA1, 0xA1);
 #[allow(dead_code)]
 pub const SOLARIZED_BASE2_RGB: (u8, u8, u8) = (0xEE, 0xE8, 0xD5);
 pub const SOLARIZED_BASE3_RGB: (u8, u8, u8) = (0xFD, 0xF6, 0xE3);
-pub const SOLARIZED_YELLOW_RGB: (u8, u8, u8) = (0xB5, 0x89, 0x00);
+// Yellow/green/cyan are darkened from canonical Solarized (#B58900 /
+// #859900 / #2AA198): the originals sit below 3:1 against base3 (#FDF6E3),
+// which fails the UI-accent contrast floor enforced by tests/palette_audit.rs.
+pub const SOLARIZED_YELLOW_RGB: (u8, u8, u8) = (0xA6, 0x7C, 0x00);
 pub const SOLARIZED_ORANGE_RGB: (u8, u8, u8) = (0xCB, 0x4B, 0x16);
 pub const SOLARIZED_RED_RGB: (u8, u8, u8) = (0xDC, 0x32, 0x2F);
 pub const SOLARIZED_BLUE_RGB: (u8, u8, u8) = (0x26, 0x8B, 0xD2);
-pub const SOLARIZED_CYAN_RGB: (u8, u8, u8) = (0x2A, 0xA1, 0x98);
-pub const SOLARIZED_GREEN_RGB: (u8, u8, u8) = (0x85, 0x99, 0x00);
+pub const SOLARIZED_CYAN_RGB: (u8, u8, u8) = (0x23, 0x8B, 0x83);
+pub const SOLARIZED_GREEN_RGB: (u8, u8, u8) = (0x74, 0x86, 0x00);
 pub const SOLARIZED_PANEL_RGB: (u8, u8, u8) = (0xF0, 0xED, 0xE7);
 pub const SOLARIZED_ELEVATED_RGB: (u8, u8, u8) = (0xE4, 0xDF, 0xCF);
 pub const SOLARIZED_SELECT_RGB: (u8, u8, u8) = (0xD6, 0xD2, 0xC9);
@@ -213,10 +216,13 @@ pub const MATRIX_SURFACE_RGB: (u8, u8, u8) = (0, 10, 0); // #000A00
 pub const MATRIX_ELEVATED_RGB: (u8, u8, u8) = (0, 51, 0); // #003300
 pub const MATRIX_SELECTION_RGB: (u8, u8, u8) = (0, 51, 0); // #003300
 pub const MATRIX_TEXT_BODY_RGB: (u8, u8, u8) = (136, 255, 136); // #88FF88
-pub const MATRIX_TEXT_MUTED_RGB: (u8, u8, u8) = (0, 85, 0); // #005500
+// Muted/dim greens are brightened from the original #005500 / #004400:
+// those sat near 2:1 against the near-black surface, below the contrast
+// floors enforced by tests/palette_audit.rs.
+pub const MATRIX_TEXT_MUTED_RGB: (u8, u8, u8) = (0, 140, 0); // #008C00
 pub const MATRIX_TEXT_HINT_RGB: (u8, u8, u8) = (0, 102, 0); // #006600
 pub const MATRIX_TEXT_SOFT_RGB: (u8, u8, u8) = (221, 255, 221); // #DDFFDD
-pub const MATRIX_TEXT_DIM_RGB: (u8, u8, u8) = (0, 68, 0); // #004400
+pub const MATRIX_TEXT_DIM_RGB: (u8, u8, u8) = (0, 80, 0); // #005000
 pub const MATRIX_BORDER_RGB: (u8, u8, u8) = (0, 204, 0); // #00CC00
 
 // New semantic colors
@@ -290,6 +296,14 @@ pub const LIGHT_TEXT_SOFT: Color = Color::Rgb(
 );
 pub const LIGHT_BORDER: Color =
     Color::Rgb(LIGHT_BORDER_RGB.0, LIGHT_BORDER_RGB.1, LIGHT_BORDER_RGB.2);
+/// Light-mode accent tokens. Shared by `LIGHT_UI_THEME`, the light-mode fg
+/// remap, and `deepseek_theme::Theme::light()` so accents that read well on
+/// dark surfaces (Signal Gold, Seafoam, Rose Red) land on legible light-mode
+/// equivalents instead of leaking through the remap.
+pub const LIGHT_ACCENT_BLUE: Color = Color::Rgb(53, 120, 229); // #3578E5
+pub const LIGHT_AMBER: Color = Color::Rgb(180, 83, 9); // #B45309
+pub const LIGHT_ERROR_FG: Color = Color::Rgb(200, 40, 60); // #C8283C
+pub const LIGHT_GREEN: Color = Color::Rgb(21, 128, 61); // #15803D
 pub const LIGHT_SELECTION_BG: Color = Color::Rgb(
     LIGHT_SELECTION_RGB.0,
     LIGHT_SELECTION_RGB.1,
@@ -759,31 +773,33 @@ pub const LIGHT_UI_THEME: UiTheme = UiTheme {
     text_body: LIGHT_TEXT_BODY,
     text_soft: LIGHT_TEXT_SOFT,
     border: LIGHT_BORDER,
-    accent_primary: Color::Rgb(53, 120, 229),   // blue
-    accent_secondary: Color::Rgb(79, 180, 160), // teal
-    accent_action: Color::Rgb(220, 90, 60),     // warm coral
-    error_fg: Color::Rgb(200, 40, 60),          // red
+    accent_primary: LIGHT_ACCENT_BLUE,
+    // Deep teal — the previous #4FB4A0 fell below 3:1 on the light surface.
+    accent_secondary: Color::Rgb(13, 148, 136),
+    accent_action: Color::Rgb(220, 90, 60), // warm coral
+    error_fg: LIGHT_ERROR_FG,
     error_hover: Color::Rgb(220, 70, 85),
     error_surface: Color::Rgb(254, 229, 229),
     error_border: Color::Rgb(240, 120, 130),
     error_text: Color::Rgb(120, 20, 30),
-    warning: Color::Rgb(180, 83, 9),      // amber
-    success: Color::Rgb(21, 128, 61),     // green
-    info: Color::Rgb(53, 120, 229),       // blue
-    mode_agent: Color::Rgb(53, 120, 229), // blue
-    mode_yolo: Color::Rgb(200, 40, 60),   // red
-    mode_plan: Color::Rgb(180, 83, 9),    // amber
-    mode_goal: Color::Rgb(80, 180, 130),  // mint green
+    warning: LIGHT_AMBER,
+    success: LIGHT_GREEN,
+    info: LIGHT_ACCENT_BLUE,
+    mode_agent: LIGHT_ACCENT_BLUE,
+    mode_yolo: LIGHT_ERROR_FG,
+    mode_plan: LIGHT_AMBER,
+    // Deep mint — the previous #50B482 fell below 3:1 on the light surface.
+    mode_goal: Color::Rgb(22, 140, 90),
     status_ready: LIGHT_TEXT_MUTED,
-    status_working: Color::Rgb(53, 120, 229),   // blue
-    status_warning: Color::Rgb(180, 83, 9),     // amber
-    diff_added_fg: Color::Rgb(22, 101, 52),     // green
-    diff_deleted_fg: Color::Rgb(200, 40, 60),   // red
-    diff_added_bg: Color::Rgb(223, 247, 231),   // light green
+    status_working: LIGHT_ACCENT_BLUE,
+    status_warning: LIGHT_AMBER,
+    diff_added_fg: Color::Rgb(22, 101, 52), // green
+    diff_deleted_fg: LIGHT_ERROR_FG,
+    diff_added_bg: Color::Rgb(223, 247, 231), // light green
     diff_deleted_bg: Color::Rgb(254, 229, 229), // light red
-    tool_running: Color::Rgb(53, 120, 229),     // blue
+    tool_running: LIGHT_ACCENT_BLUE,
     tool_success: LIGHT_TEXT_HINT,
-    tool_failed: Color::Rgb(200, 40, 60), // red
+    tool_failed: LIGHT_ERROR_FG,
 };
 
 pub const SOLARIZED_LIGHT_UI_THEME: UiTheme = UiTheme {
@@ -1118,7 +1134,9 @@ pub const CLAUDE_UI_THEME: UiTheme = UiTheme {
     text_muted: Color::Rgb(0xa0, 0x9d, 0x96), // on-dark-soft
     text_body: Color::Rgb(0xfa, 0xf9, 0xf5),  // on-dark (cream white)
     text_soft: Color::Rgb(0xd0, 0xcd, 0xc5),
-    border: Color::Rgb(0x30, 0x2d, 0x28),
+    // Warm gray, one step above selection_bg — #302D28 vanished (1.14:1)
+    // against the elevated panel.
+    border: Color::Rgb(0x3a, 0x37, 0x31),
     // Coral primary (signature Anthropic accent), teal secondary
     accent_primary: Color::Rgb(0xcc, 0x78, 0x5c), // coral
     accent_secondary: Color::Rgb(0x5d, 0xb8, 0xa6), // accent-teal
@@ -1228,10 +1246,11 @@ pub const MATRIX_UI_THEME: UiTheme = UiTheme {
     ),
     accent_secondary: Color::Rgb(0, 153, 0),
     accent_action: Color::Rgb(0x88, 0xff, 0x88),
-    error_fg: Color::Rgb(0xb4, 0, 0),
+    // Brightened from #B40000, which fell below 3:1 on the near-black surface.
+    error_fg: Color::Rgb(0xd0, 0, 0),
     error_hover: Color::Rgb(0xe0, 0, 0),
     error_surface: Color::Rgb(0x1a, 0x0d, 0x0d),
-    error_border: Color::Rgb(0xb4, 0, 0),
+    error_border: Color::Rgb(0xd0, 0, 0),
     error_text: Color::Rgb(0xff, 0x44, 0x44),
     warning: Color::Rgb(204, 204, 0),
     success: Color::Rgb(0x88, 0xff, 0x88),
@@ -1248,12 +1267,12 @@ pub const MATRIX_UI_THEME: UiTheme = UiTheme {
     ),
     status_warning: Color::Rgb(204, 204, 0),
     diff_added_fg: Color::Rgb(0x88, 0xff, 0x88),
-    diff_deleted_fg: Color::Rgb(0xb4, 0, 0),
+    diff_deleted_fg: Color::Rgb(0xd0, 0, 0),
     diff_added_bg: Color::Rgb(0x0d, 0x1a, 0x0d),
     diff_deleted_bg: Color::Rgb(0x1a, 0x0d, 0x0d),
     tool_running: Color::Rgb(0x88, 0xff, 0x88),
     tool_success: Color::Rgb(0, 102, 0),
-    tool_failed: Color::Rgb(0xb4, 0, 0),
+    tool_failed: Color::Rgb(0xd0, 0, 0),
 };
 
 /// Stable identifiers for the named themes the user can select. `System`
@@ -1337,24 +1356,24 @@ impl ThemeId {
         }
     }
 
-    /// Short tagline for picker rows.
+    /// Short tagline for picker rows. Keep these voice-consistent — a short
+    /// noun phrase describing the palette — and under ~34 columns so they fit
+    /// beside the swatches at the picker's minimum width.
     #[must_use]
     pub const fn tagline(self) -> &'static str {
         match self {
-            Self::System => "Follow terminal background (COLORFGBG / macOS appearance)",
-            Self::Terminal => "Inherit terminal colors fully (transparent surfaces, ANSI accents)",
-            Self::Whale => "Whale dark — deep navy & gold",
-            Self::WhaleLight => "DeepSeek light, paper-ish",
-            Self::Grayscale => "Color-minimal high contrast",
+            Self::System => "Auto dark/light from terminal",
+            Self::Terminal => "Inherit the terminal's own colors",
+            Self::Whale => "Deep navy & signal gold",
+            Self::WhaleLight => "Airy paper white & ink",
+            Self::Grayscale => "Color-minimal, high contrast",
             Self::CatppuccinMocha => "Soft pastels on warm dark",
-            Self::TokyoNight => "Deep blue/violet night palette",
+            Self::TokyoNight => "Deep blue-violet night palette",
             Self::Dracula => "Classic high-contrast purple",
             Self::GruvboxDark => "Vintage warm earth tones",
-            Self::Claude => "Warm navy & coral",
-            Self::Matrix => "The Matrix films inspired theme",
-            Self::SolarizedLight => {
-                "Solarized light — Light, calming palette on warm ivory — easy on the eyes"
-            }
+            Self::Claude => "Warm dark & coral",
+            Self::Matrix => "Green-on-black terminal rain",
+            Self::SolarizedLight => "Low-glare palette on warm ivory",
         }
     }
 
@@ -1524,7 +1543,16 @@ fn adapt_fg_for_light_palette(color: Color) -> Color {
     } else if color == BORDER_COLOR {
         LIGHT_BORDER
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
-        WHALE_ACCENT_PRIMARY
+        // Cyan-family accents (Seafoam / Sky) → light accent blue. The old
+        // Signal Gold target sat near 1.5:1 on the light surface.
+        LIGHT_ACCENT_BLUE
+    } else if color == WHALE_ACCENT_PRIMARY || color == STATUS_WARNING {
+        // Signal Gold (== MODE_PLAN) and the warning orange are unreadable
+        // on light surfaces; both land on the light amber token.
+        LIGHT_AMBER
+    } else if color == STATUS_ERROR {
+        // Rose Red (== DEEPSEEK_RED / MODE_YOLO) is too pale on light.
+        LIGHT_ERROR_FG
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
         Color::Rgb(146, 64, 14)
     } else if color == ACCENT_TOOL_ISSUE {
@@ -1582,6 +1610,12 @@ fn adapt_fg_for_solarized_light_palette(color: Color) -> Color {
         SOLARIZED_BORDER
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
         SOLARIZED_BLUE
+    } else if color == WHALE_ACCENT_PRIMARY || color == STATUS_WARNING {
+        // Signal Gold / warning orange → solarized yellow (dark ochre),
+        // mirroring the light-palette amber remap.
+        SOLARIZED_YELLOW
+    } else if color == STATUS_ERROR {
+        SOLARIZED_RED
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
         SOLARIZED_ORANGE
     } else if color == ACCENT_TOOL_ISSUE {
@@ -1926,22 +1960,47 @@ pub enum ColorDepth {
 }
 
 impl ColorDepth {
-    /// Detect the active terminal's color depth. Honors `COLORTERM`
-    /// (truecolor / 24bit) first, then falls back to `TERM`. Defaults to
-    /// `TrueColor` because most modern terminals support it; the conservative
-    /// fallback is `Ansi16` so background tints disappear safely.
+    /// Detect the active terminal's color depth. Honors the `NO_COLOR`
+    /// convention (plus the documented `DEEPSEEK_NO_COLOR` alias and its
+    /// `CODEWHALE_NO_COLOR` rebrand twin) first — any non-empty value forces
+    /// the `Ansi16` floor, which drops truecolor surfaces and downsamples RGB
+    /// through the existing nearest-named-color machinery. Then `COLORTERM`
+    /// (truecolor / 24bit), then `TERM`. Defaults to `TrueColor` because most
+    /// modern terminals support it; the conservative fallback is `Ansi16` so
+    /// background tints disappear safely.
     #[must_use]
     pub fn detect() -> Self {
-        if let Ok(ct) = std::env::var("COLORTERM") {
+        Self::detect_from_sources(
+            no_color_requested(),
+            std::env::var("COLORTERM").ok().as_deref(),
+            std::env::var_os("WT_SESSION").is_some(),
+            std::env::var("TERM_PROGRAM").ok().as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+        )
+    }
+
+    /// Pure resolution over already-read env sources, split from [`detect`]
+    /// (which does the env reads) so tests don't need to mutate process env.
+    fn detect_from_sources(
+        no_color: bool,
+        colorterm: Option<&str>,
+        wt_session: bool,
+        term_program: Option<&str>,
+        term: Option<&str>,
+    ) -> Self {
+        if no_color {
+            return Self::Ansi16;
+        }
+        if let Some(ct) = colorterm {
             let ct = ct.to_ascii_lowercase();
             if ct.contains("truecolor") || ct.contains("24bit") {
                 return Self::TrueColor;
             }
         }
-        if std::env::var_os("WT_SESSION").is_some() {
+        if wt_session {
             return Self::TrueColor;
         }
-        if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
+        if let Some(term_program) = term_program {
             let term_program = term_program.to_ascii_lowercase();
             if term_program.contains("iterm")
                 || term_program.contains("wezterm")
@@ -1951,8 +2010,7 @@ impl ColorDepth {
                 return Self::TrueColor;
             }
         }
-        let term = std::env::var("TERM").unwrap_or_default();
-        let term = term.to_ascii_lowercase();
+        let term = term.unwrap_or_default().to_ascii_lowercase();
         if term.contains("truecolor") || term.contains("24bit") {
             Self::TrueColor
         } else if term.contains("256") {
@@ -1966,6 +2024,25 @@ impl ColorDepth {
             Self::Ansi256
         }
     }
+}
+
+/// Whether the user asked for color output to be suppressed.
+///
+/// Follows the <https://no-color.org> convention: `NO_COLOR` set to any
+/// non-empty value disables color regardless of the value's content. The
+/// `DEEPSEEK_NO_COLOR` alias is documented in `docs/DOCKER.md`;
+/// `CODEWHALE_NO_COLOR` is honored for parity with the brand migration
+/// (`CODEWHALE_*` canonical, `DEEPSEEK_*` legacy).
+fn no_color_requested() -> bool {
+    ["NO_COLOR", "CODEWHALE_NO_COLOR", "DEEPSEEK_NO_COLOR"]
+        .iter()
+        .any(|key| no_color_value_disables(std::env::var_os(key)))
+}
+
+/// no-color.org semantics for a single env value: present and non-empty
+/// disables color; unset or empty leaves color enabled.
+fn no_color_value_disables(value: Option<std::ffi::OsString>) -> bool {
+    value.is_some_and(|v| !v.is_empty())
 }
 
 /// Adapt a foreground color to the terminal's color depth.
@@ -2181,6 +2258,51 @@ mod tests {
         reasoning_surface_tint, rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
     };
     use ratatui::style::Color;
+
+    // NO_COLOR wiring (quick-fix batch, v0.8.67). `detect_from_sources` is the
+    // pure half of `ColorDepth::detect()`, so these tests never mutate process
+    // env — env-mutating tests would race settings.rs tests that also touch
+    // TERM/TERM_PROGRAM under a lock this module (which is additionally
+    // compiled standalone by tests/palette_audit.rs) cannot share.
+
+    #[test]
+    fn detect_no_color_forces_ansi16() {
+        // Baseline without no-color on a truecolor-capable TERM.
+        assert_eq!(
+            ColorDepth::detect_from_sources(false, None, false, None, Some("xterm-truecolor")),
+            ColorDepth::TrueColor
+        );
+        assert_eq!(
+            ColorDepth::detect_from_sources(true, None, false, None, Some("xterm-truecolor")),
+            ColorDepth::Ansi16
+        );
+    }
+
+    #[test]
+    fn detect_no_color_overrides_every_truecolor_signal() {
+        assert_eq!(
+            ColorDepth::detect_from_sources(
+                true,
+                Some("truecolor"),
+                true,
+                Some("iTerm.app"),
+                Some("xterm-256color"),
+            ),
+            ColorDepth::Ansi16
+        );
+    }
+
+    #[test]
+    fn no_color_value_semantics_follow_no_color_org() {
+        use super::no_color_value_disables;
+        // Present and non-empty disables color — regardless of content.
+        assert!(no_color_value_disables(Some("1".into())));
+        assert!(no_color_value_disables(Some("0".into())));
+        assert!(no_color_value_disables(Some("false".into())));
+        // Unset or empty leaves color enabled.
+        assert!(!no_color_value_disables(Some("".into())));
+        assert!(!no_color_value_disables(None));
+    }
 
     #[test]
     fn palette_mode_parses_colorfgbg_background_slot() {

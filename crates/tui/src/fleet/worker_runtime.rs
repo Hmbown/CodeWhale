@@ -54,6 +54,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     workspace: &std::path::Path,
     agent_profiles: &[AgentProfile],
     parent_runtime_profile: Option<&WorkerRuntimeProfile>,
+    api_provider: Option<ApiProvider>,
 ) -> Result<AgentWorkerSpec> {
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)?;
     let worker_profile = task_spec.worker.as_ref();
@@ -63,7 +64,15 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     let objective = fleet_task_prompt_with_profile(task_spec, agent_profile);
     let max_spawn_depth = codewhale_config::FleetExecConfig::default().max_spawn_depth;
     let loadout = effective_fleet_loadout(worker_profile, agent_profile);
-    let effective_model = effective_fleet_model(model, worker_profile, agent_profile);
+    let selection = select_fleet_model(model, api_provider, worker_profile, agent_profile);
+    if let Some(notice) = &selection.notice {
+        tracing::warn!(
+            worker_id,
+            task_id = %task_spec.id,
+            "fleet model selection degraded: {notice}"
+        );
+    }
+    let effective_model = selection.model;
     let mut requested_runtime = fleet_worker_runtime_profile_for_loadout(
         &agent_type,
         &tool_profile,
@@ -339,8 +348,121 @@ fn effective_fleet_model(
         .to_string()
 }
 
+/// Outcome of resolving a slot's pinned/ranked models against the active
+/// provider. `model == "auto"` means every pin was unusable and the slot
+/// falls back to its class/loadout route instead of sending a known-bad id
+/// to the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetModelSelection {
+    pub model: String,
+    /// Human-readable degradation notice; `None` when the top preference won.
+    pub notice: Option<String>,
+}
+
+/// Can the active provider plausibly serve `entry`? Mirrors the #3227
+/// route-contamination guard: only tuples *known* to be wrong are rejected,
+/// so custom/self-hosted/aggregator providers stay permissive and the
+/// provider API remains the final authority.
+fn fleet_model_entry_usable(provider: ApiProvider, entry: &str) -> bool {
+    if entry.eq_ignore_ascii_case("auto") {
+        return true;
+    }
+    // Full #3227 guard: a tuple *known* to be wrong (DeepSeek-only id on a
+    // non-DeepSeek direct provider, or a foreign id on the ChatGPT Codex
+    // route) is never usable — previously only half of the guard ran here,
+    // so a `deepseek-v4-pro` pin sailed to the Codex Responses backend and
+    // came back as `Invalid request (400): The 'deepseek-v4-pro' model is
+    // not supported when using Codex with a ChatGPT account.`
+    if crate::config::model_is_foreign_to_provider(provider, entry) {
+        return false;
+    }
+    if crate::config::provider_passes_model_through(provider) {
+        return true;
+    }
+    crate::config::requested_model_for_provider(provider, entry).is_some()
+}
+
+/// Resolve a slot's ranked model preference against the active provider.
+///
+/// Candidate order: task/worker-level `model` first, then the profile's
+/// ranked `models` list (or its single `model` shorthand). The first entry
+/// the provider can plausibly serve wins. With no provider context
+/// (headless paths that never resolved a route), the first candidate is
+/// kept verbatim — legacy behavior. When no candidate is usable the slot
+/// degrades to `"auto"` (class/loadout route) with a notice, never a
+/// known-bad wire call.
+pub fn select_fleet_model(
+    run_model: &str,
+    provider: Option<ApiProvider>,
+    worker_profile: Option<&FleetTaskWorkerProfile>,
+    agent_profile: Option<&AgentProfile>,
+) -> FleetModelSelection {
+    let mut candidates: Vec<&str> = Vec::new();
+    if let Some(model) = worker_profile
+        .and_then(|worker| worker.model.as_deref())
+        .and_then(non_empty_trimmed)
+    {
+        candidates.push(model);
+    }
+    if let Some(profile) = agent_profile {
+        if !profile.profile.models.is_empty() {
+            candidates.extend(
+                profile
+                    .profile
+                    .models
+                    .iter()
+                    .filter_map(|entry| non_empty_trimmed(entry)),
+            );
+        } else if let Some(model) = profile.profile.model.as_deref().and_then(non_empty_trimmed) {
+            candidates.push(model);
+        }
+    }
+    candidates.dedup();
+
+    if candidates.is_empty() {
+        return FleetModelSelection {
+            model: run_model.to_string(),
+            notice: None,
+        };
+    }
+    let Some(provider) = provider else {
+        return FleetModelSelection {
+            model: candidates[0].to_string(),
+            notice: None,
+        };
+    };
+    for candidate in &candidates {
+        if fleet_model_entry_usable(provider, candidate) {
+            let notice = (*candidate != candidates[0]).then(|| {
+                format!(
+                    "pinned model {} is not usable on provider {}; using ranked fallback {}",
+                    candidates[0],
+                    provider.as_str(),
+                    candidate
+                )
+            });
+            return FleetModelSelection {
+                model: (*candidate).to_string(),
+                notice,
+            };
+        }
+    }
+    FleetModelSelection {
+        model: "auto".to_string(),
+        notice: Some(format!(
+            "no pinned model ({}) is usable on provider {}; falling back to the class route",
+            candidates.join(", "),
+            provider.as_str()
+        )),
+    }
+}
+
 /// Map a fleet role name to a `SubAgentType`. Unknown roles default to `General`.
-fn fleet_role_to_agent_type(role: Option<&str>) -> SubAgentType {
+///
+/// Shared with the fleet-party spawn surface
+/// (`crate::tools::subagent::fleet_party`) so profile roles resolve to the
+/// same agent type no matter which lane spawns the worker.
+pub(crate) fn fleet_role_to_agent_type(role: Option<&str>) -> SubAgentType {
     match role {
         Some("smoke-runner") => SubAgentType::Verifier,
         Some("scout") => SubAgentType::Explore,
@@ -424,6 +546,8 @@ fn fleet_model_route_for_loadout(
         codewhale_config::FleetLoadout::Inherit => ModelRoute::Inherit,
         codewhale_config::FleetLoadout::Fast => ModelRoute::Faster,
         codewhale_config::FleetLoadout::Strong
+        | codewhale_config::FleetLoadout::Heavy
+        | codewhale_config::FleetLoadout::Omni
         | codewhale_config::FleetLoadout::Balanced
         | codewhale_config::FleetLoadout::DeepReasoning
         | codewhale_config::FleetLoadout::Code
@@ -566,11 +690,194 @@ mod tests {
                 },
                 loadout,
                 model: None,
+                models: Vec::new(),
                 permissions: codewhale_config::FleetProfilePermissions::default(),
                 delegation: codewhale_config::FleetDelegationHints::default(),
             },
             source: std::path::PathBuf::from(format!("{id}.toml")),
         }
+    }
+
+    fn agent_profile_with_models(models: &[&str]) -> AgentProfile {
+        let mut profile = agent_profile(
+            "builder",
+            "builder",
+            None,
+            codewhale_config::FleetLoadout::Heavy,
+        );
+        profile.profile.models = models.iter().map(|entry| entry.to_string()).collect();
+        profile
+    }
+
+    #[test]
+    fn ranked_models_pick_first_entry_the_provider_serves() {
+        // glm-5.2 is foreign to the official DeepSeek API; the ranked list
+        // must skip it and land on the DeepSeek entry with a notice.
+        let profile = agent_profile_with_models(&["glm-5.2", "deepseek-v4-pro"]);
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::Deepseek), None, Some(&profile));
+        assert_eq!(selection.model, "deepseek-v4-pro");
+        let notice = selection.notice.expect("degradation must be surfaced");
+        assert!(notice.contains("glm-5.2"), "{notice}");
+        assert!(notice.contains("deepseek-v4-pro"), "{notice}");
+    }
+
+    #[test]
+    fn ranked_models_fall_to_class_route_when_none_usable() {
+        let profile = agent_profile_with_models(&["glm-5.2"]);
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::Deepseek), None, Some(&profile));
+        // Never send a known-bad id to the wire: degrade to the loadout route.
+        assert_eq!(selection.model, "auto");
+        let notice = selection.notice.expect("degradation must be surfaced");
+        assert!(notice.contains("class route"), "{notice}");
+    }
+
+    #[test]
+    fn ranked_models_skip_foreign_pins_on_codex_route() {
+        // Live repro: a reviewer profile pinning DeepSeek/GLM ids while the
+        // active provider is ChatGPT Codex OAuth. Both pins are foreign to
+        // the Codex backend ("The 'deepseek-v4-pro' model is not supported
+        // when using Codex with a ChatGPT account."); the slot must degrade
+        // to the class route instead of wiring a guaranteed 400.
+        let profile = agent_profile_with_models(&["deepseek-v4-pro", "glm-5.2"]);
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::OpenaiCodex), None, Some(&profile));
+        assert_eq!(selection.model, "auto");
+        let notice = selection.notice.expect("degradation must be surfaced");
+        assert!(notice.contains("deepseek-v4-pro"), "{notice}");
+        assert!(notice.contains("glm-5.2"), "{notice}");
+    }
+
+    #[test]
+    fn ranked_models_pick_codex_family_pin_on_codex_route() {
+        let profile = agent_profile_with_models(&["deepseek-v4-pro", "gpt-5.5"]);
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::OpenaiCodex), None, Some(&profile));
+        assert_eq!(selection.model, "gpt-5.5");
+        let notice = selection.notice.expect("skipped pin must be surfaced");
+        assert!(notice.contains("deepseek-v4-pro"), "{notice}");
+    }
+
+    #[test]
+    fn ranked_models_skip_deepseek_pin_on_direct_non_deepseek_provider() {
+        // The other half of the #3227 guard that was missing here: a
+        // DeepSeek-only id on a direct non-DeepSeek provider (Z.ai) is
+        // known-foreign and must be skipped in favor of the usable pin.
+        let profile = agent_profile_with_models(&["deepseek-v4-pro", "glm-5.2"]);
+        let selection = select_fleet_model("auto", Some(ApiProvider::Zai), None, Some(&profile));
+        assert_eq!(selection.model, "glm-5.2");
+        assert!(selection.notice.is_some());
+    }
+
+    #[test]
+    fn ranked_models_win_over_single_model_when_both_are_set() {
+        // Contract pinned by the config docs and docs/FLEET.md: `model` is the
+        // one-element shorthand; when both are set, `models` wins outright —
+        // the single pin is not even a fallback candidate.
+        let mut profile = agent_profile_with_models(&["deepseek-v4-pro"]);
+        profile.profile.model = Some("deepseek-v4-flash".to_string());
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::Deepseek), None, Some(&profile));
+        assert_eq!(selection.model, "deepseek-v4-pro");
+        assert!(selection.notice.is_none());
+
+        // Same precedence with no provider context (headless path).
+        let selection = select_fleet_model("auto", None, None, Some(&profile));
+        assert_eq!(selection.model, "deepseek-v4-pro");
+        assert!(selection.notice.is_none());
+    }
+
+    #[test]
+    fn empty_models_and_no_model_inherit_run_model() {
+        // models = [] plus model = None is the "no preference" shape: the run
+        // model passes through untouched with no degradation notice.
+        let profile = agent_profile(
+            "builder",
+            "builder",
+            None,
+            codewhale_config::FleetLoadout::Heavy,
+        );
+        assert!(profile.profile.models.is_empty());
+        assert!(profile.profile.model.is_none());
+        let selection = select_fleet_model(
+            "deepseek-v4-pro",
+            Some(ApiProvider::Deepseek),
+            None,
+            Some(&profile),
+        );
+        assert_eq!(selection.model, "deepseek-v4-pro");
+        assert!(selection.notice.is_none());
+    }
+
+    #[test]
+    fn heavy_and_omni_loadouts_route_auto_without_a_pin() {
+        // FleetLoadout Heavy/Omni end-to-end: with no pinned model both route
+        // `auto` (provider-candidate resolution), never a fabricated id; an
+        // explicit pin still wins.
+        for loadout in [
+            codewhale_config::FleetLoadout::Heavy,
+            codewhale_config::FleetLoadout::Omni,
+        ] {
+            assert_eq!(
+                fleet_model_route_for_loadout("auto", &loadout),
+                ModelRoute::Auto,
+                "{loadout:?}"
+            );
+            assert_eq!(
+                fleet_model_route_for_loadout("deepseek-v4-pro", &loadout),
+                ModelRoute::Fixed("deepseek-v4-pro".to_string()),
+                "{loadout:?}"
+            );
+        }
+        // A custom token that normalizes to a known class routes as that class.
+        assert_eq!(
+            codewhale_config::FleetLoadout::from_name("multi-modal"),
+            codewhale_config::FleetLoadout::Omni
+        );
+    }
+
+    #[test]
+    fn ranked_models_without_provider_context_keep_legacy_first_pick() {
+        let profile = agent_profile_with_models(&["glm-5.2", "deepseek-v4-pro"]);
+        let selection = select_fleet_model("auto", None, None, Some(&profile));
+        assert_eq!(selection.model, "glm-5.2");
+        assert!(selection.notice.is_none());
+    }
+
+    #[test]
+    fn ranked_models_pass_through_provider_accepts_first_entry() {
+        // Custom/OpenAI-compatible endpoints preserve user ids verbatim, so
+        // the top preference always wins there.
+        let profile = agent_profile_with_models(&["my-local-model", "deepseek-v4-pro"]);
+        let selection = select_fleet_model("auto", Some(ApiProvider::Custom), None, Some(&profile));
+        assert_eq!(selection.model, "my-local-model");
+        assert!(selection.notice.is_none());
+    }
+
+    #[test]
+    fn worker_pin_falls_back_to_profile_ranked_list_when_unusable() {
+        // Task-level pin is first preference; when the provider can't serve
+        // it the profile's ranked list is next in the chain.
+        let profile = agent_profile_with_models(&["deepseek-v4-pro"]);
+        let worker = worker_profile(None, None, None, None, Some("glm-5.2"), vec![]);
+        let selection = select_fleet_model(
+            "auto",
+            Some(ApiProvider::Deepseek),
+            Some(&worker),
+            Some(&profile),
+        );
+        assert_eq!(selection.model, "deepseek-v4-pro");
+        assert!(selection.notice.is_some());
+    }
+
+    #[test]
+    fn no_pins_inherit_run_model_without_notice() {
+        let profile = agent_profile("scout", "scout", None, codewhale_config::FleetLoadout::Fast);
+        let selection =
+            select_fleet_model("auto", Some(ApiProvider::Deepseek), None, Some(&profile));
+        assert_eq!(selection.model, "auto");
+        assert!(selection.notice.is_none());
     }
 
     #[test]
@@ -795,6 +1102,7 @@ mod tests {
             std::path::Path::new("/tmp"),
             &[profile],
             None,
+            None,
         )
         .unwrap();
 
@@ -874,6 +1182,7 @@ mod tests {
             std::path::Path::new("/tmp"),
             &[profile.clone()],
             None,
+            None,
         )
         .unwrap();
 
@@ -901,6 +1210,7 @@ mod tests {
             "auto",
             std::path::Path::new("/tmp"),
             &[profile],
+            None,
             None,
         )
         .unwrap();
@@ -947,6 +1257,7 @@ mod tests {
             std::path::Path::new("/tmp"),
             &[],
             Some(&parent),
+            None,
         )
         .unwrap();
 
@@ -1004,6 +1315,7 @@ mod tests {
             "auto",
             std::path::Path::new("/tmp"),
             &[],
+            None,
             None,
         )
         .expect("worker spec with empty profiles");
@@ -1118,6 +1430,7 @@ mod tests {
                 model,
                 std::path::Path::new("/tmp"),
                 &[],
+                None,
                 None,
             )
             .expect("worker spec with empty profiles");

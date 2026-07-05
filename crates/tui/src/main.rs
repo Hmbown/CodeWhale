@@ -1203,7 +1203,14 @@ async fn main() -> Result<()> {
                 } else if args.json {
                     run_doctor_json(&config, &workspace, cli.config.as_deref())
                 } else {
-                    run_doctor(&config, &workspace, cli.config.as_deref()).await;
+                    let failed_checks =
+                        run_doctor(&config, &workspace, cli.config.as_deref()).await;
+                    if failed_checks > 0 {
+                        // Exit non-zero so scripts / CI can gate on doctor
+                        // health. The human-readable report above already
+                        // named each failing check.
+                        std::process::exit(1);
+                    }
                     Ok(())
                 }
             }
@@ -2689,9 +2696,18 @@ fn run_session_diagnostics(args: SessionDiagnosticsArgs) -> Result<()> {
 }
 
 /// Run system diagnostics
-async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Option<&Path>) {
+/// Run the human-readable doctor report. Returns the number of failed (✗)
+/// checks so the caller can exit non-zero when the install is unhealthy.
+/// Warnings (`!`) and informational rows (`·`) do not count as failures.
+async fn run_doctor(
+    config: &Config,
+    workspace: &Path,
+    config_path_override: Option<&Path>,
+) -> usize {
     use crate::palette;
     use colored::Colorize;
+
+    let mut failed_checks: usize = 0;
 
     let (accent_r, accent_g, accent_b) = palette::WHALE_ACCENT_PRIMARY_RGB;
     let (sky_r, sky_g, sky_b) = palette::DEEPSEEK_SKY_RGB;
@@ -2903,6 +2919,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         println!(
             "    Run 'codewhale auth set --provider <name>' to save a key to ~/.codewhale/config.toml."
         );
+        failed_checks += 1;
         false
     };
 
@@ -2955,6 +2972,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             }
             Err(e) => {
                 let error_msg = e.to_string();
+                failed_checks += 1;
                 println!(
                     "\r  {} API connection failed",
                     "✗".truecolor(red_r, red_g, red_b)
@@ -3075,6 +3093,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                         )
                     }
                     McpServerDoctorStatus::Error(ref detail) => {
+                        failed_checks += 1;
                         format!(
                             "  {} {name}: {}",
                             "✗".truecolor(red_r, red_g, red_b),
@@ -3089,6 +3108,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             }
         }
         Err(err) => {
+            failed_checks += 1;
             println!(
                 "  {} MCP config parse error: {}",
                 "✗".truecolor(red_r, red_g, red_b),
@@ -3329,6 +3349,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             name
         ),
         None => {
+            failed_checks += 1;
             println!(
                 "  {} Python: not found (tried {:?})",
                 "✗".truecolor(red_r, red_g, red_b),
@@ -3357,6 +3378,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "✓".truecolor(aqua_r, aqua_g, aqua_b),
         ),
         None => {
+            failed_checks += 1;
             println!(
                 "  {} Node.js: not found (tried `node`)",
                 "✗".truecolor(red_r, red_g, red_b),
@@ -3469,6 +3491,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         }
         None => {
             if prefer_external {
+                failed_checks += 1;
                 println!(
                     "  {} pdftotext: not found, but `prefer_external_pdftotext = true` is set → PDF reads will return `binary_unavailable`",
                     "✗".truecolor(red_r, red_g, red_b),
@@ -3568,12 +3591,25 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     }
 
     println!();
-    println!(
-        "{}",
-        "All checks complete!"
-            .truecolor(aqua_r, aqua_g, aqua_b)
+    if failed_checks == 0 {
+        println!(
+            "{}",
+            "All checks passed."
+                .truecolor(aqua_r, aqua_g, aqua_b)
+                .bold()
+        );
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{failed_checks} check{} failed.",
+                if failed_checks == 1 { "" } else { "s" }
+            )
+            .truecolor(red_r, red_g, red_b)
             .bold()
-    );
+        );
+    }
+    failed_checks
 }
 
 const DOCTOR_LEGACY_STATE_ITEMS: &[&str] = &[

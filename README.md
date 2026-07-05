@@ -29,6 +29,22 @@ open an issue — that's how the project grows.
 
 ![CodeWhale running in a terminal](assets/screenshot.png)
 
+## What CodeWhale doesn't do
+
+- **No account.** `codewhale auth set` saves a provider API key to your local
+  config and keyring — there is no CodeWhale sign-up, and local runtimes need
+  no key at all.
+- **No telemetry.** Everything runs on your machine; there is no analytics
+  beacon in the codebase. The audit log and cost meters are local files.
+- **No price markup.** Requests go straight to the provider's own endpoint
+  with your key. CodeWhale only *estimates* what the provider charges — and
+  shows *unknown* rather than inventing a price it doesn't have.
+- **No CLA.** Contributions are plain MIT — no contributor license agreement,
+  no copyright assignment. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- **No silent model switching.** The model you pin is the model used, and the
+  resolved route is shown in the statusline. `/model auto` routing exists, but
+  it's an explicit choice — never a fallback applied behind your back.
+
 ## Install
 
 ```bash
@@ -189,6 +205,36 @@ setup view. Loadouts express model intent as a class — `strong`, `balanced`, o
 is the same headless runtime that backs in-session sub-agents; Fleet is the
 durable layer on top. See [docs/FLEET.md](docs/FLEET.md).
 
+## WhaleFlow
+
+WhaleFlow is validated multi-agent orchestration. You (or the agent itself)
+author a workflow — in a declarative JS/TS subset, Starlark, or plain JSON —
+and it compiles to a typed Rust `WorkflowSpec` that is validated before
+anything runs: dependency cycles, duplicate nodes, loops without
+`max_iterations`, and unbounded `expand` nodes are all rejected. Launch
+validation bounds the population at **100 worker agents per run and 5
+recursive Fleet rings**, so a workflow can fan out without running away.
+
+```js
+export default workflow({
+  "id": "issue-audit",
+  "goal": "Audit an issue fix with parallel agents",
+  "nodes": [
+    { "branch": { "id": "audit", "children": [
+      { "agent": { "id": "code-audit", "prompt": "Review code", "agent_type": "review" } },
+      { "agent": { "id": "test-audit", "prompt": "Review tests", "agent_type": "verifier" } }
+    ] } },
+    { "reduce": { "id": "summary", "inputs": ["code-audit", "test-audit"], "prompt": "Summarize" } }
+  ]
+});
+```
+
+Workflow source is a declaration format, not a second runtime — the compiler
+rejects `import`, `fetch`, `async`, and file I/O outright. WhaleFlow owns the
+plan (branches, loops, reducers); Fleet owns the durable execution (slots,
+models, receipts, resume). See
+[docs/WHALEFLOW_AUTHORING.md](docs/WHALEFLOW_AUTHORING.md).
+
 ## Safety
 
 CodeWhale edits files and runs commands, so the safety posture is part of the
@@ -218,7 +264,8 @@ product, not an afterthought.
 - **MCP, bidirectionally.** Consume tools from external MCP servers, or expose
   CodeWhale itself as an MCP server via `codewhale mcp`.
 - **Skills.** Reusable workflows in `~/.codewhale/skills/`, loaded with
-  `/skills`.
+  `/skills`. Bring your Claude Code skills: plain `SKILL.md` folders work as-is
+  — see [docs/CLAUDE_PLUGIN_COMPAT.md](docs/CLAUDE_PLUGIN_COMPAT.md).
 - **Embedded everywhere.** HTTP/SSE and ACP runtime APIs, a VS Code extension,
   and Telegram/Feishu bridges (Weixin experimental).
 
@@ -262,16 +309,21 @@ There is also an expert-only full base-prompt override at
 `$CODEWHALE_HOME/prompts/constitution.md` behind an explicit opt-in flag. It is
 not the normal guided setup path. When two instructions conflict, each yields to
 the higher authority layer. Because the law lives in the harness, not the model,
-swapping models keeps the structure intact.
+swapping models keeps the structure intact. The full story — bundled articles,
+guided setup, repo law, and the override — is in
+[docs/CONSTITUTION.md](docs/CONSTITUTION.md).
 
 ## Where details live
 
 The README is the short version. The rest is in docs and on
 [codewhale.net](https://codewhale.net/):
 
-- [User guide](docs/GUIDE.md) · [Install guide](docs/INSTALL.md) ·
+- [User guide](docs/GUIDE.md) · [FAQ](docs/FAQ.md) ·
+  [Install guide](docs/INSTALL.md) ·
   [Configuration](docs/CONFIGURATION.md) · [Provider registry](docs/PROVIDERS.md)
 - [Modes](docs/MODES.md) — Agent, Plan, and YOLO.
+- [The Constitution](docs/CONSTITUTION.md) — how instructions are ranked, and
+  repo-local law.
 - [Fleet](docs/FLEET.md) · [Sub-agents](docs/SUBAGENTS.md) — roles, lifecycle,
   output contract, and recovery behavior.
 - [Architecture](docs/ARCHITECTURE.md) — crate layout, runtime flow, tool system,
@@ -285,10 +337,16 @@ The README is the short version. The rest is in docs and on
 
 ## The project
 
-CodeWhale started as one person's DeepSeek side project. Developers from
-countries all over the world have made it what it is — the contributor list on
-every release is the proof. The project is built in the open, issues are triaged
-in the open, and releases cut from `main`.
+CodeWhale started as one person's DeepSeek side project. **200+ contributors**
+from countries all over the world have made it what it is — the contributor
+list on every release is the proof. The project is built in the open, issues
+are triaged in the open, and releases cut from `main`.
+
+[![Contributors](https://contrib.rocks/image?repo=Hmbown/CodeWhale)](https://github.com/Hmbown/CodeWhale/graphs/contributors)
+
+The full per-PR record — including harvested PRs, which keep visible credit by
+contract — lives in [docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md); how that
+credit machinery works is documented in [docs/CREDIT.md](docs/CREDIT.md).
 
 Something I learned early in teaching: **all feedback is a gift.** Issues, PRs,
 bug reports, feature ideas, "first PR"s, and curious questions all count as real

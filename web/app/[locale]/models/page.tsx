@@ -167,7 +167,7 @@ export default async function ModelsPage({ params }: { params: Promise<{ locale:
             {isZh ? "安装 →" : "Install →"}
           </Link>
           <Link
-            href={p("/docs#providers")}
+            href={p("/docs/providers")}
             className="px-5 py-3 hairline-t hairline-b hairline-l hairline-r font-mono text-sm uppercase tracking-wider hover:bg-paper-deep transition-colors"
           >
             {isZh ? "配置密钥：文档 →" : "Key setup: docs →"}

@@ -330,3 +330,21 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -Dwarnings
+
+  # Weekly dependency vulnerability scan against the RustSec advisory DB.
+  # Accepted advisories (all "unmaintained" warnings, no vulnerabilities)
+  # are tracked with rationale in .cargo/audit.toml.
+  security-audit:
+    name: Security audit
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit

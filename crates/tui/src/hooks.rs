@@ -984,15 +984,40 @@ impl HookExecutor {
     }
 
     /// Check whether a tool name matches a condition pattern with `*` glob support.
+    ///
+    /// Compiled glob regexes are cached per pattern: this runs for every hook
+    /// condition on every tool call, and recompiling the same handful of
+    /// user-configured patterns each time was pure waste.
     fn tool_name_matches_condition(tool_name: &str, pattern: &str) -> bool {
         if !pattern.contains('*') {
             return tool_name == pattern;
+        }
+        static GLOB_REGEX_CACHE: std::sync::OnceLock<
+            std::sync::RwLock<HashMap<String, Option<regex::Regex>>>,
+        > = std::sync::OnceLock::new();
+        // Patterns come from user hook config so the cache stays small in
+        // practice; the cap only guards against pathological configs.
+        const GLOB_REGEX_CACHE_CAP: usize = 256;
+
+        let cache = GLOB_REGEX_CACHE.get_or_init(Default::default);
+        if let Ok(guard) = cache.read()
+            && let Some(compiled) = guard.get(pattern)
+        {
+            return compiled.as_ref().is_some_and(|re| re.is_match(tool_name));
         }
         // Escape regex metacharacters except `*`, which becomes `.*`.
         let escaped = regex::escape(pattern);
         let regex_pattern = escaped.replace(r"\*", ".*");
         let anchored = format!("^{regex_pattern}$");
-        regex::Regex::new(&anchored).is_ok_and(|re| re.is_match(tool_name))
+        let compiled = regex::Regex::new(&anchored).ok();
+        let matched = compiled.as_ref().is_some_and(|re| re.is_match(tool_name));
+        if let Ok(mut guard) = cache.write() {
+            if guard.len() >= GLOB_REGEX_CACHE_CAP {
+                guard.clear();
+            }
+            guard.insert(pattern.to_string(), compiled);
+        }
+        matched
     }
 
     /// Check if a hook's condition matches the context

@@ -7,12 +7,26 @@
 //! `config.rs` with a private `use`, so no new external surface is created
 //! (#3311).
 
-pub const DEFAULT_MAX_SUBAGENTS: usize = 20;
-pub const MAX_SUBAGENTS: usize = 20;
+/// Default concurrent sub-agent cap: cores-scaled for the WhaleFlow dynamic
+/// fan-out lane (design §4.2). `available_parallelism().clamp(16, 64)` keeps
+/// small machines at a workable floor of 16 while letting big hosts fan out
+/// to 64 by default without a config edit.
+#[must_use]
+pub fn default_max_subagents() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(16)
+        .clamp(16, 64)
+}
+/// Absolute ceiling for concurrent sub-agents (raised 20 → 256 for
+/// script-driven WhaleFlow fan-out, design §4.1/A1). Config values clamp to
+/// this; the cores-scaled default above is what unconfigured sessions get.
+pub const MAX_SUBAGENTS: usize = 256;
 /// Upper bound for queued + running sub-agent admissions. This is deliberately
 /// higher than the instantaneous concurrency cap so Workflow-style fanout can
 /// opt into large bounded populations without unbounded queue growth.
-pub const MAX_SUBAGENT_ADMISSION: usize = 200;
+/// Raised 200 → 1000 (design §4.1/A3) to match the lifetime spawn backstop.
+pub const MAX_SUBAGENT_ADMISSION: usize = 1000;
 /// Default per-step DeepSeek API timeout for sub-agent requests, in seconds.
 /// Matches the legacy hardcoded value so existing configs keep their old
 /// behavior when `[subagents] api_timeout_secs` is unset (#1806, #1808).

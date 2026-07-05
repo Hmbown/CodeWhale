@@ -681,6 +681,14 @@ fn work_panel_lines(
             work_panel_empty_hint(content_width),
             Style::default().fg(ui_theme.text_muted).italic(),
         )));
+        // Empty-state action hint (v0.8.67): pair the bare label with the
+        // action that fills this panel.
+        if max_rows > 1 {
+            lines.push(Line::from(Span::styled(
+                truncate_line_to_width("Write a task below to start", content_width),
+                Style::default().fg(ui_theme.text_muted).italic(),
+            )));
+        }
     }
 
     lines
@@ -863,6 +871,9 @@ fn work_panel_hover_texts(
 
     if texts.is_empty() {
         texts.push("No active work".to_string());
+        if max_rows > 1 {
+            texts.push("Write a task below to start".to_string());
+        }
     }
 
     texts
@@ -2735,6 +2746,15 @@ fn subagent_panel_rows(
             Style::default().fg(theme.text_muted),
         )));
         actions.push(None);
+        // Empty-state action hint (v0.8.67): tell the user how agents
+        // appear here instead of leaving a bare label.
+        if max_rows > 1 {
+            lines.push(Line::from(Span::styled(
+                truncate_line_to_width("Delegated work shows up here", content_width),
+                Style::default().fg(theme.text_muted).italic(),
+            )));
+            actions.push(None);
+        }
         return (lines, actions);
     }
 
@@ -2996,6 +3016,9 @@ fn subagent_panel_hover_texts(
         && !summary.foreground_rlm_running
     {
         texts.push("No agents".to_string());
+        if max_rows > 1 {
+            texts.push("Delegated work shows up here".to_string());
+        }
         return texts;
     }
 
@@ -5677,7 +5700,13 @@ mod tests {
         let summary = SidebarSubagentSummary::default();
         let lines = subagent_panel_lines(&summary, &[], Locale::En, 32, 8, &palette::UI_THEME);
         let text = lines_to_text(&lines);
-        assert_eq!(text, vec!["No agents".to_string()]);
+        assert_eq!(
+            text,
+            vec![
+                "No agents".to_string(),
+                "Delegated work shows up here".to_string(),
+            ]
+        );
     }
 
     #[test]

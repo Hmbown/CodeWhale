@@ -3665,7 +3665,7 @@ impl Config {
 
     /// Return the maximum number of concurrent sub-agents.
     /// Checks `[subagents] max_concurrent` first, then top-level `max_subagents`,
-    /// then falls back to `DEFAULT_MAX_SUBAGENTS`.
+    /// then falls back to the cores-scaled `default_max_subagents()`.
     #[must_use]
     pub fn max_subagents(&self) -> usize {
         // Check [subagents] max_concurrent first
@@ -3676,7 +3676,7 @@ impl Config {
         }
         // Fall back to top-level max_subagents
         self.max_subagents
-            .unwrap_or(DEFAULT_MAX_SUBAGENTS)
+            .unwrap_or_else(default_max_subagents)
             .clamp(1, MAX_SUBAGENTS)
     }
 
@@ -3854,13 +3854,29 @@ impl Config {
     }
 
     /// Return the provider-specific per-step API timeout for sub-agents.
+    ///
+    /// Explicit `[providers.<p>] api_timeout_secs` / `[subagents]
+    /// api_timeout_secs` values always win. When neither is set, the ChatGPT
+    /// Codex route raises the default from the flat 120s to the stream
+    /// quiet-time budget (`stream_chunk_timeout_secs`, default 900s): codex
+    /// child requests fold a streaming Responses turn behind a non-streaming
+    /// `create_message`, so a long reasoning turn that the parent path
+    /// tolerates (its only cap is the per-chunk idle timeout, #3998) was
+    /// being killed by the child's 120s total cap with "API call timed out
+    /// after 120000ms".
     #[must_use]
     pub fn subagent_api_timeout_secs_for_provider(&self, provider: ApiProvider) -> u64 {
-        resolve_subagent_api_timeout_secs(
-            self.subagent_provider_config(provider)
-                .and_then(|cfg| cfg.api_timeout_secs)
-                .or_else(|| self.subagents.as_ref().and_then(|cfg| cfg.api_timeout_secs)),
-        )
+        let configured = self
+            .subagent_provider_config(provider)
+            .and_then(|cfg| cfg.api_timeout_secs)
+            .or_else(|| self.subagents.as_ref().and_then(|cfg| cfg.api_timeout_secs));
+        if configured.is_none() && provider == ApiProvider::OpenaiCodex {
+            return self
+                .stream_chunk_timeout_secs()
+                .max(DEFAULT_SUBAGENT_API_TIMEOUT_SECS)
+                .clamp(MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS);
+        }
+        resolve_subagent_api_timeout_secs(configured)
     }
 
     /// Resolved no-progress heartbeat timeout for running sub-agents.
@@ -4044,6 +4060,43 @@ impl Config {
             exponential_base: cfg.exponential_base.unwrap_or(defaults.exponential_base),
         }
     }
+}
+
+/// Can the ChatGPT Codex OAuth route plausibly serve `model`?
+///
+/// The Codex Responses backend is subscription-scoped and serves only the
+/// GPT-5.5 / Codex model family; it rejects every foreign id with
+/// `The '<model>' model is not supported when using Codex with a ChatGPT
+/// account.` (400). Known-good ids resolve through the canonical family
+/// check; unknown-but-plausible ids (`gpt-*`, anything containing `codex`)
+/// stay permissive so future family additions keep working — the backend
+/// remains the final authority for those.
+pub(crate) fn openai_codex_route_can_serve_model(model: &str) -> bool {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return true;
+    }
+    if crate::models::model_is_openai_reasoning_family(trimmed) {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("gpt-") || lower.contains("codex")
+}
+
+/// Full #3227 route-contamination guard as a reusable predicate: `true` when
+/// the provider/model tuple is *known* to be wrong before it reaches the
+/// network. Extends the original DeepSeek-foreign check with the ChatGPT
+/// Codex route, whose backend serves only its own model family (a DeepSeek or
+/// GLM pin there is a guaranteed 400, never a legitimate custom route).
+pub(crate) fn model_is_foreign_to_provider(provider: ApiProvider, model: &str) -> bool {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return false;
+    }
+    if provider == ApiProvider::OpenaiCodex {
+        return !openai_codex_route_can_serve_model(trimmed);
+    }
+    root_deepseek_model_is_foreign_to_direct_provider(provider, trimmed)
 }
 
 fn root_deepseek_model_is_foreign_to_direct_provider(provider: ApiProvider, model: &str) -> bool {

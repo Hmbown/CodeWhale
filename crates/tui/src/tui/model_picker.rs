@@ -11,13 +11,14 @@
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::config::{ApiProvider, Config, model_completion_names_for_provider};
+use crate::localization::{MessageId, tr_current};
 use crate::model_registry;
 use crate::palette;
 use crate::tui::app::{App, ReasoningEffort};
@@ -63,10 +64,18 @@ pub struct ModelPickerView {
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
     model_rows: Vec<ModelPickerRow>,
-    /// Other providers considered "configured" (#3830), shown by default
-    /// alongside `initial_provider`'s own rows without requiring the user to
-    /// type a search query first. Uses the same definition as the
-    /// `/provider` manager's default view
+    /// Progressive disclosure: `false` (default) shows only the curated
+    /// shortlist in [`Self::shortlist_idxs`]; `true` (Ctrl+A) reveals every
+    /// known row across all providers. Typing a query always searches the
+    /// full row set regardless of this flag.
+    expanded: bool,
+    /// Indices into `model_rows` for the default (collapsed, empty-query)
+    /// view: `auto` plus the active provider's curated models, bounded to
+    /// [`MAX_SHORTLIST_ROWS`], with the current model guaranteed a slot.
+    shortlist_idxs: Vec<usize>,
+    /// Other providers considered "configured" (#3830), used to accept
+    /// provider-qualified custom queries (`openrouter:vendor/model`). Uses
+    /// the same definition as the `/provider` manager
     /// (`crate::config::provider_is_configured_for_active`): active
     /// provider, working credentials/OAuth, or an explicit
     /// `[providers.<name>]` entry. Self-hosted providers (Ollama/Sglang/
@@ -92,22 +101,22 @@ impl ModelPickerView {
         };
         let model_rows = picker_model_rows_for_app(app);
         let configured_providers = configured_providers_for(config, app.api_provider);
-        let mut selected_model_idx = model_rows.iter().position(|row| {
-            row.id == initial_model
-                && (row.provider.is_none() || row.provider == Some(app.api_provider))
+        let shortlist_idxs = shortlist_row_idxs(&model_rows, app.api_provider, &initial_model);
+        // The picker opens on the collapsed shortlist, so the initial
+        // selection is a position within it. The shortlist always reserves a
+        // slot for the current model, so a listed model is never missed here.
+        let mut selected_model_idx = shortlist_idxs.iter().position(|&idx| {
+            model_rows[idx].id == initial_model
+                && (model_rows[idx].provider.is_none()
+                    || model_rows[idx].provider == Some(app.api_provider))
         });
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
             // The custom row is conceptually appended right after every row
-            // the default (empty-query) view shows, so its index must match
-            // that count, not just the active-provider-scoped one (#3830) —
-            // `resolved_model`/`model_row_count` treat any selection at or
-            // past `visible_model_rows().len()` as "the custom row."
-            selected_model_idx = Some(default_visible_model_row_count(
-                &model_rows,
-                app.api_provider,
-                &configured_providers,
-            ));
+            // the default (empty-query) view shows — `resolved_model`/
+            // `model_row_count` treat any selection at or past
+            // `visible_model_rows().len()` as "the custom row."
+            selected_model_idx = Some(shortlist_idxs.len());
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
 
@@ -130,6 +139,8 @@ impl ModelPickerView {
             focus: Pane::Model,
             show_custom_model_row,
             model_rows,
+            expanded: false,
+            shortlist_idxs,
             configured_providers,
         }
     }
@@ -144,19 +155,21 @@ impl ModelPickerView {
 
     fn visible_model_rows(&self) -> Vec<&ModelPickerRow> {
         let query = self.query.trim();
-        self.model_rows
+        if !query.is_empty() {
+            // Typing always searches the full row set (all providers), in
+            // both the shortlist and the expanded view.
+            return self
+                .model_rows
+                .iter()
+                .filter(|row| model_row_matches_query(row, query, self.initial_provider))
+                .collect();
+        }
+        if self.expanded {
+            return self.model_rows.iter().collect();
+        }
+        self.shortlist_idxs
             .iter()
-            .filter(|row| {
-                if query.is_empty() {
-                    model_row_visible_by_default(
-                        row.provider,
-                        self.initial_provider,
-                        &self.configured_providers,
-                    )
-                } else {
-                    model_row_matches_query(row, query, self.initial_provider)
-                }
-            })
+            .map(|&idx| &self.model_rows[idx])
             .collect()
     }
 
@@ -336,6 +349,41 @@ impl ModelPickerView {
             Pane::Model => Pane::Effort,
             Pane::Effort => Pane::Model,
         };
+    }
+
+    /// Flip between the curated shortlist and the full all-models list
+    /// (Ctrl+A), keeping the highlighted model selected when it exists in the
+    /// new view (the shortlist is a subset of the full list, so expanding
+    /// never loses the selection; collapsing falls back to the top).
+    fn toggle_expanded(&mut self) {
+        let effort = self.resolved_effort();
+        let selected = {
+            let rows = self.visible_model_rows();
+            (self.selected_model_idx < rows.len()).then(|| {
+                let row = rows[self.selected_model_idx];
+                (row.id.clone(), row.provider)
+            })
+        };
+        self.expanded = !self.expanded;
+        let rows = self.visible_model_rows();
+        self.selected_model_idx = match selected {
+            Some((id, provider)) => rows
+                .iter()
+                .position(|row| row.id == id && row.provider == provider)
+                .unwrap_or(0),
+            // The custom row stays selected: it is appended right after the
+            // visible rows in every view.
+            None => rows.len(),
+        };
+        self.clamp_model_selection();
+        self.select_effort_for_current_model(effort);
+    }
+
+    /// Whether `row` is the model the session is currently using (the row the
+    /// list marks as `current`).
+    fn is_current_row(&self, row: &ModelPickerRow) -> bool {
+        row.id == self.initial_model
+            && (row.provider.is_none() || row.provider == Some(self.initial_provider))
     }
 
     fn build_event(&self) -> ViewEvent {
@@ -562,7 +610,13 @@ fn push_provider_model_rows(
         } else {
             let mut hint = picker_model_hint(&id);
             if provider != active_provider {
-                hint = format!("switch route · {hint}");
+                // Cross-provider rows keep the row budget of two facts: the
+                // route switch plus at most one metadata fact.
+                let switch = tr_current(MessageId::ModelHintSwitchRoute).into_owned();
+                hint = match hint.split(" · ").next().filter(|part| !part.is_empty()) {
+                    Some(first) => format!("{switch} · {first}"),
+                    None => switch,
+                };
             }
             push_model_row(rows, id.clone(), Some(provider), hint);
         }
@@ -676,34 +730,41 @@ fn model_row_label(row: &ModelPickerRow, initial_provider: ApiProvider) -> Strin
     }
 }
 
-/// Whether a model row shows up without the user typing a search query
-/// (#3830): `auto`, the active provider's own rows, and any other
-/// provider's rows once that provider is "configured" — same definition the
-/// `/provider` manager's default view uses.
-fn model_row_visible_by_default(
-    row_provider: Option<ApiProvider>,
-    initial_provider: ApiProvider,
-    configured_providers: &[ApiProvider],
-) -> bool {
-    match row_provider {
-        None => true,
-        Some(provider) => provider == initial_provider || configured_providers.contains(&provider),
-    }
-}
+/// Ceiling for the collapsed default view: `auto` + the active provider's
+/// curated models, so the picker opens on a scannable list instead of the
+/// full catalog.
+const MAX_SHORTLIST_ROWS: usize = 10;
 
-/// Count of rows the default (empty-query) view shows — i.e. how many
-/// `model_rows` entries satisfy [`model_row_visible_by_default`]. Used to
-/// position the custom-model row right after them (#3830).
-fn default_visible_model_row_count(
+/// Indices into `rows` for the collapsed default view: `auto` plus the
+/// active provider's own rows, in catalog order, bounded to
+/// [`MAX_SHORTLIST_ROWS`]. When the bound would drop the current model, the
+/// last shortlist slot is given to it instead so the active selection is
+/// always visible.
+fn shortlist_row_idxs(
     rows: &[ModelPickerRow],
     initial_provider: ApiProvider,
-    configured_providers: &[ApiProvider],
-) -> usize {
-    rows.iter()
-        .filter(|row| {
-            model_row_visible_by_default(row.provider, initial_provider, configured_providers)
-        })
-        .count()
+    initial_model: &str,
+) -> Vec<usize> {
+    let mut idxs: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.provider.is_none() || row.provider == Some(initial_provider))
+        .map(|(idx, _)| idx)
+        .collect();
+    if idxs.len() > MAX_SHORTLIST_ROWS {
+        let current_idx = idxs
+            .iter()
+            .copied()
+            .find(|&idx| rows[idx].id.eq_ignore_ascii_case(initial_model));
+        idxs.truncate(MAX_SHORTLIST_ROWS);
+        if let Some(current_idx) = current_idx
+            && !idxs.contains(&current_idx)
+        {
+            idxs.pop();
+            idxs.push(current_idx);
+        }
+    }
+    idxs
 }
 
 /// Providers other than `active` that should be treated as "configured" for
@@ -720,12 +781,15 @@ fn configured_providers_for(config: &Config, active: ApiProvider) -> Vec<ApiProv
         .collect()
 }
 
+/// Row hint, capped at TWO facts (context window + reasoning support) so no
+/// row overwhelms; everything else (pricing, max output, provider) lives in
+/// the details strip for the focused row.
 fn picker_model_hint(id: &str) -> String {
     if id == "auto" {
-        return "select per turn".to_string();
+        return tr_current(MessageId::ModelHintAuto).into_owned();
     }
     let Some(metadata) = model_registry::lookup(id) else {
-        return "provider model".to_string();
+        return String::new();
     };
 
     let mut parts = Vec::new();
@@ -736,13 +800,9 @@ fn picker_model_hint(id: &str) -> String {
         ));
     }
     if metadata.supports_reasoning {
-        parts.push("reasoning".to_string());
+        parts.push(tr_current(MessageId::ModelHintReasoning).into_owned());
     }
-    parts.push(if crate::pricing::has_pricing_for_model(id) {
-        "priced".to_string()
-    } else {
-        "price unknown".to_string()
-    });
+    parts.truncate(2);
     parts.join(" · ")
 }
 
@@ -777,6 +837,17 @@ impl ModalView for ModelPickerView {
             KeyCode::Esc => ViewAction::Close,
             KeyCode::Enter if self.model_row_count() == 0 => ViewAction::None,
             KeyCode::Enter => ViewAction::EmitAndClose(self.build_event()),
+            // Ctrl+A: progressive disclosure — flip between the curated
+            // shortlist and the full all-models list. Placed before the
+            // filter arm (which already excludes CONTROL chords).
+            KeyCode::Char('a' | 'A')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.toggle_expanded();
+                ViewAction::None
+            }
             KeyCode::Char(ch)
                 if self.focus == Pane::Model
                     && !key
@@ -868,8 +939,9 @@ impl ModalView for ModelPickerView {
 impl ModelPickerView {
     fn render_classic(&self, area: Rect, buf: &mut Buffer) {
         let desired_height = (self.model_row_count().max(self.current_efforts().len()) as u16)
-            .saturating_add(4)
-            .clamp(10, 22);
+            // +4 chrome (borders/footer) +2 focused-row details strip.
+            .saturating_add(6)
+            .clamp(12, 24);
         let popup_area = centered_modal_area(area, 96, desired_height, 60, 10);
 
         render_modal_surface(area, popup_area, buf);
@@ -889,6 +961,11 @@ impl ModelPickerView {
         let inner = outer.inner(popup_area);
         outer.render(popup_area, buf);
 
+        let toggle_label = if self.expanded {
+            tr_current(MessageId::ModelActionShortlist)
+        } else {
+            tr_current(MessageId::ModelActionAll)
+        };
         let content = render_modal_footer(
             inner,
             buf,
@@ -896,21 +973,43 @@ impl ModelPickerView {
                 ActionHint::new("↑↓", "move"),
                 ActionHint::new("Tab", "switch"),
                 ActionHint::new("Type", "filter"),
+                ActionHint::new("Ctrl+A", toggle_label),
                 ActionHint::new("Enter", "apply"),
                 ActionHint::new("Esc", "cancel"),
             ],
         );
 
-        let layout = ListDetailLayout::split(content, 24);
+        // Reserve a two-line strip at the bottom for the focused row's full
+        // details (progressive disclosure: rows stay terse, the strip does
+        // not). Skipped when the modal is too short to spare the lines.
+        let (body, details_area) = if content.height >= 9 {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(2)])
+                .split(content);
+            (split[0], Some(split[1]))
+        } else {
+            (content, None)
+        };
 
+        let layout = ListDetailLayout::split(body, 24);
+
+        let current_hint = tr_current(MessageId::ModelHintCurrent);
         let mut model_rows: Vec<(String, String)> = self
             .visible_model_rows()
             .iter()
             .map(|row| {
-                (
-                    model_row_label(row, self.initial_provider),
-                    row.hint.clone(),
-                )
+                // The current model is marked on-row; its hint keeps the
+                // two-item budget by dropping to one metadata fact.
+                let hint = if self.is_current_row(row) {
+                    match row.hint.split(" · ").next().filter(|part| !part.is_empty()) {
+                        Some(first) => format!("{current_hint} · {first}"),
+                        None => current_hint.clone().into_owned(),
+                    }
+                } else {
+                    row.hint.clone()
+                };
+                (model_row_label(row, self.initial_provider), hint)
             })
             .collect();
         if let Some((model, provider)) = self.custom_model_row() {
@@ -920,16 +1019,18 @@ impl ModelPickerView {
                 format!("{} · {}", provider.display_name(), model)
             };
             let hint = if self.query.trim().is_empty() {
-                "current (custom)".to_string()
+                format!("{current_hint} (custom)")
             } else {
                 "custom route".to_string()
             };
             model_rows.push((label, hint));
         }
-        let model_title = if self.query.trim().is_empty() {
-            "Model".to_string()
-        } else {
+        let model_title = if !self.query.trim().is_empty() {
             format!("Model: {}", self.query.trim())
+        } else if self.expanded {
+            "Model · all".to_string()
+        } else {
+            "Model".to_string()
         };
         self.render_pane(
             layout.list,
@@ -976,6 +1077,85 @@ impl ModelPickerView {
             selected_effort_idx,
             self.focus == Pane::Effort,
         );
+
+        if let Some(details_area) = details_area {
+            self.render_focused_details(details_area, buf);
+        }
+    }
+
+    /// Two-line strip describing the focused model row in full — the
+    /// information that used to crowd every list row (pricing, max output,
+    /// route switches) now renders once, here.
+    fn render_focused_details(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let model = self.resolved_model();
+        let provider = self.resolved_provider().unwrap_or(self.initial_provider);
+        let rows = self.visible_model_rows();
+        let is_custom = self.selected_model_idx >= rows.len();
+
+        let facts = if model.trim().eq_ignore_ascii_case("auto") {
+            tr_current(MessageId::ModelDetailAuto).into_owned()
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            if is_custom {
+                parts.push(tr_current(MessageId::ModelDetailCustomId).into_owned());
+            }
+            if let Some(metadata) = model_registry::lookup(&model) {
+                if let Some(context_window) = metadata.context_window {
+                    parts.push(format!(
+                        "{} ctx",
+                        format_picker_context_window(context_window)
+                    ));
+                }
+                if let Some(max_output) = metadata.max_output {
+                    parts.push(format!(
+                        "{} max out",
+                        format_picker_context_window(max_output)
+                    ));
+                }
+                if metadata.supports_reasoning {
+                    parts.push(tr_current(MessageId::ModelHintReasoning).into_owned());
+                }
+            }
+            parts.push(if crate::pricing::has_pricing_for_model(&model) {
+                tr_current(MessageId::ModelDetailPriced).into_owned()
+            } else {
+                tr_current(MessageId::ModelDetailPriceUnknown).into_owned()
+            });
+            if provider != self.initial_provider {
+                parts.push(format!(
+                    "{} → {}",
+                    tr_current(MessageId::ModelHintSwitchRoute),
+                    provider.display_name()
+                ));
+            }
+            parts.join(" · ")
+        };
+
+        let width = usize::from(area.width);
+        let title_line = Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                crate::tui::ui_text::truncate_line_to_width(&model, width.saturating_sub(3)),
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", provider.display_name()),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+        ]);
+        let facts_line = Line::from(Span::styled(
+            format!(
+                " {}",
+                crate::tui::ui_text::truncate_line_to_width(&facts, width.saturating_sub(2))
+            ),
+            Style::default().fg(palette::TEXT_MUTED),
+        ));
+        Paragraph::new(vec![title_line, facts_line]).render(area, buf);
     }
 }
 
@@ -1073,6 +1253,10 @@ mod tests {
         };
         let config = Config::default();
         let mut app = App::new(options, &config);
+        // App::new syncs the process-wide rust_i18n locale from the
+        // developer's persisted settings.toml; pin it back to English so
+        // localized picker strings stay deterministic under test.
+        rust_i18n::set_locale("en");
         // App::new merges in the user's persisted settings.toml, which can override
         // the model, effort, and provider with whatever the developer
         // happens to have saved. Pin all three back to known values so
@@ -1120,10 +1304,39 @@ mod tests {
             hint.contains("reasoning"),
             "hint should include registry reasoning support: {hint}"
         );
+        // Pricing moved off the row into the focused-row details strip; a row
+        // hint never carries more than two facts.
         assert!(
-            hint.contains("priced"),
-            "hint should include pricing availability: {hint}"
+            !hint.contains("priced"),
+            "pricing belongs to the details strip, not the row: {hint}"
         );
+        assert!(
+            hint.split(" · ").count() <= 2,
+            "row hints are capped at two facts: {hint}"
+        );
+    }
+
+    #[test]
+    fn row_hints_never_exceed_two_facts() {
+        let (mut app, config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openrouter;
+        app.model_ids_passthrough = true;
+        app.model = "minimax/minimax-m3".to_string();
+        app.auto_model = false;
+
+        let mut view = ModelPickerView::new(&app, &config);
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        for row in view.visible_model_rows() {
+            assert!(
+                row.hint.split(" · ").count() <= 2,
+                "row hint for {} exceeds two facts: {}",
+                row.id,
+                row.hint
+            );
+        }
     }
 
     #[test]
@@ -1172,40 +1385,152 @@ mod tests {
     }
 
     #[test]
-    fn picker_default_view_includes_explicitly_configured_provider_rows() {
-        // #3830: an explicit `[providers.together]` entry (base URL override,
-        // no key) makes Together "configured," so its model rows surface in
-        // the default (no-query) view alongside DeepSeek's own rows and
-        // `auto` — not just when the user types a search query.
-        let (mut app, _default_config, _lock) = create_test_app();
+    fn expanded_view_includes_other_provider_rows() {
+        // Progressive disclosure: the collapsed default view is scoped to
+        // `auto` + the active provider; Ctrl+A reveals the full all-models
+        // list, including other providers' rows (which were shown by default
+        // in the pre-0.8.67 #3830 layout).
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
 
-        let config = Config {
-            providers: Some(crate::config::ProvidersConfig {
-                together: crate::config::ProviderConfig {
-                    base_url: Some("https://custom.together.example/v1".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Config::default()
-        };
+        let mut view = ModelPickerView::new(&app, &config);
+        assert!(
+            view.visible_model_rows()
+                .iter()
+                .all(|row| row.provider.is_none()
+                    || row.provider == Some(crate::config::ApiProvider::Deepseek)),
+            "collapsed view stays scoped to the active provider"
+        );
 
-        let view = ModelPickerView::new(&app, &config);
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
         let visible_ids = view.visible_model_ids();
-
         assert!(
             view.visible_model_rows()
                 .iter()
                 .any(|row| row.provider == Some(crate::config::ApiProvider::Together)),
-            "explicitly configured Together should surface rows by default: {visible_ids:?}"
+            "expanded view surfaces other providers' rows: {visible_ids:?}"
         );
         assert!(visible_ids.contains(&crate::config::DEFAULT_TOGETHER_MODEL));
         // Auto and the active provider's own rows are still present.
         assert!(visible_ids.contains(&"auto"));
         assert!(visible_ids.contains(&"deepseek-v4-pro"));
+
+        // Toggling back restores the shortlist without losing the selection.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(!view.expanded);
+        assert_eq!(view.resolved_model(), "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn collapsed_default_view_is_bounded() {
+        let (mut app, config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openrouter;
+        app.model_ids_passthrough = true;
+        app.model = "minimax/minimax-m3".to_string();
+        app.auto_model = false;
+
+        let mut view = ModelPickerView::new(&app, &config);
+        let collapsed = view.visible_model_rows().len();
+        assert!(
+            collapsed <= MAX_SHORTLIST_ROWS,
+            "collapsed view must stay scannable, got {collapsed} rows"
+        );
+        // The current model always keeps a slot in the shortlist.
+        assert!(view.visible_model_ids().contains(&"minimax/minimax-m3"));
+        assert!(view.visible_model_ids().contains(&"auto"));
+        assert_eq!(view.resolved_model(), "minimax/minimax-m3");
+
+        // Ctrl+A reveals strictly more rows, and preserves the selection.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(view.expanded);
+        assert!(view.visible_model_rows().len() > collapsed);
+        assert_eq!(view.resolved_model(), "minimax/minimax-m3");
+    }
+
+    #[test]
+    fn typed_filter_searches_full_row_set_in_both_views() {
+        let (mut app, config, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+
+        // Collapsed: a query still reaches other providers' rows.
+        let mut collapsed = ModelPickerView::new(&app, &config);
+        type_model_query(&mut collapsed, "openrouter");
+        let collapsed_ids: Vec<String> = collapsed
+            .visible_model_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
+        assert!(!collapsed_ids.is_empty());
+
+        // Expanded: the same query yields the same matches.
+        let mut expanded = ModelPickerView::new(&app, &config);
+        expanded.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        type_model_query(&mut expanded, "openrouter");
+        let expanded_ids: Vec<String> = expanded
+            .visible_model_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
+        assert_eq!(collapsed_ids, expanded_ids);
+    }
+
+    #[test]
+    fn details_strip_follows_focused_row() {
+        let (mut app, config, _lock) = create_test_app();
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+        let mut view = ModelPickerView::new(&app, &config);
+        let area = Rect::new(0, 0, 100, 24);
+
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let before = (0..area.height)
+            .map(|y| buffer_row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            before.contains("priced") || before.contains("price unknown"),
+            "details strip should carry the pricing fact: {before}"
+        );
+
+        // Move focus to the next model; the strip must follow.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let after = (0..area.height)
+            .map(|y| buffer_row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let focused = view.resolved_model();
+        assert_eq!(focused, "deepseek-v4-flash");
+        // The strip is the bottom-most content; the focused id renders there
+        // (bold) in addition to the list row.
+        let strip_rows: Vec<u16> = (area.y..area.y + area.height)
+            .filter(|&y| buffer_row_text(&buf, area, y).contains(&focused))
+            .collect();
+        assert!(
+            strip_rows.len() >= 2,
+            "focused model should appear in both the list and the details strip: {after}"
+        );
     }
 
     #[test]
@@ -1243,36 +1568,33 @@ mod tests {
     }
 
     #[test]
-    fn custom_model_row_position_accounts_for_other_configured_providers() {
-        // #3830 regression: `resolved_model`/`model_row_count` treat any
-        // selection at or past `visible_model_rows().len()` as "the custom
-        // row." Once other configured providers' rows are mixed into the
-        // default view, the initial selection must still land past *all* of
-        // them, not just past the active provider's own rows.
-        let (mut app, _default_config, _lock) = create_test_app();
+    fn custom_model_row_stays_selected_across_views() {
+        // `resolved_model`/`model_row_count` treat any selection at or past
+        // `visible_model_rows().len()` as "the custom row." The custom row is
+        // appended after the visible rows in *every* view, so the selection
+        // must track the visible count through Ctrl+A toggles.
+        let (mut app, config, _lock) = create_test_app();
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro-2026-04-XX".to_string();
         app.auto_model = false;
 
-        let config = Config {
-            providers: Some(crate::config::ProvidersConfig {
-                together: crate::config::ProviderConfig {
-                    base_url: Some("https://custom.together.example/v1".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Config::default()
-        };
-
-        let view = ModelPickerView::new(&app, &config);
+        let mut view = ModelPickerView::new(&app, &config);
         assert!(view.show_custom_model_row);
-        assert!(
-            view.visible_model_rows()
-                .iter()
-                .any(|row| row.provider == Some(crate::config::ApiProvider::Together)),
-            "sanity check: Together rows are actually in the default view"
-        );
+        assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
+        assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
+
+        // Expanding shows more rows; the custom row keeps the selection.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
+        assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
+
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
         assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
     }
@@ -1648,21 +1970,26 @@ mod tests {
         app.model = "minimax/minimax-m3".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app, &config);
-        let model_ids = view.visible_model_ids();
+        let mut view = ModelPickerView::new(&app, &config);
+        // The collapsed shortlist keeps the current model visible without
+        // scrolling on normal terminals.
+        assert!(
+            view.visible_model_ids().contains(&"minimax/minimax-m3"),
+            "current model must stay in the collapsed shortlist"
+        );
+        assert!(!view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "minimax/minimax-m3");
 
+        // The full OpenRouter catalog remains reachable behind Ctrl+A.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        let model_ids = view.visible_model_ids();
         assert!(model_ids.contains(&"arcee-ai/trinity-large-thinking"));
         assert!(model_ids.contains(&"xiaomi/mimo-v2.5-pro"));
         assert!(model_ids.contains(&"minimax/minimax-m3"));
         assert!(model_ids.contains(&"z-ai/glm-5.2"));
-        assert!(
-            model_ids
-                .iter()
-                .take(6)
-                .any(|id| *id == "minimax/minimax-m3"),
-            "MiniMax M3 should be visible in the first picker window on normal terminals"
-        );
-        assert!(!view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "minimax/minimax-m3");
     }
 
@@ -1673,7 +2000,13 @@ mod tests {
         app.model = "mimo-v2.5-pro".to_string();
         app.auto_model = false;
 
-        let view = ModelPickerView::new(&app, &config);
+        let mut view = ModelPickerView::new(&app, &config);
+        // Assert against the full (expanded) list so the shortlist bound can
+        // never mask a deprecated/speech id sneaking back in.
+        view.handle_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
         let model_ids = view.visible_model_ids();
 
         for expected in ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"] {
@@ -2172,8 +2505,9 @@ mod tests {
                 .collect();
             let text = rows.join("\n");
 
-            // Footer keeps every action (it wraps instead of clipping).
-            for label in ["move", "switch", "filter", "apply", "cancel"] {
+            // Footer keeps every action (it wraps instead of clipping),
+            // including the shortlist/all-models disclosure toggle.
+            for label in ["move", "switch", "filter", "all models", "apply", "cancel"] {
                 assert!(text.contains(label), "{w}x{h}: missing '{label}' hint");
             }
             // The shared list/detail layout keeps both picker panes visible;

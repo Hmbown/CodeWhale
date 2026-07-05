@@ -444,13 +444,13 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
             "context" | "session" => SidebarFocus::Context,
             _ => {
                 return CommandResult::error(
-                    "Usage: /sidebar [on|off|pinned|auto|tasks|agents|context] [--save]",
+                    "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
                 );
             }
         },
         _ => {
             return CommandResult::error(
-                "Usage: /sidebar [on|off|pinned|auto|tasks|agents|context] [--save]",
+                "Usage: /sidebar [on|off|auto|work|tasks|agents|context] [--save]",
             );
         }
     };
@@ -1672,6 +1672,9 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 &settings.theme,
                 settings.background_color.as_deref(),
             );
+            // Cached transcript lines carry palette-mode-remapped colors;
+            // invalidate so a light↔dark family switch restyles history.
+            app.mark_history_updated();
             app.needs_redraw = true;
         }
         "cost_currency" | "currency" => {

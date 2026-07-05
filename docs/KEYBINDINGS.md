@@ -18,9 +18,19 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-R`             | Open the resume-session picker                                 |
 | `Ctrl-L`             | Refresh / clear the screen                                     |
 | `Ctrl-O`             | Open Activity Detail for selected/live/recent tool work, or the full reasoning timeline for thinking blocks when the composer is empty |
+| `Ctrl-T`             | Toggle the live transcript overlay (sticky-tail auto-scroll)    |
+| `Alt-C`              | Open the compact session context inspector (same as `/context`) |
+| `Esc Esc`            | Backtrack to a previous user message when idle (first Esc arms, second opens the backtrack overlay; silent no-op while a turn is streaming) |
+| `Alt-P` / `Alt-A` / `Alt-Y` | Switch directly to Plan / Agent / YOLO mode              |
 | `Alt-V` / `Option-V` (macOS) | Open the details pager for the selected, visible, or most recent tool/sub-agent card; terminals that emit the legacy Option-V glyph are also handled |
+| `v`                  | Open details for the selected or most recent tool/message card (composer empty) |
+| `Alt-L`              | Open a pager for the last message (composer empty)              |
+| `?` / `Alt-?`        | Open the help overlay (bare `?` only when the composer is empty) |
 | `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
-| `Alt-G`              | Scroll transcript to top when the composer is empty             |
+| `Ctrl-Shift-C`       | Copy the current transcript selection to the clipboard          |
+| `Alt-G` / `Alt-Shift-G` | Scroll transcript to top / bottom when the composer is empty |
+| `Alt-[` / `Alt-]`    | Jump to the previous / next tool output block (composer empty)  |
+| `Alt-↑` / `Alt-↓` / `Shift-↑` / `Shift-↓` | Scroll the transcript a few lines from the composer |
 | `Alt-1`-`Alt-8`      | Dispatch Hotbar slots 1-8 when no modal or inline picker is open |
 | `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` / `Alt-0` | Focus Pinned / Tasks / Agents / Context / Auto sidebar |
 | `Ctrl-Alt-0`         | Hide/show the pinned sidebar                                    |
@@ -42,9 +52,10 @@ Editing the message you're about to send.
 | `Ctrl-←` / `Alt-←`          | Move backward one word                                  |
 | `Ctrl-→` / `Alt-→`          | Move forward one word                                   |
 | `Ctrl-V` / `Cmd-V`          | Paste from clipboard (also bracketed-paste auto-handled)|
-| `Ctrl-Y`                    | Yank (paste) from kill buffer                           |
+| `Ctrl-Y`                    | Yank (paste) from kill buffer; with an empty composer, copies the focused transcript cell instead |
 | `↑` / `↓`                   | Cycle composer history (also selects popup/attachment items) |
-| `Ctrl-P` / `Ctrl-N`         | Cycle composer history (alternative)                     |
+| `Ctrl-P`                    | Open the fuzzy file picker (inserts `@path` on Enter); when the slash menu is open, `Ctrl-P` / `Ctrl-N` move its selection instead |
+| `Ctrl-Z`                    | Restore the last cleared draft (after `Ctrl-U` or Esc)   |
 | `Ctrl-S`                    | Stash current draft; with queued follow-ups during a running turn, send the next queued item now |
 | `Alt-R`                    | Search prompt history (Alt-R to exit)                  |
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
@@ -146,9 +157,16 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 |----------------------|-----------------------------------------------------|
 | `Enter`              | Advance to next step (Welcome → Language → API/trust gates → setup checkpoint) |
 | `Esc`                | Step back one screen                                |
-| `1`–`7`              | Pick a language (Language step)                    |
+| `1`–`8`              | Pick a language (Language step: `1` = auto-detect via `LC_ALL`/`LANG`, `2`–`8` = the seven shipped locales) |
 | `y` / `Y`            | Trust the workspace (Trust step)                   |
 | `n` / `N`            | Skip the trust prompt                              |
+
+## v0.8.67 audit notes
+
+- **`Ctrl-P` is the fuzzy file picker, not history.** This file previously documented `Ctrl-P`/`Ctrl-N` as "cycle composer history"; in code `Ctrl-P` opens the fuzzy file-picker overlay (composer focused, no modal, not streaming), and `Ctrl-P`/`Ctrl-N` only move the slash-menu selection while that menu is open. History browsing is `↑`/`↓`.
+- **Onboarding language step offers 8 choices.** `1` is auto-detect (`LC_ALL`/`LANG`); `2`–`8` are the seven shipped locales (en, ja, zh-Hans, zh-Hant, pt-BR, es-419, vi). The doc previously said `1`–`7`.
+- **Previously implemented but undocumented chords added above:** `Ctrl-T` (live transcript overlay), `Alt-C` (context inspector), `Esc Esc` (backtrack), `Alt-P`/`Alt-A`/`Alt-Y` (direct mode jumps), `Alt-[`/`Alt-]` (tool-block jumps), `Alt-L` (last-message pager), bare `v` (selected-card details), `?` (help on empty composer), `Ctrl-Shift-C` (copy selection), `Ctrl-Z` (restore cleared draft), and `Alt`/`Shift` arrow transcript scrolling.
+- **In-app help catalog (`crates/tui/src/tui/keybindings.rs`) has minor drift of its own** (it lists bare `l`, `g`/`G`, `[`/`]` where the handlers now require `Alt`, and `Shift-↑`/`Shift-↓` as history where the code scrolls the transcript); this document follows the actual `ui.rs` handlers.
 
 ## v0.8.29 audit notes
 

@@ -227,7 +227,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
       <>
         CodeWhale is a bidirectional MCP client and server. Define servers in <code className="inline">~/.codewhale/mcp.json</code>.
         Tools appear as <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code>. You can also expose CodeWhale as an MCP server with <code className="inline">codewhale mcp</code>.
-        See the <Link href="/docs#mcp" className="body-link">docs page</Link> for configuration examples.
+        See the <Link href="/docs/mcp" className="body-link">docs page</Link> for configuration examples.
       </>
     ),
     sources: ["docs/MCP.md"],
@@ -286,7 +286,7 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
         </p>
         <p className="mb-2">
           A CNB mirror is maintained for users who cannot reliably reach GitHub
-          (<Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>).
+          (<Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/CNB_MIRROR.md" className="body-link">docs/CNB_MIRROR.md</Link>).
           Cargo users can use the TUNA mirror for faster downloads in China.
         </p>
         <p>
@@ -570,7 +570,7 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
       <>
         CodeWhale 是双向 MCP 客户端和服务器。在 <code className="inline">~/.codewhale/mcp.json</code> 中定义服务器。
         工具以 <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code> 形式呈现。你也可以通过 <code className="inline">codewhale mcp</code> 将 CodeWhale 暴露为 MCP 服务器。
-        查看 <Link href="/zh/docs#mcp" className="body-link">文档页面</Link> 了解配置示例。
+        查看 <Link href="/zh/docs/mcp" className="body-link">文档页面</Link> 了解配置示例。
       </>
     ),
     sources: ["docs/MCP.md"],
@@ -628,7 +628,7 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`}
         </p>
         <p className="mb-2">
           面向无法稳定访问 GitHub 的用户，提供 CNB 镜像（
-          <Link href="/docs#cnb-mirror" className="body-link">docs/CNB_MIRROR.md</Link>）。
+          <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/CNB_MIRROR.md" className="body-link">docs/CNB_MIRROR.md</Link>）。
           Cargo 用户可使用 TUNA 镜像在国内加速下载。
         </p>
         <p>

@@ -88,7 +88,10 @@ impl Theme {
         }
     }
 
-    /// Light theme tokens for sidebar and tool chrome.
+    /// Light theme tokens for sidebar and tool chrome. Accents use the
+    /// light-mode tokens (blue / amber / deep red) — the dark palette's
+    /// Signal Gold and Rose Red don't clear readable contrast on light
+    /// surfaces.
     #[must_use]
     pub const fn light() -> Self {
         Self {
@@ -97,20 +100,20 @@ impl Theme {
             section_border_type: BorderType::Plain,
             section_border_color: palette::LIGHT_BORDER,
             section_bg: palette::LIGHT_PANEL,
-            section_title_color: palette::WHALE_ACCENT_PRIMARY,
+            section_title_color: palette::LIGHT_ACCENT_BLUE,
             section_padding: Padding::horizontal(1),
             tool_title_color: palette::LIGHT_TEXT_SOFT,
             tool_value_color: palette::LIGHT_TEXT_MUTED,
             tool_label_color: palette::LIGHT_TEXT_HINT,
-            tool_running_accent: palette::WHALE_ACCENT_PRIMARY,
+            tool_running_accent: palette::LIGHT_ACCENT_BLUE,
             tool_success_accent: palette::LIGHT_TEXT_HINT,
-            tool_failed_accent: palette::DEEPSEEK_RED,
-            plan_progress_color: palette::WHALE_ACCENT_PRIMARY,
+            tool_failed_accent: palette::LIGHT_ERROR_FG,
+            plan_progress_color: palette::LIGHT_GREEN,
             plan_summary_color: palette::LIGHT_TEXT_MUTED,
             plan_explanation_color: palette::LIGHT_TEXT_HINT,
             plan_pending_color: palette::LIGHT_TEXT_MUTED,
-            plan_in_progress_color: Color::Rgb(180, 83, 9),
-            plan_completed_color: palette::WHALE_ACCENT_PRIMARY,
+            plan_in_progress_color: palette::LIGHT_AMBER,
+            plan_completed_color: palette::LIGHT_GREEN,
         }
     }
 
@@ -214,10 +217,38 @@ impl Theme {
     }
 }
 
-/// Returns the active theme used by the TUI today.
+// The render loop publishes the active `PaletteMode` here (via
+// `ColorCompatBackend::set_palette_mode`, called once per frame from the
+// draw path) so free-function style helpers — the tool/plan card styling in
+// `crate::tui::history` — can resolve theme-correct tokens without threading
+// `App` through every call site. Rendering is single-threaded, and a
+// `thread_local` (rather than a process-global) keeps the `#[test]`-per-thread
+// harness isolated: a test that flips the mode can't bleed into tests
+// asserting dark-theme styles on other threads.
+thread_local! {
+    static ACTIVE_PALETTE_MODE: std::cell::Cell<PaletteMode> =
+        const { std::cell::Cell::new(PaletteMode::Dark) };
+}
+
+/// Publish the palette mode the current thread should style against.
+pub fn set_active_palette_mode(mode: PaletteMode) {
+    ACTIVE_PALETTE_MODE.with(|cell| cell.set(mode));
+}
+
+/// The palette mode last published on this thread (dark until told otherwise).
 #[must_use]
-pub const fn active_theme() -> Theme {
-    Theme::dark()
+pub fn active_palette_mode() -> PaletteMode {
+    ACTIVE_PALETTE_MODE.with(std::cell::Cell::get)
+}
+
+/// Returns the active theme used by the TUI: the token set matching the
+/// palette mode the render loop last published. Defaults to dark, which is
+/// also correct for the community presets (Catppuccin, Tokyo Night, …) —
+/// those report `PaletteMode::Dark` and restyle dark tokens per-cell in the
+/// backend remap.
+#[must_use]
+pub fn active_theme() -> Theme {
+    Theme::for_palette_mode(active_palette_mode())
 }
 
 #[cfg(test)]
@@ -227,7 +258,27 @@ mod tests {
     use crate::tui::history::ToolStatus;
 
     #[test]
-    fn active_theme_returns_dark() {
+    fn active_theme_defaults_to_dark() {
+        // Fresh thread ⇒ nothing published yet ⇒ dark tokens. Run on a
+        // dedicated thread so this can't observe a mode set by another test
+        // sharing this thread in single-threaded test runs.
+        std::thread::spawn(|| assert_eq!(active_theme(), Theme::dark()))
+            .join()
+            .expect("thread");
+    }
+
+    #[test]
+    fn active_theme_follows_published_palette_mode() {
+        // thread_local storage keeps this from bleeding into other tests,
+        // but reset to Dark on the way out anyway for single-threaded runs.
+        use crate::palette::PaletteMode;
+        super::set_active_palette_mode(PaletteMode::Light);
+        assert_eq!(active_theme(), Theme::light());
+        super::set_active_palette_mode(PaletteMode::SolarizedLight);
+        assert_eq!(active_theme(), Theme::solarized_light());
+        super::set_active_palette_mode(PaletteMode::Grayscale);
+        assert_eq!(active_theme(), Theme::grayscale());
+        super::set_active_palette_mode(PaletteMode::Dark);
         assert_eq!(active_theme(), Theme::dark());
     }
 
@@ -255,6 +306,28 @@ mod tests {
         assert_eq!(theme.tool_title_color, palette::LIGHT_TEXT_SOFT);
         assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_MUTED);
         assert_eq!(theme.plan_summary_color, palette::LIGHT_TEXT_MUTED);
+    }
+
+    #[test]
+    fn light_theme_accents_avoid_dark_palette_gold_and_rose() {
+        // Signal Gold (#F6C453) and Rose Red (#FF5C7A) are dark-surface
+        // accents; on light panels they fall to ~1.5:1 / ~2.8:1. The light
+        // token set must not reach for them.
+        let theme = Theme::light();
+        for accent in [
+            theme.section_title_color,
+            theme.tool_running_accent,
+            theme.tool_failed_accent,
+            theme.plan_progress_color,
+            theme.plan_in_progress_color,
+            theme.plan_completed_color,
+        ] {
+            assert_ne!(accent, palette::WHALE_ACCENT_PRIMARY);
+            assert_ne!(accent, palette::DEEPSEEK_RED);
+        }
+        assert_eq!(theme.tool_running_accent, palette::LIGHT_ACCENT_BLUE);
+        assert_eq!(theme.tool_failed_accent, palette::LIGHT_ERROR_FG);
+        assert_eq!(theme.plan_in_progress_color, palette::LIGHT_AMBER);
     }
 
     #[test]

@@ -94,8 +94,8 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
       <section id="source" className="hairline-t pt-8">
         <p className="text-sm text-ink-mute">
           {isZh
-            ? "来源文档：docs/ARCHITECTURE.md · 更新时请同步修改 docs-map.ts。"
-            : "Source document: docs/ARCHITECTURE.md · Update docs-map.ts when changing."}
+            ? "来源文档：docs/CONSTITUTION.md（架构背景见 docs/ARCHITECTURE.md）· 更新时请同步修改 docs-map.ts。"
+            : "Source document: docs/CONSTITUTION.md (architecture background in docs/ARCHITECTURE.md) · Update docs-map.ts when changing."}
         </p>
       </section>
     </section>

@@ -28,19 +28,19 @@ const INTEGRATIONS: Integration[] = [
     name: "HTTP / SSE Runtime API",
     desc: "Full local HTTP + Server-Sent Events runtime API on 127.0.0.1:7878. Create threads, stream turns, manage background jobs, and control approval decisions — all from any HTTP client or the bundled mobile page.",
     descZh: "完整的本地 HTTP + Server-Sent Events Runtime API，监听 127.0.0.1:7878。创建线程、流式对话、管理后台任务、控制审批决策——任意 HTTP 客户端或内置手机页面皆可调用。",
-    docsHref: "/en/docs#runtime-api",
+    docsHref: "/en/docs/runtime-api",
   },
   {
-    name: "ACP (Agent Communication Protocol)",
-    desc: "Open IETF-standard protocol surface for agent-to-agent communication. CodeWhale speaks ACP natively so external agents, tools, and platforms can discover and interact with running sessions.",
-    descZh: "开放的 IETF 标准 Agent 通信协议。CodeWhale 原生支持 ACP，外部 Agent、工具和平台可以发现并互操作运行中的会话。",
-    docsHref: "/en/docs#acp",
+    name: "ACP (Agent Client Protocol)",
+    desc: "Open protocol for connecting coding agents to editor clients. CodeWhale speaks ACP natively over stdio (codewhale serve --acp), so ACP-capable editors can host running sessions.",
+    descZh: "用于连接编码 Agent 与编辑器客户端的开放协议。CodeWhale 通过 stdio 原生支持 ACP（codewhale serve --acp），兼容 ACP 的编辑器可直接托管会话。",
+    docsHref: "https://github.com/Hmbown/CodeWhale/blob/main/docs/ACP_REGISTRY_SUBMISSION.md",
   },
   {
     name: "MCP (Model Context Protocol)",
     desc: "Connect CodeWhale to external tools and services via MCP servers over stdio or HTTP/SSE. Pre-configured servers include filesystem, Git, SQLite, and popular SaaS platforms.",
     descZh: "通过 MCP 服务器（stdio 或 HTTP/SSE）将 CodeWhale 连接到外部工具和服务。预配置的服务器包括文件系统、Git、SQLite 和常用 SaaS 平台。",
-    docsHref: "/en/docs#mcp",
+    docsHref: "/en/docs/mcp",
   },
   {
     name: "VS Code Extension",
@@ -172,16 +172,16 @@ export default async function RuntimePage({ params }: { params: Promise<{ locale
           {isZh ? (
             <>
               详细实现文档：{" "}
-              <Link href="/zh/docs" className="body-link">docs/RUNTIME_API.md</Link>
+              <Link href="/zh/docs/runtime-api" className="body-link">docs/RUNTIME_API.md</Link>
               {" · "}
-              <Link href="/zh/docs#acp" className="body-link">ACP Registry</Link>
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/ACP_REGISTRY_SUBMISSION.md" className="body-link">ACP Registry</Link>
             </>
           ) : (
             <>
               Detailed implementation docs:{" "}
-              <Link href="/en/docs" className="body-link">docs/RUNTIME_API.md</Link>
+              <Link href="/en/docs/runtime-api" className="body-link">docs/RUNTIME_API.md</Link>
               {" · "}
-              <Link href="/en/docs#acp" className="body-link">ACP Registry</Link>
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/ACP_REGISTRY_SUBMISSION.md" className="body-link">ACP Registry</Link>
             </>
           )}
         </p>
