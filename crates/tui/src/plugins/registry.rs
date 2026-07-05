@@ -7,8 +7,11 @@ use super::manifest::LoadedPlugin;
 pub struct PluginRegistry {
     plugins: HashMap<String, LoadedPlugin>,
     user_overrides: HashMap<String, bool>,
-    /// Where `user_overrides` is persisted. `None` in tests / when no home
-    /// directory is available, in which case enable/disable stays in-memory.
+    /// Where `user_overrides` is persisted. Discovery always sets this via
+    /// [`set_overrides_store`](Self::set_overrides_store); it is `None` only
+    /// when a registry is built without a persistence store (e.g. a direct
+    /// `PluginRegistry::new()` in unit tests), in which case enable/disable
+    /// stays in-memory.
     overrides_path: Option<PathBuf>,
 }
 
