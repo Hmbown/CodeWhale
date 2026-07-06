@@ -4601,6 +4601,9 @@ async fn run_event_loop(
                 KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     app.scroll_up(3);
                 }
+                KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.scroll_up(1);
+                }
                 KeyCode::Up
                     if key.modifiers.is_empty()
                         && mention_menu_open
@@ -4654,6 +4657,9 @@ async fn run_event_loop(
                 }
                 KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     app.scroll_down(3);
+                }
+                KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.scroll_down(1);
                 }
                 KeyCode::Down if key.modifiers.is_empty() && mention_menu_open => {
                     app.mention_menu_selected = (app.mention_menu_selected + 1)

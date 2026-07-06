@@ -902,6 +902,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-extension"
+version = "0.8.66"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "codewhale-hooks"
 version = "0.8.66"
 dependencies = [

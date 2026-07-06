@@ -1,0 +1,20 @@
+[package]
+name = "codewhale-extension"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime extension API for CodeWhale — lifecycle hooks, tool registration, MCP server auto-config, slash commands, keyboard shortcuts"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
