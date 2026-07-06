@@ -35,7 +35,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let lines = match app.onboarding {
-        OnboardingState::Welcome => welcome::lines(),
+        OnboardingState::Welcome => welcome::lines(app),
         OnboardingState::Language => language::lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
