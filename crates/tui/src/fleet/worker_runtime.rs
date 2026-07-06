@@ -1429,6 +1429,58 @@ mod tests {
     }
 
     #[test]
+    fn fleet_slots_with_concrete_models_resolve_to_distinct_models() {
+        // Acceptance bar: with one loaded operator model, an operator slot
+        // (no model pin) plus two slots each pinned to a different model must
+        // resolve to THREE distinct models — not all the operator's model.
+        let operator_model = "glm-5.2";
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        let cases = [
+            ("operator", None, operator_model),
+            ("reviewer", Some("deepseek-v4-flash"), "deepseek-v4-flash"),
+            ("builder", Some("kimi-k2"), "kimi-k2"),
+        ];
+        let mut resolved = std::collections::BTreeSet::new();
+        for (role, pinned_model, expected_model) in cases {
+            let task = fleet_task(
+                role,
+                Some(worker_profile(None, Some(role), None, None, pinned_model, vec![])),
+            );
+            let spec = fleet_task_to_worker_spec_with_profiles(
+                &format!("{role}-w"),
+                "run-x",
+                &task,
+                &worker,
+                operator_model,
+                std::path::Path::new("/tmp"),
+                &[],
+                None,
+            )
+            .expect("worker spec");
+            assert_eq!(spec.model, expected_model, "slot {role} effective model");
+            assert_eq!(
+                spec.runtime_profile.model,
+                ModelRoute::Fixed(expected_model.to_string()),
+                "slot {role} route pins its resolved model",
+            );
+            resolved.insert(spec.model.clone());
+        }
+        assert_eq!(
+            resolved.len(),
+            3,
+            "operator + two pinned slots must resolve to three distinct models"
+        );
+    }
+
+    #[test]
     fn exec_hardening_caps_max_steps_to_max_turns() {
         let spec = AgentWorkerSpec {
             worker_id: "w1".to_string(),
