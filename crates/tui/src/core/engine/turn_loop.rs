@@ -1203,6 +1203,10 @@ impl Engine {
                                 "Turn ending with {running} sub-agent(s) still running in the background; they'll report when done."
                             )))
                             .await;
+                        // Inject a waiting hint so the model does not poll
+                        // with peek/status/sleep on the next turn (issue #4097).
+                        self.add_session_message(waiting_for_subagents_runtime_message(running))
+                            .await;
                     }
                 }
                 if subagent_completions > 0 {
@@ -2505,6 +2509,28 @@ XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 {payload}\n\
 </codewhale:runtime_event>"
     )
+}
+
+fn waiting_for_subagents_runtime_message(running: usize) -> Message {
+    Message {
+        role: "user".to_string(),
+        content: vec![
+            ContentBlock::Text {
+                text: format!(
+                    "<codewhale:runtime_event kind=\"waiting_for_subagents\" visibility=\"internal\">\n\
+This is an internal runtime event, not user input. Your {running} sub-agent(s) \
+are still running. Do NOT poll them with agent(action=\"peek\") or \
+agent(action=\"status\"). Do NOT use sleep or any shell blocking primitive as a \
+waiting strategy. The runtime will deliver <codewhale:subagent.done> sentinels \
+automatically when each child finishes — polling will never make that happen \
+sooner. Stop immediately: emit zero tool calls and end the turn.\n\
+</codewhale:runtime_event>"
+                ),
+                cache_control: None,
+            },
+            runtime_event_turn_metadata_block(UserInputProvenance::SubAgentHandoff),
+        ],
+    }
 }
 
 fn subagent_completion_runtime_message(payload: &str) -> Message {
