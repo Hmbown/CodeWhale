@@ -48,10 +48,6 @@ struct AgentProfileToml {
     #[serde(default)]
     persona: Option<String>,
     #[serde(default)]
-    model_class_hint: Option<String>,
-    #[serde(default)]
-    route_tier: Option<String>,
-    #[serde(default)]
     loadout: Option<String>,
     #[serde(default, alias = "model_hint", alias = "model_id")]
     model: Option<String>,
@@ -152,13 +148,9 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
     .to_string();
     validate_agent_profile_token(path, "base_role/role_hint", &role_name)?;
 
-    let loadout = first_present([
-        parsed.model_class_hint.as_deref(),
-        parsed.route_tier.as_deref(),
-        parsed.loadout.as_deref(),
-    ])
-    .map(FleetLoadout::from_name)
-    .unwrap_or_default();
+    let loadout = first_present([parsed.loadout.as_deref()])
+        .map(FleetLoadout::from_name)
+        .unwrap_or_default();
     let model = non_empty_trimmed(parsed.model.as_deref()).map(str::to_string);
     validate_agent_profile_model_hint(path, model.as_deref())?;
 
@@ -450,10 +442,7 @@ impl FleetProfileDraft {
             toml::Value::String(self.role_hint.clone()),
         );
         if let Some(ref hint) = self.model_class_hint {
-            root.insert(
-                "model_class_hint".to_string(),
-                toml::Value::String(hint.clone()),
-            );
+            root.insert("loadout".to_string(), toml::Value::String(hint.clone()));
         }
         if let Some(ref model) = self.model {
             root.insert("model".to_string(), toml::Value::String(model.clone()));
@@ -728,7 +717,7 @@ name = "adversarial_reviewer"
 display_name = "Adversarial Reviewer"
 description = "Skeptical read-only review posture"
 role_hint = "reviewer"
-model_class_hint = "balanced"
+loadout = "balanced"
 model = "deepseek-v4-pro"
 
 [instructions]
@@ -768,6 +757,33 @@ posture = "read-only"
             FleetProfilePermissions::default()
         );
         assert_eq!(profile.source, source);
+    }
+
+    #[test]
+    fn agent_profile_loader_rejects_retired_model_policy_aliases() {
+        for (field, value) in [("model_class_hint", "balanced"), ("route_tier", "fast")] {
+            let tmp = TempDir::new().unwrap();
+            write_profile(
+                tmp.path(),
+                "reviewer.toml",
+                &format!(
+                    r#"
+name = "reviewer"
+role_hint = "reviewer"
+{field} = "{value}"
+"#
+                ),
+            );
+
+            let err = load_agent_profiles_from_dir(tmp.path())
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains(field) || err.contains("unknown field"),
+                "unexpected error for {field}: {err}"
+            );
+        }
     }
 
     #[test]
