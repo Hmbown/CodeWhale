@@ -373,6 +373,15 @@ Reach for them when the work is genuinely independent:
   launch more; do not invent a smaller per-turn limit. To fan out more gently
   you can lower `[subagents].launch_concurrency` (how many start at once);
   the default is the full running cap.
+- **Waiting, not polling**: When you end a turn because every remaining task
+  depends on background results that haven't arrived yet, do **not** poll those
+  children with `agent(action="peek")` or `agent(action="status")` on your next
+  turn. Do not use `sleep` or any shell blocking primitive as a waiting strategy.
+  The runtime delivers `<codewhale:subagent.done>` sentinels automatically as
+  user messages the moment a child finishes — polling will never make that happen
+  sooner, it only burns turns and budget. If you receive a new turn with no new
+  user message and your children are still running, stop immediately: emit zero
+  tool calls and end the turn.
 
 ## Thinking Delegation
 
