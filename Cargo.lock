@@ -985,6 +985,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-tn-extension"
+version = "0.8.66"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "codewhale-extension",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codewhale-tools"
 version = "0.8.66"
 dependencies = [
@@ -1013,9 +1025,11 @@ dependencies = [
  "clap_complete",
  "codewhale-config",
  "codewhale-execpolicy",
+ "codewhale-extension",
  "codewhale-protocol",
  "codewhale-release",
  "codewhale-secrets",
+ "codewhale-tn-extension",
  "codewhale-tools",
  "colored",
  "crossterm 0.28.1",

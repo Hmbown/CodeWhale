@@ -1,0 +1,16 @@
+[package]
+name = "codewhale-tn-extension"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TormentNexus extension adapter for CodeWhale — hooks into the extension API"
+
+[dependencies]
+codewhale-extension = { path = "../codewhale-extension" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true

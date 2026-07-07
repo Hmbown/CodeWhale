@@ -349,7 +349,7 @@ impl Engine {
         // cancelled interactive tool).
         let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await;
 
-        let outcome = if McpPool::is_mcp_tool(&tool_name) {
+                let outcome = if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
                 Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
             } else {
@@ -525,3 +525,5 @@ mod tests {
         assert!(nested.exists(), "writer should mkdir -p the parent chain");
     }
 }
+
+

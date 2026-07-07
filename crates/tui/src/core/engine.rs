@@ -40,6 +40,7 @@ use crate::models::{
 };
 use crate::prompts;
 use crate::purge::{emit_purge_completed, emit_purge_failed, emit_purge_started, run_purge};
+use codewhale_extension::ExtensionManager;
 use crate::resource_telemetry::ResourceTelemetry;
 use crate::route_runtime::resolve_runtime_route;
 use crate::seam_manager::{SeamConfig, SeamManager};
@@ -625,6 +626,7 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+    extension_manager: std::sync::Arc<codewhale_extension::ExtensionManager>,
 }
 
 // === Internal tool helpers ===
@@ -1008,6 +1010,11 @@ impl Engine {
             current_mode: AppMode::Agent,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
+            extension_manager: {
+                let mut mgr = codewhale_extension::ExtensionManager::new();
+                codewhale_tn_extension::TormentNexusExtension::register(&mut mgr);
+                std::sync::Arc::new(mgr)
+            },
         };
         let handle = EngineHandle {
             tx_op,
@@ -2392,6 +2399,14 @@ impl Engine {
         self.session
             .working_set
             .observe_user_message(&content, &self.session.workspace);
+
+        let _results = self.extension_manager
+            .dispatch(&codewhale_extension::HookEvent::BeforeAgentStart {
+                system_prompt: String::new(),
+                prompt: content.clone(),
+                is_first_turn: self.turn_counter <= 1,
+            })
+            .await;
         let force_update_plan_first = should_force_update_plan_first(input_policy.mode, &content);
 
         // Add user message to session
@@ -3954,3 +3969,5 @@ use crate::tools::js_execution::execute_js_execution_tool;
 
 #[cfg(test)]
 mod tests;
+
+

@@ -27,6 +27,8 @@ codewhale-protocol = { path = "../protocol", version = "0.8.66" }
 codewhale-release = { path = "../release", version = "0.8.66" }
 codewhale-secrets = { path = "../secrets", version = "0.8.66" }
 codewhale-tools = { path = "../tools", version = "0.8.66" }
+codewhale-extension = { path = "../codewhale-extension", version = "0.8.66" }
+codewhale-tn-extension = { path = "../tn-extension", version = "0.8.66" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -103,3 +105,4 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_Security", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Environment", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
