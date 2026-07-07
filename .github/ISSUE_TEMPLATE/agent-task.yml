@@ -1,7 +1,7 @@
 name: Agent task
 description: Create a self-contained task that a headless agent (DeepSeek V4, remote droplet) can execute end-to-end without human context.
-title: "v0.8.67: "
-labels: ["agent-ready", "v0.8.67"]
+title: "v0.8.68: "
+labels: ["agent-ready", "v0.8.68"]
 body:
   - type: markdown
     attributes:
