@@ -10034,7 +10034,12 @@ fn activity_detail_fallback_prefers_live_activity_context() {
     assert!(open_activity_detail_pager(&mut app));
     let body = pop_pager_body(&mut app);
 
-    assert!(body.contains("Turn: turn_live_123456789"));
+    // A6 (#4102): short id + humanized status, never the raw UUID/"in_progress".
+    assert!(
+        body.contains("Turn turn_live_12 \u{00B7} in progress"),
+        "{body}"
+    );
+    assert!(!body.contains("turn_live_123456789"), "{body}");
     assert!(body.contains("Activity: delegate"));
     assert!(body.contains("Status: running"));
     assert!(body.contains("agent_id: agent_af58ba3a"));
@@ -10117,9 +10122,10 @@ fn turn_inspector_renders_overview_sections_for_active_turn() {
 
     // Overview framing + Ctrl+O vs. v contract.
     assert!(
-        body.contains("Turn: turn_abc123456789 (completed)"),
+        body.contains("Turn turn_abc1234 \u{00B7} completed"),
         "{body}"
     );
+    assert!(!body.contains("turn_abc123456789"), "{body}");
     assert!(
         body.contains("press v for the selected item's raw detail"),
         "{body}"
@@ -10379,8 +10385,8 @@ fn turn_handoff_markdown_renders_compact_sections_for_active_turn() {
 
     let md = turn_handoff_markdown(&app);
 
-    // Title carries the turn id.
-    assert!(md.contains("# Turn handoff — turn_abc123456789"), "{md}");
+    // Title carries the short turn id (A6: no raw UUID dumps).
+    assert!(md.contains("# Turn handoff — turn_abc1234"), "{md}");
     // Markdown section headings for the issue's required sections.
     for heading in [
         "## Intent",

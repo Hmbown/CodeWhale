@@ -142,11 +142,8 @@ fn activity_detail_text(app: &App, cell_index: usize, width: u16) -> Option<Stri
     let mut sections = Vec::new();
 
     if let Some(turn_id) = app.runtime_turn_id.as_ref() {
-        let status = app.runtime_turn_status.as_deref().unwrap_or("in progress");
-        sections.push(format!(
-            "Turn: {} ({status})",
-            truncate_line_to_width(turn_id, 24)
-        ));
+        let status = humanized_turn_status(app);
+        sections.push(format!("Turn {} \u{00B7} {status}", short_turn_id(turn_id)));
     }
 
     sections.push(format!(
@@ -211,11 +208,8 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
 
     let mut sections = Vec::new();
     if let Some(turn_id) = app.runtime_turn_id.as_ref() {
-        let status = app.runtime_turn_status.as_deref().unwrap_or("in progress");
-        sections.push(format!(
-            "Turn: {} ({status})",
-            truncate_line_to_width(turn_id, 24)
-        ));
+        let status = humanized_turn_status(app);
+        sections.push(format!("Turn {} \u{00B7} {status}", short_turn_id(turn_id)));
     }
     sections.push("Activity: reasoning timeline".to_string());
     sections.push(format!(
@@ -861,22 +855,40 @@ fn current_turn_range(app: &App) -> (usize, usize) {
     (start, end)
 }
 
+/// Human form of the runtime turn status — raw enum-ish values like
+/// "in_progress" must never reach the inspector (dogfood A6, #4102).
+fn humanized_turn_status(app: &App) -> &str {
+    match app.runtime_turn_status.as_deref() {
+        Some("in_progress") | None => "in progress",
+        Some(other) => other,
+    }
+}
+
+/// Short display form of a runtime turn id. The full UUID reads as internal
+/// state in the inspector header (dogfood A6); twelve characters is plenty
+/// to correlate with logs.
+fn short_turn_id(turn_id: &str) -> &str {
+    turn_id.get(..12).unwrap_or(turn_id)
+}
+
 /// Assemble the Turn Inspector overview text from all available turn data.
 pub(super) fn turn_inspector_text(app: &App) -> String {
     let (start, end) = current_turn_range(app);
     let mut out: Vec<String> = Vec::new();
 
-    // Turn identity header.
-    if let Some(turn_id) = app.runtime_turn_id.as_ref() {
-        let status = app.runtime_turn_status.as_deref().unwrap_or("in progress");
-        out.push(format!(
-            "Turn: {} ({status})",
-            truncate_line_to_width(turn_id, 32)
-        ));
-    } else if app.turn_counter > 0 {
-        out.push(format!("Turn #{}", app.turn_counter));
+    // Turn identity header. Lead with the human turn number and status; the
+    // id is a short correlation suffix, never a raw UUID dump (dogfood A6).
+    let status = humanized_turn_status(app);
+    if app.turn_counter > 0 {
+        let mut line = format!("Turn #{} \u{00B7} {status}", app.turn_counter);
+        if let Some(turn_id) = app.runtime_turn_id.as_ref() {
+            line.push_str(&format!(" \u{00B7} id {}", short_turn_id(turn_id)));
+        }
+        out.push(line);
+    } else if let Some(turn_id) = app.runtime_turn_id.as_ref() {
+        out.push(format!("Turn {} \u{00B7} {status}", short_turn_id(turn_id)));
     } else {
-        out.push("Turn: — (no turn recorded yet)".to_string());
+        out.push("Turn: \u{2014} (no turn recorded yet)".to_string());
     }
     // Restate the Ctrl+O (overview) vs. `v` (raw leaf detail) contract so the
     // two surfaces never get confused.
@@ -936,10 +948,10 @@ pub(crate) fn turn_handoff_markdown(app: &App) -> String {
 
     // Title + identity — turn id when known, else the turn counter, else a
     // bare heading so an empty transcript still yields a coherent artifact.
-    let heading = if let Some(turn_id) = app.runtime_turn_id.as_ref() {
-        format!("# Turn handoff — {}", truncate_line_to_width(turn_id, 48))
-    } else if app.turn_counter > 0 {
+    let heading = if app.turn_counter > 0 {
         format!("# Turn handoff — Turn #{}", app.turn_counter)
+    } else if let Some(turn_id) = app.runtime_turn_id.as_ref() {
+        format!("# Turn handoff — {}", short_turn_id(turn_id))
     } else {
         "# Turn handoff".to_string()
     };
