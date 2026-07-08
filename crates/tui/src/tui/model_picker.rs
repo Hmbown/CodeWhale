@@ -396,11 +396,7 @@ impl ModelPickerView {
         };
         let visible_height = usize::from(area.height.saturating_sub(2));
         let (start, end) = visible_row_window(selected, rows.len(), visible_height);
-        let title = if rows.len() > visible_height && visible_height > 0 {
-            format!(" {title} {}-{}/{} ", start + 1, end, rows.len())
-        } else {
-            format!(" {title} ")
-        };
+        let title = picker_pane_title(title, start, end, rows.len(), visible_height);
         let block = Block::default()
             .title(Line::from(Span::styled(
                 title,
@@ -469,6 +465,24 @@ fn visible_row_window(selected: usize, total: usize, viewport_height: usize) -> 
         start = total.saturating_sub(visible);
     }
     (start, start + visible)
+}
+
+fn picker_pane_title(
+    title: &str,
+    start: usize,
+    end: usize,
+    total: usize,
+    viewport_height: usize,
+) -> String {
+    if total > viewport_height && viewport_height > 0 {
+        if end == start + 1 {
+            format!(" {title} {}/{} ", start + 1, total)
+        } else {
+            format!(" {title} {}-{}/{} ", start + 1, end, total)
+        }
+    } else {
+        format!(" {title} ")
+    }
 }
 
 fn picker_row_spans<'a>(
@@ -1753,6 +1767,50 @@ mod tests {
         assert_eq!(visible_row_window(15, 16, 8), (8, 16));
         assert_eq!(visible_row_window(3, 4, 8), (0, 4));
         assert_eq!(visible_row_window(3, 4, 0), (0, 0));
+    }
+
+    #[test]
+    fn pane_title_uses_position_for_single_visible_row() {
+        let (app, config, _lock) = create_test_app();
+        let view = ModelPickerView::new(&app, &config);
+        let rows = vec![
+            ("auto".to_string(), String::new()),
+            ("deepseek-v4-pro".to_string(), String::new()),
+            ("deepseek-v4-flash".to_string(), String::new()),
+        ];
+        let area = Rect::new(0, 0, 32, 3);
+        let mut buf = Buffer::empty(area);
+
+        view.render_pane(area, &mut buf, "Model", rows, 1, true);
+
+        let rendered = (area.y..area.y.saturating_add(area.height))
+            .map(|y| buffer_row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Model 2/3"), "{rendered}");
+        assert!(!rendered.contains("Model 2-2/3"), "{rendered}");
+    }
+
+    #[test]
+    fn pane_title_keeps_range_for_multiple_visible_rows() {
+        let (app, config, _lock) = create_test_app();
+        let view = ModelPickerView::new(&app, &config);
+        let rows = vec![
+            ("auto".to_string(), String::new()),
+            ("off".to_string(), String::new()),
+            ("high".to_string(), String::new()),
+            ("max".to_string(), String::new()),
+        ];
+        let area = Rect::new(0, 0, 32, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_pane(area, &mut buf, "Thinking", rows, 3, true);
+
+        let rendered = (area.y..area.y.saturating_add(area.height))
+            .map(|y| buffer_row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Thinking 3-4/4"), "{rendered}");
     }
 
     #[test]
