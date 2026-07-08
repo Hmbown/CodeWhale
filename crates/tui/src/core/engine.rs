@@ -1508,6 +1508,8 @@ impl Engine {
                         .with_todos(self.config.todos.clone())
                         .with_parent_mode(self.current_mode)
                         .background_runtime();
+                        runtime.worker_profile.denied_tools =
+                            self.config.disallowed_tools.clone().unwrap_or_default();
                         let route = resolve_subagent_assignment_route(
                             &runtime,
                             None,
@@ -2625,6 +2627,8 @@ impl Engine {
                 if matches!(input_policy.mode, AppMode::Plan) {
                     rt.worker_profile = WorkerRuntimeProfile::for_role(SubAgentType::Plan);
                 }
+                rt.worker_profile.denied_tools =
+                    self.config.disallowed_tools.clone().unwrap_or_default();
                 if let Some(context) = fork_context_for_runtime.clone() {
                     rt = rt.with_fork_context(context);
                 }

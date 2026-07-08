@@ -139,6 +139,11 @@ pub struct WorkerRuntimeProfile {
     pub max_spawn_depth: u32,
     /// Whether the worker runs detached (background) or inline (foreground).
     pub background: bool,
+    /// Tools that are explicitly denied for this worker, overriding any allowlist.
+    /// Deny always wins over allow. Deny rules propagate to child workers through
+    /// `derive_child()` — each child inherits its parent's deny list as a union.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_tools: Vec<String>,
 }
 
 impl WorkerRuntimeProfile {
@@ -172,6 +177,7 @@ impl WorkerRuntimeProfile {
             provider: None,
             max_spawn_depth: codewhale_config::DEFAULT_SPAWN_DEPTH,
             background: true,
+            denied_tools: Vec::new(),
         }
     }
 
@@ -212,6 +218,14 @@ impl WorkerRuntimeProfile {
             .max_spawn_depth
             .min(self.max_spawn_depth.saturating_sub(1))
             .min(codewhale_config::MAX_SPAWN_DEPTH_CEILING);
+        // Union parent + child deny lists (no duplicates). Neither can remove
+        // the other's entries — deny always adds across generations.
+        let mut denied_tools = self.denied_tools.clone();
+        for tool in &requested.denied_tools {
+            if !denied_tools.contains(tool) {
+                denied_tools.push(tool.clone());
+            }
+        }
         WorkerRuntimeProfile {
             role: requested.role.clone(),
             permissions,
@@ -221,6 +235,7 @@ impl WorkerRuntimeProfile {
             provider: requested.provider.clone().or_else(|| self.provider.clone()),
             max_spawn_depth,
             background: requested.background,
+            denied_tools,
         }
     }
 
@@ -359,5 +374,75 @@ mod tests {
         let requested = WorkerRuntimeProfile::for_role(SubAgentType::Explore); // provider None
         let child = parent.derive_child(&requested);
         assert_eq!(child.provider.as_deref(), Some("moonshot"));
+    }
+
+    #[test]
+    fn derive_child_unions_deny_lists() {
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        parent.denied_tools = vec!["tool_a".to_string(), "tool_b".to_string()];
+
+        let mut requested = WorkerRuntimeProfile::for_role(SubAgentType::Implementer);
+        requested.denied_tools = vec!["tool_c".to_string()];
+
+        let child = parent.derive_child(&requested);
+        // Child inherits parent's denied tools AND keeps its own (union).
+        assert!(
+            child.denied_tools.contains(&"tool_a".to_string()),
+            "parent's deny list propagates to child"
+        );
+        assert!(
+            child.denied_tools.contains(&"tool_b".to_string()),
+            "parent's deny list propagates to child"
+        );
+        assert!(
+            child.denied_tools.contains(&"tool_c".to_string()),
+            "child's own denied tools are preserved"
+        );
+        assert_eq!(child.denied_tools.len(), 3, "no duplicates in union");
+    }
+
+    #[test]
+    fn derive_child_preserves_wildcard_denies() {
+        // Parent denies mcp_*, child denies file_*. Union must preserve both
+        // wildcards — neither can remove the other's deny entries.
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        parent.denied_tools = vec!["mcp_*".to_string()];
+
+        let mut requested = WorkerRuntimeProfile::for_role(SubAgentType::Implementer);
+        requested.denied_tools = vec!["file_*".to_string()];
+
+        let child = parent.derive_child(&requested);
+        assert!(
+            child.denied_tools.contains(&"mcp_*".to_string()),
+            "parent's wildcard deny propagates"
+        );
+        assert!(
+            child.denied_tools.contains(&"file_*".to_string()),
+            "child's wildcard deny is preserved"
+        );
+        assert_eq!(
+            child.denied_tools.len(),
+            2,
+            "both wildcards in union, no duplicates"
+        );
+    }
+
+    #[test]
+    fn derive_child_does_not_duplicate_case_variants() {
+        // Union should not add duplicate entries even if case differs —
+        // the matching logic (is_tool_denied) is case-insensitive, so
+        // storing both "MCP_*" and "mcp_*" is redundant (though harmless).
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        parent.denied_tools = vec!["mcp_*".to_string()];
+
+        let mut requested = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        requested.denied_tools = vec!["mcp_*".to_string()]; // same literal
+
+        let child = parent.derive_child(&requested);
+        assert_eq!(
+            child.denied_tools.len(),
+            1,
+            "duplicate wildcards are not stored twice"
+        );
     }
 }
