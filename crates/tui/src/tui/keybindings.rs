@@ -191,7 +191,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "Ctrl+X (Activity sidebar)",
+        chord: "Ctrl+X (Tasks sidebar)",
         description_id: crate::localization::MessageId::KbCancelBackgroundShellJobs,
         section: KeybindingSection::Submission,
     },
@@ -426,11 +426,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_x_activity_sidebar_cancel_all_is_documented() {
+    fn ctrl_x_tasks_sidebar_cancel_all_is_documented() {
         let ctrl_x_activity = KEYBINDINGS
             .iter()
-            .find(|entry| entry.chord == "Ctrl+X (Activity sidebar)")
-            .expect("Ctrl+X Activity sidebar keybinding should be documented");
+            .find(|entry| entry.chord == "Ctrl+X (Tasks sidebar)")
+            .expect("Ctrl+X Tasks sidebar keybinding should be documented");
 
         assert_eq!(
             ctrl_x_activity.description_id,

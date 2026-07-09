@@ -4931,6 +4931,44 @@ fn hotbar_bound_disabled_action_reports_reason_without_dispatching() {
 }
 
 #[test]
+fn hotbar_header_slots_label_uses_only_explicit_filled_slots() {
+    let prefix = crate::tui::widgets::key_hint::alt_prefix();
+    let config = Config {
+        hotbar: Some(vec![
+            codewhale_config::HotbarBindingToml {
+                slot: 1,
+                label: Some("mode".to_string()),
+                action: "mode.agent".to_string(),
+            },
+            codewhale_config::HotbarBindingToml {
+                slot: 9,
+                label: Some("invalid".to_string()),
+                action: "slash.help".to_string(),
+            },
+            codewhale_config::HotbarBindingToml {
+                slot: 4,
+                label: Some("plan".to_string()),
+                action: "mode.plan".to_string(),
+            },
+        ]),
+        ..Config::default()
+    };
+
+    assert_eq!(
+        hotbar_header_slots_label(&config),
+        Some(format!("{prefix}1 {prefix}4"))
+    );
+    assert_eq!(hotbar_header_slots_label(&Config::default()), None);
+    assert_eq!(
+        hotbar_header_slots_label(&Config {
+            hotbar: Some(Vec::new()),
+            ..Config::default()
+        }),
+        None
+    );
+}
+
+#[test]
 fn alt_0_restores_auto_sidebar_focus() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Hidden;

@@ -9524,6 +9524,20 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     preview
 }
 
+fn hotbar_header_slots_label(config: &Config) -> Option<String> {
+    let bindings = config.hotbar.as_deref()?;
+    let prefix = crate::tui::widgets::key_hint::alt_prefix();
+    let slots: Vec<String> = bindings
+        .iter()
+        .filter_map(|binding| {
+            (1..=8)
+                .contains(&binding.slot)
+                .then(|| format!("{prefix}{}", binding.slot))
+        })
+        .collect();
+    (!slots.is_empty()).then(|| slots.join(" "))
+}
+
 fn render(f: &mut Frame, app: &mut App, config: &Config) {
     let size = f.area();
 
@@ -9663,6 +9677,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         } else {
             app.turn_started_at
         };
+        let hotbar_slots_label = hotbar_header_slots_label(config);
         let header_data = HeaderData::new(
             app.mode,
             &model_label,
@@ -9678,6 +9693,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         )
         .with_reasoning_effort(Some(&effort_label))
         .with_provider(provider_label)
+        .with_hotbar_slots(hotbar_slots_label.as_deref())
         .with_status_indicator(crate::tui::widgets::header_status_indicator_frame(
             status_indicator_started_at,
             &app.status_indicator,

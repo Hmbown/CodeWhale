@@ -1,4 +1,4 @@
-//! Sidebar rendering — Pinned / Activity / Agents / Context panels.
+//! Sidebar rendering — Pinned / To-do / Tasks / Agents / Context panels.
 //!
 //! Extracted from `tui/ui.rs` (P1.2). The sidebar appears to the right of
 //! the chat transcript when the available width allows it. Each section
@@ -1304,11 +1304,9 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
     let (lines, row_actions) = task_panel_rows(app, content_width.max(1), usable_rows.max(1));
 
     let full_texts = task_panel_hover_texts(app, usable_rows.max(1));
-    // #4147: This panel renders live tools / background jobs, not durable task
-    // state, so the user-facing label is "Activity" to match its contents and
-    // avoid colliding with durable tasks. The internal identifiers keep the
-    // "task_panel"/`SidebarFocus::Tasks` names (guard #4172).
-    render_sidebar_section(f, area, "Activity", lines, full_texts, row_actions, app);
+    // Wave 7 chrome vocabulary: "Tasks" is the live/background work rail;
+    // durable checklist items stay in the separate "To-do" panel.
+    render_sidebar_section(f, area, "Tasks", lines, full_texts, row_actions, app);
 }
 
 #[derive(Debug, Clone)]
@@ -1324,7 +1322,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
     task_panel_rows(app, content_width, max_rows).0
 }
 
-/// Build the Activity panel lines together with a parallel per-line click-action
+/// Build the Tasks panel lines together with a parallel per-line click-action
 /// vector (#3028). Producing both in a single pass keeps the action indices
 /// aligned with the rendered lines no matter how the layout evolves.
 fn task_panel_rows(
@@ -3587,6 +3585,21 @@ mod tests {
             .collect()
     }
 
+    fn render_sidebar_text(app: &mut App, config: &Config, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), app, config))
+            .expect("draw sidebar");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
     #[test]
     fn context_panel_cost_line_shows_na_for_unpriced_zero_cost_model() {
         let mut app = create_test_app();
@@ -3957,6 +3970,51 @@ mod tests {
         assert!(
             rendered.contains("Alt4"),
             "active agent-mode slot should render distinctly: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_tasks_sidebar_uses_tasks_title_not_activity() {
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Tasks;
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_build".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cargo build".to_string(),
+            duration_ms: Some(1_000),
+            kind: TaskPanelEntryKind::Background,
+            stale: false,
+            elapsed_since_output_ms: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+        });
+
+        let rendered = render_sidebar_text(&mut app, &Config::default(), 44, 12);
+
+        assert!(rendered.contains("Tasks"), "{rendered:?}");
+        assert!(rendered.contains("cargo build"), "{rendered:?}");
+        assert!(
+            !rendered.contains("Activity"),
+            "Tasks rail must not regress to the old Activity title: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("To-do"),
+            "explicit live Tasks focus should not duplicate the durable To-do panel: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn pinned_idle_sidebar_keeps_todo_as_the_quiet_work_panel() {
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Pinned;
+
+        let rendered = render_sidebar_text(&mut app, &Config::default(), 44, 12);
+
+        assert!(rendered.contains("To-do"), "{rendered:?}");
+        assert!(rendered.contains("No active work"), "{rendered:?}");
+        assert!(
+            !rendered.contains("Tasks"),
+            "idle pinned sidebar should not duplicate empty live Tasks chrome: {rendered:?}"
         );
     }
 

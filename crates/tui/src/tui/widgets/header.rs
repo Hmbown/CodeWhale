@@ -96,6 +96,10 @@ pub struct HeaderData<'a> {
     /// so the widget itself stays a pure pre-built render. `None` hides the
     /// chip entirely (e.g., `status_indicator = "off"`).
     pub status_indicator_frame: Option<&'static str>,
+    /// Compact label for filled Hotbar slots (for example `Alt1 Alt4`).
+    /// `None` or an empty string renders no chip, so empty/default hotbars
+    /// spend no main-screen ink.
+    pub hotbar_slots_label: Option<&'a str>,
 }
 
 impl<'a> HeaderData<'a> {
@@ -121,6 +125,7 @@ impl<'a> HeaderData<'a> {
             reasoning_effort_label: None,
             provider_label: None,
             status_indicator_frame: None,
+            hotbar_slots_label: None,
         }
     }
 
@@ -137,6 +142,13 @@ impl<'a> HeaderData<'a> {
     #[must_use]
     pub fn with_status_indicator(mut self, frame: Option<&'static str>) -> Self {
         self.status_indicator_frame = frame;
+        self
+    }
+
+    /// Attach filled Hotbar slots for the header command chrome.
+    #[must_use]
+    pub fn with_hotbar_slots(mut self, label: Option<&'a str>) -> Self {
+        self.hotbar_slots_label = label;
         self
     }
 
@@ -426,20 +438,53 @@ impl<'a> HeaderWidget<'a> {
         spans
     }
 
+    fn hotbar_spans(&self) -> Vec<Span<'static>> {
+        let Some(label) = self.data.hotbar_slots_label else {
+            return Vec::new();
+        };
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+
+        vec![
+            Span::styled("Hotbar ", Style::default().fg(palette::TEXT_HINT)),
+            Span::styled(
+                trimmed.to_string(),
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    }
+
     fn right_spans(&self, max_width: usize) -> Vec<Span<'static>> {
         // Width-priority cascade. Each row is a candidate; we pick the
-        // first that fits. The version chip is the last thing to drop —
-        // once `status_variant(false, false, true)` no longer leaves room
-        // for `  v0.8.29`, we fall through to the same status variant
-        // without the version chip.
+        // first that fits. Hotbar is lowest-priority command chrome, so it
+        // appears only in the widest candidate and drops before live/context
+        // safety signals. Version remains the final non-safety chip.
         let pinned = |status: Vec<Span<'static>>| {
             let prefix = !status.is_empty();
             let mut combined = status;
             combined.extend(Self::version_spans(prefix));
             combined
         };
+        let pinned_with_hotbar = |status: Vec<Span<'static>>| {
+            let mut combined = status;
+            let hotbar = self.hotbar_spans();
+            if !hotbar.is_empty() {
+                if !combined.is_empty() {
+                    combined.push(Span::raw("  "));
+                }
+                combined.extend(hotbar);
+            }
+            let prefix = !combined.is_empty();
+            combined.extend(Self::version_spans(prefix));
+            combined
+        };
 
         let candidates = [
+            pinned_with_hotbar(self.status_variant(true, true, true)),
             pinned(self.status_variant(true, true, true)),
             pinned(self.status_variant(false, true, true)),
             pinned(self.status_variant(false, true, false)),
@@ -654,6 +699,69 @@ mod tests {
             rendered.contains(&expected),
             "expected version chip `{expected}` in header: {rendered:?}",
         );
+    }
+
+    #[test]
+    fn wide_header_shows_filled_hotbar_slots_in_command_chrome() {
+        let rendered = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-v4-pro",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            )
+            .with_hotbar_slots(Some("Alt1 Alt4")),
+            120,
+        );
+
+        assert!(rendered.contains("Hotbar"), "{rendered:?}");
+        assert!(rendered.contains("Alt1"), "{rendered:?}");
+        assert!(rendered.contains("Alt4"), "{rendered:?}");
+    }
+
+    #[test]
+    fn narrow_header_drops_hotbar_before_live_context_signal() {
+        let rendered = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-v4-pro",
+                "repo",
+                true,
+                palette::WHALE_BG,
+            )
+            .with_usage(1_000, Some(128_000), 0.0, Some(48_000))
+            .with_provider(Some("NIM"))
+            .with_reasoning_effort(Some("max"))
+            .with_hotbar_slots(Some("Alt1 Alt2 Alt3 Alt4 Alt5 Alt6 Alt7 Alt8")),
+            44,
+        );
+
+        assert!(
+            !rendered.contains("Hotbar"),
+            "Hotbar should collapse before safety/status facts: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("NIM") || rendered.contains("Live") || rendered.contains('▰'),
+            "header must preserve higher-priority status facts: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn header_omits_empty_hotbar_slot_label() {
+        let rendered = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-v4-pro",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            )
+            .with_hotbar_slots(Some("   ")),
+            120,
+        );
+
+        assert!(!rendered.contains("Hotbar"), "{rendered:?}");
     }
 
     #[test]
