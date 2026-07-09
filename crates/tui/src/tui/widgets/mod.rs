@@ -65,6 +65,7 @@ pub struct ChatWidget {
     scrollbar: Option<TranscriptScrollbar>,
     jump_to_latest_button: Option<Rect>,
     background: Color,
+    ocean_field: Option<OceanField>,
     scroll_track: Color,
     scroll_thumb: Color,
     jump_border: Color,
@@ -78,12 +79,22 @@ struct TranscriptScrollbar {
     total: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct OceanField {
+    elapsed_ms: u128,
+    phase: crate::tui::motion::OceanPhase,
+    ambient_fish: bool,
+    scatter_seed: u64,
+}
+
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
         // Ocean completion surface: one-shot lighten of the transcript field
         // on working→done (gated inside completion_surface_field_color).
         let background = app.completion_surface_field_color(app.ui_theme.surface_bg);
+        let render_empty_state = should_render_empty_state(app);
+        let ocean_field = ocean_field_for_app(app, render_empty_state);
         let scroll_track = app.ui_theme.border;
         let scroll_thumb = app.ui_theme.status_working;
         let jump_border = app.ui_theme.border;
@@ -91,7 +102,7 @@ impl ChatWidget {
         let visible_lines = content_area.height as usize;
         let render_options = app.transcript_render_options();
 
-        if should_render_empty_state(app) {
+        if render_empty_state {
             let lines = build_empty_state_lines(app, content_area);
             app.viewport.last_transcript_area = Some(content_area);
             app.viewport.last_transcript_top = 0;
@@ -105,6 +116,7 @@ impl ChatWidget {
                 scrollbar: None,
                 jump_to_latest_button: None,
                 background,
+                ocean_field,
                 scroll_track,
                 scroll_thumb,
                 jump_border,
@@ -406,6 +418,7 @@ impl ChatWidget {
             scrollbar,
             jump_to_latest_button,
             background,
+            ocean_field,
             scroll_track,
             scroll_thumb,
             jump_border,
@@ -481,6 +494,7 @@ impl Renderable for ChatWidget {
         let paragraph =
             Paragraph::new(self.lines.clone()).style(Style::default().bg(self.background));
         paragraph.render(area, buf);
+        render_ocean_field_empty_cells(area, buf, self.background, self.ocean_field, &self.lines);
 
         // #3029: the transcript carries OSC 8 hyperlinks in-band inside span
         // content. Scan the rendered buffer for those payloads, blank the
@@ -521,6 +535,88 @@ impl Renderable for ChatWidget {
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+}
+
+fn ocean_field_for_app(app: &App, render_empty_state: bool) -> Option<OceanField> {
+    if app.low_motion || !app.fancy_animations {
+        return None;
+    }
+    let phase = if app.ocean_field_waiting_on_user() {
+        crate::tui::motion::OceanPhase::Waiting
+    } else if app.is_loading || app.is_compacting || app.is_purging || app.turn_started_at.is_some()
+    {
+        crate::tui::motion::OceanPhase::Working
+    } else if app.completion_surface_started_at.is_some() {
+        crate::tui::motion::OceanPhase::Done
+    } else {
+        crate::tui::motion::OceanPhase::Idle
+    };
+    Some(OceanField {
+        elapsed_ms: app.ocean_field_started_at.elapsed().as_millis(),
+        phase,
+        ambient_fish: render_empty_state && matches!(phase, crate::tui::motion::OceanPhase::Idle),
+        scatter_seed: app
+            .history_version
+            .wrapping_add(app.input.len() as u64)
+            .wrapping_add(app.workspace.as_os_str().len() as u64),
+    })
+}
+
+fn render_ocean_field_empty_cells(
+    area: Rect,
+    buf: &mut Buffer,
+    base: Color,
+    field: Option<OceanField>,
+    lines: &[Line<'static>],
+) {
+    let Some(field) = field else {
+        return;
+    };
+    for y in area.top()..area.bottom() {
+        let local_y = y.saturating_sub(area.y);
+        let occupied_width = lines
+            .get(usize::from(local_y))
+            .map(|line| line_display_width(line).min(usize::from(area.width)))
+            .unwrap_or(0);
+        let start_x = area.x.saturating_add(occupied_width as u16);
+        let row_bg = crate::tui::motion::ocean_field_color(
+            base,
+            local_y,
+            area.height,
+            field.elapsed_ms,
+            field.phase,
+            false,
+            true,
+        );
+        for x in start_x..area.right() {
+            let local_x = x.saturating_sub(area.x);
+            let cell = &mut buf[(x, y)];
+            cell.set_symbol(" ")
+                .set_style(Style::default().fg(palette::TEXT_DIM).bg(row_bg));
+            if field.ambient_fish
+                && let Some(symbol) = crate::tui::motion::ambient_fish_symbol(
+                    local_x,
+                    local_y,
+                    area.width,
+                    area.height,
+                    field.elapsed_ms,
+                    field.scatter_seed,
+                    false,
+                    true,
+                )
+            {
+                cell.set_symbol(symbol)
+                    .set_style(Style::default().fg(palette::WHALE_INFO).bg(row_bg));
+            }
+        }
+    }
+}
+
+fn line_display_width(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
 fn jump_to_latest_button_rect(area: Rect, has_scrollbar: bool) -> Option<Rect> {
@@ -3407,6 +3503,7 @@ mod tests {
         text::{Line, Span},
     };
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
     use unicode_width::UnicodeWidthStr;
 
     fn create_test_app() -> App {
@@ -4674,6 +4771,99 @@ mod tests {
         assert_eq!(text_lines[2].trim_start(), title);
         assert_eq!(text_lines[4].trim_start(), model);
         assert_eq!(text_lines[5].trim_start(), directory);
+    }
+
+    #[test]
+    fn ocean_field_paints_empty_water_but_not_occupied_empty_state_text() {
+        let mut app = create_test_app();
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.ocean_field_started_at = Instant::now() - Duration::from_millis(1_200);
+        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
+        app.model = "deepseek-v4-pro".to_string();
+
+        let area = Rect::new(0, 0, 100, 20);
+        let base = app.ui_theme.surface_bg;
+        let widget = ChatWidget::new(&mut app, area);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        assert_ne!(
+            buf[(0, 12)].bg,
+            base,
+            "lower blank empty water should show ombre depth"
+        );
+
+        let title = format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"));
+        let model = "model: deepseek-v4-pro  /model to switch";
+        let directory = "directory: /tmp/codewhale-test-workspace";
+        let block_width = [title.as_str(), model, directory]
+            .into_iter()
+            .map(UnicodeWidthStr::width)
+            .max()
+            .expect("startup block has lines");
+        let title_x = ((100usize - block_width) / 2) as u16;
+        let title_cell = &buf[(title_x, 2)];
+        assert_eq!(title_cell.symbol(), ">");
+        assert_eq!(
+            title_cell.bg, base,
+            "occupied startup text must overwrite water field"
+        );
+    }
+
+    #[test]
+    fn ocean_field_is_flat_when_reduced_motion_is_enabled() {
+        let mut app = create_test_app();
+        app.low_motion = true;
+        app.fancy_animations = true;
+        app.ocean_field_started_at = Instant::now() - Duration::from_millis(1_200);
+
+        let area = Rect::new(0, 0, 80, 12);
+        let base = app.ui_theme.surface_bg;
+        let widget = ChatWidget::new(&mut app, area);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        assert_eq!(buf[(0, 0)].bg, base);
+        assert_eq!(buf[(20, 8)].bg, base);
+    }
+
+    #[test]
+    fn ocean_field_waiting_surfaces_are_time_still() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run git status",
+            &serde_json::json!({ "command": "git status" }),
+            "exec_shell:git status",
+        );
+        let mut early = create_test_app();
+        early.low_motion = false;
+        early.fancy_animations = true;
+        early
+            .view_stack
+            .push(crate::tui::approval::ApprovalView::new(request.clone()));
+        early.ocean_field_started_at = Instant::now();
+
+        let mut late = create_test_app();
+        late.low_motion = false;
+        late.fancy_animations = true;
+        late.view_stack
+            .push(crate::tui::approval::ApprovalView::new(request));
+        late.ocean_field_started_at =
+            Instant::now() - Duration::from_millis(crate::tui::motion::OCEAN_FIELD_CYCLE_MS * 3);
+
+        let area = Rect::new(0, 0, 80, 12);
+        let mut early_buf = Buffer::empty(area);
+        ChatWidget::new(&mut early, area).render(area, &mut early_buf);
+        let mut late_buf = Buffer::empty(area);
+        ChatWidget::new(&mut late, area).render(area, &mut late_buf);
+
+        assert_eq!(early_buf[(4, 8)].bg, late_buf[(4, 8)].bg);
+
+        let mut plan_prompt = create_test_app();
+        plan_prompt.plan_prompt_pending = true;
+        assert!(plan_prompt.ocean_field_waiting_on_user());
     }
 
     /// Probe: confirm `cell.lines_with_motion` returns no Line whose total

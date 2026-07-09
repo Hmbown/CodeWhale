@@ -1698,6 +1698,8 @@ pub struct App {
     /// Current burst counter; resets when pushes are spaced further than
     /// [`crate::tui::motion::RECEIPT_SETTLE_MS`] apart.
     pub settle_burst_index: u32,
+    /// Session-local clock for the empty-water ombre field.
+    pub ocean_field_started_at: Instant,
     /// One-shot completion surface start (working→done). `None` when idle.
     pub completion_surface_started_at: Option<Instant>,
     /// Monotonic counter used to issue fresh per-cell revisions.
@@ -2817,6 +2819,7 @@ impl App {
             history_settle_stagger: Vec::new(),
             last_history_push_at: None,
             settle_burst_index: 0,
+            ocean_field_started_at: Instant::now(),
             completion_surface_started_at: None,
             next_history_revision: 1,
             api_messages: Vec::new(),
@@ -3859,6 +3862,9 @@ impl App {
         if self.low_motion {
             return false;
         }
+        if self.ocean_field_should_tick() {
+            return true;
+        }
         if let Some(started) = self.completion_surface_started_at
             && crate::tui::motion::is_completion_surface_active(
                 started.elapsed().as_millis(),
@@ -3879,6 +3885,32 @@ impl App {
             }
         }
         false
+    }
+
+    /// Whether the empty-water field may ask the event loop for gentle frames.
+    #[must_use]
+    pub fn ocean_field_should_tick(&self) -> bool {
+        !self.low_motion
+            && self.fancy_animations
+            && !self.ocean_field_waiting_on_user()
+            && (self
+                .active_cell
+                .as_ref()
+                .is_some_and(|cell| !cell.is_empty())
+                || self.is_loading
+                || self.is_compacting
+                || self.is_purging
+                || self.turn_started_at.is_some()
+                || self.completion_surface_started_at.is_some())
+    }
+
+    /// Decision surfaces freeze the field into a still coral posture.
+    #[must_use]
+    pub fn ocean_field_waiting_on_user(&self) -> bool {
+        !self.view_stack.is_empty()
+            || self.pending_user_input_prompt.is_some()
+            || self.plan_prompt_pending
+            || self.decision_card.is_some()
     }
 
     /// Settle progress for history index `i` (1.0 = fully settled).

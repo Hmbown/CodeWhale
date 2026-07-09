@@ -1,9 +1,11 @@
-//! Ocean motion grammar — receipt settle + completion surface.
+//! Ocean motion grammar — receipt settle, completion surface, and empty water.
 //!
 //! Pure timing helpers ported from `tui-fix/cw-underwater-take.html`:
 //! - Receipt settle: ~400ms ease, ~60ms burst stagger, gated on `!low_motion`
 //! - Completion surface: one-shot ~800ms field lighten on working→done,
 //!   gated on `!low_motion && fancy_animations`
+//! - Empty-water field: slow ombre + rare ambient marks, applied through an
+//!   occupancy mask so transcript text cells stay undecorated.
 //!
 //! Product cadence: 50ms frames × 48 ≈ 2.4s (shared with the braille spinner).
 //! This module is intentionally free of App/History coupling so unit tests can
@@ -37,10 +39,27 @@ pub const COMPLETION_SURFACE_MS: u64 = PRODUCT_CADENCE_MS / 3;
 /// Peak brightness multiplier at the midpoint of the completion surface.
 pub const COMPLETION_SURFACE_PEAK: f32 = 0.12;
 
+/// Slow empty-water field cycle: four product breaths (~9.6s).
+pub const OCEAN_FIELD_CYCLE_MS: u64 = PRODUCT_CADENCE_MS * 4;
+
+/// Ambient marks drift more slowly than the background field.
+pub const AMBIENT_FISH_STEP_MS: u64 = PRODUCT_CADENCE_MS * 2;
+
 /// Floor brightness for a settling receipt at t=0 (never fully invisible).
 /// Slightly lower than v1 so tool receipt cells read a clearer dim→ink settle
 /// against the HTML prototype (opacity 0→1 approximated for terminal).
 const SETTLE_DIM_FLOOR: f32 = 0.32;
+
+/// State vocabulary for the empty-water field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OceanPhase {
+    Idle,
+    Working,
+    Waiting,
+    Done,
+    #[allow(dead_code)]
+    Failed,
+}
 
 /// Ease approximating cubic-bezier(0.32, 0.72, 0, 1) — organic settle curve.
 #[must_use]
@@ -138,6 +157,132 @@ pub fn lighten_color(color: Color, amount: f32) -> Color {
         }
         other => other,
     }
+}
+
+/// Lerp one RGB color toward another by `amount` (0 = from, 1 = to).
+#[must_use]
+pub fn mix_color(from: Color, to: Color, amount: f32) -> Color {
+    let amount = amount.clamp(0.0, 1.0);
+    match (from, to) {
+        (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) => {
+            let f = |a: u8, b: u8| {
+                (f32::from(a) + (f32::from(b) - f32::from(a)) * amount)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            Color::Rgb(f(fr, tr), f(fg, tg), f(fb, tb))
+        }
+        (other, _) => other,
+    }
+}
+
+/// Empty-water ombre background for one transcript field row.
+///
+/// The render layer applies this only to cells outside each transcript line's
+/// occupied display width. `Waiting` deliberately ignores time so approval /
+/// user-input surfaces stay coral-still instead of breathing.
+#[must_use]
+pub fn ocean_field_color(
+    base: Color,
+    row: u16,
+    height: u16,
+    elapsed_ms: u128,
+    phase: OceanPhase,
+    low_motion: bool,
+    fancy_animations: bool,
+) -> Color {
+    if low_motion || !fancy_animations || height == 0 {
+        return base;
+    }
+    if !matches!(base, Color::Rgb(_, _, _)) {
+        return base;
+    }
+
+    let depth = if height <= 1 {
+        0.0
+    } else {
+        f32::from(row.min(height.saturating_sub(1))) / f32::from(height.saturating_sub(1))
+    };
+    let cycle =
+        (elapsed_ms % u128::from(OCEAN_FIELD_CYCLE_MS)) as f32 / OCEAN_FIELD_CYCLE_MS as f32;
+    let breath = if matches!(phase, OceanPhase::Waiting) {
+        0.0
+    } else {
+        (cycle * std::f32::consts::TAU).sin() * 0.5 + 0.5
+    };
+    let phase_strength = match phase {
+        OceanPhase::Idle => 0.12,
+        OceanPhase::Working => 0.18,
+        OceanPhase::Waiting => 0.08,
+        OceanPhase::Done => 0.04,
+        OceanPhase::Failed => 0.10,
+    };
+    let depth_strength = phase_strength * (0.35 + depth * 0.65);
+    let pulse_strength = if matches!(phase, OceanPhase::Waiting) {
+        0.0
+    } else {
+        phase_strength * 0.28 * breath
+    };
+    let deep = match phase {
+        OceanPhase::Waiting => Color::Rgb(44, 30, 30),
+        OceanPhase::Failed => Color::Rgb(47, 22, 26),
+        _ => Color::Rgb(5, 18, 32),
+    };
+    let lit = match phase {
+        OceanPhase::Working => Color::Rgb(27, 72, 90),
+        OceanPhase::Done => Color::Rgb(34, 84, 73),
+        OceanPhase::Waiting => Color::Rgb(90, 54, 40),
+        OceanPhase::Failed => Color::Rgb(84, 34, 39),
+        OceanPhase::Idle => Color::Rgb(18, 48, 69),
+    };
+
+    let deepened = mix_color(base, deep, depth_strength);
+    mix_color(deepened, lit, pulse_strength)
+}
+
+/// Rare, deterministic ambient life for empty water.
+///
+/// The render layer calls this only through the empty-water occupancy mask.
+/// `scatter_seed` lets user input or history changes gently move the marks.
+#[must_use]
+pub fn ambient_fish_symbol(
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    elapsed_ms: u128,
+    scatter_seed: u64,
+    low_motion: bool,
+    fancy_animations: bool,
+) -> Option<&'static str> {
+    if low_motion || !fancy_animations || width < 24 || height < 6 {
+        return None;
+    }
+    let step = u64::try_from(elapsed_ms / u128::from(AMBIENT_FISH_STEP_MS)).unwrap_or(u64::MAX);
+    let seed = scatter_seed
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(step.rotate_left(17))
+        .wrapping_add(u64::from(y) << 32)
+        .wrapping_add(u64::from(x));
+    let hash = splitmix64(seed);
+    if hash % 97 != 0 {
+        return None;
+    }
+    if y < 2 || y >= height.saturating_sub(1) {
+        return None;
+    }
+    if x < 2 || x >= width.saturating_sub(2) {
+        return None;
+    }
+    Some(if ((hash >> 8) & 1) == 0 { ">" } else { "<" })
+}
+
+#[must_use]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
 }
 
 /// Scale an RGB foreground toward the dim floor by settle progress.
@@ -347,6 +492,86 @@ mod tests {
         );
         assert_eq!(completion_surface_color(base, 0, true, true), base);
         assert_eq!(completion_surface_color(base, 0, false, false), base);
+    }
+
+    #[test]
+    fn ocean_field_ombre_is_gated_and_depth_based() {
+        let base = Color::Rgb(13, 17, 23);
+        assert_eq!(
+            ocean_field_color(base, 4, 10, 0, OceanPhase::Idle, true, true),
+            base
+        );
+        assert_eq!(
+            ocean_field_color(base, 4, 10, 0, OceanPhase::Idle, false, false),
+            base
+        );
+
+        let top = ocean_field_color(base, 0, 10, 0, OceanPhase::Idle, false, true);
+        let bottom = ocean_field_color(base, 9, 10, 0, OceanPhase::Idle, false, true);
+        assert_ne!(bottom, base);
+        assert_ne!(top, bottom, "ombre should carry vertical depth");
+        assert_ne!(
+            ocean_field_color(base, 5, 10, 0, OceanPhase::Failed, false, true),
+            base,
+            "failed phase should hold visible depth without jitter"
+        );
+    }
+
+    #[test]
+    fn ocean_waiting_phase_is_still_over_time() {
+        let base = Color::Rgb(13, 17, 23);
+        let early = ocean_field_color(base, 5, 10, 0, OceanPhase::Waiting, false, true);
+        let late = ocean_field_color(
+            base,
+            5,
+            10,
+            u128::from(OCEAN_FIELD_CYCLE_MS) * 3,
+            OceanPhase::Waiting,
+            false,
+            true,
+        );
+        let working_late = ocean_field_color(
+            base,
+            5,
+            10,
+            u128::from(OCEAN_FIELD_CYCLE_MS) / 4,
+            OceanPhase::Working,
+            false,
+            true,
+        );
+        assert_eq!(early, late, "waiting-on-user must not breathe/thrash");
+        assert_ne!(
+            early, working_late,
+            "working phase should keep phase contrast"
+        );
+    }
+
+    #[test]
+    fn ambient_fish_are_gated_and_scatter_with_seed() {
+        let collect = |seed| {
+            let mut marks = Vec::new();
+            for y in 0..20 {
+                for x in 0..80 {
+                    if let Some(symbol) = ambient_fish_symbol(x, y, 80, 20, 0, seed, false, true) {
+                        marks.push((x, y, symbol));
+                    }
+                }
+            }
+            marks
+        };
+
+        assert!(
+            collect(7).len() > 3,
+            "wide empty water should have rare ambient marks"
+        );
+        assert_ne!(
+            collect(7),
+            collect(8),
+            "input/history seed should scatter marks"
+        );
+        assert!(ambient_fish_symbol(10, 4, 80, 20, 0, 7, true, true).is_none());
+        assert!(ambient_fish_symbol(10, 4, 80, 20, 0, 7, false, false).is_none());
+        assert!(ambient_fish_symbol(10, 4, 12, 5, 0, 7, false, true).is_none());
     }
 
     #[test]
