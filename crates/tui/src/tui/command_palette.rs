@@ -3,9 +3,10 @@
 //! Product job (#4276): **find and run one action** — not a dense manual.
 //! Help owns concepts; Config owns settings; Fleet owns worker readiness.
 
+use std::cell::RefCell;
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -22,6 +23,7 @@ use crate::skills;
 use crate::tools::spec::ApprovalRequirement;
 use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
     render_modal_chrome,
@@ -60,6 +62,8 @@ pub struct CommandPaletteView {
     filtered: Vec<usize>,
     query: String,
     selected: usize,
+    /// Row hit regions from the last paint (shared by hover + click).
+    hit_map: RefCell<HitMap>,
 }
 
 pub fn build_entries(
@@ -690,6 +694,7 @@ impl CommandPaletteView {
             filtered: Vec::new(),
             query: String::new(),
             selected: 0,
+            hit_map: RefCell::new(HitMap::new()),
         };
         view.refilter();
         view
@@ -787,6 +792,18 @@ impl CommandPaletteView {
             .get(self.selected)
             .and_then(|idx| self.entries.get(*idx))
     }
+
+    /// Align keyboard focus with the row under the pointer (hover = select).
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index < self.filtered.len() && self.selected != index {
+            self.selected = index;
+            return true;
+        }
+        index < self.filtered.len()
+    }
 }
 
 impl ModalView for CommandPaletteView {
@@ -802,6 +819,22 @@ impl ModalView for CommandPaletteView {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.move_selection(-1),
             MouseEventKind::ScrollDown => self.move_selection(1),
+            // Hover shares keyboard focus: the highlighted row is the same
+            // one Enter would activate.
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+            }
+            // Click selects the same row Enter would, and runs it
+            // (pick-and-close — same as Enter on the command palette).
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus_row_at(mouse.column, mouse.row) {
+                    if let Some(entry) = self.selected_entry() {
+                        return ViewAction::EmitAndClose(ViewEvent::CommandPaletteSelected {
+                            action: entry.action.clone(),
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         ViewAction::None
@@ -931,6 +964,12 @@ impl ModalView for CommandPaletteView {
         // rendered cost rather than a flat entry count (#2590).
         let header_lines = lines.len();
         let available = (content.height as usize).saturating_sub(header_lines);
+        // Track the terminal y-coordinate of each entry row so mouse
+        // hover/click can resolve to the same row keyboard focus uses.
+        let mut hit_map = HitMap::new();
+        let mut row_y = content
+            .y
+            .saturating_add(u16::try_from(header_lines).unwrap_or(u16::MAX));
         let mut action_count = 0usize;
         let mut command_count = 0usize;
         let mut skill_count = 0usize;
@@ -967,6 +1006,7 @@ impl ModalView for CommandPaletteView {
                 if active_section != Some(entry.section) {
                     if slot > 0 {
                         lines.push(Line::from(""));
+                        row_y = row_y.saturating_add(1);
                     }
                     let count = match entry.section {
                         PaletteSection::Action => action_count,
@@ -976,6 +1016,7 @@ impl ModalView for CommandPaletteView {
                         PaletteSection::Mcp => mcp_count,
                     };
                     lines.push(Self::format_section_label(entry.section, count));
+                    row_y = row_y.saturating_add(1);
                     active_section = Some(entry.section);
                 }
 
@@ -1006,10 +1047,16 @@ impl ModalView for CommandPaletteView {
                 }
                 line.push_str("  ");
                 line.push_str(&desc);
+                // Record hit region before painting so hover/click can find it.
+                if row_y < content.y.saturating_add(content.height) {
+                    hit_map.push_row(absolute, content.x, row_y, content.width);
+                }
                 lines.push(Line::from(Span::styled(line, style)));
+                row_y = row_y.saturating_add(1);
             }
         }
 
+        *self.hit_map.borrow_mut() = hit_map;
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(content, buf);
@@ -1757,5 +1804,91 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mouse_hover_and_click_share_keyboard_selected_row() {
+        use crossterm::event::MouseButton;
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        let mut view = sample_palette_view();
+        // Default selected = 0 ("/config"). Paint so hit map is populated.
+        view.render(area, &mut buf);
+        assert!(!view.hit_map.borrow().is_empty(), "render must fill hit map");
+
+        // Find the "/model" row (index 1 in filtered) coordinates.
+        let model_hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|r| {
+                matches!(
+                    r.target,
+                    crate::tui::hit_region::HitTarget::Row { index: 1 }
+                )
+            })
+            .copied()
+            .expect("model row hit region");
+        let col = model_hit.rect.x + 2;
+        let row = model_hit.rect.y;
+
+        // Hover moves keyboard focus without activating.
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.selected, 1, "hover should focus /model row");
+
+        // Enter on the hovered row matches keyboard Enter path.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            action,
+            ViewAction::EmitAndClose(ViewEvent::CommandPaletteSelected { .. })
+        ));
+
+        // Fresh view: click activates the row under the pointer (same as Enter).
+        let mut view = sample_palette_view();
+        view.render(area, &mut buf);
+        // Find the "$search" skill row (index 2 in filtered).
+        let skill_hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|r| {
+                matches!(
+                    r.target,
+                    crate::tui::hit_region::HitTarget::Row { index: 2 }
+                )
+            })
+            .copied()
+            .expect("skill row hit region");
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: skill_hit.rect.x + 2,
+            row: skill_hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            action,
+            ViewAction::EmitAndClose(ViewEvent::CommandPaletteSelected { .. })
+        ));
+        assert_eq!(view.selected, 2, "click should select $search skill row");
+
+        // Clicking outside any row does nothing.
+        let mut view = sample_palette_view();
+        view.render(area, &mut buf);
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
     }
 }
