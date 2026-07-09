@@ -107,6 +107,9 @@ working, while Workflow supplies the repeatable workflow/progress surface for
 large fanout. In the UI, a Workflow run should be shown as an overlay on the
 main screen, not as a fourth mode next to Act, Plan, and Operate.
 
+For the UI vocabulary that separates **Tasks**, **To-do**, **Fleet workers**,
+and **Workflow runs**, see [WORK_UNITS.md](WORK_UNITS.md).
+
 App-server clients can persist a thread-scoped goal with `thread/goal/set`, read
 it with `thread/goal/get`, and clear it with `thread/goal/clear`. That persisted
 record carries `active`, `paused`, `blocked`, `usage_limited`, `budget_limited`,

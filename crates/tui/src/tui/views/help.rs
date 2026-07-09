@@ -105,6 +105,11 @@ const HELP_CONCEPTS: &[HelpConcept] = &[
         description: "Transcript tool rows, raw detail with v, turn inspector, receipts, and audit trails.",
         search_terms: "tool calls receipts transcript raw detail v inspector audit",
     },
+    HelpConcept {
+        label: "Work units",
+        description: "Tasks, To-do, Fleet workers, and Workflow runs have separate surfaces; see docs/WORK_UNITS.md.",
+        search_terms: "work units glossary tasks todo to-do fleet worker workflow run docs modes",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +620,7 @@ mod tests {
                 "Models / providers / routing",
                 "Permissions / trust",
                 "Tool calls / receipts",
+                "Work units",
             ]
         );
     }
