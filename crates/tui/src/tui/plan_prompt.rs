@@ -544,7 +544,7 @@ fn push_plan_snapshot_lines(
                 StepStatus::InProgress => "\u{25b6}",
                 StepStatus::Completed => "\u{2713}",
             };
-            let step_text = format!("  {status_mark} {}. {}", i + 1, &item.step);
+            let step_text = format!("  {status_mark} {}. {}", i + 1, item.step);
             for line in wrap_text(&step_text, content_width) {
                 lines.push(Line::from(Span::styled(
                     line,
@@ -589,7 +589,7 @@ fn push_todo_snapshot_lines(
             TodoStatus::InProgress => "\u{25b6}",
             TodoStatus::Completed => "\u{2713}",
         };
-        let item_text = format!("  {status_mark} {}. {}", i + 1, &item.content);
+        let item_text = format!("  {status_mark} {}. {}", i + 1, item.content);
         let style = if matches!(item.status, TodoStatus::Completed) {
             Style::default().fg(palette::TEXT_MUTED)
         } else {
