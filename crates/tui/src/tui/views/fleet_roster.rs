@@ -20,7 +20,7 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
 };
@@ -333,7 +333,7 @@ impl FleetRosterView {
                 let member = &self.members[idx - 1];
                 (
                     format!("{pointer}{}  [{}]  [open]", member.id, member.origin),
-                    Style::default().fg(palette::TEXT_PRIMARY),
+                    Style::default().fg(member_hue(member)),
                 )
             };
             let style = if is_selected {
@@ -430,6 +430,19 @@ fn member_posture(member: &AgentProfile) -> String {
         ShellPolicy::Full => "shell full",
     };
     format!("{} worker · {write} · {shell}", agent_type.as_str())
+}
+
+fn member_hue(member: &AgentProfile) -> Color {
+    let agent_type = roster_member_agent_type(member);
+    match agent_type.as_str() {
+        "explore" => palette::WHALE_INFO,
+        "plan" => palette::MODE_PLAN,
+        "implementer" => palette::STATUS_SUCCESS,
+        "verifier" => palette::ACCENT_SECONDARY,
+        "review" => palette::WHALE_ACCENT_PRIMARY,
+        "general" => palette::MODE_OPERATE,
+        _ => palette::TEXT_ACCENT,
+    }
 }
 
 /// The routing truth for a member: explicit model pin, else route preset, else
@@ -791,6 +804,18 @@ mod tests {
         let mut pinned = reviewer.clone();
         pinned.profile.model = Some("glm-5.2".to_string());
         assert_eq!(member_routing(&pinned), "model glm-5.2 (pinned)");
+    }
+
+    #[test]
+    fn member_hues_distinguish_operate_roster_roles() {
+        let roster = FleetRoster::built_ins_only();
+        let scout = roster.get("scout").unwrap();
+        let builder = roster.get("builder").unwrap();
+        let reviewer = roster.get("reviewer").unwrap();
+
+        assert_ne!(member_hue(scout), member_hue(builder));
+        assert_ne!(member_hue(builder), member_hue(reviewer));
+        assert_ne!(member_hue(scout), member_hue(reviewer));
     }
 
     #[test]

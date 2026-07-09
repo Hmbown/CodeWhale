@@ -2778,7 +2778,7 @@ impl ModalView for SubAgentsView {
                 Style::default().fg(palette::WHALE_INFO).bold(),
             )));
             lines.push(Line::from(Span::styled(
-                "Sub-agent roles are Fleet worker roles.",
+                "Operate control surface: select a worker, open its ledger, or stop it.",
                 Style::default().fg(palette::TEXT_DIM),
             )));
 
@@ -2972,7 +2972,7 @@ fn fleet_worker_row_line(
         .map(|nick| truncate_view_text(nick, 12))
         .unwrap_or_else(|| id.clone());
     let kind = format_agent_type(&agent.agent_type);
-    let (status, status_style, _) = format_agent_status(&agent.status);
+    let (status, _, _) = format_agent_status(&agent.status);
     let actions = if agent_status_is_stoppable(&agent.status) {
         "[open] [stop]"
     } else {
@@ -2993,9 +2993,21 @@ fn fleet_worker_row_line(
             .bg(palette::SELECTION_BG)
             .add_modifier(Modifier::BOLD)
     } else {
-        status_style
+        Style::default().fg(fleet_worker_hue(&agent.agent_type))
     };
     (Line::from(Span::styled(padded, style)), stop_start_col)
+}
+
+fn fleet_worker_hue(agent_type: &SubAgentType) -> ratatui::style::Color {
+    match agent_type {
+        SubAgentType::Explore => palette::WHALE_INFO,
+        SubAgentType::Plan => palette::MODE_PLAN,
+        SubAgentType::Implementer => palette::STATUS_SUCCESS,
+        SubAgentType::Verifier => palette::ACCENT_SECONDARY,
+        SubAgentType::Review => palette::WHALE_ACCENT_PRIMARY,
+        SubAgentType::General => palette::MODE_OPERATE,
+        SubAgentType::Custom => palette::TEXT_ACCENT,
+    }
 }
 
 fn append_selected_worker_ledger(
@@ -3823,6 +3835,19 @@ mod tests {
         assert!(text.contains("Selected worker"), "{text}");
         assert!(text.contains("read the docs"), "{text}");
         assert!(text.contains("[open]") && text.contains("[stop]"), "{text}");
+    }
+
+    #[test]
+    fn fleet_worker_status_rows_use_member_hues_for_operate_roles() {
+        let mut scout = manager_agent("agent_scout", SubAgentStatus::Running);
+        scout.agent_type = SubAgentType::Explore;
+        let mut builder = manager_agent("agent_builder", SubAgentStatus::Running);
+        builder.agent_type = SubAgentType::Implementer;
+
+        let (scout_line, _) = super::fleet_worker_row_line(&scout, false, 80);
+        let (builder_line, _) = super::fleet_worker_row_line(&builder, false, 80);
+
+        assert_ne!(scout_line.spans[0].style.fg, builder_line.spans[0].style.fg);
     }
 
     fn visible_section_labels(view: &ConfigView) -> Vec<Cow<'static, str>> {
