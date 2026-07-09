@@ -4,7 +4,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
+    widgets::{
+        Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Widget, Wrap,
+    },
 };
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -321,6 +324,36 @@ pub(crate) fn render_modal_text_footer(
 ) -> Rect {
     let lines = wrapped_footer_lines(text, inner.width, style);
     place_footer_lines(inner, buf, lines)
+}
+
+/// Render a vertical scrollbar inside the right edge of the owning panel.
+///
+/// Callers pass the content/body rect that owns scrolling, not the terminal
+/// frame. This keeps nested scrollbars attached to their panel and prevents the
+/// classic "floating scrollbar in the transcript column" bug.
+pub(crate) fn render_panel_scrollbar(
+    panel: Rect,
+    buf: &mut Buffer,
+    total_rows: usize,
+    visible_rows: usize,
+    top_row: usize,
+) {
+    if panel.width == 0 || panel.height == 0 || visible_rows == 0 || total_rows <= visible_rows {
+        return;
+    }
+
+    let scrollable_range = total_rows.saturating_sub(visible_rows);
+    let mut state = ScrollbarState::new(scrollable_range)
+        .position(top_row.min(scrollable_range))
+        .viewport_content_length(visible_rows);
+    Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .track_style(Style::default().fg(palette::BORDER_COLOR))
+        .thumb_symbol("┃")
+        .thumb_style(Style::default().fg(palette::WHALE_INFO))
+        .render(panel, buf, &mut state);
 }
 
 /// Geometry returned by the shared modal chrome recipe ([`render_modal_chrome`]).
@@ -3321,7 +3354,8 @@ mod tests {
     use super::{
         ActionHint, ConfigListItem, ConfigView, EmptyState, HelpView, ListDetailLayout, ModalKind,
         ModalView, ViewAction, ViewEvent, ViewStack, action_footer_lines, centered_modal_area,
-        render_modal_chrome, render_modal_footer, subagent_view_agents, truncate_view_text,
+        render_modal_chrome, render_modal_footer, render_panel_scrollbar, subagent_view_agents,
+        truncate_view_text,
     };
     use crate::config::Config;
     use crate::localization::{Locale, MessageId, tr};
@@ -3492,6 +3526,31 @@ mod tests {
         assert_eq!(body.y, inner.y);
         assert_eq!(body.height, inner.height - 1);
         assert_eq!(body.y + body.height, inner.y + inner.height - 1);
+    }
+
+    #[test]
+    fn panel_scrollbar_binds_to_panel_right_edge() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let panel = Rect::new(8, 4, 30, 10);
+        let mut buf = Buffer::empty(frame);
+
+        render_panel_scrollbar(panel, &mut buf, 40, 10, 7);
+
+        let panel_scrollbar_x = panel.x + panel.width - 1;
+        let saw_panel_scrollbar = (panel.y..panel.y + panel.height)
+            .any(|y| matches!(buf[(panel_scrollbar_x, y)].symbol(), "│" | "┃"));
+        assert!(
+            saw_panel_scrollbar,
+            "scrollbar should render inside panel edge"
+        );
+
+        let frame_scrollbar_x = frame.x + frame.width - 1;
+        let saw_frame_edge_scrollbar = (frame.y..frame.y + frame.height)
+            .any(|y| matches!(buf[(frame_scrollbar_x, y)].symbol(), "│" | "┃"));
+        assert!(
+            !saw_frame_edge_scrollbar,
+            "panel scrollbar must not float on terminal edge"
+        );
     }
 
     #[test]

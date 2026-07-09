@@ -30,7 +30,7 @@ use crate::palette;
 use crate::tui::app::App;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
-    truncate_view_text,
+    render_panel_scrollbar, truncate_view_text,
 };
 
 const PROFILE_DIR: &str = ".codewhale/agents";
@@ -955,6 +955,7 @@ fn render_scrollable_text(area: Rect, buf: &mut Buffer, text: &str, scroll: usiz
         .wrap(Wrap { trim: true })
         .scroll((scroll as u16, 0))
         .render(area, buf);
+    render_panel_scrollbar(area, buf, visual_rows, usize::from(area.height), scroll);
 }
 
 /// Render a wizard choice step: a list of selectable identifiers on the left and
