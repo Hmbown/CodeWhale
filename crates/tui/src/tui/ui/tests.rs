@@ -13184,6 +13184,7 @@ fn agent_progress_redraw_coalesces_once_per_agent_per_drain() {
             &mut seen_agents,
             "agent-a",
             t0,
+            4,
         ),
         "first progress event for an agent in a drain may repaint"
     );
@@ -13193,6 +13194,7 @@ fn agent_progress_redraw_coalesces_once_per_agent_per_drain() {
             &mut seen_agents,
             "agent-a",
             t0 + Duration::from_millis(150),
+            4,
         ),
         "later progress for the same agent in the same drain is coalesced"
     );
@@ -13204,8 +13206,47 @@ fn agent_progress_redraw_coalesces_once_per_agent_per_drain() {
             &mut next_drain_seen_agents,
             "agent-a",
             t0 + Duration::from_millis(150),
+            4,
         ),
         "a later drain can repaint that agent again after the throttle window"
+    );
+}
+
+#[test]
+fn agent_progress_redraw_throttle_only_engages_under_fanout_storm() {
+    let t0 = Instant::now();
+    let mut last_redraw = Some(t0);
+    let mut seen_agents = HashSet::new();
+
+    assert!(
+        agent_progress_redraw_permitted_for_drain(
+            &mut last_redraw,
+            &mut seen_agents,
+            "agent-a",
+            t0 + Duration::from_millis(10),
+            1,
+        ),
+        "single-agent progress should repaint normally"
+    );
+    assert!(
+        agent_progress_redraw_permitted_for_drain(
+            &mut last_redraw,
+            &mut seen_agents,
+            "agent-a",
+            t0 + Duration::from_millis(20),
+            1,
+        ),
+        "single-agent progress is not per-drain coalesced"
+    );
+    assert!(
+        !agent_progress_redraw_permitted_for_drain(
+            &mut last_redraw,
+            &mut seen_agents,
+            "agent-b",
+            t0 + Duration::from_millis(30),
+            4,
+        ),
+        "four-agent storm uses the 100ms throttle window"
     );
 }
 
@@ -13232,6 +13273,7 @@ fn six_worker_progress_storm_keeps_input_render_and_cancel_live() {
                 &mut seen_agents,
                 &agent_id,
                 t0 + Duration::from_millis(burst * 2 + worker),
+                6,
             ) {
                 redraws += 1;
             } else {

@@ -3147,19 +3147,22 @@ async fn run_event_loop(
                         if !app.subagent_cache.iter().any(|agent| agent.agent_id == id) {
                             subagent_list_refresh_requested = true;
                         }
-                        // #3033: Throttle redraws from rapid AgentProgress events.
-                        // When 4+ sub-agents are running concurrently, each firing
+                        // #3033 / COH-12: Throttle redraws from rapid AgentProgress
+                        // events only under fan-out storm. When 4+ sub-agents are
+                        // running concurrently, each firing
                         // progress events, the per-event `needs_redraw = true` saturates
                         // the render loop and starves terminal input.  Limit
                         // progress-driven repaints to at most one per 100ms; the
                         // status-animation timer (80ms cadence) provides a guaranteed
                         // floor for sidebar updates.  Data is still recorded immediately;
                         // the sidebar picks it up on the next permitted redraw.
+                        let running_agents_for_progress = running_agent_count(app);
                         if !agent_progress_redraw_permitted_for_drain(
                             &mut app.last_agent_progress_redraw,
                             &mut progress_redraw_agents,
                             &id,
                             Instant::now(),
+                            running_agents_for_progress,
                         ) {
                             // Restore the pre-event accumulator value: a
                             // throttled progress event contributes no redraw of
@@ -6222,7 +6225,12 @@ fn agent_progress_redraw_permitted_for_drain(
     seen_agents: &mut HashSet<String>,
     agent_id: &str,
     now: Instant,
+    running_agents: usize,
 ) -> bool {
+    const FANOUT_STORM_AGENT_THRESHOLD: usize = 4;
+    if running_agents < FANOUT_STORM_AGENT_THRESHOLD {
+        return true;
+    }
     if !seen_agents.insert(agent_id.to_string()) {
         return false;
     }
