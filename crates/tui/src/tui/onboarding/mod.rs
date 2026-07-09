@@ -15,13 +15,25 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
+use crate::config::ApiProvider;
 use crate::palette;
 use crate::tui::app::{App, OnboardingState};
 
 const ONBOARDED_MARKER_FILE: &str = ".onboarded";
 
+pub const ONBOARDING_PROVIDER_OPTIONS: &[(char, ApiProvider)] = &[
+    ('1', ApiProvider::Deepseek),
+    ('2', ApiProvider::Openai),
+    ('3', ApiProvider::Anthropic),
+    ('4', ApiProvider::Openrouter),
+    ('5', ApiProvider::Zai),
+    ('6', ApiProvider::Moonshot),
+    ('7', ApiProvider::Siliconflow),
+    ('8', ApiProvider::Ollama),
+];
+
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().style(Style::default().bg(palette::DEEPSEEK_INK));
+    let block = Block::default().style(Style::default().bg(palette::WHALE_BG));
     f.render_widget(block, area);
 
     const TOP_MARGIN: u16 = 2;
@@ -35,8 +47,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let lines = match app.onboarding {
-        OnboardingState::Welcome => welcome::lines(),
+        OnboardingState::Welcome => welcome::lines(app),
         OnboardingState::Language => language::lines(app),
+        OnboardingState::Provider => provider_lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
         OnboardingState::Tips => tips_lines(app),
@@ -53,7 +66,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             )))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_SLATE))
+            .style(Style::default().bg(palette::WHALE_PANEL))
             .padding(Padding::new(2, 2, 1, 1));
         if !app.onboarding_workspace_trust_gate {
             let (step, total) = onboarding_step(app);
@@ -76,7 +89,7 @@ fn onboarding_step(app: &App) -> (usize, usize) {
     // Welcome + Language + Tips are always shown.
     let mut total = 3;
     if app.onboarding_needs_api_key {
-        total += 1;
+        total += 2;
     }
     if needs_trust {
         total += 1;
@@ -85,10 +98,14 @@ fn onboarding_step(app: &App) -> (usize, usize) {
     let step = match app.onboarding {
         OnboardingState::Welcome => 1,
         OnboardingState::Language => 2,
-        OnboardingState::ApiKey => 3,
+        OnboardingState::Provider => 3,
+        OnboardingState::ApiKey => 4,
         OnboardingState::TrustDirectory => {
-            // Welcome (1) + Language (2) + optional ApiKey
-            if app.onboarding_needs_api_key { 4 } else { 3 }
+            if app.onboarding_needs_api_key {
+                5
+            } else {
+                3
+            }
         }
         OnboardingState::Tips => total,
         OnboardingState::None => total,
@@ -106,7 +123,7 @@ pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
         Line::from(Span::styled(
             app.tr(MessageId::OnboardTipsTitle).to_string(),
             Style::default()
-                .fg(palette::DEEPSEEK_SKY)
+                .fg(palette::WHALE_INFO)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -233,17 +250,101 @@ pub fn advance_onboarding_from_welcome(app: &mut App) {
     app.onboarding = OnboardingState::Language;
 }
 
-/// Language → next step. Routes to ApiKey when the session lacks a key,
-/// to TrustDirectory when the workspace is untrusted, otherwise to Tips.
+/// Language → next step. Routes to Provider/ApiKey when the session lacks a
+/// key, to TrustDirectory when the workspace is untrusted, otherwise to Tips.
 pub fn advance_onboarding_after_language(app: &mut App) {
     app.status_message = None;
     if app.onboarding_needs_api_key {
-        app.onboarding = OnboardingState::ApiKey;
+        app.onboarding = OnboardingState::Provider;
     } else if !app.trust_mode && needs_trust(&app.workspace) {
         app.onboarding = OnboardingState::TrustDirectory;
     } else {
         app.onboarding = OnboardingState::Tips;
     }
+}
+
+pub fn advance_onboarding_from_provider(app: &mut App) {
+    app.status_message = None;
+    app.onboarding = OnboardingState::ApiKey;
+}
+
+pub fn advance_onboarding_after_api_key(app: &mut App) {
+    app.status_message = None;
+    if !app.trust_mode && needs_trust(&app.workspace) {
+        app.onboarding = OnboardingState::TrustDirectory;
+    } else {
+        app.onboarding = OnboardingState::Tips;
+    }
+}
+
+pub fn select_onboarding_provider(app: &mut App, provider: ApiProvider) {
+    app.onboarding_provider = provider;
+}
+
+pub fn move_onboarding_provider_selection(app: &mut App, delta: i32) {
+    let options: Vec<ApiProvider> = ONBOARDING_PROVIDER_OPTIONS
+        .iter()
+        .map(|(_, provider)| *provider)
+        .collect();
+    let current_idx = options
+        .iter()
+        .position(|provider| *provider == app.onboarding_provider)
+        .unwrap_or(0);
+    let len = options.len().max(1) as i32;
+    let next = (current_idx as i32 + delta).rem_euclid(len) as usize;
+    app.onboarding_provider = options[next];
+}
+
+fn provider_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
+    use crate::localization::MessageId;
+    use ratatui::style::Modifier;
+    use ratatui::text::{Line, Span};
+
+    let mut out = vec![
+        Line::from(Span::styled(
+            app.tr(MessageId::OnboardProviderTitle).to_string(),
+            Style::default()
+                .fg(palette::WHALE_INFO)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            app.tr(MessageId::OnboardProviderBlurb).to_string(),
+            Style::default().fg(palette::TEXT_MUTED),
+        )),
+        Line::from(""),
+    ];
+
+    for (hotkey, provider) in ONBOARDING_PROVIDER_OPTIONS {
+        let is_current = app.onboarding_provider == *provider;
+        let bullet = if is_current { "●" } else { "○" };
+        let bullet_color = if is_current {
+            palette::WHALE_ACCENT_PRIMARY
+        } else {
+            palette::TEXT_MUTED
+        };
+        out.push(Line::from(vec![
+            Span::styled(format!("  {bullet}  "), Style::default().fg(bullet_color)),
+            Span::styled(
+                format!("[{hotkey}] "),
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                provider.display_name().to_string(),
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ),
+        ]));
+    }
+
+    out.push(Line::from(""));
+    out.push(Line::from(Span::styled(
+        app.tr(MessageId::OnboardProviderFooter).to_string(),
+        Style::default().fg(palette::TEXT_MUTED),
+    )));
+
+    out
 }
 
 /// Re-validate the current `api_key_input` and project the result onto
@@ -269,6 +370,63 @@ pub fn sync_api_key_validation_status(app: &mut App, show_empty_error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::localization::Locale;
+    use crate::tui::app::{App, TuiOptions};
+    use std::path::PathBuf;
+
+    fn test_app_with_locale(locale: Locale) -> App {
+        let options = TuiOptions {
+            model: "deepseek-v4-pro".to_string(),
+            workspace: PathBuf::from("."),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = locale;
+        app
+    }
+
+    fn flattened(lines: Vec<ratatui::text::Line<'static>>) -> String {
+        lines
+            .into_iter()
+            .flat_map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn tips_copy_points_to_setup_and_constitution() {
+        let app = test_app_with_locale(Locale::En);
+        let body = flattened(tips_lines(&app));
+
+        assert!(body.contains("/setup"));
+        assert!(body.contains("/constitution"));
+        assert!(body.contains("/provider"));
+        assert!(body.contains("/model"));
+        assert!(body.contains("open setup if it needs attention"));
+        assert!(!body.contains("open the workspace"));
+    }
 
     #[test]
     fn fresh_install_marker_path_uses_codewhale_not_legacy() {

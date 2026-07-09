@@ -19,7 +19,10 @@ use ratatui::{
 };
 
 use crate::palette::{SELECTABLE_THEMES, ThemeId, UiTheme};
-use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
+    render_modal_footer,
+};
 
 pub struct ThemePickerView {
     selected: usize,
@@ -157,34 +160,18 @@ impl ModalView for ThemePickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        // Modal must always fit inside `area`. The old `.max(52) / .max(10)`
-        // floors could produce dimensions larger than the available area on
-        // very small terminals (or split-pane setups), which then made the
-        // centering arithmetic underflow and ratatui assert. Take a
-        // soft-preferred size and clamp it strictly to `area`.
-        let popup_width = 78u16.min(area.width.saturating_sub(4));
-        // 1 title + 1 spacer + N rows + spacer + bottom hint
+        // 1 title + 1 spacer + N rows + spacer + the in-body action footer.
+        // centered_modal_area clamps strictly to `area`, so the modal always
+        // fits even on tiny or split-pane terminals.
         let needed_height = (SELECTABLE_THEMES.len() as u16).saturating_add(9);
-        let popup_height = needed_height.min(area.height.saturating_sub(4));
-
-        if popup_width == 0 || popup_height == 0 {
-            // Nothing sensible to draw — the host's caller has already
-            // cleared the area, so we just return.
-            return;
-        }
-
-        let popup_area = Rect {
-            x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-            y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = centered_modal_area(area, 78, needed_height, 44, 8);
 
         // The live theme has already been swapped under us via ConfigUpdated,
         // so we pull the *current* preview's UiTheme from the cursor row to
         // skin the modal chrome. That way the popup itself shifts color as
         // the cursor moves, matching what the background will look like
-        // after Enter.
+        // after Enter. We keep the live `surface_bg` (not the shared ink) and
+        // the bare `Clear` so the preview backdrop reads as intended.
         let live = self.ui_theme_for(self.current());
 
         Clear.render(popup_area, buf);
@@ -196,14 +183,6 @@ impl ModalView for ThemePickerView {
                     .fg(live.status_working)
                     .add_modifier(Modifier::BOLD),
             )))
-            .title_bottom(Line::from(vec![
-                Span::styled(" ↑/↓ ", Style::default().fg(live.text_muted)),
-                Span::raw("preview "),
-                Span::styled(" Enter ", Style::default().fg(live.text_muted)),
-                Span::raw("save "),
-                Span::styled(" Esc ", Style::default().fg(live.text_muted)),
-                Span::raw("revert "),
-            ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(live.border))
             .style(Style::default().bg(live.surface_bg))
@@ -211,6 +190,16 @@ impl ModalView for ThemePickerView {
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
+
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑/↓", "preview"),
+                ActionHint::new("Enter", "save"),
+                ActionHint::new("Esc", "revert"),
+            ],
+        );
 
         let mut lines: Vec<Line> = Vec::with_capacity(SELECTABLE_THEMES.len() + 5);
         lines.push(Line::from(Span::styled(
@@ -267,12 +256,18 @@ impl ModalView for ThemePickerView {
             ));
             spans.extend(swatch);
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(id.tagline(), tagline_style));
+
+            let prefix_width = Line::from(spans.clone()).width();
+            let tagline = crate::tui::ui_text::semantic_truncate(
+                id.tagline(),
+                usize::from(content.width).saturating_sub(prefix_width),
+            );
+            spans.push(Span::styled(tagline, tagline_style));
 
             lines.push(Line::from(spans));
         }
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).render(content, buf);
     }
 }
 
@@ -411,5 +406,84 @@ mod tests {
         let area = ratatui::layout::Rect::new(0, 0, 20, 6);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         v.render(area, &mut buf);
+    }
+
+    #[test]
+    fn render_semantically_truncates_taglines_at_narrow_width() {
+        let v = ThemePickerView::new("system".to_string());
+        let area = ratatui::layout::Rect::new(0, 0, 56, 12);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        v.render(area, &mut buf);
+        let rows = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let text = rows.join("\n");
+
+        assert!(text.contains('…'), "{text}");
+        for (idx, row) in rows.iter().enumerate() {
+            assert!(
+                crate::tui::ui_text::text_display_width(row) <= usize::from(area.width),
+                "line {idx} overflows: {row:?}"
+            );
+        }
+    }
+
+    /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires
+    /// every overlay to remain readable and fully operable at.
+    const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+
+    #[test]
+    fn theme_picker_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+        use ratatui::{buffer::Buffer, layout::Rect};
+        use unicode_width::UnicodeWidthStr;
+
+        for (w, h) in BLOCKER_SIZES {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(ThemePickerView::new("system".to_string()));
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| {
+                    (0..w)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect();
+            let text = rows.join("\n");
+
+            for label in ["preview", "save", "revert"] {
+                assert!(text.contains(label), "{w}x{h}: missing footer '{label}'");
+            }
+            assert!(
+                !text.contains('X'),
+                "{w}x{h}: background bleed-through into modal surface"
+            );
+            // The theme picker paints the *live* theme surface (not the shared
+            // ink), so assert the center cell is painted (no surviving
+            // sentinel) rather than checking a fixed background color.
+            assert_ne!(
+                buf[(w / 2, h / 2)].symbol(),
+                "X",
+                "{w}x{h}: modal interior must be painted"
+            );
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 }

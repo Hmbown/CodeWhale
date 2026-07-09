@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-pub mod amend;
 pub mod decision;
 pub mod error;
 pub mod execpolicycheck;
@@ -14,8 +13,6 @@ pub mod policy;
 pub mod rule;
 pub mod rules;
 
-pub use amend::AmendError;
-pub use amend::blocking_append_allow_prefix_rule;
 pub use decision::Decision;
 pub use error::Error;
 pub use error::Result;

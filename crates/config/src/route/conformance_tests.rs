@@ -83,9 +83,9 @@ fn every_provider_kind_resolves_its_default_route() {
 
         // The resolver prefers this provider's bundled *default offering* wire id
         // when one exists, and otherwise falls back to the descriptor default
-        // wire model. Assert that exact contract so a future drift between
-        // OFFERING_SEEDS and `Provider::default_model()` fails with an honest
-        // message instead of coincidentally passing.
+        // wire model. Assert that exact contract so a future drift between the
+        // catalog-backed default and `Provider::default_model()` fails with an
+        // honest message instead of coincidentally passing.
         let expected_wire = bundled
             .iter()
             .find(|offering| {

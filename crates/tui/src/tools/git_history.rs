@@ -112,7 +112,7 @@ impl ToolSpec for GitLogTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Ok(
@@ -230,7 +230,7 @@ impl ToolSpec for GitShowTool {
         }
 
         let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let output = run_git_command_async(git_ctx.working_dir.clone(), args).await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Ok(ToolResult::error(format!(
@@ -360,7 +360,7 @@ impl ToolSpec for GitBlameTool {
         args.push(pathspec.display().to_string());
 
         let command_str = format_command(working_dir, &args);
-        let output = run_git_command(working_dir, &args)?;
+        let output = run_git_command_async(working_dir.to_path_buf(), args).await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Ok(ToolResult::error(format!(
@@ -489,6 +489,17 @@ fn run_git_command(working_dir: &Path, args: &[String]) -> Result<Output, ToolEr
             ToolError::execution_failed(format!("Failed to run git: {e}"))
         }
     })
+}
+
+/// Async wrapper that offloads the blocking `git` invocation onto a
+/// blocking-capable thread so the tokio worker is not stalled.
+async fn run_git_command_async(
+    working_dir: PathBuf,
+    args: Vec<String>,
+) -> Result<Output, ToolError> {
+    tokio::task::spawn_blocking(move || run_git_command(&working_dir, &args))
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("git task panicked: {e}")))?
 }
 
 fn format_command(working_dir: &Path, args: &[String]) -> String {

@@ -18,7 +18,10 @@ use crate::models::{
 };
 use crate::tools::schema_sanitize;
 
-use super::{DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, system_to_instructions};
+use super::{
+    DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
+    system_to_instructions, to_api_tool_name,
+};
 
 /// Base URL path for the Codex Responses endpoint.
 const CODEX_RESPONSES_PATH: &str = "/codex/responses";
@@ -88,6 +91,8 @@ impl DeepSeekClient {
         // ChatGPT backend additionally requires the account id and the
         // experimental Responses beta opt-in.
         let account_id = crate::oauth::codex_account_id();
+        let request_body =
+            serde_json::to_vec(&body).context("Failed to serialize Responses API request body")?;
         let response = self
             .send_with_retry(|| {
                 let mut builder = self
@@ -100,7 +105,7 @@ impl DeepSeekClient {
                 if let Some(account_id) = &account_id {
                     builder = builder.header("chatgpt-account-id", account_id);
                 }
-                builder.json(&body)
+                builder.body(request_body.clone())
             })
             .await
             .context("Responses API request failed")?;
@@ -135,7 +140,10 @@ impl DeepSeekClient {
             let mut current_block_index: Option<u32> = None;
             let mut saw_tool_call = false;
             let mut usage_data: Option<Usage> = None;
-            let mut buffer = String::new();
+            // Raw byte buffer: decode only COMPLETE lines so a multi-byte
+            // UTF-8 char split across two network reads is never corrupted
+            // to U+FFFD (line boundaries are ASCII). Mirrors chat.rs.
+            let mut buffer: Vec<u8> = Vec::new();
             let mut done = false;
             let mut content_block_counter: u32 = 0;
 
@@ -155,12 +163,10 @@ impl DeepSeekClient {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                buffer.extend_from_slice(&chunk);
 
                 // Process complete SSE lines.
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
+                while let Some(line) = super::take_sse_line(&mut buffer) {
 
                     if line.is_empty() || line.starts_with(':') {
                         continue;
@@ -234,7 +240,7 @@ impl DeepSeekClient {
                                                 content_block:
                                                     ContentBlockStart::ToolUse {
                                                         id: composite_id,
-                                                        name,
+                                                        name: from_api_tool_name(&name),
                                                         input: json!({}),
                                                         caller: None,
                                                     },
@@ -545,7 +551,7 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
                             items.push(json!({
                                 "type": "function_call",
                                 "call_id": call_id,
-                                "name": name,
+                                "name": to_api_tool_name(name),
                                 "arguments": serde_json::to_string(input).unwrap_or_default(),
                             }));
                         }
@@ -597,7 +603,7 @@ fn tool_to_responses_function(tool: &Tool) -> Value {
     };
     json!({
         "type": "function",
-        "name": tool.name,
+        "name": to_api_tool_name(&tool.name),
         "description": description,
         "parameters": parameters,
         "strict": false,
@@ -922,6 +928,12 @@ mod tests {
             message.contains("blocked before it reached the model"),
             "{message}"
         );
+        // #3884: the structured LlmError must stay downcastable through the
+        // context layers so sub-agent failure records can classify it.
+        assert!(
+            err.downcast_ref::<crate::llm_client::LlmError>().is_some(),
+            "LlmError should survive the anyhow chain"
+        );
     }
 
     #[test]
@@ -1080,16 +1092,48 @@ mod tests {
 
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["call_id"], "call_abc");
+        assert_eq!(input[0]["name"], "checklist_write");
         assert_eq!(input[1]["type"], "function_call_output");
         assert_eq!(input[1]["call_id"], "call_abc");
         assert_eq!(input[1]["output"], "<6 items>");
     }
 
     #[test]
+    fn responses_input_encodes_tool_call_names() {
+        let request = MessageRequest {
+            model: "gpt-5.5".to_string(),
+            messages: vec![Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call_abc|fc_123".to_string(),
+                    name: "web.run".to_string(),
+                    input: json!({}),
+                    caller: None,
+                }],
+            }],
+            max_tokens: 128,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let input = convert_messages_to_responses_input(&request);
+
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["name"], to_api_tool_name("web.run"));
+    }
+
+    #[test]
     fn responses_function_tool_sanitizes_root_composition_schema() {
         let tool = Tool {
             tool_type: None,
-            name: "apply_patch".to_string(),
+            name: "web.run".to_string(),
             description: "Apply patch".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -1112,6 +1156,7 @@ mod tests {
         let payload = tool_to_responses_function(&tool);
         let parameters = &payload["parameters"];
 
+        assert_eq!(payload["name"], to_api_tool_name("web.run"));
         assert_eq!(parameters["type"], "object");
         assert!(parameters.get("oneOf").is_none());
         assert!(parameters.get("anyOf").is_none());

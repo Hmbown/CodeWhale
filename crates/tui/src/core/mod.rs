@@ -14,6 +14,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+pub mod authority;
 pub mod engine;
 pub mod events;
 pub mod ops;

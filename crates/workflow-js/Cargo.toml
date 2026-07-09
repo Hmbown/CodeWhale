@@ -1,0 +1,19 @@
+[package]
+name = "codewhale-workflow-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dynamic Workflow runtime: sandboxed rquickjs scripts that dispatch CodeWhale subagents"
+
+[dependencies]
+async-trait.workspace = true
+jsonschema.workspace = true
+rquickjs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

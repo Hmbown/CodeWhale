@@ -5,32 +5,6 @@
 use std::borrow::Cow;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextDirection {
-    Ltr,
-    Rtl,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocaleCoverage {
-    English,
-    V076Core,
-    PlannedQa,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocaleSpec {
-    pub tag: &'static str,
-    pub display_name: &'static str,
-    pub script: &'static str,
-    pub direction: TextDirection,
-    pub fallback: &'static str,
-    pub coverage: LocaleCoverage,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Locale {
     En,
@@ -67,68 +41,7 @@ impl Locale {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn spec(self) -> LocaleSpec {
-        match self {
-            Self::En => LocaleSpec {
-                tag: "en",
-                display_name: "English",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::English,
-            },
-            Self::Ja => LocaleSpec {
-                tag: "ja",
-                display_name: "Japanese",
-                script: "Jpan",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::ZhHans => LocaleSpec {
-                tag: "zh-Hans",
-                display_name: "Chinese Simplified",
-                script: "Hans",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::ZhHant => LocaleSpec {
-                tag: "zh-Hant",
-                display_name: "Chinese Traditional",
-                script: "Hant",
-                direction: TextDirection::Ltr,
-                fallback: "zh-Hans",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::PtBr => LocaleSpec {
-                tag: "pt-BR",
-                display_name: "Portuguese (Brazil)",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::Es419 => LocaleSpec {
-                tag: "es-419",
-                display_name: "Spanish (Latin America)",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-            Self::Vi => LocaleSpec {
-                tag: "vi",
-                display_name: "Vietnamese",
-                script: "Latin",
-                direction: TextDirection::Ltr,
-                fallback: "en",
-                coverage: LocaleCoverage::V076Core,
-            },
-        }
-    }
-
+    /// Every locale the TUI exposes in pickers and runtime resolution.
     #[allow(dead_code)]
     pub fn shipped() -> &'static [Self] {
         &[
@@ -141,83 +54,28 @@ impl Locale {
             Self::Vi,
         ]
     }
-}
 
-#[allow(dead_code)]
-pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
-    LocaleSpec {
-        tag: "ar",
-        display_name: "Arabic",
-        script: "Arab",
-        direction: TextDirection::Rtl,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "hi",
-        display_name: "Hindi",
-        script: "Deva",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "bn",
-        display_name: "Bengali",
-        script: "Beng",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "id",
-        display_name: "Indonesian",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "sw",
-        display_name: "Swahili",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "ha",
-        display_name: "Hausa",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "yo",
-        display_name: "Yoruba",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "fr",
-        display_name: "French",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
-        tag: "fil",
-        display_name: "Filipino/Tagalog",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-];
+    /// Complete UI packs held to `en.json` parity. `zh-Hant` is intentionally
+    /// excluded — it remains selectable but falls back to English for missing
+    /// keys until the pack catches up (#4057).
+    #[allow(dead_code)]
+    pub fn shipped_complete() -> &'static [Self] {
+        &[
+            Self::En,
+            Self::Ja,
+            Self::ZhHans,
+            Self::PtBr,
+            Self::Es419,
+            Self::Vi,
+        ]
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn is_partial_pack(self) -> bool {
+        matches!(self, Self::ZhHant)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageId {
@@ -236,7 +94,54 @@ pub enum MessageId {
     StatusPickerActionNone,
     StatusPickerActionSave,
     StatusPickerActionCancel,
+    // Hotbar setup wizard chrome and validation.
+    HotbarSetupTitle,
+    HotbarSetupSourceApp,
+    HotbarSetupSourceSlash,
+    HotbarSetupSourceMcp,
+    HotbarSetupSourceSkill,
+    HotbarSetupSourcePlugin,
+    HotbarSetupStatusDisabled,
+    HotbarSetupStatusPrefill,
+    HotbarSetupStatusReady,
+    HotbarSetupDirtyModified,
+    HotbarSetupDirtyClean,
+    HotbarSetupNoAction,
+    HotbarSetupStatusLine,
+    HotbarSetupSlotOutOfRange,
+    HotbarSetupNoActionSelected,
+    HotbarSetupCannotAssign,
+    HotbarSetupNoActions,
+    HotbarSetupRecommended,
+    HotbarSetupEmptySlot,
+    HotbarSetupHelp,
+    HotbarActionVoiceToggleName,
+    HotbarActionVoiceToggleDescription,
+    HotbarActionSessionCompactName,
+    HotbarActionSessionCompactDescription,
+    HotbarActionModePlanName,
+    HotbarActionModePlanDescription,
+    HotbarActionModeAgentName,
+    HotbarActionModeAgentDescription,
+    HotbarActionModeYoloName,
+    HotbarActionModeYoloDescription,
+    HotbarActionModeOperateName,
+    HotbarActionModeOperateDescription,
+    HotbarActionReasoningCycleName,
+    HotbarActionReasoningCycleDescription,
+    HotbarActionReasoningCycleAutoDisabled,
+    HotbarActionSidebarToggleName,
+    HotbarActionSidebarToggleDescription,
+    HotbarActionFileTreeToggleName,
+    HotbarActionFileTreeToggleDescription,
+    HotbarActionPaletteOpenName,
+    HotbarActionPaletteOpenDescription,
+    HotbarActionTrustToggleName,
+    HotbarActionTrustToggleDescription,
+    CommandPaletteTitle,
+    CommandPaletteSubtitle,
     ConfigTitle,
+    ConfigSubtitle,
     ConfigModalTitle,
     ConfigSearchPlaceholder,
     ConfigNoSettings,
@@ -271,6 +176,7 @@ pub enum MessageId {
     ConfigDefaultReasoning,
     ConfigUnavailable,
     HelpTitle,
+    HelpSubtitle,
     HelpFilterPlaceholder,
     HelpFilterPrefix,
     HelpNoMatches,
@@ -293,6 +199,7 @@ pub enum MessageId {
     CmdCompactDescription,
     CmdPurgeDescription,
     CmdConfigDescription,
+    CmdConstitutionDescription,
     CmdContextDescription,
     CmdCostDescription,
     CmdDiffDescription,
@@ -365,7 +272,9 @@ pub enum MessageId {
     CmdStatusDescription,
     CmdStatuslineDescription,
     CmdFleetDescription,
+    CmdWorkflowDescription,
     CmdHotbarDescription,
+    CmdSetupDescription,
     CmdSubagentsDescription,
     CmdSystemDescription,
     CmdTaskDescription,
@@ -438,6 +347,8 @@ pub enum MessageId {
     KbLiveTranscript,
     KbBacktrackMessage,
     KbCompleteCycleModes,
+    KbCycleThinking,
+    KbCyclePermissions,
     KbJumpPlanAgentYolo,
     KbAltJumpPlanAgentYolo,
     KbFocusSidebar,
@@ -488,15 +399,32 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    HomeOperateModeTip,
+    HomeOperateModeFleetTip,
     HomeGoalModeTip,
+    // Onboarding screens — welcome.
+    OnboardWelcomeVersion,
+    OnboardWelcomeLead,
+    OnboardWelcomeSetupBlurb,
+    OnboardWelcomeSteps,
+    OnboardWelcomeStepLanguage,
+    OnboardWelcomeStepApiKey,
+    OnboardWelcomeStepTrust,
+    OnboardWelcomeStepTips,
+    OnboardWelcomeDefaults,
+    OnboardWelcomeEnter,
+    OnboardWelcomeExit,
     // Onboarding screens — language picker.
     OnboardLanguageTitle,
     OnboardLanguageBlurb,
     OnboardLanguageFooter,
-    // Onboarding screens — API key entry.
+    OnboardProviderTitle,
+    OnboardProviderBlurb,
+    OnboardProviderFooter,
     OnboardApiKeyTitle,
     OnboardApiKeyStep1,
     OnboardApiKeyStep2,
+    OnboardApiKeyLocalHint,
     OnboardApiKeySavedHint,
     OnboardApiKeyFormatHint,
     OnboardApiKeyPlaceholder,
@@ -519,6 +447,170 @@ pub enum MessageId {
     OnboardTipsLine4,
     OnboardTipsFooterEnter,
     OnboardTipsFooterAction,
+    // Constitution-first setup wizard.
+    SetupWizardTitle,
+    SetupWizardWhy,
+    SetupWizardProgress,
+    SetupActionBack,
+    SetupActionContinue,
+    SetupActionSkip,
+    SetupActionRetry,
+    SetupActionScrollBody,
+    SetupActionGuided,
+    SetupActionTuneGuided,
+    SetupActionModelDraft,
+    SetupActionFreeform,
+    SetupActionKeepExisting,
+    SetupActionProvider,
+    SetupActionModel,
+    SetupActionFleet,
+    SetupActionHotbar,
+    SetupActionRemote,
+    SetupActionMode,
+    SetupActionConfig,
+    SetupActionRuntimePreset,
+    SetupActionApplyRuntimePreset,
+    SetupActionUseBundled,
+    SetupActionDefer,
+    SetupActionCancel,
+    SetupStatusNotStarted,
+    SetupStatusRecommended,
+    SetupStatusOptional,
+    SetupStatusDeferred,
+    SetupStatusInProgress,
+    SetupStatusNeedsAction,
+    SetupStatusVerified,
+    SetupStatusSkipped,
+    SetupStatusFailed,
+    SetupStepLanguageTitle,
+    SetupStepLanguageWhy,
+    SetupStepProviderModelTitle,
+    SetupStepProviderModelWhy,
+    SetupStepTrustSandboxTitle,
+    SetupStepTrustSandboxWhy,
+    SetupStepOperateFleetTitle,
+    SetupStepOperateFleetWhy,
+    SetupStepToolsMcpTitle,
+    SetupStepToolsMcpWhy,
+    SetupStepHotbarTitle,
+    SetupStepHotbarWhy,
+    SetupStepRemoteRuntimeTitle,
+    SetupStepRemoteRuntimeWhy,
+    SetupStepPersistenceTitle,
+    SetupStepPersistenceWhy,
+    SetupStepConstitutionTitle,
+    SetupStepConstitutionWhy,
+    SetupStepVerificationTitle,
+    SetupStepVerificationWhy,
+    SetupCheckpointLayerOrder,
+    SetupCheckpointDoneBundled,
+    SetupCheckpointDoneGuided,
+    SetupCheckpointDoneKept,
+    SetupCheckpointDeferred,
+    SetupStepSkipped,
+    SetupStepRetryRecorded,
+    SetupLanguageReviewed,
+    SetupConstitutionChoiceLabel,
+    SetupConstitutionSourceLabel,
+    SetupConstitutionValidityLabel,
+    SetupConstitutionPreviewLabel,
+    SetupConstitutionExistingLabel,
+    SetupConstitutionExpertOverrideLabel,
+    SetupConstitutionGuidedHint,
+    SetupConstitutionGuidedAnswersHint,
+    SetupConstitutionPurposeLabel,
+    SetupConstitutionAutonomyLabel,
+    SetupConstitutionEvidenceLabel,
+    SetupConstitutionCommunicationLabel,
+    SetupConstitutionPrivacyLabel,
+    SetupConstitutionPrinciplesLabel,
+    SetupCardRouteLabel,
+    SetupCardModelLabel,
+    SetupCardAuthLabel,
+    SetupCardHealthLabel,
+    SetupCardIntentLabel,
+    SetupCardApprovalLabel,
+    SetupCardShellLabel,
+    SetupCardTrustLabel,
+    SetupCardSandboxLabel,
+    SetupCardNetworkLabel,
+    SetupOperateRuntimeLabel,
+    SetupOperateRosterLabel,
+    SetupOperateConcurrencyLabel,
+    SetupOperateReadinessLabel,
+    SetupOperateReviewHint,
+    SetupOperateReviewed,
+    SetupOperateNeedsActionSaved,
+    SetupHotbarBindingsLabel,
+    SetupHotbarActionsLabel,
+    SetupHotbarReviewHint,
+    SetupHotbarReviewed,
+    SetupToolsMcpServersLabel,
+    SetupToolsMcpSkillsLabel,
+    SetupToolsMcpToolsLabel,
+    SetupToolsMcpPluginsLabel,
+    SetupToolsMcpHotbarLabel,
+    SetupToolsMcpReviewHint,
+    SetupToolsMcpReviewed,
+    SetupToolsMcpNeedsActionSaved,
+    SetupToolsMcpPreviewTitle,
+    SetupToolsMcpOnRampText,
+    SetupRemoteCloudsLabel,
+    SetupRemoteBridgesLabel,
+    SetupRemoteProvidersLabel,
+    SetupRemoteModeLabel,
+    SetupRemoteReviewHint,
+    SetupRemotePreviewTitle,
+    SetupRemoteReviewed,
+    SetupPersistenceHomeLabel,
+    SetupPersistenceConfigLabel,
+    SetupPersistenceStateLabel,
+    SetupPersistenceConstitutionLabel,
+    SetupPersistenceMemoryLabel,
+    SetupPersistenceNotesLabel,
+    SetupPersistenceReviewHint,
+    SetupPersistenceReviewed,
+    SetupProviderModelReadyHint,
+    SetupProviderModelNeedsActionHint,
+    SetupProviderModelReviewed,
+    SetupProviderModelNeedsActionSaved,
+    SetupRuntimePostureBoundary,
+    SetupRuntimePostureReviewHint,
+    SetupRuntimePostureReviewed,
+    SetupRuntimePresetSelectedLabel,
+    SetupRuntimePresetDiffLabel,
+    SetupRuntimePresetAskFirstTitle,
+    SetupRuntimePresetAskFirstDescription,
+    SetupRuntimePresetNormalAgentTitle,
+    SetupRuntimePresetNormalAgentDescription,
+    SetupRuntimePresetHighTrustTitle,
+    SetupRuntimePresetHighTrustDescription,
+    SetupRuntimePresetPreviewTitle,
+    SetupRuntimePresetSafetyFloor,
+    SetupRuntimePresetApplyHint,
+    SetupRuntimePresetApplied,
+    SetupRuntimeProjectOverrideLabel,
+    SetupRuntimeProjectOverrideNone,
+    SetupReportFirstRunLabel,
+    SetupReportUpdateLabel,
+    SetupReportOperateLabel,
+    SetupReportSourceLabel,
+    SetupReportAutonomyLabel,
+    SetupReportRuntimePostureLabel,
+    SetupReportPersisted,
+    SetupReportInherited,
+    SetupReportReady,
+    SetupReportRequired,
+    SetupReportOptional,
+    SetupReportRowsLabel,
+    SetupReportNextActionLabel,
+    SetupReportNextActionNone,
+    SetupReportNextActionConstitution,
+    SetupReportNextActionProvider,
+    SetupReportNextActionRuntime,
+    SetupReportNextActionOperate,
+    SetupReportNextActionRequired,
+    SetupReportRecorded,
     // Context menu.
     CtxMenuTitle,
     CtxMenuCopySelection,
@@ -548,22 +640,24 @@ pub enum MessageId {
     // Agent fanout card.
     FanoutCounts,
 
-    // App mode picker (prompt, names, hints) and composer vim indicator.
-    ModePickerPrompt,
+    // App mode picker (names, hints) and composer vim indicator.
     AppModeAgent,
     AppModeAuto,
     AppModeYolo,
     AppModePlan,
+    AppModeOperate,
     AppModeAgentHint,
     AppModeAutoHint,
     AppModePlanHint,
     AppModeYoloHint,
+    AppModeOperateHint,
     VimModeNormal,
     VimModeInsert,
     VimModeVisual,
 
     // Approval dialog — risk badges, category labels, field labels, options.
     ApprovalRiskReview,
+    ApprovalRiskElevated,
     ApprovalRiskDestructive,
     ApprovalCategorySafe,
     ApprovalCategoryFileWrite,
@@ -571,6 +665,7 @@ pub enum MessageId {
     ApprovalCategoryNetwork,
     ApprovalCategoryMcpRead,
     ApprovalCategoryMcpAction,
+    ApprovalCategoryAgent,
     ApprovalCategoryUnknown,
     ApprovalFieldType,
     ApprovalFieldAbout,
@@ -680,6 +775,94 @@ pub enum MessageId {
     VoiceRecording,
     VoiceProcessing,
     VoiceTranscribed,
+    // Notifications (turn/agent completion).
+    NotificationTurnComplete,
+    NotificationSubagentComplete,
+    // Footer chips.
+    FooterWorkedChip,
+    // Fleet setup wizard.
+    FleetDraftTitle,
+    FleetDraftHeader,
+    FleetPreviewHeader,
+    // Remote setup on-ramp.
+    SetupRemoteOnRampText,
+    // Approval dialog — localized descriptions.
+    ApprovalDescSafe,
+    ApprovalDescFileWrite,
+    ApprovalDescShell,
+    ApprovalDescNetwork,
+    ApprovalDescMcpRead,
+    ApprovalDescMcpAction,
+    ApprovalDescAgent,
+    ApprovalDescUnknown,
+    // Approval impact summaries.
+    ApprovalImpactSafe,
+    ApprovalImpactFileWrite,
+    ApprovalImpactShell,
+    ApprovalImpactNetwork,
+    ApprovalImpactMcpRead,
+    ApprovalImpactMcpAction,
+    ApprovalImpactAgent,
+    ApprovalImpactUnknown,
+    // Approval detail labels.
+    ApprovalLabelCommand,
+    ApprovalLabelDir,
+    ApprovalLabelFile,
+    ApprovalLabelPreview,
+    ApprovalLabelProposedContent,
+    ApprovalLabelReplaceThis,
+    ApprovalLabelWithThis,
+    ApprovalLabelReplacementContent,
+    ApprovalLabelPath,
+    ApprovalLabelTarget,
+    ApprovalLabelInput,
+    ApprovalLabelAction,
+    ApprovalLabelType,
+    ApprovalLabelPrompt,
+    // Approval header labels.
+    ApprovalLabelAbout,
+    ApprovalLabelImpact,
+    // Setup wizard — constitution file state.
+    SetupConstitutionFileNotChecked,
+    SetupConstitutionFileMissing,
+    SetupConstitutionFileLoadedSelected,
+    SetupConstitutionFileLoadedInactive,
+    SetupConstitutionFileLoadedUnselected,
+    SetupConstitutionFileEmpty,
+    SetupConstitutionFileInvalid,
+    SetupConstitutionFileUnreadable,
+    SetupConstitutionFilePathError,
+    // Setup wizard — expert override state.
+    SetupExpertOverrideNotChecked,
+    SetupExpertOverrideMissing,
+    SetupExpertOverrideActive,
+    SetupExpertOverrideDisabled,
+    SetupExpertOverrideEmpty,
+    SetupExpertOverrideUnreadable,
+    SetupExpertOverridePathError,
+    // Setup wizard — autonomy fallback.
+    SetupAutonomyUnspecified,
+    // Setup wizard — purpose labels.
+    SetupGuidedPurposeCoding,
+    SetupGuidedPurposeResearch,
+    SetupGuidedPurposeOperations,
+    SetupGuidedPurposeMixed,
+    // Setup wizard — purpose about descriptions.
+    SetupGuidedPurposeAboutCoding,
+    SetupGuidedPurposeAboutResearch,
+    SetupGuidedPurposeAboutOperations,
+    SetupGuidedPurposeAboutMixed,
+    // Setup wizard — working style descriptions.
+    SetupGuidedStyleCoding,
+    SetupGuidedStyleResearch,
+    SetupGuidedStyleOperations,
+    SetupGuidedStyleMixed,
+    // Setup wizard — evidence labels.
+    SetupGuidedEvidenceAssumptions,
+    SetupGuidedEvidenceTestsAndReceipts,
+    SetupGuidedEvidenceReleaseReceipts,
+    // Setup wizard — guided answer notes.
+    SetupGuidedNotes,
 }
 
 #[allow(dead_code)]
@@ -698,7 +881,53 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::StatusPickerActionNone,
     MessageId::StatusPickerActionSave,
     MessageId::StatusPickerActionCancel,
+    MessageId::HotbarSetupTitle,
+    MessageId::HotbarSetupSourceApp,
+    MessageId::HotbarSetupSourceSlash,
+    MessageId::HotbarSetupSourceMcp,
+    MessageId::HotbarSetupSourceSkill,
+    MessageId::HotbarSetupSourcePlugin,
+    MessageId::HotbarSetupStatusDisabled,
+    MessageId::HotbarSetupStatusPrefill,
+    MessageId::HotbarSetupStatusReady,
+    MessageId::HotbarSetupDirtyModified,
+    MessageId::HotbarSetupDirtyClean,
+    MessageId::HotbarSetupNoAction,
+    MessageId::HotbarSetupStatusLine,
+    MessageId::HotbarSetupSlotOutOfRange,
+    MessageId::HotbarSetupNoActionSelected,
+    MessageId::HotbarSetupCannotAssign,
+    MessageId::HotbarSetupNoActions,
+    MessageId::HotbarSetupRecommended,
+    MessageId::HotbarSetupEmptySlot,
+    MessageId::HotbarSetupHelp,
+    MessageId::HotbarActionVoiceToggleName,
+    MessageId::HotbarActionVoiceToggleDescription,
+    MessageId::HotbarActionSessionCompactName,
+    MessageId::HotbarActionSessionCompactDescription,
+    MessageId::HotbarActionModePlanName,
+    MessageId::HotbarActionModePlanDescription,
+    MessageId::HotbarActionModeAgentName,
+    MessageId::HotbarActionModeAgentDescription,
+    MessageId::HotbarActionModeYoloName,
+    MessageId::HotbarActionModeYoloDescription,
+    MessageId::HotbarActionModeOperateName,
+    MessageId::HotbarActionModeOperateDescription,
+    MessageId::HotbarActionReasoningCycleName,
+    MessageId::HotbarActionReasoningCycleDescription,
+    MessageId::HotbarActionReasoningCycleAutoDisabled,
+    MessageId::HotbarActionSidebarToggleName,
+    MessageId::HotbarActionSidebarToggleDescription,
+    MessageId::HotbarActionFileTreeToggleName,
+    MessageId::HotbarActionFileTreeToggleDescription,
+    MessageId::HotbarActionPaletteOpenName,
+    MessageId::HotbarActionPaletteOpenDescription,
+    MessageId::HotbarActionTrustToggleName,
+    MessageId::HotbarActionTrustToggleDescription,
+    MessageId::CommandPaletteTitle,
+    MessageId::CommandPaletteSubtitle,
     MessageId::ConfigTitle,
+    MessageId::ConfigSubtitle,
     MessageId::ConfigModalTitle,
     MessageId::ConfigSearchPlaceholder,
     MessageId::ConfigNoSettings,
@@ -733,6 +962,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ConfigDefaultReasoning,
     MessageId::ConfigUnavailable,
     MessageId::HelpTitle,
+    MessageId::HelpSubtitle,
     MessageId::HelpFilterPlaceholder,
     MessageId::HelpFilterPrefix,
     MessageId::HelpNoMatches,
@@ -750,6 +980,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCompactDescription,
     MessageId::CmdPurgeDescription,
     MessageId::CmdConfigDescription,
+    MessageId::CmdConstitutionDescription,
     MessageId::CmdContextDescription,
     MessageId::CmdCostDescription,
     MessageId::CmdDiffDescription,
@@ -819,7 +1050,9 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdStatusDescription,
     MessageId::CmdStatuslineDescription,
     MessageId::CmdFleetDescription,
+    MessageId::CmdWorkflowDescription,
     MessageId::CmdHotbarDescription,
+    MessageId::CmdSetupDescription,
     MessageId::CmdSubagentsDescription,
     MessageId::CmdSystemDescription,
     MessageId::CmdTaskDescription,
@@ -897,6 +1130,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbLiveTranscript,
     MessageId::KbBacktrackMessage,
     MessageId::KbCompleteCycleModes,
+    MessageId::KbCycleThinking,
+    MessageId::KbCyclePermissions,
     MessageId::KbJumpPlanAgentYolo,
     MessageId::KbAltJumpPlanAgentYolo,
     MessageId::KbFocusSidebar,
@@ -947,13 +1182,30 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::HomeOperateModeTip,
+    MessageId::HomeOperateModeFleetTip,
     MessageId::HomeGoalModeTip,
+    MessageId::OnboardWelcomeVersion,
+    MessageId::OnboardWelcomeLead,
+    MessageId::OnboardWelcomeSetupBlurb,
+    MessageId::OnboardWelcomeSteps,
+    MessageId::OnboardWelcomeStepLanguage,
+    MessageId::OnboardWelcomeStepApiKey,
+    MessageId::OnboardWelcomeStepTrust,
+    MessageId::OnboardWelcomeStepTips,
+    MessageId::OnboardWelcomeDefaults,
+    MessageId::OnboardWelcomeEnter,
+    MessageId::OnboardWelcomeExit,
     MessageId::OnboardLanguageTitle,
     MessageId::OnboardLanguageBlurb,
     MessageId::OnboardLanguageFooter,
+    MessageId::OnboardProviderTitle,
+    MessageId::OnboardProviderBlurb,
+    MessageId::OnboardProviderFooter,
     MessageId::OnboardApiKeyTitle,
     MessageId::OnboardApiKeyStep1,
     MessageId::OnboardApiKeyStep2,
+    MessageId::OnboardApiKeyLocalHint,
     MessageId::OnboardApiKeySavedHint,
     MessageId::OnboardApiKeyFormatHint,
     MessageId::OnboardApiKeyPlaceholder,
@@ -974,6 +1226,169 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardTipsLine4,
     MessageId::OnboardTipsFooterEnter,
     MessageId::OnboardTipsFooterAction,
+    MessageId::SetupWizardTitle,
+    MessageId::SetupWizardWhy,
+    MessageId::SetupWizardProgress,
+    MessageId::SetupActionBack,
+    MessageId::SetupActionContinue,
+    MessageId::SetupActionSkip,
+    MessageId::SetupActionRetry,
+    MessageId::SetupActionScrollBody,
+    MessageId::SetupActionGuided,
+    MessageId::SetupActionTuneGuided,
+    MessageId::SetupActionModelDraft,
+    MessageId::SetupActionFreeform,
+    MessageId::SetupActionKeepExisting,
+    MessageId::SetupActionProvider,
+    MessageId::SetupActionModel,
+    MessageId::SetupActionFleet,
+    MessageId::SetupActionHotbar,
+    MessageId::SetupActionRemote,
+    MessageId::SetupActionMode,
+    MessageId::SetupActionConfig,
+    MessageId::SetupActionRuntimePreset,
+    MessageId::SetupActionApplyRuntimePreset,
+    MessageId::SetupActionUseBundled,
+    MessageId::SetupActionDefer,
+    MessageId::SetupActionCancel,
+    MessageId::SetupStatusNotStarted,
+    MessageId::SetupStatusRecommended,
+    MessageId::SetupStatusOptional,
+    MessageId::SetupStatusDeferred,
+    MessageId::SetupStatusInProgress,
+    MessageId::SetupStatusNeedsAction,
+    MessageId::SetupStatusVerified,
+    MessageId::SetupStatusSkipped,
+    MessageId::SetupStatusFailed,
+    MessageId::SetupStepLanguageTitle,
+    MessageId::SetupStepLanguageWhy,
+    MessageId::SetupStepProviderModelTitle,
+    MessageId::SetupStepProviderModelWhy,
+    MessageId::SetupStepTrustSandboxTitle,
+    MessageId::SetupStepTrustSandboxWhy,
+    MessageId::SetupStepOperateFleetTitle,
+    MessageId::SetupStepOperateFleetWhy,
+    MessageId::SetupStepToolsMcpTitle,
+    MessageId::SetupStepToolsMcpWhy,
+    MessageId::SetupStepHotbarTitle,
+    MessageId::SetupStepHotbarWhy,
+    MessageId::SetupStepRemoteRuntimeTitle,
+    MessageId::SetupStepRemoteRuntimeWhy,
+    MessageId::SetupStepPersistenceTitle,
+    MessageId::SetupStepPersistenceWhy,
+    MessageId::SetupStepConstitutionTitle,
+    MessageId::SetupStepConstitutionWhy,
+    MessageId::SetupStepVerificationTitle,
+    MessageId::SetupStepVerificationWhy,
+    MessageId::SetupCheckpointLayerOrder,
+    MessageId::SetupCheckpointDoneBundled,
+    MessageId::SetupCheckpointDoneGuided,
+    MessageId::SetupCheckpointDoneKept,
+    MessageId::SetupCheckpointDeferred,
+    MessageId::SetupStepSkipped,
+    MessageId::SetupStepRetryRecorded,
+    MessageId::SetupLanguageReviewed,
+    MessageId::SetupConstitutionChoiceLabel,
+    MessageId::SetupConstitutionSourceLabel,
+    MessageId::SetupConstitutionValidityLabel,
+    MessageId::SetupConstitutionPreviewLabel,
+    MessageId::SetupConstitutionExistingLabel,
+    MessageId::SetupConstitutionExpertOverrideLabel,
+    MessageId::SetupConstitutionGuidedHint,
+    MessageId::SetupConstitutionGuidedAnswersHint,
+    MessageId::SetupConstitutionPurposeLabel,
+    MessageId::SetupConstitutionAutonomyLabel,
+    MessageId::SetupConstitutionEvidenceLabel,
+    MessageId::SetupConstitutionCommunicationLabel,
+    MessageId::SetupConstitutionPrivacyLabel,
+    MessageId::SetupConstitutionPrinciplesLabel,
+    MessageId::SetupCardRouteLabel,
+    MessageId::SetupCardModelLabel,
+    MessageId::SetupCardAuthLabel,
+    MessageId::SetupCardHealthLabel,
+    MessageId::SetupCardIntentLabel,
+    MessageId::SetupCardApprovalLabel,
+    MessageId::SetupCardShellLabel,
+    MessageId::SetupCardTrustLabel,
+    MessageId::SetupCardSandboxLabel,
+    MessageId::SetupCardNetworkLabel,
+    MessageId::SetupOperateRuntimeLabel,
+    MessageId::SetupOperateRosterLabel,
+    MessageId::SetupOperateConcurrencyLabel,
+    MessageId::SetupOperateReadinessLabel,
+    MessageId::SetupOperateReviewHint,
+    MessageId::SetupOperateReviewed,
+    MessageId::SetupOperateNeedsActionSaved,
+    MessageId::SetupHotbarBindingsLabel,
+    MessageId::SetupHotbarActionsLabel,
+    MessageId::SetupHotbarReviewHint,
+    MessageId::SetupHotbarReviewed,
+    MessageId::SetupToolsMcpServersLabel,
+    MessageId::SetupToolsMcpSkillsLabel,
+    MessageId::SetupToolsMcpToolsLabel,
+    MessageId::SetupToolsMcpPluginsLabel,
+    MessageId::SetupToolsMcpHotbarLabel,
+    MessageId::SetupToolsMcpReviewHint,
+    MessageId::SetupToolsMcpReviewed,
+    MessageId::SetupToolsMcpNeedsActionSaved,
+    MessageId::SetupToolsMcpPreviewTitle,
+    MessageId::SetupToolsMcpOnRampText,
+    MessageId::SetupRemoteCloudsLabel,
+    MessageId::SetupRemoteBridgesLabel,
+    MessageId::SetupRemoteProvidersLabel,
+    MessageId::SetupRemoteModeLabel,
+    MessageId::SetupRemoteReviewHint,
+    MessageId::SetupRemotePreviewTitle,
+    MessageId::SetupRemoteReviewed,
+    MessageId::SetupPersistenceHomeLabel,
+    MessageId::SetupPersistenceConfigLabel,
+    MessageId::SetupPersistenceStateLabel,
+    MessageId::SetupPersistenceConstitutionLabel,
+    MessageId::SetupPersistenceMemoryLabel,
+    MessageId::SetupPersistenceNotesLabel,
+    MessageId::SetupPersistenceReviewHint,
+    MessageId::SetupPersistenceReviewed,
+    MessageId::SetupProviderModelReadyHint,
+    MessageId::SetupProviderModelNeedsActionHint,
+    MessageId::SetupProviderModelReviewed,
+    MessageId::SetupProviderModelNeedsActionSaved,
+    MessageId::SetupRuntimePostureBoundary,
+    MessageId::SetupRuntimePostureReviewHint,
+    MessageId::SetupRuntimePostureReviewed,
+    MessageId::SetupRuntimePresetSelectedLabel,
+    MessageId::SetupRuntimePresetDiffLabel,
+    MessageId::SetupRuntimePresetAskFirstTitle,
+    MessageId::SetupRuntimePresetAskFirstDescription,
+    MessageId::SetupRuntimePresetNormalAgentTitle,
+    MessageId::SetupRuntimePresetNormalAgentDescription,
+    MessageId::SetupRuntimePresetHighTrustTitle,
+    MessageId::SetupRuntimePresetHighTrustDescription,
+    MessageId::SetupRuntimePresetPreviewTitle,
+    MessageId::SetupRuntimePresetSafetyFloor,
+    MessageId::SetupRuntimePresetApplyHint,
+    MessageId::SetupRuntimePresetApplied,
+    MessageId::SetupRuntimeProjectOverrideLabel,
+    MessageId::SetupRuntimeProjectOverrideNone,
+    MessageId::SetupReportFirstRunLabel,
+    MessageId::SetupReportUpdateLabel,
+    MessageId::SetupReportOperateLabel,
+    MessageId::SetupReportSourceLabel,
+    MessageId::SetupReportAutonomyLabel,
+    MessageId::SetupReportRuntimePostureLabel,
+    MessageId::SetupReportPersisted,
+    MessageId::SetupReportInherited,
+    MessageId::SetupReportReady,
+    MessageId::SetupReportRequired,
+    MessageId::SetupReportOptional,
+    MessageId::SetupReportRowsLabel,
+    MessageId::SetupReportNextActionLabel,
+    MessageId::SetupReportNextActionNone,
+    MessageId::SetupReportNextActionConstitution,
+    MessageId::SetupReportNextActionProvider,
+    MessageId::SetupReportNextActionRuntime,
+    MessageId::SetupReportNextActionOperate,
+    MessageId::SetupReportNextActionRequired,
+    MessageId::SetupReportRecorded,
     // Context menu.
     MessageId::CtxMenuTitle,
     MessageId::CtxMenuCopySelection,
@@ -1001,19 +1416,21 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
     MessageId::FanoutCounts,
-    MessageId::ModePickerPrompt,
     MessageId::AppModeAgent,
     MessageId::AppModeAuto,
     MessageId::AppModeYolo,
     MessageId::AppModePlan,
+    MessageId::AppModeOperate,
     MessageId::AppModeAgentHint,
     MessageId::AppModeAutoHint,
     MessageId::AppModePlanHint,
     MessageId::AppModeYoloHint,
+    MessageId::AppModeOperateHint,
     MessageId::VimModeNormal,
     MessageId::VimModeInsert,
     MessageId::VimModeVisual,
     MessageId::ApprovalRiskReview,
+    MessageId::ApprovalRiskElevated,
     MessageId::ApprovalRiskDestructive,
     MessageId::ApprovalCategorySafe,
     MessageId::ApprovalCategoryFileWrite,
@@ -1021,6 +1438,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ApprovalCategoryNetwork,
     MessageId::ApprovalCategoryMcpRead,
     MessageId::ApprovalCategoryMcpAction,
+    MessageId::ApprovalCategoryAgent,
     MessageId::ApprovalCategoryUnknown,
     MessageId::ApprovalFieldType,
     MessageId::ApprovalFieldAbout,
@@ -1126,6 +1544,78 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::VoiceRecording,
     MessageId::VoiceProcessing,
     MessageId::VoiceTranscribed,
+    MessageId::NotificationTurnComplete,
+    MessageId::NotificationSubagentComplete,
+    MessageId::FooterWorkedChip,
+    MessageId::FleetDraftTitle,
+    MessageId::FleetDraftHeader,
+    MessageId::FleetPreviewHeader,
+    MessageId::SetupRemoteOnRampText,
+    MessageId::ApprovalDescSafe,
+    MessageId::ApprovalDescFileWrite,
+    MessageId::ApprovalDescShell,
+    MessageId::ApprovalDescNetwork,
+    MessageId::ApprovalDescMcpRead,
+    MessageId::ApprovalDescMcpAction,
+    MessageId::ApprovalDescAgent,
+    MessageId::ApprovalDescUnknown,
+    MessageId::ApprovalImpactSafe,
+    MessageId::ApprovalImpactFileWrite,
+    MessageId::ApprovalImpactShell,
+    MessageId::ApprovalImpactNetwork,
+    MessageId::ApprovalImpactMcpRead,
+    MessageId::ApprovalImpactMcpAction,
+    MessageId::ApprovalImpactAgent,
+    MessageId::ApprovalImpactUnknown,
+    MessageId::ApprovalLabelCommand,
+    MessageId::ApprovalLabelDir,
+    MessageId::ApprovalLabelFile,
+    MessageId::ApprovalLabelPreview,
+    MessageId::ApprovalLabelProposedContent,
+    MessageId::ApprovalLabelReplaceThis,
+    MessageId::ApprovalLabelWithThis,
+    MessageId::ApprovalLabelReplacementContent,
+    MessageId::ApprovalLabelPath,
+    MessageId::ApprovalLabelTarget,
+    MessageId::ApprovalLabelInput,
+    MessageId::ApprovalLabelAction,
+    MessageId::ApprovalLabelType,
+    MessageId::ApprovalLabelPrompt,
+    MessageId::ApprovalLabelAbout,
+    MessageId::ApprovalLabelImpact,
+    MessageId::SetupConstitutionFileNotChecked,
+    MessageId::SetupConstitutionFileMissing,
+    MessageId::SetupConstitutionFileLoadedSelected,
+    MessageId::SetupConstitutionFileLoadedInactive,
+    MessageId::SetupConstitutionFileLoadedUnselected,
+    MessageId::SetupConstitutionFileEmpty,
+    MessageId::SetupConstitutionFileInvalid,
+    MessageId::SetupConstitutionFileUnreadable,
+    MessageId::SetupConstitutionFilePathError,
+    MessageId::SetupExpertOverrideNotChecked,
+    MessageId::SetupExpertOverrideMissing,
+    MessageId::SetupExpertOverrideActive,
+    MessageId::SetupExpertOverrideDisabled,
+    MessageId::SetupExpertOverrideEmpty,
+    MessageId::SetupExpertOverrideUnreadable,
+    MessageId::SetupExpertOverridePathError,
+    MessageId::SetupAutonomyUnspecified,
+    MessageId::SetupGuidedPurposeCoding,
+    MessageId::SetupGuidedPurposeResearch,
+    MessageId::SetupGuidedPurposeOperations,
+    MessageId::SetupGuidedPurposeMixed,
+    MessageId::SetupGuidedPurposeAboutCoding,
+    MessageId::SetupGuidedPurposeAboutResearch,
+    MessageId::SetupGuidedPurposeAboutOperations,
+    MessageId::SetupGuidedPurposeAboutMixed,
+    MessageId::SetupGuidedStyleCoding,
+    MessageId::SetupGuidedStyleResearch,
+    MessageId::SetupGuidedStyleOperations,
+    MessageId::SetupGuidedStyleMixed,
+    MessageId::SetupGuidedEvidenceAssumptions,
+    MessageId::SetupGuidedEvidenceTestsAndReceipts,
+    MessageId::SetupGuidedEvidenceReleaseReceipts,
+    MessageId::SetupGuidedNotes,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> Cow<'static, str> {
@@ -1346,9 +1836,21 @@ mod tests {
             .collect()
     }
 
+    fn locale_json_source(locale: Locale) -> &'static str {
+        match locale {
+            Locale::En => include_str!("../locales/en.json"),
+            Locale::Ja => include_str!("../locales/ja.json"),
+            Locale::ZhHans => include_str!("../locales/zh-Hans.json"),
+            Locale::ZhHant => include_str!("../locales/zh-Hant.json"),
+            Locale::PtBr => include_str!("../locales/pt-BR.json"),
+            Locale::Es419 => include_str!("../locales/es-419.json"),
+            Locale::Vi => include_str!("../locales/vi.json"),
+        }
+    }
+
     #[test]
-    fn shipped_first_pack_has_no_missing_core_messages() {
-        for locale in Locale::shipped() {
+    fn shipped_complete_packs_have_no_missing_core_messages() {
+        for locale in Locale::shipped_complete() {
             assert!(
                 missing_message_ids(*locale).is_empty(),
                 "{} is missing messages",
@@ -1358,18 +1860,65 @@ mod tests {
     }
 
     #[test]
+    fn zh_hant_is_scoped_as_partial_pack() {
+        assert!(
+            Locale::ZhHant.is_partial_pack(),
+            "zh-Hant must be marked partial until it reaches en.json parity"
+        );
+        let en_keys = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            locale_json_source(Locale::En),
+        )
+        .expect("en locale json");
+        let zh_hant_keys = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            locale_json_source(Locale::ZhHant),
+        )
+        .expect("zh-Hant locale json");
+        assert!(
+            zh_hant_keys.len() < en_keys.len(),
+            "partial zh-Hant should not claim full parity"
+        );
+        assert!(
+            !Locale::shipped_complete().contains(&Locale::ZhHant),
+            "parity gates must exclude partial zh-Hant"
+        );
+    }
+
+    #[test]
+    fn shipped_setup_strings_are_explicitly_localized() {
+        let setup_keys = ALL_MESSAGE_IDS
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .filter(|id| id.starts_with("Setup"))
+            .collect::<Vec<_>>();
+
+        for locale in Locale::shipped_complete() {
+            let messages = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                locale_json_source(*locale),
+            )
+            .unwrap_or_else(|err| panic!("{} locale json should parse: {err}", locale.tag()));
+            for key in &setup_keys {
+                assert!(
+                    messages.contains_key(key),
+                    "{} should define {key} explicitly",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mode_picker_strings_are_translated_in_non_english_locales() {
-        // The picker prompt and the three mode hints are full sentences; every
-        // shipped non-English locale must provide a real translation rather than
-        // leaking the English string through the fallback chain.
+        // The mode hints are full sentences; every shipped non-English locale
+        // must provide a real translation rather than leaking the English
+        // string through the fallback chain.
         let sentences = [
-            MessageId::ModePickerPrompt,
             MessageId::AppModeAgentHint,
             MessageId::AppModeAutoHint,
             MessageId::AppModePlanHint,
             MessageId::AppModeYoloHint,
+            MessageId::AppModeOperateHint,
         ];
-        for locale in Locale::shipped() {
+        for locale in Locale::shipped_complete() {
             if *locale == Locale::En {
                 continue;
             }
@@ -1387,6 +1936,23 @@ mod tests {
     }
 
     #[test]
+    fn zh_hant_hotbar_command_and_keybinding_strings_are_native() {
+        for id in [
+            MessageId::CmdHotbarDescription,
+            MessageId::KbJumpPlanAgentYolo,
+            MessageId::KbAltJumpPlanAgentYolo,
+        ] {
+            let localized = tr(Locale::ZhHant, id);
+            assert!(!localized.is_empty(), "zh-Hant empty for {id:?}");
+            assert_ne!(
+                localized,
+                tr(Locale::En, id),
+                "zh-Hant should translate {id:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_locale_falls_back_to_english() {
         assert_eq!(
             resolve_locale_with_env("ar", |_| None),
@@ -1397,7 +1963,7 @@ mod tests {
 
     #[test]
     fn provider_description_is_present_for_all_locales() {
-        for locale in Locale::shipped() {
+        for locale in Locale::shipped_complete() {
             let description = tr(*locale, MessageId::CmdProviderDescription);
             assert!(
                 !description.is_empty(),
@@ -1463,5 +2029,133 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    fn visible_row_text(buf: &Buffer, area: Rect, y: u16) -> String {
+        let mut out = String::new();
+        let mut skip_cells = 0usize;
+        for x in area.left()..area.right() {
+            if skip_cells > 0 {
+                skip_cells -= 1;
+                continue;
+            }
+            let symbol = buf[(x, y)].symbol();
+            out.push_str(symbol);
+            skip_cells = UnicodeWidthStr::width(symbol).saturating_sub(1);
+        }
+        out
+    }
+
+    // --- Unicode / CJK / terminal-width QA (issue #3488) -------------------
+    // `truncate_to_width` is the localization-layer truncation helper. These
+    // verify it clips by display width (never byte/char count), preserves
+    // semantic prefixes, never splits a grapheme cluster, and that mixed
+    // English/CJK rows wrap inside a narrow (40-col) and medium (80-col)
+    // terminal buffer without overflowing the column.
+
+    #[test]
+    fn truncate_to_width_clips_cjk_by_display_width_and_keeps_prefix_intact() {
+        // Each Han glyph is two columns. A 12-column budget fits the six-glyph
+        // title exactly, so no truncation/ellipsis happens and the prefix survives.
+        let title = "项目报告结果"; // 12 columns
+        assert_eq!(truncate_to_width(title, 12), title);
+
+        // Oversized: clip on a whole-glyph boundary, append the ellipsis, and
+        // stay within the budget by display width.
+        let out = truncate_to_width("数据库迁移任务结果", 7); // 10 glyphs = 20 cols
+        assert!(
+            UnicodeWidthStr::width(out.as_str()) <= 7,
+            "{out:?} overflowed"
+        );
+        assert!(out.ends_with('…'), "expected ellipsis, got {out:?}");
+        assert!(!out.contains('\u{FFFD}'), "split a wide glyph: {out:?}");
+        // The kept body is whole wide glyphs (each two columns) — never a half cell.
+        let body = out.strip_suffix('…').unwrap_or(&out);
+        assert!(
+            body.chars()
+                .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+                .sum::<usize>()
+                <= 6,
+            "body exceeded budget-minus-ellipsis: {out:?}"
+        );
+
+        // A semantic ASCII prefix (e.g. a status verb) survives when it fits.
+        let row = "running 数据库迁移任务结果预览测试";
+        let out = truncate_to_width(row, 16);
+        assert!(
+            out.starts_with("running"),
+            "semantic prefix dropped: {out:?}"
+        );
+        assert!(UnicodeWidthStr::width(out.as_str()) <= 16);
+        assert!(!out.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn truncate_to_width_never_splits_combining_marks_or_emoji() {
+        // Combining mark (U+0301) and ZWJ are zero-width; they must not be
+        // counted as columns and must never be cut mid-cluster into U+FFFD.
+        let cafe = "cafe\u{0301}"; // "café", 4 columns
+        assert_eq!(truncate_to_width(cafe, 10), cafe);
+        let out = truncate_to_width("cafe\u{0301} overflow here", 6);
+        assert!(UnicodeWidthStr::width(out.as_str()) <= 6);
+        assert!(!out.contains('\u{FFFD}'));
+
+        // Emoji is two columns; truncation lands on a cluster boundary.
+        let out = truncate_to_width("\u{1F433}\u{1F433}\u{1F433} whales everywhere", 5);
+        assert!(UnicodeWidthStr::width(out.as_str()) <= 5);
+        assert!(!out.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn narrow_and_medium_terminal_wraps_mixed_width_rows_without_overflow() {
+        // Issue #3488 acceptance: at a 40-col (narrow, macOS-Terminal-like) and
+        // 80-col (medium) terminal, mixed English/CJK task titles and transcript
+        // lines must (a) truncate to the column by display width, and (b) wrap
+        // inside the buffer so no rendered row exceeds the terminal width.
+        let fixtures = [
+            "Task: 数据库迁移任务 — verify provider routing for issue #3488",
+            "抹香鲸 is running codex/issue-3439-zhipu-glm-fixture @ issue-3439",
+            "满員電車🫠 — full-width punctuation：『』【】 mixes with ASCII ids",
+        ];
+
+        for width in [40usize, 80] {
+            // (a) The truncation helper clips by display width.
+            for fixture in fixtures {
+                let out = truncate_to_width(fixture, width);
+                assert!(
+                    UnicodeWidthStr::width(out.as_str()) <= width,
+                    "width={width}: truncated row overflowed: {out:?}"
+                );
+                assert!(
+                    !out.contains('\u{FFFD}'),
+                    "width={width}: split a glyph: {out:?}"
+                );
+            }
+
+            // (b) Wrapping the full mixed-width line inside a buffer of `width`
+            // columns never lets a rendered row exceed the terminal width.
+            for fixture in fixtures {
+                let area = Rect::new(0, 0, width as u16, 6);
+                let mut buf = Buffer::empty(area);
+                Paragraph::new(fixture)
+                    .wrap(Wrap { trim: false })
+                    .render(area, &mut buf);
+                let mut saw_text = false;
+                for (row_idx, y) in (area.top()..area.bottom()).enumerate() {
+                    let row = visible_row_text(&buf, area, y);
+                    let trimmed = row.trim_end_matches('\u{0}').trim_end();
+                    assert!(
+                        UnicodeWidthStr::width(trimmed) <= width,
+                        "width={width} row {row_idx}: wrapped row overflowed ({} cols): {trimmed:?}",
+                        UnicodeWidthStr::width(trimmed)
+                    );
+                    saw_text |= trimmed.chars().any(|ch| !ch.is_whitespace());
+                }
+                assert!(
+                    saw_text,
+                    "width={width}: mixed fixture produced an empty render"
+                );
+            }
+        }
     }
 }

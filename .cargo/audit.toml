@@ -2,8 +2,8 @@
 #
 # The advisories below are all "unmaintained" warnings — NOT security
 # vulnerabilities. Each crate is pulled in transitively only by the `starlark`
-# 0.13.0 family (starlark / starlark_syntax / starlark_map), which crates/tui and
-# crates/whaleflow depend on directly for Starlark-based Fleet/workflow config.
+# 0.13.0 family (starlark / starlark_syntax / starlark_map), which crates/tui
+# depends on directly for Starlark execpolicy files.
 # `cargo tree -i <crate>` confirms starlark is the sole path for each.
 #
 # There is no fix available without an upstream `starlark` release that drops

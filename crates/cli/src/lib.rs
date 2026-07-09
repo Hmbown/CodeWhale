@@ -64,6 +64,10 @@ enum ProviderArg {
     Deepinfra,
     #[value(alias = "fugu", alias = "sakana-ai", alias = "sakana_ai")]
     Sakana,
+    #[value(alias = "long-cat", alias = "meituan-longcat", alias = "meituan")]
+    LongCat,
+    #[value(alias = "x-ai", alias = "x_ai", alias = "grok")]
+    Xai,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -96,6 +100,8 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Minimax => ProviderKind::Minimax,
             ProviderArg::Deepinfra => ProviderKind::Deepinfra,
             ProviderArg::Sakana => ProviderKind::Sakana,
+            ProviderArg::LongCat => ProviderKind::LongCat,
+            ProviderArg::Xai => ProviderKind::Xai,
         }
     }
 }
@@ -214,6 +220,20 @@ path used by stream-json wrappers.
     Exec(TuiPassthroughArgs),
     /// Manage durable Agent Fleet runs via the TUI runtime.
     Fleet(TuiPassthroughArgs),
+    /// Manage running workflow instances (Lanes) and Runtime backends (#4176).
+    #[command(after_help = "\
+Examples:
+  codewhale lane list
+  codewhale lane status <lane-id>
+  codewhale lane attach <lane-id>
+  codewhale lane logs <lane-id>
+  codewhale lane stop <lane-id>
+  codewhale lane start --workflow stopship --fleet v0868-stopship --runtime tmux --issue 4090 -- echo hello
+
+Lane records persist under $CODEWHALE_HOME/lanes/. tmux durability belongs to
+Runtime, not Fleet.
+")]
+    Lane(LaneArgs),
     /// Run a CodeWhale-powered code review over a git diff.
     Review(TuiPassthroughArgs),
     /// Apply a patch file or stdin to the working tree.
@@ -343,6 +363,285 @@ struct RunArgs {
 struct TuiPassthroughArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
+}
+
+/// `codewhale lane …` — running workflow instances (#4176).
+#[derive(Debug, Args)]
+struct LaneArgs {
+    #[command(subcommand)]
+    command: LaneCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum LaneCommand {
+    /// List known lanes (newest first).
+    List {
+        /// Emit JSON.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Show one lane's status and attach metadata.
+    Status {
+        /// Lane id (e.g. `lane-a1b2c3d4`).
+        lane_id: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Attach to a tmux-backed lane (prints attach command; execs when possible).
+    Attach {
+        lane_id: String,
+        /// Only print the attach command; do not exec.
+        #[arg(long, default_value_t = false)]
+        print: bool,
+    },
+    /// Tail the lane stream-json / NDJSON journal.
+    Logs {
+        lane_id: String,
+        /// Follow the log file (like `tail -f`).
+        #[arg(long, short = 'f', default_value_t = false)]
+        follow: bool,
+        /// Number of trailing lines when not following (default 50).
+        #[arg(long, default_value_t = 50)]
+        tail: usize,
+    },
+    /// Stop a running lane and run worktree TTL cleanup.
+    Stop { lane_id: String },
+    /// Start a lane under a Runtime backend (tmux|inline|vm|ci).
+    Start {
+        /// Workflow name (e.g. `stopship`).
+        #[arg(long)]
+        workflow: Option<String>,
+        /// Fleet roster name (e.g. `v0868-stopship`).
+        #[arg(long)]
+        fleet: Option<String>,
+        /// Issue id binding.
+        #[arg(long)]
+        issue: Option<String>,
+        /// Free-form goal text.
+        #[arg(long)]
+        goal: Option<String>,
+        /// Runtime backend: tmux, inline, vm, or ci.
+        #[arg(long, default_value = "tmux")]
+        runtime: String,
+        /// Create an isolated worktree under this repo root.
+        #[arg(long, value_name = "DIR")]
+        worktree_repo: Option<PathBuf>,
+        /// Branch name for the worktree (requires `--worktree-repo`).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Worktree path (defaults to `<repo>/.codewhale/lanes/<lane-id>`).
+        #[arg(long, value_name = "DIR")]
+        worktree_path: Option<PathBuf>,
+        /// Worktree cleanup TTL seconds after stop (0 = immediate on stop).
+        #[arg(long)]
+        worktree_ttl_secs: Option<u64>,
+        /// Command to run in the runtime (after `--`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
+fn run_lane_command(args: LaneArgs) -> Result<()> {
+    use codewhale_lane::{
+        LaneRegistry, LaneStartSpec, RuntimeBackendKind, WorktreeProvision, backend_for,
+        resolve_backend,
+    };
+    use std::io::{BufRead, Seek, Write};
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    match args.command {
+        LaneCommand::List { json } => {
+            let reg = LaneRegistry::open_default()?;
+            let lanes = reg.list()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&lanes)?);
+            } else if lanes.is_empty() {
+                println!("No lanes under {}", reg.root().display());
+            } else {
+                println!(
+                    "{:<16} {:<10} {:<12} {:<16} {:<10} STARTED",
+                    "ID", "STATUS", "RUNTIME", "WORKFLOW", "ISSUE"
+                );
+                for lane in lanes {
+                    println!(
+                        "{:<16} {:<10} {:<12} {:<16} {:<10} {}",
+                        lane.id,
+                        lane.status.as_str(),
+                        lane.runtime.as_str(),
+                        lane.workflow.as_deref().unwrap_or("-"),
+                        lane.issue.as_deref().unwrap_or("-"),
+                        lane.started_at,
+                    );
+                }
+            }
+            Ok(())
+        }
+        LaneCommand::Status { lane_id, json } => {
+            let reg = LaneRegistry::open_default()?;
+            let lane = reg.load(&lane_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&lane)?);
+            } else {
+                println!("lane:     {}", lane.id);
+                println!("status:   {}", lane.status.as_str());
+                println!("runtime:  {}", lane.runtime.as_str());
+                println!("workflow: {}", lane.workflow.as_deref().unwrap_or("-"));
+                println!("fleet:    {}", lane.fleet.as_deref().unwrap_or("-"));
+                println!("issue:    {}", lane.issue.as_deref().unwrap_or("-"));
+                println!("goal:     {}", lane.goal.as_deref().unwrap_or("-"));
+                println!("started:  {}", lane.started_at);
+                println!("stopped:  {}", lane.stopped_at.as_deref().unwrap_or("-"));
+                println!(
+                    "worktree: {}",
+                    lane.worktree_path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "-".into())
+                );
+                println!("branch:   {}", lane.branch.as_deref().unwrap_or("-"));
+                println!("tmux:     {}", lane.tmux_session.as_deref().unwrap_or("-"));
+                println!("attach:   {}", lane.attach_target.as_deref().unwrap_or("-"));
+                println!("log:      {}", lane.log_path.display());
+            }
+            Ok(())
+        }
+        LaneCommand::Attach { lane_id, print } => {
+            let reg = LaneRegistry::open_default()?;
+            let lane = reg.load(&lane_id)?;
+            let backend = backend_for(&lane);
+            let Some(attach) = backend.attach_command(&lane) else {
+                bail!(
+                    "lane `{lane_id}` runtime `{}` has no attach target",
+                    lane.runtime.as_str()
+                );
+            };
+            if print {
+                println!("{attach}");
+                return Ok(());
+            }
+            if let Some(session) = lane.tmux_session.as_deref() {
+                let status = Command::new("tmux")
+                    .args(["attach", "-t", session])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => Ok(()),
+                    Ok(s) => bail!("tmux attach failed ({s}); command was: {attach}"),
+                    Err(err) => {
+                        eprintln!("could not exec tmux: {err}");
+                        println!("{attach}");
+                        bail!("tmux attach unavailable");
+                    }
+                }
+            } else {
+                println!("{attach}");
+                Ok(())
+            }
+        }
+        LaneCommand::Logs {
+            lane_id,
+            follow,
+            tail,
+        } => {
+            let reg = LaneRegistry::open_default()?;
+            let lane = reg.load(&lane_id)?;
+            let path = lane.log_path;
+            if !path.exists() {
+                bail!("log file missing: {}", path.display());
+            }
+            let content = std::fs::read_to_string(&path)?;
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            for line in &lines[start..] {
+                println!("{line}");
+            }
+            if !follow {
+                return Ok(());
+            }
+            let mut file = std::fs::File::open(&path)?;
+            file.seek(std::io::SeekFrom::End(0))?;
+            let mut reader = std::io::BufReader::new(file);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
+                    Ok(_) => {
+                        print!("{line}");
+                        let _ = std::io::stdout().flush();
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        LaneCommand::Stop { lane_id } => {
+            let reg = LaneRegistry::open_default()?;
+            let mut lane = reg.load(&lane_id)?;
+            let backend = backend_for(&lane);
+            backend.stop(&reg, &mut lane)?;
+            println!("stopped {}", lane.id);
+            Ok(())
+        }
+        LaneCommand::Start {
+            workflow,
+            fleet,
+            issue,
+            goal,
+            runtime,
+            worktree_repo,
+            branch,
+            worktree_path,
+            worktree_ttl_secs,
+            command,
+        } => {
+            let kind = RuntimeBackendKind::parse(&runtime)?;
+            let reg = LaneRegistry::open_default()?;
+            let mut record =
+                reg.create_pending(workflow, fleet, issue, goal, kind, worktree_ttl_secs)?;
+            let worktree = match (worktree_repo, branch) {
+                (Some(repo_root), Some(branch_name)) => {
+                    let path = worktree_path.unwrap_or_else(|| {
+                        repo_root.join(".codewhale").join("lanes").join(&record.id)
+                    });
+                    Some(WorktreeProvision {
+                        repo_root,
+                        branch: branch_name,
+                        path,
+                        base_ref: None,
+                    })
+                }
+                (None, None) => None,
+                _ => bail!("--worktree-repo and --branch must be provided together"),
+            };
+            let cmd = if command.is_empty() {
+                vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!("echo lane {} started", record.id),
+                ]
+            } else {
+                command
+            };
+            let spec = LaneStartSpec {
+                command: cmd,
+                cwd: None,
+                worktree,
+            };
+            let backend = resolve_backend(kind);
+            backend.start(&reg, &mut record, &spec)?;
+            println!("started {}", record.id);
+            println!("status:  {}", record.status.as_str());
+            println!("runtime: {}", record.runtime.as_str());
+            println!("log:     {}", record.log_path.display());
+            if let Some(attach) = backend.attach_command(&record) {
+                println!("attach:  {attach}");
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Flags for `codewhale remote-setup`. Forwarded to the TUI binary, which owns
@@ -718,6 +1017,7 @@ fn run() -> Result<()> {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, tui_args("fleet", args))
         }
+        Some(Commands::Lane(args)) => run_lane_command(args),
         Some(Commands::Review(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, tui_args("review", args))
@@ -1140,6 +1440,42 @@ fn auth_status_all_providers(store: &ConfigStore, secrets: &Secrets) -> Vec<Stri
     lines
 }
 
+fn auth_list_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push("provider     config store env  active".to_string());
+    for provider in ProviderKind::ALL {
+        let slot = provider_slot(provider);
+        let file = provider_config_set(store, provider);
+        let keyring = (!file).then(|| provider_keyring_set(secrets, provider));
+        let env = provider_env_set(provider);
+        let oauth_file = provider_oauth_file_path(provider).is_some_and(|p| p.exists());
+        let active = if provider == ProviderKind::OpenaiCodex {
+            if env {
+                "env"
+            } else if oauth_file {
+                "oauth"
+            } else {
+                "missing"
+            }
+        } else if file {
+            "config"
+        } else if keyring == Some(true) {
+            "store"
+        } else if env {
+            "env"
+        } else {
+            "missing"
+        };
+        lines.push(format!(
+            "{slot:<12}  {}     {}      {}   {active}",
+            yes_no(file),
+            keyring_status_short(keyring),
+            yes_no(env)
+        ));
+    }
+    lines
+}
+
 fn auth_status_lines_for_provider(
     store: &ConfigStore,
     secrets: &Secrets,
@@ -1346,27 +1682,8 @@ fn run_auth_command_with_secrets(
             Ok(())
         }
         AuthCommand::List => {
-            println!("provider     config store env  active");
-            for provider in ProviderKind::ALL {
-                let slot = provider_slot(provider);
-                let file = provider_config_set(store, provider);
-                let keyring = (!file).then(|| provider_keyring_set(secrets, provider));
-                let env = provider_env_set(provider);
-                let active = if file {
-                    "config"
-                } else if keyring == Some(true) {
-                    "store"
-                } else if env {
-                    "env"
-                } else {
-                    "missing"
-                };
-                println!(
-                    "{slot:<12}  {}     {}      {}   {active}",
-                    yes_no(file),
-                    keyring_status_short(keyring),
-                    yes_no(env)
-                );
+            for line in auth_list_lines(store, secrets) {
+                println!("{line}");
             }
             Ok(())
         }
@@ -2236,11 +2553,29 @@ fn build_tui_command(
     Ok(cmd)
 }
 
-fn exit_with_tui_status(status: std::process::ExitStatus) -> Result<()> {
-    match status.code() {
-        Some(code) => std::process::exit(code),
-        None => bail!("codewhale-tui terminated by signal"),
+fn tui_child_exit_code(status: std::process::ExitStatus) -> Option<i32> {
+    if let Some(code) = status.code() {
+        return Some(code);
     }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        status.signal().map(|signal| 128 + signal)
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+fn exit_with_tui_status(status: std::process::ExitStatus) -> Result<()> {
+    if let Some(code) = tui_child_exit_code(status) {
+        std::process::exit(code);
+    }
+    bail!("codewhale-tui terminated without an exit code")
 }
 
 fn delegate_simple_tui(args: Vec<String>) -> Result<()> {
@@ -2249,10 +2584,7 @@ fn delegate_simple_tui(args: Vec<String>) -> Result<()> {
         .args(args)
         .status()
         .map_err(|err| anyhow!("{}", tui_spawn_error(&tui, &err)))?;
-    match status.code() {
-        Some(code) => std::process::exit(code),
-        None => bail!("codewhale-tui terminated by signal"),
-    }
+    exit_with_tui_status(status)
 }
 
 fn tui_spawn_error(tui: &Path, err: &io::Error) -> String {
@@ -3619,6 +3951,36 @@ mod tests {
     }
 
     #[test]
+    fn auth_list_treats_openai_codex_oauth_file_as_active() {
+        use codewhale_secrets::InMemoryKeyringStore;
+        use std::sync::Arc;
+
+        let _lock = env_lock();
+        let _access_token = ScopedEnvVar::set("OPENAI_CODEX_ACCESS_TOKEN", "");
+        let _codex_token = ScopedEnvVar::set("CODEX_ACCESS_TOKEN", "");
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let auth_path = dir.path().join("auth.json");
+        std::fs::write(&auth_path, r#"{"tokens":{"access_token":"secret-token"}}"#)
+            .expect("write auth file");
+        let auth_path_str = auth_path.to_string_lossy().into_owned();
+        let _auth_file = ScopedEnvVar::set("OPENAI_CODEX_AUTH_FILE", &auth_path_str);
+
+        let mut store = ConfigStore::load(Some(config_path)).expect("store should load");
+        store.config.provider = ProviderKind::OpenaiCodex;
+        let secrets = Secrets::new(Arc::new(InMemoryKeyringStore::new()));
+
+        let output = auth_list_lines(&store, &secrets).join("\n");
+        let row = output
+            .lines()
+            .find(|line| line.starts_with("openai-codex"))
+            .unwrap_or_else(|| panic!("missing openai-codex row:\n{output}"));
+        assert!(row.ends_with("oauth"), "{row}");
+        assert!(!output.contains("secret-token"));
+    }
+
+    #[test]
     fn auth_status_scoped_provider_shows_detailed_info() {
         use codewhale_secrets::InMemoryKeyringStore;
         use std::sync::Arc;
@@ -4644,6 +5006,16 @@ mod tests {
         assert!(message.contains("access is denied"));
         assert!(message.contains("where codewhale"));
         assert!(message.contains("DEEPSEEK_TUI_BIN"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tui_child_exit_code_maps_unix_signal_to_shell_status() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let status = std::process::ExitStatus::from_raw(libc::SIGPIPE);
+
+        assert_eq!(tui_child_exit_code(status), Some(141));
     }
 
     /// Windows-only fallback: the user from #247 manually renamed the

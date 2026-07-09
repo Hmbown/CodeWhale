@@ -36,10 +36,20 @@ pub struct FleetManager {
     ledger: FleetLedger,
     stale_after: Duration,
     exec_config: codewhale_config::FleetExecConfig,
+    /// `[fleet]` table used to build the agent roster for dispatch
+    /// (#fleet-roster cutover (v0.8.67)). Defaults keep built-in + workspace
+    /// members resolvable even when the caller has no parsed config.
+    fleet_config: codewhale_config::FleetConfigToml,
     /// Optional sub-agent manager for headless worker execution.
     /// When set, fleet workers spawn real sub-agents; when None,
     /// the manager falls back to local simulation.
     sub_agent_manager: Option<SharedSubAgentManager>,
+    /// The live session route — the operator's model. Workers whose task and
+    /// roster profile pin no model inherit this instead of `"auto"`, so the
+    /// model the user picked in `/model` is the model that runs the fleet
+    /// (matching the `/fleet roster` operator row). `None` keeps the legacy
+    /// `"auto"` fallback for headless callers with no session.
+    session_model: Option<String>,
 }
 
 impl std::fmt::Debug for FleetManager {
@@ -173,8 +183,29 @@ impl FleetManager {
             ledger,
             stale_after: Duration::from_secs(DEFAULT_STALE_AFTER_SECONDS),
             exec_config: codewhale_config::FleetExecConfig::default(),
+            fleet_config: codewhale_config::FleetConfigToml::default(),
             sub_agent_manager: None,
+            session_model: None,
         })
+    }
+
+    /// Adopt the active session route as the run-level model: whatever the
+    /// user selected in `/model` becomes the operator, and workers without a
+    /// task/profile model pin inherit it. Empty and `"auto"` values are
+    /// ignored so the resolver default keeps applying.
+    pub fn with_session_model(mut self, model: impl Into<String>) -> Self {
+        let model = model.into();
+        let trimmed = model.trim();
+        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("auto") {
+            self.session_model = Some(trimmed.to_string());
+        }
+        self
+    }
+
+    /// The run-level model handed to worker-spec resolution: the session
+    /// model when one was adopted, else the legacy `"auto"` sentinel.
+    fn run_model(&self) -> &str {
+        self.session_model.as_deref().unwrap_or("auto")
     }
 
     pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
@@ -188,15 +219,23 @@ impl FleetManager {
         self
     }
 
+    /// Apply the parsed `[fleet]` table so `[fleet.profiles]` members join
+    /// the dispatch roster (#fleet-roster cutover (v0.8.67)).
+    pub fn with_fleet_config(mut self, fleet_config: codewhale_config::FleetConfigToml) -> Self {
+        self.fleet_config = fleet_config;
+        self
+    }
+
+    /// Merged agent roster (built-ins + `[fleet.profiles]` + workspace files)
+    /// used everywhere a task references an `agent_profile` id.
+    fn agent_roster(&self) -> crate::fleet::roster::FleetRoster {
+        crate::fleet::roster::FleetRoster::load(&self.fleet_config, &self.workspace)
+    }
+
     /// Attach a sub-agent manager so fleet workers can spawn real headless agents.
     pub fn with_sub_agent_manager(mut self, mgr: SharedSubAgentManager) -> Self {
         self.sub_agent_manager = Some(mgr);
         self
-    }
-
-    /// True when the manager has a sub-agent runtime for headless worker execution.
-    pub fn has_worker_runtime(&self) -> bool {
-        self.sub_agent_manager.is_some()
     }
 
     pub fn ledger_path(&self) -> &Path {
@@ -226,8 +265,8 @@ impl FleetManager {
         max_workers: usize,
     ) -> Result<FleetRunReport> {
         validate_task_spec_document(&doc)?;
-        let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
-        worker_runtime::validate_task_agent_profiles(&doc.tasks, &agent_profiles)?;
+        let roster = self.agent_roster();
+        worker_runtime::validate_task_agent_profiles(&doc.tasks, roster.members())?;
         let max_workers = max_workers.clamp(1, 128);
         let run_id = FleetRunId::from(format!(
             "fleet-{}",
@@ -705,15 +744,15 @@ impl FleetManager {
                     capabilities: vec![],
                     max_concurrent_tasks: Some(1),
                 });
-            let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
+            let roster = self.agent_roster();
             let worker = worker_runtime::fleet_task_to_worker_spec_with_profiles(
                 worker_id,
                 &entry.run_id.0,
                 task_spec,
                 &worker_spec,
-                "auto",
+                self.run_model(),
                 &self.workspace,
-                &agent_profiles,
+                roster.members(),
                 None,
             )?;
             Some(worker_runtime::apply_exec_hardening(
@@ -780,7 +819,7 @@ impl FleetManager {
             .get(&run_id.0)
             .cloned()
             .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
-        let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)?;
+        let roster = self.agent_roster();
         let mut started = 0usize;
         for task in active_tasks_for_run(&state, run_id) {
             let Some(worker_id) = task.leased_to.as_deref() else {
@@ -808,7 +847,7 @@ impl FleetManager {
                 &task_spec,
                 &self.exec_config,
                 model,
-                &agent_profiles,
+                roster.members(),
             )?;
             let cwd = resolve_task_cwd(&self.workspace, &task_spec);
             match executor.start_worker_on_host(worker_id, &worker_spec.host, command, Some(cwd)) {
@@ -902,6 +941,7 @@ impl FleetManager {
         // verification and the simulated/transport fallback below — persists the
         // same honest, secret-free route detail.
         let resolved_route = self.resolve_task_route(&task.task_spec);
+        let effective_permissions = self.resolve_task_effective_permissions(task);
         let verification_input = FleetTaskVerificationInput {
             run_id: task.entry.run_id.clone(),
             task_id: task.entry.task_id.clone(),
@@ -909,6 +949,7 @@ impl FleetManager {
             exit_code,
             artifacts,
             resolved_route,
+            effective_permissions,
         };
         if task.task_spec.scorer.is_some() {
             let verification =
@@ -954,21 +995,61 @@ impl FleetManager {
             artifacts: verification_input.artifacts,
             score: None,
             resolved_route: verification_input.resolved_route,
+            effective_permissions: verification_input.effective_permissions,
         })?;
         Ok(true)
     }
 
     /// Resolve the route snapshot to persist on a task's receipt (#3154).
     ///
-    /// Loads workspace agent profiles so role/loadout intent composes the same
+    /// Loads the merged agent roster so role/loadout intent composes the same
     /// way as the worker-spec path, then mints a secret-free route candidate via
     /// the hermetic resolver bridge. Returns `None` (never a fabricated route)
-    /// when profiles or resolution are unavailable.
+    /// when resolution is unavailable.
     fn resolve_task_route(&self, task_spec: &FleetTaskSpec) -> Option<FleetResolvedRoute> {
-        let agent_profiles = super::profile::load_workspace_agent_profiles(&self.workspace)
-            .ok()
-            .unwrap_or_default();
-        worker_runtime::resolve_fleet_route(task_spec, &agent_profiles)
+        let roster = self.agent_roster();
+        worker_runtime::resolve_fleet_route(task_spec, roster.members(), self.session_model())
+    }
+
+    /// The adopted session route, if any — the operator's model.
+    fn session_model(&self) -> Option<&str> {
+        self.session_model.as_deref()
+    }
+
+    /// Resolve the effective worker authority to persist on a task's receipt
+    /// (#3211). This mirrors Fleet worker registration and applies exec
+    /// hardening before snapshotting the runtime profile. Failures degrade to
+    /// `None` so receipt writing never widens or fabricates authority.
+    fn resolve_task_effective_permissions(
+        &self,
+        task: &FleetExecutorTaskContext,
+    ) -> Option<FleetEffectivePermissions> {
+        let state = self.ledger.rebuild_state().ok()?;
+        let run = state.runs.get(&task.entry.run_id.0)?;
+        let worker_spec = run
+            .worker_specs
+            .iter()
+            .find(|worker| worker.id == task.worker_id)
+            .cloned()
+            .unwrap_or_else(|| default_local_worker(&task.worker_id));
+        let roster = self.agent_roster();
+        let worker = worker_runtime::fleet_task_to_worker_spec_with_profiles(
+            &task.worker_id,
+            &task.entry.run_id.0,
+            &task.task_spec,
+            &worker_spec,
+            self.run_model(),
+            &self.workspace,
+            roster.members(),
+            None,
+        )
+        .ok()?;
+        let worker = worker_runtime::apply_exec_hardening(worker, &self.exec_config);
+        Some(worker_runtime::fleet_effective_permissions_for_task(
+            &task.task_spec,
+            roster.members(),
+            &worker,
+        ))
     }
 
     fn task_artifacts_for_receipt(
@@ -1531,6 +1612,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn with_session_model_adopts_route_and_ignores_auto_or_empty() {
+        let tmp = TempDir::new().unwrap();
+
+        // No session: legacy auto sentinel.
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        assert_eq!(manager.run_model(), "auto");
+        assert_eq!(manager.session_model(), None);
+
+        // The session route becomes the run model — the operator's model.
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_session_model("deepseek-v4-pro");
+        assert_eq!(manager.run_model(), "deepseek-v4-pro");
+        assert_eq!(manager.session_model(), Some("deepseek-v4-pro"));
+
+        // "auto" and empty/whitespace inputs keep the resolver default.
+        for noop in ["auto", "AUTO", "", "   "] {
+            let manager = FleetManager::open(tmp.path())
+                .unwrap()
+                .with_session_model(noop);
+            assert_eq!(manager.run_model(), "auto");
+            assert_eq!(manager.session_model(), None);
+        }
+    }
+
     fn task_spec_file(dir: &TempDir, tasks: Vec<FleetTaskSpec>) -> PathBuf {
         let path = dir.path().join("fleet-tasks.json");
         let doc = json!({
@@ -1682,6 +1789,7 @@ mod tests {
                     artifacts: Vec::new(),
                     score: None,
                     resolved_route: None,
+                    effective_permissions: None,
                 })
                 .unwrap();
         }
@@ -2383,6 +2491,68 @@ esac
                 route.source, "resolver",
                 "receipt {key} resolved-route source must be the resolver"
             );
+            assert!(
+                route
+                    .model_route
+                    .as_deref()
+                    .is_some_and(|route| !route.is_empty()),
+                "receipt {key} resolved-route should record the model route seam"
+            );
+            assert!(
+                route
+                    .role_source
+                    .as_deref()
+                    .is_some_and(|source| !source.is_empty()),
+                "receipt {key} resolved-route should record role source"
+            );
+            assert!(
+                route
+                    .model_source
+                    .as_deref()
+                    .is_some_and(|source| !source.is_empty()),
+                "receipt {key} resolved-route should record model source"
+            );
+            let permissions = receipt
+                .effective_permissions
+                .as_ref()
+                .unwrap_or_else(|| panic!("receipt {key} should carry effective permissions"));
+            assert_eq!(
+                permissions.source, "worker_runtime_profile",
+                "receipt {key} permissions source must be the worker runtime profile"
+            );
+            assert!(
+                permissions.background,
+                "receipt {key} should record background worker execution"
+            );
+            assert_eq!(
+                permissions.tool_scope, "explicit",
+                "receipt {key} should preserve explicit tool scope"
+            );
+            assert!(
+                !permissions.tools.is_empty(),
+                "receipt {key} should record explicit tool names"
+            );
+            match route.role.as_deref() {
+                Some("builder") => {
+                    assert!(permissions.write, "builder receipt {key} should write");
+                    assert_eq!(permissions.shell, "full");
+                }
+                Some("scout") => {
+                    assert!(
+                        !permissions.write,
+                        "scout receipt {key} must stay read-only"
+                    );
+                    assert_eq!(permissions.shell, "read_only");
+                }
+                Some("verifier") => {
+                    assert!(
+                        !permissions.write,
+                        "verifier receipt {key} must stay read-only"
+                    );
+                    assert_eq!(permissions.shell, "full");
+                }
+                role => panic!("unexpected receipt role for {key}: {role:?}"),
+            }
 
             let receipt_json = serde_json::to_string(receipt).unwrap();
             let haystack = receipt_json.to_ascii_lowercase();

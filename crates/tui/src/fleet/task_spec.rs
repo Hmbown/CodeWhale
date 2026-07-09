@@ -75,6 +75,8 @@ pub struct FleetTaskVerificationInput {
     pub artifacts: Vec<FleetArtifactRef>,
     /// Resolved-route snapshot to persist on the receipt (#3154).
     pub resolved_route: Option<FleetResolvedRoute>,
+    /// Effective worker authority snapshot to persist on the receipt (#3211).
+    pub effective_permissions: Option<FleetEffectivePermissions>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +302,7 @@ pub fn record_verification_receipt(
         artifacts,
         score: Some(verification.score),
         resolved_route: input.resolved_route.clone(),
+        effective_permissions: input.effective_permissions.clone(),
     };
     ledger.record_receipt(receipt.clone())?;
     Ok(receipt)
@@ -798,6 +801,7 @@ mod tests {
             exit_code: Some(0),
             artifacts: vec![],
             resolved_route: None,
+            effective_permissions: None,
         };
 
         let pass = verify_task_result(
@@ -905,6 +909,18 @@ mod tests {
             exit_code: Some(1),
             artifacts: vec![log],
             resolved_route: None,
+            effective_permissions: Some(FleetEffectivePermissions {
+                write: false,
+                network: false,
+                shell: "read_only".to_string(),
+                tool_scope: "explicit".to_string(),
+                tools: vec!["read_file".to_string()],
+                background: true,
+                max_spawn_depth: 0,
+                profile_id: None,
+                profile_origin: None,
+                source: "worker_runtime_profile".to_string(),
+            }),
         };
         let verification = verify_task_result(
             tmp.path(),
@@ -917,6 +933,7 @@ mod tests {
 
         assert_eq!(receipt.result, FleetTaskResult::Fail);
         assert_eq!(receipt.failure_kind, Some(FleetTaskFailureKind::Task));
+        assert_eq!(receipt.effective_permissions, input.effective_permissions);
         assert_eq!(receipt.artifacts.len(), 2);
         assert!(matches!(
             receipt.artifacts.last().unwrap().kind,

@@ -11,15 +11,18 @@
  * marketing copy. Keep them honest if you edit them (see AGENTS.md Article II).
  */
 
-type Scene = {
+export type Scene = {
+  /** Short tab label for players that show one scene at a time. */
+  tab: { en: string; zh: string };
   context: { en: string; zh: string };
   trace: string;
   cites: string[];
   decision: { en: string; zh: string };
 };
 
-const SCENES: Scene[] = [
+export const SCENES: Scene[] = [
   {
+    tab: { en: "Stale handoff", zh: "过期交接" },
     context: {
       en: "When the prior session's summary didn't match the real repo state…",
       zh: "当上一会话的总结与仓库真实状态不符时……",
@@ -33,6 +36,7 @@ const SCENES: Scene[] = [
     },
   },
   {
+    tab: { en: "Conflicting orders", zh: "指令冲突" },
     context: {
       en: "When a “pause” signal conflicted with the user's explicit request to keep going…",
       zh: "当「暂停」信号与用户明确要求继续相冲突时……",
@@ -46,6 +50,7 @@ const SCENES: Scene[] = [
     },
   },
   {
+    tab: { en: "Community credit", zh: "社区署名" },
     context: {
       en: "When trimming the README, tempted to drop the contributor wall…",
       zh: "精简 README 时，本可以顺手删掉贡献者名单……",

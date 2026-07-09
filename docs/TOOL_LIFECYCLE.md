@@ -28,8 +28,8 @@ tools** that map to the *same* implementation under different names:
   (`registry.rs:527,530`).
 - `tts` and `speech` are both `SpeechTool`
   (`registry.rs:787-792`, both deferred).
-- `todo_write` and `checklist_write` are the *same* `TodoWriteTool`
-  constructed two ways (`crates/tui/src/tools/todo.rs:184-196`).
+- `work_update`, `checklist_*`, and `todo_*` are the *same*
+  `TodoWriteTool` surface, with only `work_update` visible to models.
 
 For a strong model, redundant names are harmless noise. For **weaker / smaller
 models** (the Arcee Trinity lane, `deepseek-v4-flash` child executors, and any
@@ -47,25 +47,23 @@ The lifecycle policy exists to **shrink and discipline the model-visible
 surface** without ever breaking the ability to replay an old transcript that
 referenced a now-retired name.
 
-### Canonical work-tracking surface for v0.8.65
+### Canonical work-tracking surface for v0.8.68
 
-The model-visible progress surface is `checklist_*`:
-`checklist_write`, `checklist_add`, `checklist_update`, and `checklist_list`.
-Agents and Fleet workers use that surface for concrete Work progress under the
+The model-visible progress surface is a single tool: `work_update` (#4132).
+Agents and Fleet workers use it for concrete To-do / Work progress under the
 active runtime thread or durable task.
 
-`task_*` and the Fleet/WhaleFlow ledger remain the durable lifecycle owners.
+`task_*` and the Fleet/Workflow ledger remain the durable lifecycle owners.
 Checklist metadata is the model-visible projection of progress:
 `task_updates.checklist` carries the current items, completion percentage, and
-in-progress item. `update_plan` is optional high-level strategy metadata for
-complex initiatives; it must not duplicate checklist items or become a parallel
+in-progress item. `update_plan` is optional Strategy metadata/context/route for
+complex initiatives; it must not duplicate To-do items or become a parallel
 progress store.
 
-The legacy `todo_*` names are deprecated hidden compatibility aliases. They
-remain registered and dispatchable against the same checklist state so old
-transcripts replay without data loss, but they are not advertised to the model
-catalog and their result metadata points callers to the corresponding
-`checklist_*` tool.
+The legacy `checklist_*` and older `todo_*` names are hidden compatibility
+aliases. They remain registered and dispatchable against the same To-do state
+so old transcripts replay without data loss, but they are not advertised to the
+model catalog.
 
 ---
 
@@ -93,7 +91,7 @@ caller-facing signal:
   re-learning it. (Example: `exec_wait` is literally `exec_shell_wait`.)
 - **deprecated:** behaves identically *and succeeds*, but the tool result's
   **metadata** carries an appended notice like
-  `"deprecated: use checklist_write instead"`. The notice goes **only in the
+  `"deprecated: use <replacement> instead"`. The notice goes **only in the
   result metadata returned for that call** — never in the cached tool catalog
   prefix (see Section 8). We use this when there is a canonical replacement we
   want the caller (and any human reading the transcript) nudged toward.
@@ -120,6 +118,14 @@ pub(super) const HIDDEN_COMPATIBILITY_TOOLS: &[&str] = &[
     "exec_wait",          // == exec_shell_wait  (ShellWaitTool)
     "exec_interact",      // == exec_shell_interact (ShellInteractTool)
     "tts",                // == speech (SpeechTool)
+    "checklist_write",    // == work_update (TodoWriteTool)
+    "checklist_add",      // == work_update single-item add
+    "checklist_update",   // == work_update single-item update
+    "checklist_list",     // == work_update list
+    "todo_write",         // == work_update
+    "todo_add",           // == work_update single-item add
+    "todo_update",        // == work_update single-item update
+    "todo_list",          // == work_update list
 ];
 
 /// Deprecated aliases: invisible + dispatchable, with a replacement notice
@@ -131,14 +137,8 @@ pub(super) struct DeprecatedAlias {
 }
 
 pub(super) const DEPRECATED_ALIASES: &[DeprecatedAlias] = &[
-    DeprecatedAlias { name: "todo_write",  replacement: "checklist_write",
-                      note: "use checklist_write instead" },
-    DeprecatedAlias { name: "todo_add",    replacement: "checklist_add",
-                      note: "use checklist_add instead" },
-    DeprecatedAlias { name: "todo_update", replacement: "checklist_update",
-                      note: "use checklist_update instead" },
-    DeprecatedAlias { name: "todo_list",   replacement: "checklist_list",
-                      note: "use checklist_list instead" },
+    // Empty in the #4132 work-surface cutover: checklist_* and todo_* are
+    // silent hidden-compatibility aliases of work_update for transcript replay.
 ];
 
 #[inline]
@@ -197,10 +197,14 @@ is "removed" in 0.8.53; replay is supported for everything listed.
 | `exec_wait` | `exec_shell_wait` | hidden-compatibility | 0.8.53 | TBD (≥ 0.9.x) | Yes |
 | `exec_interact` | `exec_shell_interact` | hidden-compatibility | 0.8.53 | TBD (≥ 0.9.x) | Yes |
 | `tts` | `speech` | hidden-compatibility | 0.8.53 | TBD (≥ 0.9.x) | Yes |
-| `todo_write` | `checklist_write` | deprecated | 0.8.53 | TBD (≥ 0.9.x) | Yes |
-| `todo_add` | `checklist_add` | deprecated | 0.8.53 | TBD (≥ 0.9.x) | Yes |
-| `todo_update` | `checklist_update` | deprecated | 0.8.53 | TBD (≥ 0.9.x) | Yes |
-| `todo_list` | `checklist_list` | deprecated | 0.8.53 | TBD (≥ 0.9.x) | Yes |
+| `checklist_write` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `checklist_add` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `checklist_update` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `checklist_list` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `todo_write` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `todo_add` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `todo_update` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
+| `todo_list` | `work_update` | hidden-compatibility | 0.8.68 | TBD (≥ 0.9.x) | Yes |
 
 **Legacy subagent names — removed, no manifest entry needed.**
 The model-visible subagent surface is only `agent`. The old lifecycle names and
@@ -268,7 +272,7 @@ else or an explicit budget bump in this doc.
 |---|---|---|---|
 | **Shell wait** | `exec_shell_wait` | `exec_wait` → hidden-compat | Same `ShellWaitTool` (`registry.rs:526,529`); router already unifies (`tool_routing.rs:1139`) |
 | **Shell interact** | `exec_shell_interact` | `exec_interact` → hidden-compat | Same `ShellInteractTool` (`registry.rs:527,530`) |
-| **Checklist / todo** | `checklist_write` | `todo_write/add/update/list` → deprecated | Same `TodoWriteTool`, `::new` vs `::checklist` (`todo.rs:184-196`) |
+| **Work progress / checklist / todo** | `work_update` | `checklist_write/add/update/list`, `todo_write/add/update/list` → hidden-compat | Same `TodoWriteTool`; compatibility names replay old transcripts only |
 | **Speech / tts** | `speech` | `tts` → hidden-compat | Same `SpeechTool` (`registry.rs:787-792`) |
 | **Subagent lifecycle** | `agent` | old lifecycle names and tool-agent lane removed | Single async launcher; child agents are leaf workers |
 | **Edit family** | `apply_patch`, `edit_file`, `write_file`, `fim_edit` | none — **all distinct niches** | NOT touched (per #2681 non-goals); doc-only canonical guidance |

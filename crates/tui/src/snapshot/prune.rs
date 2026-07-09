@@ -25,7 +25,12 @@ pub fn prune_older_than(workspace: &Path, max_age: Duration) -> io::Result<usize
     }
     let repo = SnapshotRepo::open_or_init(workspace)?;
     let removed = repo.prune_older_than(max_age)?;
-    repo.prune_unreachable_objects()?;
+    // `git prune --expire=now` walks the whole object store — seconds on a
+    // large snapshot repo. Nothing removed means nothing newly unreachable,
+    // so skip the walk entirely on the common boot path (#3757).
+    if removed > 0 {
+        repo.prune_unreachable_objects()?;
+    }
     Ok(removed)
 }
 

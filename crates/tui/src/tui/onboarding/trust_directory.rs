@@ -12,7 +12,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
     lines.push(Line::from(Span::styled(
         app.tr(MessageId::OnboardTrustTitle).to_string(),
         Style::default()
-            .fg(palette::DEEPSEEK_SKY)
+            .fg(palette::WHALE_INFO)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -51,7 +51,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
-            "1/Y",
+            "Enter/1/Y",
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -61,7 +61,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
-            "2/N",
+            "2/N/Esc",
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),

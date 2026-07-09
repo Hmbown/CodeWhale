@@ -271,7 +271,8 @@ mod tests {
             .await
             .expect("execute");
         assert!(result.success);
-        assert!(result.content.contains("\"valid\": true"));
+        let content: Value = serde_json::from_str(&result.content).expect("validation json");
+        assert_eq!(content.get("valid").and_then(Value::as_bool), Some(true));
     }
 
     #[tokio::test]
@@ -286,7 +287,8 @@ mod tests {
             .await
             .expect("execute");
         assert!(result.success);
-        assert!(result.content.contains("\"format\": \"toml\""));
+        let content: Value = serde_json::from_str(&result.content).expect("validation json");
+        assert_eq!(content.get("format").and_then(Value::as_str), Some("toml"));
     }
 
     #[tokio::test]

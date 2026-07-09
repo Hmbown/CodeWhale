@@ -67,7 +67,7 @@ pub fn tool_family_for_title(title: &str) -> ToolFamily {
         "Patch" | "Diff" => ToolFamily::Patch,
         "Workspace" | "Image" => ToolFamily::Read,
         "Search" => ToolFamily::Find,
-        "Plan" | "Review" => ToolFamily::Generic,
+        "Plan" | "Strategy" | "Review" => ToolFamily::Generic,
         _ => ToolFamily::Generic,
     }
 }
@@ -97,6 +97,10 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
         | "task_gate_run"
         | "validate_data"
         | "wait_for_dev_server" => ToolFamily::Verify,
+        // Workflow runs are multi-child activity; reuse fanout glyph so the
+        // compact history card (#4122) shares visual vocabulary with direct
+        // multi-agent cards rather than the neutral generic bullet.
+        "workflow" => ToolFamily::Fanout,
         _ => ToolFamily::Generic,
     }
 }
@@ -216,6 +220,7 @@ fn is_known_metadata_tool_name(name: &str) -> bool {
     matches!(
         name,
         "update_plan"
+            | "work_update"
             | "todo_write"
             | "todo_add"
             | "todo_update"
@@ -341,6 +346,7 @@ mod tests {
         assert_eq!(tool_family_for_title("Search"), ToolFamily::Find);
         assert_eq!(tool_family_for_title("Diff"), ToolFamily::Patch);
         assert_eq!(tool_family_for_title("Plan"), ToolFamily::Generic);
+        assert_eq!(tool_family_for_title("Strategy"), ToolFamily::Generic);
         assert_eq!(tool_family_for_title("unknown title"), ToolFamily::Generic);
     }
 

@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::MessageId;
-use crate::tui::app::App;
+use crate::tui::app::{App, SidebarRowAction};
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
 };
@@ -207,6 +207,49 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, inner: Rect, rows: isize)
     app.needs_redraw = true;
 }
 
+/// Click the WorkflowPanel header to toggle expand/collapse, or the trailing
+/// cancel affordance while a run is active (#4121).
+fn handle_workflow_panel_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return false;
+    }
+    let Some(area) = app.viewport.last_workflow_panel_area else {
+        return false;
+    };
+    if !mouse_hits_rect(mouse, Some(area)) {
+        return false;
+    }
+    if app.workflow_panel.is_none() {
+        return false;
+    }
+
+    if let Some(panel) = app.workflow_panel.as_mut() {
+        panel.keyboard_focus = true;
+    }
+
+    // Rightmost ~14 columns of the header row act as the cancel control.
+    let on_header_row = mouse.row == area.y;
+    let cancel_zone_start = area.x.saturating_add(area.width.saturating_sub(14));
+    let in_cancel_zone = on_header_row && mouse.column >= cancel_zone_start;
+    let running = app
+        .workflow_panel
+        .as_ref()
+        .is_some_and(|panel| panel.lifecycle.is_running());
+
+    if in_cancel_zone && running {
+        if let Some(run_id) = app.request_workflow_panel_cancel() {
+            app.status_message = Some(format!(
+                "Cancelling workflow {run_id}… (dispatch via /workflow cancel {run_id})"
+            ));
+            return true;
+        }
+    }
+
+    // Any other click on the panel toggles expand/collapse.
+    app.toggle_workflow_panel();
+    true
+}
+
 /// Handle mouse events within the composer area.
 /// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
@@ -283,6 +326,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     // Sidebar resize handle — check before composer so it doesn't compete
     // with text selection / scrolling.
     if handle_sidebar_resize_mouse(app, mouse) {
+        return Vec::new();
+    }
+
+    // WorkflowPanel toggle / cancel (#4121) before composer so the strip
+    // above the input remains clickable.
+    if handle_workflow_panel_mouse(app, mouse) {
         return Vec::new();
     }
 
@@ -393,14 +442,56 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             app.viewport.transcript_scrollbar_dragging = false;
             app.viewport.selection_autoscroll = None;
 
-            // #3028: Check sidebar hover state for clickable rows before
-            // falling through to transcript selection.  Reuses the existing
-            // command-palette dispatch pipeline.
+            // #3028/#4009: Check sidebar hover state for clickable rows before
+            // falling through to transcript selection. Command rows still use
+            // the command-palette pipeline; agent rows are direct UI actions.
             if let Some(action) = sidebar_click_action(app, mouse) {
-                use crate::tui::views::CommandPaletteAction;
-                return vec![ViewEvent::CommandPaletteSelected {
-                    action: CommandPaletteAction::ExecuteCommand { command: action },
-                }];
+                match action {
+                    SidebarRowAction::Command(command) => {
+                        use crate::tui::views::CommandPaletteAction;
+                        return vec![ViewEvent::CommandPaletteSelected {
+                            action: CommandPaletteAction::ExecuteCommand { command },
+                        }];
+                    }
+                    SidebarRowAction::ToggleAgentDetails { agent_id } => {
+                        if !app.expanded_sidebar_agents.insert(agent_id.clone()) {
+                            app.expanded_sidebar_agents.remove(&agent_id);
+                            app.status_message = Some("Agent details collapsed".to_string());
+                        } else {
+                            app.status_message = Some("Agent details expanded".to_string());
+                        }
+                        app.needs_redraw = true;
+                        return Vec::new();
+                    }
+                    SidebarRowAction::OpenAgentDetail { agent_id } => {
+                        // #2889 slice / dogfood A3: drill from the expanded
+                        // dossier into the child's transcript card (action
+                        // tree, status, summary) in the detail pager.
+                        let cell_index = app.history.iter().position(|cell| {
+                            matches!(
+                                cell,
+                                HistoryCell::SubAgent(
+                                    crate::tui::history::SubAgentCell::Delegate(card)
+                                ) if card.agent_id == agent_id
+                            )
+                        });
+                        match cell_index {
+                            Some(cell_index) => {
+                                open_details_pager_for_cell(app, cell_index);
+                            }
+                            None => {
+                                app.status_message = Some(format!(
+                                    "No transcript card for {agent_id} yet — use handle_read agent:{agent_id}/full_transcript"
+                                ));
+                            }
+                        }
+                        app.needs_redraw = true;
+                        return Vec::new();
+                    }
+                    SidebarRowAction::CancelAgent { agent_id } => {
+                        return vec![ViewEvent::SidebarAgentCancel { agent_id }];
+                    }
+                }
             }
 
             // Click on the transcript scrollbar gutter starts a scrollbar
@@ -498,9 +589,9 @@ fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
 
-/// Resolve a left-click in the sidebar to a slash command, if the clicked
-/// row has a click_action assigned (#3028).
-fn sidebar_click_action(app: &App, mouse: MouseEvent) -> Option<String> {
+/// Resolve a left-click in the sidebar to a typed row action, if the clicked
+/// row has a click action assigned (#3028, #4009).
+fn sidebar_click_action(app: &App, mouse: MouseEvent) -> Option<SidebarRowAction> {
     for section in &app.sidebar_hover.sections {
         if mouse.column >= section.content_area.x
             && mouse.column
@@ -714,7 +805,9 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
     let on_sidebar = mouse_hits_rect(mouse, app.viewport.last_sidebar_area);
 
     if on_sidebar {
-        if let Some(command) = sidebar_click_action(app, mouse) {
+        if let Some(command) = sidebar_click_action(app, mouse)
+            .and_then(|action| action.as_command().map(str::to_string))
+        {
             entries.push(ContextMenuEntry {
                 label: "Run".to_string(),
                 description: command.clone(),
@@ -873,15 +966,17 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
             }
         }
         ContextMenuAction::OpenCommandPalette => {
-            app.view_stack
-                .push(CommandPaletteView::new(build_command_palette_entries(
+            app.view_stack.push(CommandPaletteView::new_for_locale(
+                app.ui_locale,
+                build_command_palette_entries(
                     app.ui_locale,
                     &app.skills_dir,
                     app.skills_scan_codewhale_only,
                     &app.workspace,
                     &app.mcp_config_path,
                     app.mcp_snapshot.as_ref(),
-                )));
+                ),
+            ));
         }
         ContextMenuAction::OpenContextInspector => {
             open_context_inspector(app);
@@ -1008,6 +1103,23 @@ pub(crate) fn ctrl_c_disposition(app: &App) -> CtrlCDisposition {
     }
 }
 
+/// Normalize the raw Ctrl+C control byte to canonical `Ctrl+C`.
+///
+/// In PTY/raw-mode the terminal driver delivers Ctrl+C as the literal byte
+/// `0x03` (the ETX control character). crossterm usually decodes that to
+/// `Char('c') + CONTROL`, but some terminal / kitty-keyboard-protocol
+/// combinations surface it as `Char('\u{3}')` instead, where it slips past the
+/// `Char('c') + CONTROL` arm of the key handler and never reaches the
+/// quit-arm flow (#4090). Rewriting every encoding of Ctrl+C to the canonical
+/// form here keeps the double-press-to-exit behavior consistent across PTY,
+/// raw-mode, and kitty-enhanced terminals.
+pub(crate) fn normalize_raw_ctrl_c(key: &mut KeyEvent) {
+    if matches!(key.code, KeyCode::Char('\u{3}')) {
+        key.code = KeyCode::Char('c');
+        key.modifiers.insert(KeyModifiers::CONTROL);
+    }
+}
+
 pub(crate) fn copy_active_selection(app: &mut App) {
     // Composer selection takes priority.
     let sel = app.selected_text();
@@ -1112,7 +1224,9 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
 mod tests {
     use super::{build_context_menu_entries, sidebar_click_action};
     use crate::config::Config;
-    use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection, TuiOptions};
+    use crate::tui::app::{
+        App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
+    };
     use crate::tui::views::ContextMenuAction;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;
@@ -1150,7 +1264,7 @@ mod tests {
             full_text: "row".to_string(),
             detail: None,
             is_truncated: false,
-            click_action: action.map(str::to_string),
+            click_action: action.map(|action| SidebarRowAction::Command(action.to_string())),
             stop_action: None,
             stop_zone_start_col: None,
             stop_zone_end_col: None,
@@ -1164,11 +1278,18 @@ mod tests {
             full_text: "job row [x]".to_string(),
             detail: None,
             is_truncated: false,
-            click_action: Some(action.to_string()),
-            stop_action: Some(stop_action.to_string()),
+            click_action: Some(SidebarRowAction::Command(action.to_string())),
+            stop_action: Some(SidebarRowAction::Command(stop_action.to_string())),
             stop_zone_start_col: Some(68),
             stop_zone_end_col: Some(71),
         }
+    }
+
+    fn action_command(action: Option<SidebarRowAction>) -> Option<String> {
+        action
+            .as_ref()
+            .and_then(SidebarRowAction::as_command)
+            .map(str::to_string)
     }
 
     fn left_click(column: u16, row: u16) -> MouseEvent {
@@ -1264,25 +1385,37 @@ mod tests {
                 hover_row(4, None),
                 hover_row(5, Some("/jobs show shell_x")),
                 hover_row(6, Some("/jobs cancel shell_x")),
-                hover_row(7, Some("/fleet status")),
+                SidebarHoverRow {
+                    row_y: 7,
+                    display_text: "agent row".to_string(),
+                    full_text: "agent row".to_string(),
+                    detail: None,
+                    is_truncated: false,
+                    click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                        agent_id: "agent_123".to_string(),
+                    }),
+                    stop_action: None,
+                    stop_zone_start_col: None,
+                    stop_zone_end_col: None,
+                },
             ],
         });
 
         assert_eq!(
-            sidebar_click_action(&app, left_click(65, 5)).as_deref(),
+            action_command(sidebar_click_action(&app, left_click(65, 5))).as_deref(),
             Some("/jobs show shell_x"),
             "job label row resolves to its show action"
         );
         assert_eq!(
-            sidebar_click_action(&app, left_click(79, 6)).as_deref(),
+            action_command(sidebar_click_action(&app, left_click(79, 6))).as_deref(),
             Some("/jobs cancel shell_x"),
             "job detail row resolves to its cancel action"
         );
-        assert_eq!(
-            sidebar_click_action(&app, left_click(60, 7)).as_deref(),
-            Some("/fleet status"),
-            "agent row opens the Fleet worker status view"
-        );
+        assert!(matches!(
+            sidebar_click_action(&app, left_click(60, 7)),
+            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+                if agent_id == "agent_123"
+        ));
         assert_eq!(
             sidebar_click_action(&app, left_click(65, 4)),
             None,
@@ -1305,15 +1438,50 @@ mod tests {
         });
 
         assert_eq!(
-            sidebar_click_action(&app, left_click(62, 4)).as_deref(),
+            action_command(sidebar_click_action(&app, left_click(62, 4))).as_deref(),
             Some("/jobs show shell_x"),
             "clicking the label opens the job"
         );
         assert_eq!(
-            sidebar_click_action(&app, left_click(69, 4)).as_deref(),
+            action_command(sidebar_click_action(&app, left_click(69, 4))).as_deref(),
             Some("/jobs cancel shell_x"),
             "clicking [x] cancels the job"
         );
+    }
+
+    #[test]
+    fn sidebar_click_routes_agent_inline_stop_zone_before_peek_action() {
+        let mut app = create_test_app();
+        app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 24, 4));
+        app.sidebar_hover.sections.push(SidebarHoverSection {
+            content_area: Rect::new(60, 4, 24, 4),
+            lines: vec!["[~] worker Agent 1 [x]".to_string()],
+            rows: vec![SidebarHoverRow {
+                row_y: 4,
+                display_text: "[~] Agent 1 is working [x]".to_string(),
+                full_text: "[~] Agent 1 is working [x]".to_string(),
+                detail: None,
+                is_truncated: false,
+                click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                    agent_id: "agent_123".to_string(),
+                }),
+                stop_action: Some(SidebarRowAction::CancelAgent {
+                    agent_id: "agent_123".to_string(),
+                }),
+                stop_zone_start_col: Some(68),
+                stop_zone_end_col: Some(71),
+            }],
+        });
+
+        assert!(matches!(
+            sidebar_click_action(&app, left_click(62, 4)),
+            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+                if agent_id == "agent_123"
+        ));
+        assert!(matches!(
+            sidebar_click_action(&app, left_click(69, 4)),
+            Some(SidebarRowAction::CancelAgent { agent_id }) if agent_id == "agent_123"
+        ));
     }
 
     #[test]

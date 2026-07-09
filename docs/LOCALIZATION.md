@@ -1,96 +1,67 @@
 # Localization Matrix
 
-Status date: 2026-04-29
+Canonical tracking document for every locale CodeWhale ships, is actively
+building, is planning, or has explicitly deferred.
 
-This document tracks UI localization only. It does not change model output language, provider behavior, or DeepSeek payload support. Media attachments remain local path text references unless native media payload support is added separately.
+Last updated: 2026-06-29.
+Source-of-truth README: `README.md` (English, post-#3087).
 
-## Source Audit
+## Status legend
 
-The v0.7.6 parity check used live GitHub sources with `/opt/homebrew/bin/gh`.
+| Status | Meaning |
+|--------|---------|
+| **shipped** | Live on codewhale.net and/or published as a standalone README |
+| **partial** | Shipped but missing sections; actively being filled in |
+| **planned** | Explicitly prioritized for the next wave |
+| **deferred** | Acknowledged as wanted but not yet scheduled; needs layout QA, bridge support, or community champion |
 
-| Project | Ref | Evidence | Result |
-|---|---:|---|---|
-| Codex CLI | `openai/codex@df966996a75333add031fca47b72655e9ee504fd` | `gh repo view openai/codex`; recursive tree scan for `locale`, `i18n`, `l10n`, `translation`, `messages`; README language scan | No checked-in CLI UI localization registry found in the audited tree. Treat Codex CLI parity as English-first terminal UI behavior, not a source for shipped locale tags. |
-| opencode | `anomalyco/opencode@00bb9836a60f1dcdd0ce5078b05d12f749fdde66` | `packages/console/app/src/lib/language.ts`, `packages/app/src/context/language.tsx`, `packages/web/src/i18n/locales.ts`, `packages/app/src/i18n/parity.test.ts` | opencode ships app/docs locale infrastructure with language detection, locale labels, docs locale aliases, RTL direction for Arabic, and parity tests for targeted keys. |
+---
 
-## v0.7.6 Shipped Core Pack
+## Website locales
 
-These locales are supported by `locale` in `settings.toml` and by `LANG` / `LC_ALL` auto-detection.
+| Locale | Code | Status | Notes |
+|--------|------|--------|-------|
+| English | `en` | **shipped** | Source text. Every page has an EN route. |
+| Simplified Chinese | `zh` | **shipped** | Full parity with EN on all first-class pages. |
+| Japanese | `ja` | **planned** | README exists (`README.ja-JP.md`); website route not yet live. Depends on locale-switcher supporting >2 languages and dictionary scaffolding (#3091). |
+| Vietnamese | `vi` | **planned** | README exists (`README.vi.md`); same dependencies as Japanese (#3091). |
+| Korean | `ko` | **planned** | README exists (`README.ko-KR.md`); #3093 next-wave locale. |
+| Russian | `ru` | **planned** | **Next-priority locale.** No README yet; explicitly scoped for #3092. Latin+Cyrillic layout is established in the CSS font stack; needs dictionary + route scaffolding. |
+| Spanish | `es` | **deferred** | #3093 next-wave. |
+| Brazilian Portuguese | `pt-BR` | **deferred** | #3093 next-wave. |
+| Arabic | `ar` | **deferred** | RTL candidate. Deferred until layout/typography QA exists (bidirectional text, mirrored chrome, number formatting). |
 
-| Locale | Display | Script | Direction | Fallback | Priority tier | v0.7.6 scope | Notes |
-|---|---|---|---|---|---|---|---|
-| `en` | English | Latin | LTR | `en` | Baseline | Source strings remain canonical. | English is always available. |
-| `ja` | Japanese | Jpan | LTR | `en` | v0.7.6 must-have | Core TUI chrome | Covers composer placeholder/history search, help chrome, and `/config` chrome. |
-| `zh-Hans` | Chinese Simplified | Hans | LTR | `en` | v0.7.6 must-have | Core TUI chrome | `zh`, `zh-CN`, and `zh-Hans` resolve here. Traditional Chinese is not shipped. |
-| `pt-BR` | Portuguese (Brazil) | Latin | LTR | `en` | v0.7.6 must-have | Core TUI chrome | `pt` and `pt-PT` currently fall back to Brazilian Portuguese; European Portuguese is not separately shipped. |
-| `es-419` | Spanish (Latin America) | Latin | LTR | `en` | v0.7.6 must-have | Core TUI chrome | `es` and regional variants resolve here. |
-| `vi` | Vietnamese | Latin | LTR | `en` | v0.7.6 must-have | Core TUI chrome | Fully translated UI chrome, automated width tested. |
+## README locales
 
-Selection:
+| Locale | File | Status | Parity check |
+|--------|------|--------|-------------|
+| English | `README.md` | **shipped** | Canonical source |
+| Simplified Chinese | `README.zh-CN.md` | **shipped** | Manual review per release |
+| Japanese | `README.ja-JP.md` | **shipped** | Manual review per release |
+| Vietnamese | `README.vi.md` | **shipped** | Manual review per release |
+| Korean | `README.ko-KR.md` | **shipped** | Manual review per release |
+| Russian | _(not yet created)_ | **planned** | #3092 |
 
-```toml
-locale = "auto"     # default; checks LC_ALL, LC_MESSAGES, then LANG
-locale = "ja"
-locale = "zh-Hans"
-locale = "pt-BR"
-locale = "es-419"
-locale = "vi"
-```
+## Drift checks
 
-Fallback:
+| Check | Tool | Status |
+|-------|------|--------|
+| README locale links symmetric | `scripts/check-readme-locales.sh` | Planned |
+| Website dictionaries cover all shipped locales | `npm run check:locales` (vitest) | Planned |
+| Accept-Language routes to all shipped locales | Middleware test | Planned |
+| Locale selector lists all shipped locales | Component test | Planned |
 
-- Missing or unsupported configured locales fall back to English.
-- `auto` falls back to English when no supported environment locale is detected.
-- The resolved locale is included in the system prompt as the fallback natural
-  language for V4 reasoning and replies. The latest user message takes priority,
-  including for `reasoning_content`, so a Chinese turn should remain Chinese
-  even when the resolved locale is English.
+## How to add a locale
 
-## Planned Global South QA Matrix
+1. Add the locale code to `locales` array in `web/lib/i18n/config.ts`.
+2. Add label to `LOCALE_LABELS` in `web/components/locale-switcher.tsx`.
+3. Scaffold translation dictionaries under `web/lib/i18n/dictionaries/<code>/`.
+4. Add a locale route segment — Next.js `[locale]` will pick it up automatically once the `locales` array includes it.
+5. Update this matrix.
 
-These are not claimed as shipped translations in v0.7.6 unless a later change adds complete message coverage and QA evidence.
+## Related issues
 
-| Locale | Display | Script | Direction | Priority tier | Coverage status | Fallback | QA status | Layout risks |
-|---|---|---|---|---|---|---|---|---|
-| `ar` | Arabic | Arab | RTL | Follow-up | Planned | `en` | Automated renderer sample only; native review required before shipping | RTL ordering, punctuation, key-chord mixing |
-| `hi` | Hindi | Deva | LTR | Follow-up | Planned | `en` | Automated renderer sample only; native review preferred before shipping | Combining marks, cursor width, truncation |
-| `bn` | Bengali | Beng | LTR | Follow-up | Planned | `en` | Matrix only; native review required before shipping | Combining marks, line wrapping |
-| `id` | Indonesian | Latin | LTR | Follow-up | Planned | `en` | Matrix only; automated narrow-width snapshots and reviewer pass required | Longer labels than English |
-| `sw` | Swahili | Latin | LTR | Follow-up | Planned | `en` | Matrix only; native or fluent review required before shipping | Translation quality, longer command descriptions |
-| `ha` | Hausa | Latin | LTR | Follow-up | Planned | `en` | Matrix only; native or fluent review required before shipping | Diacritics and terminology |
-| `yo` | Yoruba | Latin | LTR | Follow-up | Planned | `en` | Matrix only; native or fluent review required before shipping | Tone marks and terminology |
-| `fil` | Filipino/Tagalog | Latin | LTR | Follow-up | Planned | `en` | Matrix only; source strings required before shipping | Terminology consistency |
-| `fr` | French | Latin | LTR | Follow-up | Planned | `en` | Matrix only; reviewer pass required before shipping | African locale terminology varies |
-
-## Message Coverage
-
-The first registry pass covers stable message IDs for high-visibility terminal chrome:
-
-- composer placeholder
-- composer history search title, placeholder, hints, and no-match state
-- `/config` title, filter placeholder, no-match state, filtered count, and footer hints
-- help overlay title, filter placeholder, no-match state, section labels, and footer hints
-
-Not yet translated in v0.7.6:
-
-- model/system prompts and personalities
-- provider or tool schemas
-- full slash-command descriptions and every status/toast/error path
-- README/docs content beyond this configuration note
-
-## Translator Notes
-
-Keep these technical terms stable unless a later glossary explicitly changes
-them: `Plan`, `Agent`, `YOLO`, `/config`, `/mcp`, `@path`, `/attach`, `DeepSeek`,
-`MCP`, `CLI`, `TUI`, and key chords such as `Enter`, `Esc`, `Tab`, `PgUp`, and
-`PgDn`.
-
-## QA Checklist
-
-Before promoting a planned locale to shipped:
-
-1. Add complete message coverage in `crates/tui/src/localization.rs`.
-2. Add locale resolution tests and missing-key tests.
-3. Add narrow-width render coverage for at least composer, help, and `/config`.
-4. Verify CJK width, RTL punctuation, combining marks, and truncation.
-5. Record native/fluent review status, or mark the locale as automated-QA-only.
+- #3091 — Website parity with JA + VI README locales
+- #3092 — Russian README + website localization
+- #3093 — Korean, Spanish, Brazilian Portuguese next-wave locales
+- #3087 — Post-rebrand README source text refresh

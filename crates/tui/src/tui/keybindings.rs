@@ -193,7 +193,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "Ctrl+X (Tasks sidebar)",
+        chord: "Ctrl+X (Activity sidebar)",
         description_id: crate::localization::MessageId::KbCancelBackgroundShellJobs,
         section: KeybindingSection::Submission,
     },
@@ -223,9 +223,14 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "Ctrl+T",
+        chord: "Ctrl+Shift+T",
         description_id: crate::localization::MessageId::KbLiveTranscript,
         section: KeybindingSection::Submission,
+    },
+    KeybindingEntry {
+        chord: "Ctrl+T",
+        description_id: crate::localization::MessageId::KbCycleThinking,
+        section: KeybindingSection::Modes,
     },
     KeybindingEntry {
         chord: "Esc Esc",
@@ -234,8 +239,13 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
     },
     // --- Modes ---
     KeybindingEntry {
-        chord: "Tab / Shift+Tab",
+        chord: "Tab",
         description_id: crate::localization::MessageId::KbCompleteCycleModes,
+        section: KeybindingSection::Modes,
+    },
+    KeybindingEntry {
+        chord: "Shift+Tab",
+        description_id: crate::localization::MessageId::KbCyclePermissions,
         section: KeybindingSection::Modes,
     },
     KeybindingEntry {
@@ -337,31 +347,35 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_help_copy_matches_activity_detail_behavior() {
+    fn ctrl_o_help_copy_matches_turn_inspector_behavior() {
         let ctrl_o = KEYBINDINGS
             .iter()
             .find(|entry| entry.chord == "Ctrl+O")
             .expect("Ctrl+O keybinding should be documented");
 
+        // Ctrl+O now opens the whole-turn Turn Inspector (#4104), not the
+        // single-cell Activity Detail. The message id is intentionally kept
+        // (`KbThinkingPager`) to avoid an existing-symbol rename; only the
+        // copy changes.
         assert_eq!(
             ctrl_o.description_id,
             crate::localization::MessageId::KbThinkingPager
         );
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, ctrl_o.description_id,),
-            "Open Activity Detail"
+            "Open Turn Inspector"
         );
     }
 
     #[test]
-    fn ctrl_x_tasks_sidebar_cancel_all_is_documented() {
-        let ctrl_x_tasks = KEYBINDINGS
+    fn ctrl_x_activity_sidebar_cancel_all_is_documented() {
+        let ctrl_x_activity = KEYBINDINGS
             .iter()
-            .find(|entry| entry.chord == "Ctrl+X (Tasks sidebar)")
-            .expect("Ctrl+X Tasks sidebar keybinding should be documented");
+            .find(|entry| entry.chord == "Ctrl+X (Activity sidebar)")
+            .expect("Ctrl+X Activity sidebar keybinding should be documented");
 
         assert_eq!(
-            ctrl_x_tasks.description_id,
+            ctrl_x_activity.description_id,
             crate::localization::MessageId::KbCancelBackgroundShellJobs
         );
     }

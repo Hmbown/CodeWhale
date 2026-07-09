@@ -122,6 +122,11 @@ pub fn exit() -> CommandResult {
 /// way to flip both knobs without memorising the docs.
 pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
     if let Some(name) = model_name {
+        // Manual Models.dev catalog refresh (#4187). Dispatched async so the
+        // TUI event loop is not blocked; failure keeps prior/bundled rows.
+        if name.trim().eq_ignore_ascii_case("refresh") {
+            return CommandResult::action(AppAction::RefreshModelsDevCatalog);
+        }
         if name.trim().eq_ignore_ascii_case("auto") {
             let old_model = app.model_display_label();
             let model_changed = !app.auto_model || app.model != "auto";
@@ -480,7 +485,7 @@ pub fn deepseek_links(app: &mut App) -> CommandResult {
         if let Some(key_url) = links.key_url {
             let _ = writeln!(
                 message,
-                "{} {}",
+                "{} `{}`",
                 tr(locale, MessageId::LinksDashboard),
                 key_url
             );
@@ -494,7 +499,7 @@ pub fn deepseek_links(app: &mut App) -> CommandResult {
         }
         let _ = writeln!(
             message,
-            "{}      {}",
+            "{}      `{}`",
             tr(locale, MessageId::LinksDocs),
             links.docs_url
         );
@@ -607,8 +612,13 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeAgentModeYoloTip));
         }
         AppMode::Yolo => {
+            // Compatibility residual: YOLO is invisible Act + Full Access.
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeYoloModeTip));
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeYoloModeCaution));
+        }
+        AppMode::Operate => {
+            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeOperateModeTip));
+            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeOperateModeFleetTip));
         }
         AppMode::Plan => {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomePlanModeTip));
@@ -743,7 +753,7 @@ mod tests {
         let result = help(&mut app, Some("config"));
         let msg = result.message.expect("help topic should return message");
         assert!(msg.contains("config"));
-        assert!(msg.contains("Open interactive configuration editor"));
+        assert!(msg.contains("Inspect and change settings"));
         assert!(msg.contains("Usage: /config"));
     }
 
@@ -1269,6 +1279,17 @@ mod tests {
     }
 
     #[test]
+    fn model_refresh_dispatches_models_dev_catalog_action() {
+        let mut app = create_test_app();
+        let result = model(&mut app, Some("refresh"));
+        assert!(result.message.is_none());
+        assert!(matches!(
+            result.action,
+            Some(AppAction::RefreshModelsDevCatalog)
+        ));
+    }
+
+    #[test]
     fn test_subagents_pushes_view_and_sets_status() {
         let mut app = create_test_app();
         let result = subagents(&mut app);
@@ -1277,7 +1298,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching Fleet worker status...".to_string())
+            Some("Fetching Fleet status...".to_string())
         );
     }
 
@@ -1298,6 +1319,30 @@ mod tests {
         assert!(msg.contains("XIAOMI_MIMO_TOKEN_PLAN_API_KEY"));
         assert!(!msg.contains("https://codewhale.dev/docs/providers"));
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn provider_links_emit_urls_as_inline_code_for_narrow_transcripts() {
+        let mut app = create_test_app();
+        let result = deepseek_links(&mut app);
+        let msg = result.message.expect("links should return a message");
+
+        assert!(msg.contains("`https://platform.openai.com/api-keys`"));
+        assert!(
+            msg.contains(
+                "`https://platform.minimax.io/user-center/basic-information/interface-key`"
+            )
+        );
+
+        for line in msg.lines().filter(|line| line.contains("http")) {
+            let Some(url_start) = line.find("http") else {
+                continue;
+            };
+            assert!(
+                line[..url_start].ends_with('`') && line[url_start..].contains('`'),
+                "provider URL should be inline-code wrapped so narrow TUI renders do not emit oversized OSC8 link payloads: {line}"
+            );
+        }
     }
 
     #[test]
@@ -1341,7 +1386,13 @@ mod tests {
 
     #[test]
     fn test_home_dashboard_mode_tips_for_each_mode() {
-        let modes = [AppMode::Agent, AppMode::Auto, AppMode::Yolo, AppMode::Plan];
+        let modes = [
+            AppMode::Agent,
+            AppMode::Auto,
+            AppMode::Yolo,
+            AppMode::Plan,
+            AppMode::Operate,
+        ];
         for mode in modes {
             let mut app = create_test_app();
             app.mode = mode;
@@ -1359,7 +1410,7 @@ mod tests {
             .message
             .expect("home dashboard should return message");
         assert!(msg.contains("/links      - Dashboard & API links"));
-        assert!(msg.contains("/config      - Open interactive configuration editor"));
+        assert!(msg.contains("/config      - Inspect and change settings"));
         assert!(
             !msg.lines()
                 .any(|line| line.trim_start().starts_with("/set "))

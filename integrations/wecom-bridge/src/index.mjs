@@ -21,6 +21,7 @@ import {
   stripGroupPrefix,
   ThreadStore
 } from "./lib.mjs";
+import { createRuntimeClient, readJsonSafe, readSse } from "../../bridge-core/src/lib.mjs";
 
 /** Map of chatId -> latest pending approval info for natural-language approval. */
 const pendingApprovals = new Map();
@@ -50,6 +51,8 @@ const config = {
   turnTimeoutMs: Number(process.env.CODEWHALE_TURN_TIMEOUT_MS || 900000),
   approvalTimeoutMs: Number(process.env.CODEWHALE_APPROVAL_TIMEOUT_MS || 300000)
 };
+
+const { runtimeJson, authHeaders } = createRuntimeClient(config);
 
 const threadStore = await ThreadStore.open(config.threadMapPath);
 
@@ -521,53 +524,4 @@ async function setChatModel(chatId, modelName, frame) {
     updatedAt: new Date().toISOString()
   });
   await replyText(frame, `Per-chat model set to: ${modelName}`);
-}
-
-async function runtimeJson(route, options = {}) {
-  const response = await fetch(`${config.runtimeUrl}${route}`, {
-    method: options.method || "GET",
-    headers: {
-      ...(options.auth === false ? {} : authHeaders()),
-      ...(options.body ? { "content-type": "application/json" } : {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const body = await readJsonSafe(response);
-  if (!response.ok) {
-    throw new Error(compactRuntimeError(response.status, body));
-  }
-  return body;
-}
-
-function authHeaders() {
-  return { authorization: `Bearer ${config.runtimeToken}` };
-}
-
-async function readJsonSafe(response) {
-  const text = await response.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-async function* readSse(response) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const raw = buffer.slice(0, boundary).replace(/\r/g, "");
-      buffer = buffer.slice(boundary + 2);
-      const event = { event: "", data: "" };
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("event:")) event.event = line.slice(6).trim();
-        if (line.startsWith("data:")) event.data += line.slice(5).trim();
-      }
-      yield event;
-    }
-  }
 }

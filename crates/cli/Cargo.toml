@@ -19,14 +19,15 @@ path = "src/bin/codew_legacy_shim.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.65" }
-codewhale-app-server = { path = "../app-server", version = "0.8.65" }
-codewhale-config = { path = "../config", version = "0.8.65" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.65" }
-codewhale-mcp = { path = "../mcp", version = "0.8.65" }
-codewhale-release = { path = "../release", version = "0.8.65" }
-codewhale-secrets = { path = "../secrets", version = "0.8.65" }
-codewhale-state = { path = "../state", version = "0.8.65" }
+codewhale-agent = { path = "../agent", version = "0.8.67" }
+codewhale-app-server = { path = "../app-server", version = "0.8.67" }
+codewhale-config = { path = "../config", version = "0.8.67" }
+codewhale-lane = { path = "../lane", version = "0.8.67" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.67" }
+codewhale-mcp = { path = "../mcp", version = "0.8.67" }
+codewhale-release = { path = "../release", version = "0.8.67" }
+codewhale-secrets = { path = "../secrets", version = "0.8.67" }
+codewhale-state = { path = "../state", version = "0.8.67" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true
@@ -35,15 +36,20 @@ reqwest = { workspace = true, features = ["blocking"] }
 rustls.workspace = true
 semver.workspace = true
 tokio.workspace = true
+mimalloc.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
 
+[build-dependencies]
+codewhale-build-support = { path = "../build-support", version = "0.8.67" }
+
 # Parent-death cleanup for delegated server children (#3259): on Linux the
 # dispatcher sets PR_SET_PDEATHSIG so the child is signalled if the dispatcher
 # dies uncatchably; on Windows it assigns the child to a kill-on-job-close Job
-# Object.
-[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+# Object. Also used in main.rs to reset SIGPIPE to SIG_DFL on any Unix target
+# (#4030), so libc must be available across all Unix, not just Linux.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

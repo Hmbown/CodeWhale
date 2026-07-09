@@ -1,4 +1,7 @@
 //! Command palette modal for quick command/skill insertion.
+//!
+//! Product job (#4276): **find and run one action** — not a dense manual.
+//! Help owns concepts; Config owns settings; Fleet owns worker readiness.
 
 use std::path::Path;
 
@@ -8,18 +11,21 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands;
-use crate::localization::Locale;
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::skills;
 use crate::tools::spec::ApprovalRequirement;
 use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
-use crate::tui::views::{CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
+    centered_modal_area, render_modal_footer, render_modal_surface,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PaletteSection {
@@ -49,6 +55,7 @@ impl CommandPaletteEntry {
 }
 
 pub struct CommandPaletteView {
+    locale: Locale,
     entries: Vec<CommandPaletteEntry>,
     filtered: Vec<usize>,
     query: String,
@@ -435,6 +442,7 @@ fn modal_block() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::BORDER_COLOR))
+        .style(Style::default().bg(palette::WHALE_BG))
         .padding(Padding::uniform(1))
 }
 
@@ -678,8 +686,14 @@ fn visible_entry_window(
 }
 
 impl CommandPaletteView {
+    #[cfg(test)]
     pub fn new(entries: Vec<CommandPaletteEntry>) -> Self {
+        Self::new_for_locale(Locale::En, entries)
+    }
+
+    pub fn new_for_locale(locale: Locale, entries: Vec<CommandPaletteEntry>) -> Self {
         let mut view = Self {
+            locale,
             entries,
             filtered: Vec::new(),
             query: String::new(),
@@ -739,7 +753,7 @@ impl CommandPaletteView {
         Line::from(vec![Span::styled(
             format!("  {title} ({count})  "),
             Style::default()
-                .fg(palette::DEEPSEEK_SKY)
+                .fg(palette::WHALE_INFO)
                 .add_modifier(Modifier::BOLD),
         )])
     }
@@ -863,20 +877,38 @@ impl ModalView for CommandPaletteView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_width = 90.min(area.width.saturating_sub(4));
-        let popup_height = 22.min(area.height.saturating_sub(4));
-        let popup_area = Rect {
-            x: (area.width.saturating_sub(popup_width)) / 2,
-            y: (area.height.saturating_sub(popup_height)) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = centered_modal_area(area, 90, 22, 44, 8);
+        let popup_width = popup_area.width;
 
-        Clear.render(popup_area, buf);
+        render_modal_surface(area, popup_area, buf);
+
+        let title = format!(
+            " {} — {} ",
+            tr(self.locale, MessageId::CommandPaletteTitle),
+            tr(self.locale, MessageId::CommandPaletteSubtitle)
+        );
+        let block = modal_block().title(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(palette::WHALE_INFO)
+                .add_modifier(Modifier::BOLD),
+        )));
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑/↓/j/k", "move"),
+                ActionHint::new("Enter", "run"),
+                ActionHint::new("Esc", "close"),
+            ],
+        );
 
         let mut lines = Vec::new();
         let query_label = if self.query.is_empty() {
-            "Type to filter".to_string()
+            "Type to find and run one action".to_string()
         } else {
             format!("Filter: {}", self.query)
         };
@@ -906,9 +938,7 @@ impl ModalView for CommandPaletteView {
         // labels and separators, so the scroll window is sized against the real
         // rendered cost rather than a flat entry count (#2590).
         let header_lines = lines.len();
-        let available = (popup_height as usize)
-            .saturating_sub(2) // top + bottom border
-            .saturating_sub(header_lines);
+        let available = (content.height as usize).saturating_sub(header_lines);
         let mut action_count = 0usize;
         let mut command_count = 0usize;
         let mut skill_count = 0usize;
@@ -988,18 +1018,9 @@ impl ModalView for CommandPaletteView {
             }
         }
 
-        let block = modal_block()
-            .title(" Command Palette ")
-            .title_bottom(Line::from(vec![
-                Span::styled(" ↑/↓/j/k move  ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled("Enter run/open  ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled("Esc close", Style::default().fg(palette::TEXT_MUTED)),
-            ]));
-
         Paragraph::new(lines)
-            .block(block)
             .wrap(Wrap { trim: false })
-            .render(popup_area, buf);
+            .render(content, buf);
     }
 }
 
@@ -1686,5 +1707,63 @@ mod tests {
                 action: CommandPaletteAction::ExecuteCommand { .. }
             })
         ));
+    }
+
+    /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires every
+    /// overlay to remain readable and fully operable at.
+    const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+
+    fn sample_palette_view() -> CommandPaletteView {
+        let entries = vec![
+            palette_entry(PaletteSection::Command, "/config", "open config", "/config"),
+            palette_entry(PaletteSection::Command, "/model", "choose model", "/model"),
+            palette_entry(PaletteSection::Skill, "$search", "search skill", "$search"),
+            palette_entry(PaletteSection::Tool, "tool:git", "git tool", "git"),
+            palette_entry(PaletteSection::Mcp, "mcp:fs", "filesystem", "mcp_fs_read"),
+        ];
+        CommandPaletteView::new(entries)
+    }
+
+    #[test]
+    fn command_palette_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+        for (w, h) in BLOCKER_SIZES {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(sample_palette_view());
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+                .collect();
+            let text = rows.join("\n");
+
+            // Footer keeps every action.
+            assert!(text.contains("move"), "{w}x{h}: missing 'move' hint");
+            assert!(text.contains("run"), "{w}x{h}: missing 'run' hint");
+            assert!(text.contains("close"), "{w}x{h}: missing 'close' hint");
+
+            // Composited frame is fully opaque.
+            assert!(!text.contains('X'), "{w}x{h}: background bleed-through");
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+
+            // No horizontal overflow.
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 }

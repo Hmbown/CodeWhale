@@ -1,7 +1,11 @@
 # Ensure LF line endings for files consumed by include_str!() on all platforms.
 # include_str!() preserves raw bytes; CRLF breaks substring assertions and
 # produces different compiled binaries on Windows vs Linux/macOS.
+# Cover nested mode/approval/personality prompts — a top-level *.md glob alone
+# left modes/*.md on CRLF under Windows autocrlf and blew the agent token budget.
+crates/tui/src/prompts/**/*.md text eol=lf
 crates/tui/src/prompts/*.md text eol=lf
+crates/tui/src/prompts/*.txt text eol=lf
 
 # Rustfmt writes LF; keep Rust sources stable across Windows/Linux/macOS.
 *.rs text eol=lf

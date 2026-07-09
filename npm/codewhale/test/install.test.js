@@ -119,7 +119,7 @@ test("glibc preflight message is CodeWhale-branded and actionable", () => {
   assert.match(message, /this system has glibc 2\.35/);
   assert.match(message, /cargo install codewhale-cli --locked/);
   assert.match(message, /Linux x64 release asset is a static \(musl\) build/);
-  assert.match(message, /arm64 and riscv64 assets are GNU libc builds/);
+  assert.match(message, /Linux arm64 asset is a GNU libc build/);
   assert.match(message, /CODEWHALE_SKIP_GLIBC_CHECK=1/);
 });
 
@@ -222,4 +222,44 @@ test("manual binaries with mismatched checksums are not adopted", async (t) => {
 
   assert.equal(adopted, false);
   assert.equal(await exists(`${target}.version`), false);
+});
+
+test("resolvePackageVersion honors codewhaleBinaryVersion precedence (#3769)", () => {
+  const { resolvePackageVersion } = _internal;
+
+  // codewhaleBinaryVersion wins over deepseekBinaryVersion and pkg.version.
+  assert.equal(
+    resolvePackageVersion(
+      {
+        codewhaleBinaryVersion: "1.2.3",
+        deepseekBinaryVersion: "0.0.1",
+        version: "9.9.9",
+      },
+      {},
+    ),
+    "1.2.3",
+  );
+
+  // Falls back to deepseekBinaryVersion, then pkg.version.
+  assert.equal(
+    resolvePackageVersion({ deepseekBinaryVersion: "0.0.1", version: "9.9.9" }, {}),
+    "0.0.1",
+  );
+  assert.equal(resolvePackageVersion({ version: "9.9.9" }, {}), "9.9.9");
+
+  // Legacy env vars still take precedence over package fields, unchanged.
+  assert.equal(
+    resolvePackageVersion(
+      { codewhaleBinaryVersion: "1.2.3", version: "9.9.9" },
+      { DEEPSEEK_TUI_VERSION: "7.7.7" },
+    ),
+    "7.7.7",
+  );
+  assert.equal(
+    resolvePackageVersion(
+      { codewhaleBinaryVersion: "1.2.3" },
+      { DEEPSEEK_VERSION: "8.8.8" },
+    ),
+    "8.8.8",
+  );
 });

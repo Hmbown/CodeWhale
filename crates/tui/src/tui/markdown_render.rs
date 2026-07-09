@@ -240,7 +240,7 @@ pub fn render_parsed_tagged(
         match &parsed.blocks[i] {
             Block::Heading { text, .. } => {
                 let style = Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
+                    .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD);
                 out.extend(render_wrapped_line_tagged(text, width, style, false, false));
             }
@@ -267,7 +267,7 @@ pub fn render_parsed_tagged(
                 });
             }
             Block::ListItem { bullet, text } => {
-                let bullet_style = Style::default().fg(palette::DEEPSEEK_SKY);
+                let bullet_style = Style::default().fg(palette::WHALE_INFO);
                 out.extend(render_list_line_tagged(
                     bullet,
                     text,
@@ -278,7 +278,7 @@ pub fn render_parsed_tagged(
             }
             Block::Code { line } => {
                 let code_style = Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
+                    .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::ITALIC);
                 out.extend(render_wrapped_line_tagged(
                     line, width, code_style, true, true,
@@ -838,10 +838,13 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<I
                 continue;
             }
         }
-        // URL: consume until whitespace
+        // URL: consume until whitespace, then keep trailing punctuation
+        // visible but outside the hyperlink target.
         if rest.starts_with("http://") || rest.starts_with("https://") {
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            let url = &rest[..end];
+            let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let token = &rest[..token_end];
+            let url_end = trailing_url_end(token);
+            let url = &token[..url_end];
             if osc8::enabled() {
                 out.push(InlineToken::new(
                     url.to_string(),
@@ -851,7 +854,14 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<I
             } else {
                 out.push(InlineToken::new(url.to_string(), link_style, None));
             }
-            rest = &rest[end..];
+            if url_end < token_end {
+                out.push(InlineToken::new(
+                    token[url_end..].to_string(),
+                    base_style,
+                    None,
+                ));
+            }
+            rest = &rest[token_end..];
             continue;
         }
         // Plain text: consume until next marker or URL; always advance at least 1 char.
@@ -860,6 +870,36 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<I
         rest = &rest[next..];
     }
     out
+}
+
+fn trailing_url_end(candidate: &str) -> usize {
+    let mut end = candidate.len();
+    while end > 0 {
+        let remaining = &candidate[..end];
+        let Some(ch) = remaining.chars().next_back() else {
+            break;
+        };
+        let trim = matches!(ch, ',' | '.' | ';' | '!' | '\'' | '"')
+            || matches!(ch, ')' | ']' | '}' | '>')
+                && has_unmatched_closing_delimiter(remaining, ch);
+        if !trim {
+            break;
+        }
+        end -= ch.len_utf8();
+    }
+    end
+}
+
+fn has_unmatched_closing_delimiter(candidate: &str, closing: char) -> bool {
+    let opening = match closing {
+        ')' => '(',
+        ']' => '[',
+        '}' => '{',
+        '>' => '<',
+        _ => return false,
+    };
+    candidate.chars().filter(|ch| *ch == closing).count()
+        > candidate.chars().filter(|ch| *ch == opening).count()
 }
 
 /// Find the index of the next inline marker (`**`, `__`, `*`, `_`, `http`)
@@ -1525,6 +1565,32 @@ mod tests {
     }
 
     #[test]
+    fn bare_http_links_exclude_surrounding_punctuation_from_osc8_target() {
+        let joined = render_with_osc8(true, "see (https://example.com/path).");
+        assert!(
+            joined.contains(
+                "\x1b]8;;https://example.com/path\x1b\\https://example.com/path\x1b]8;;\x1b\\)."
+            ),
+            "expected trailing punctuation outside OSC 8 target; got {joined:?}"
+        );
+        assert!(
+            !joined.contains("\x1b]8;;https://example.com/path)."),
+            "OSC 8 target must not include surrounding punctuation: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn bare_http_links_preserve_balanced_parentheses_in_target() {
+        let url = "https://en.wikipedia.org/wiki/Function_(mathematics)";
+        let joined = render_with_osc8(true, &format!("see {url}."));
+        let expected = format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\.");
+        assert!(
+            joined.contains(&expected),
+            "expected balanced URL parentheses to remain linked; got {joined:?}"
+        );
+    }
+
+    #[test]
     fn wrapped_osc_8_url_chunks_keep_full_link_target() {
         let url = "https://raw.githubusercontent.com/Hmbown/deepseek-skills/main/index.json";
         let joined = render_with_osc8_width(true, url, 34);
@@ -1924,5 +1990,136 @@ mod tests {
         let rendered = render_paragraph_for_test("hello world", 0);
         // Any output is acceptable (the path is degenerate); assert no panic.
         let _ = rendered;
+    }
+
+    fn rendered_text(rendered: &[Line<'static>]) -> String {
+        rendered
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect()
+    }
+
+    fn assert_rendered_widths_fit(rendered: &[Line<'static>], width: usize, label: &str) {
+        for line_width in rendered_widths(rendered) {
+            assert!(
+                line_width <= width,
+                "{label} width={width}: rendered line width {line_width} exceeds budget"
+            );
+        }
+    }
+
+    // ── Unicode / CJK / emoji / combining-char width QA (#3488) ────────────
+
+    #[test]
+    fn paragraph_wrap_keeps_unicode_runs_within_qa_widths() {
+        let cases = [
+            ("cjk", "界".repeat(300)),
+            ("emoji", "😀".repeat(200)),
+            ("mixed-cjk-emoji", "界😀世🚀".repeat(90)),
+        ];
+
+        for (label, text) in cases {
+            for &width in &[80usize, 100, 120] {
+                let rendered = render_paragraph_for_test(&text, width);
+                assert_rendered_widths_fit(&rendered, width, label);
+                assert_eq!(
+                    rendered_text(&rendered),
+                    text,
+                    "{label} width={width}: content changed while wrapping"
+                );
+
+                let min_lines = text.width().div_ceil(width);
+                assert!(
+                    rendered.len() >= min_lines,
+                    "{label} width={width}: expected at least {min_lines} lines, got {}",
+                    rendered.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_preserves_mixed_unicode_and_ascii_fragments() {
+        let cjk = "这是一个测试字符串".repeat(10); // 80 Han chars = 160 cols
+        let emoji = "🚀".repeat(12);
+        let text = format!("Note: {cjk} done {emoji}");
+
+        for &width in &[80usize, 100, 120] {
+            let rendered = render_paragraph_for_test(&text, width);
+            assert_rendered_widths_fit(&rendered, width, "mixed unicode/ascii");
+
+            let visible = visible_lines(&rendered).join("\n");
+            for fragment in ["Note:", "测试", "done"] {
+                assert!(
+                    visible.contains(fragment),
+                    "width={width}: fragment {fragment:?} missing from output:\n{visible}"
+                );
+            }
+            assert_eq!(
+                visible.matches('🚀').count(),
+                12,
+                "width={width}: emoji content lost"
+            );
+        }
+    }
+
+    #[test]
+    fn lower_level_wrap_text_keeps_unicode_runs_within_qa_widths() {
+        let cases = [
+            ("cjk", "中".repeat(140)),
+            ("emoji", "😀".repeat(110)),
+            ("combining", "e\u{301}".repeat(140)),
+        ];
+
+        for (label, input) in cases {
+            for &width in &[80usize, 100, 120] {
+                let lines = wrap_text(&input, width);
+                for line in &lines {
+                    assert!(
+                        line.width() <= width,
+                        "{label} width={width}: wrap_text line {line:?} exceeds budget"
+                    );
+                }
+                let combined: String = lines.join("");
+                assert_eq!(
+                    combined, input,
+                    "{label} width={width}: wrap_text changed content"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn table_render_keeps_cjk_cells_within_qa_widths() {
+        let cjk = "界".repeat(80);
+        let src = format!("| Name | Value |\n|---|---|\n| CJK | {cjk} |\n");
+
+        for &width in &[80usize, 100, 120] {
+            let rendered = render_markdown(&src, width as u16, Style::default());
+            assert_rendered_widths_fit(&rendered, width, "table cjk");
+            assert_eq!(
+                rendered_text(&rendered).matches('界').count(),
+                80,
+                "width={width}: CJK table cell content lost"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_keeps_cjk_transcript_within_narrow_widths() {
+        // The seed cases cover 80/100/120; narrow terminals (resize / small
+        // panes) are the other half of #3488's terminal-width lane. A CJK
+        // transcript paragraph must still wrap inside tiny windows without
+        // overflowing the border or dropping content.
+        let text = "实时输出结果显示正常".repeat(6); // 60 Han glyphs, 120 cols
+        for &width in &[20usize, 40] {
+            let rendered = render_paragraph_for_test(&text, width);
+            assert_rendered_widths_fit(&rendered, width, "narrow cjk transcript");
+            assert_eq!(
+                rendered_text(&rendered),
+                text,
+                "width={width}: CJK transcript content changed while wrapping"
+            );
+        }
     }
 }

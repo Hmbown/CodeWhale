@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       heavy: ${{ steps.detect.outputs.heavy }}
-      whaleflow: ${{ steps.detect.outputs.whaleflow }}
+      workflow: ${{ steps.detect.outputs.workflow }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,7 +43,7 @@ jobs:
 
           if [[ "${EVENT_NAME}" == "schedule" || "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             echo "heavy=true" >> "${GITHUB_OUTPUT}"
-            echo "whaleflow=true" >> "${GITHUB_OUTPUT}"
+            echo "workflow=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -57,13 +57,13 @@ jobs:
 
           if [[ -z "${base}" ]]; then
             echo "heavy=true" >> "${GITHUB_OUTPUT}"
-            echo "whaleflow=true" >> "${GITHUB_OUTPUT}"
+            echo "workflow=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           mapfile -t changed < <(git diff --name-only "${base}" "${GITHUB_SHA}" | sort)
           heavy=false
-          whaleflow=false
+          workflow=false
           for path in "${changed[@]}"; do
             case "${path}" in
               docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml)
@@ -73,17 +73,17 @@ jobs:
                 ;;
             esac
             case "${path}" in
-              crates/whaleflow/*|workflows/rlm_cache_change.star|.github/workflows/ci.yml)
-                whaleflow=true
+              crates/workflow/*|workflows/rlm_cache_change.star|.github/workflows/ci.yml)
+                workflow=true
                 ;;
             esac
           done
 
           echo "heavy=${heavy}" >> "${GITHUB_OUTPUT}"
-          echo "whaleflow=${whaleflow}" >> "${GITHUB_OUTPUT}"
+          echo "workflow=${workflow}" >> "${GITHUB_OUTPUT}"
 
           echo "Heavy Rust CI required: ${heavy}"
-          echo "WhaleFlow RLM cache CI required: ${whaleflow}"
+          echo "Workflow RLM cache CI required: ${workflow}"
           printf 'Changed files:\n'
           printf '  %s\n' "${changed[@]}"
 
@@ -174,10 +174,10 @@ jobs:
         if: needs.changes.outputs.heavy == 'true'
         run: echo "Linux clippy/test gates run on CNB for mirrored fix/*, rebrand/*, work/v*, and main branches."
 
-  whaleflow-rlm-cache:
-    name: WhaleFlow RLM cache workflow
+  workflow-rlm-cache:
+    name: Workflow RLM cache
     needs: changes
-    if: needs.changes.outputs.whaleflow == 'true'
+    if: needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -192,7 +192,7 @@ jobs:
         with:
           cache-bin: false
       - name: Run RLM cache workflow mock/replay tests
-        run: cargo test -p codewhale-whaleflow --locked rlm_cache_change
+        run: cargo test -p codewhale-workflow --locked rlm_cache_change
 
   test:
     name: Test

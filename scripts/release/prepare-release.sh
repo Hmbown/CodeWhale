@@ -79,6 +79,40 @@ bump(
 # 4) README install-tag examples (all translations).
 for readme in ["README.md", "README.zh-CN.md", "README.ja-JP.md", "README.vi.md", "README.ko-KR.md"]:
     bump(readme, rf"--tag v{old_re}\b", f"--tag v{new}", 1)
+
+# 5) Public install/version snippets in README*.md and docs/INSTALL.md.
+#    These are the user-facing "verify your install" lines and the npm wrapper
+#    publish pointer. They drifted on a prior lane while check-versions still
+#    passed (#3767, #3552), so bump and (in check-versions.sh) guard them.
+version_doc_files = [
+    "README.md",
+    "README.zh-CN.md",
+    "README.ja-JP.md",
+    "README.vi.md",
+    "README.ko-KR.md",
+    "docs/INSTALL.md",
+]
+version_comment_hits = 0
+for doc in version_doc_files:
+    p = pathlib.Path(doc)
+    text = p.read_text()
+    out, n = re.subn(
+        rf"(codewhale --version\s+#\s*){old_re}\b", rf"\g<1>{new}", text
+    )
+    if n:
+        p.write_text(out)
+        print(f"  {doc}: {n} version-comment replacement(s)")
+        version_comment_hits += n
+if version_comment_hits == 0:
+    sys.exit("error: no 'codewhale --version # X' snippets were bumped — wrong old version?")
+
+# docs/INSTALL.md npm-wrapper publish pointer ("published at vX.Y.Z").
+bump(
+    "docs/INSTALL.md",
+    rf"(wrapper is published at\s+)v{old_re}\b",
+    rf"\g<1>v{new}",
+    1,
+)
 PY
 
 echo "Refreshing Cargo.lock..."

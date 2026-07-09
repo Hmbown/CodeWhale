@@ -2,7 +2,7 @@
 //! worker (#3217, #3211, #3213, and the child-permission-intersection issues
 //! #414 / #426 / #1186).
 //!
-//! This is the **WhaleFlow substrate**: every detached worker — whether launched
+//! This is the **Workflow substrate**: every detached worker — whether launched
 //! as an `agent` sub-agent or a Fleet worker — should run under a profile
 //! that bounds what it may do (permissions, shell access, tool scope, model
 //! route, recursion budget, foreground/background). A child profile is always
@@ -133,6 +133,21 @@ pub struct WorkerRuntimeProfile {
     pub model: ModelRoute,
     /// Explicit provider override; `None` inherits the parent/session provider.
     pub provider: Option<String>,
+    /// Explicit reasoning/thinking tier; `None` inherits the parent/session tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Tool deny-list inherited from the parent session's `--disallowed-tools`
+    /// (#4042). Deny always wins over allow, even over the explicit allowlist
+    /// and the role posture. Entries support wildcard matching: an exact name
+    /// (`exec_shell`) or a `prefix*` glob (`mcp_*`), compared case-insensitively.
+    ///
+    /// A child can only ever *add* entries — `derive_child()` takes the union of
+    /// the parent's and the child's deny lists, so a descendant can never drop a
+    /// restriction an ancestor imposed. The only way to start without the
+    /// parent's list is an explicit `inherit_disallowed_tools: false` at spawn,
+    /// which clears the cloned runtime's list before the registry reads it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_tools: Vec<String>,
     /// Remaining nested-delegation budget. A worker may spawn children while
     /// `max_spawn_depth > 0`; each level decrements it. Clamped to the workspace
     /// ceiling.
@@ -170,6 +185,8 @@ impl WorkerRuntimeProfile {
             tools: ToolScope::Inherit,
             model: ModelRoute::Inherit,
             provider: None,
+            reasoning_effort: None,
+            denied_tools: Vec::new(),
             max_spawn_depth: codewhale_config::DEFAULT_SPAWN_DEPTH,
             background: true,
         }
@@ -182,7 +199,9 @@ impl WorkerRuntimeProfile {
     /// - permissions are AND-ed,
     /// - shell takes the more restrictive policy,
     /// - an explicit parent tool set bounds the child's tool set,
-    /// - the spawn-depth budget decrements by one level and clamps to the ceiling.
+    /// - the spawn-depth budget decrements by one level and clamps to the ceiling,
+    /// - the tool deny-list is the **union** of the two — a child may add
+    ///   restrictions but never drop one an ancestor imposed (#4042).
     ///
     /// The child keeps its own requested role, model route, and
     /// foreground/background preference (these don't grant capability), but its
@@ -191,6 +210,14 @@ impl WorkerRuntimeProfile {
     pub fn derive_child(&self, requested: &WorkerRuntimeProfile) -> WorkerRuntimeProfile {
         let permissions = self.permissions.intersect(requested.permissions);
         let shell = self.shell.min_with(requested.shell);
+        // Deny-lists union: a child can never drop a restriction an ancestor
+        // imposed. Wildcard entries are merged verbatim (no expansion).
+        let mut denied_tools = self.denied_tools.clone();
+        for rule in &requested.denied_tools {
+            if !denied_tools.contains(rule) {
+                denied_tools.push(rule.clone());
+            }
+        }
         let tools = match (&self.tools, &requested.tools) {
             // Parent restricts to a set → the child can only narrow within it.
             (ToolScope::Explicit(parent), ToolScope::Explicit(child)) => ToolScope::Explicit(
@@ -219,6 +246,11 @@ impl WorkerRuntimeProfile {
             tools,
             model: requested.model.clone(),
             provider: requested.provider.clone().or_else(|| self.provider.clone()),
+            reasoning_effort: requested
+                .reasoning_effort
+                .clone()
+                .or_else(|| self.reasoning_effort.clone()),
+            denied_tools,
             max_spawn_depth,
             background: requested.background,
         }
@@ -359,5 +391,38 @@ mod tests {
         let requested = WorkerRuntimeProfile::for_role(SubAgentType::Explore); // provider None
         let child = parent.derive_child(&requested);
         assert_eq!(child.provider.as_deref(), Some("moonshot"));
+    }
+
+    #[test]
+    fn child_reasoning_effort_uses_requested_then_parent() {
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        parent.reasoning_effort = Some("low".to_string());
+
+        let requested = WorkerRuntimeProfile::for_role(SubAgentType::Explore);
+        let inherited = parent.derive_child(&requested);
+        assert_eq!(inherited.reasoning_effort.as_deref(), Some("low"));
+
+        let mut requested = WorkerRuntimeProfile::for_role(SubAgentType::Explore);
+        requested.reasoning_effort = Some("max".to_string());
+        let overridden = parent.derive_child(&requested);
+        assert_eq!(overridden.reasoning_effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn child_denied_tools_union_never_drops_parent_restriction() {
+        // A child may only *add* deny entries; it can never drop a restriction
+        // an ancestor imposed (#4042 non-escalation invariant).
+        let mut parent = WorkerRuntimeProfile::for_role(SubAgentType::General);
+        parent.denied_tools = vec!["exec_shell".into(), "mcp_*".into()];
+
+        // Child asks for its own deny list and (tryingly) tries to omit the
+        // parent's exec_shell — the union keeps both.
+        let mut requested = WorkerRuntimeProfile::for_role(SubAgentType::Implementer);
+        requested.denied_tools = vec!["write_file".into()];
+
+        let child = parent.derive_child(&requested);
+        assert!(child.denied_tools.contains(&"exec_shell".to_string()));
+        assert!(child.denied_tools.contains(&"mcp_*".to_string()));
+        assert!(child.denied_tools.contains(&"write_file".to_string()));
     }
 }

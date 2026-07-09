@@ -637,6 +637,7 @@ impl HookExecutor {
         {
             use std::os::windows::process::CommandExt as _;
             let mut cmd = Command::new("cmd");
+            crate::utils::suppress_console_window(&mut cmd);
             // raw_arg: cmd.exe does not parse the CRT-style \" escapes that
             // Command::arg would insert, so pass the command line verbatim.
             cmd.arg("/C").raw_arg(command);
@@ -1020,7 +1021,7 @@ impl HookExecutor {
             Some(HookCondition::Mode { mode }) => context
                 .mode
                 .as_ref()
-                .is_some_and(|m| m.to_lowercase() == mode.to_lowercase()),
+                .is_some_and(|m| m.eq_ignore_ascii_case(mode)),
             Some(HookCondition::ExitCode { code }) => context.tool_exit_code == Some(*code),
             Some(HookCondition::All { conditions }) => conditions.iter().all(|c| {
                 self.matches_condition(

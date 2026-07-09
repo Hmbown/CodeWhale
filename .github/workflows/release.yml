@@ -143,14 +143,14 @@ jobs:
             shim_artifact: codew-linux-arm64
             tui_artifact: codewhale-tui-linux-arm64
           - os: ubuntu-latest
-            target: riscv64gc-unknown-linux-gnu
-            platform: linux-riscv64
+            target: aarch64-linux-android
+            platform: android-arm64
             cli_binary: codewhale
             shim_binary: codew
             tui_binary: codewhale-tui
-            cli_artifact: codewhale-linux-riscv64
-            shim_artifact: codew-linux-riscv64
-            tui_artifact: codewhale-tui-linux-riscv64
+            cli_artifact: codewhale-android-arm64
+            shim_artifact: codew-android-arm64
+            tui_artifact: codewhale-tui-android-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: macos-x64
@@ -199,7 +199,7 @@ jobs:
         with:
           cache-bin: false
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-musl'
+        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           for i in 1 2 3 4 5; do
             sudo apt-get update && break
@@ -215,26 +215,6 @@ jobs:
           sudo apt-get install -y musl-tools
           rustup target add --toolchain stable x86_64-unknown-linux-musl
           cargo build --release --locked --target x86_64-unknown-linux-musl -p codewhale-cli -p codewhale-tui
-      - name: Install RISC-V cross-compilation toolchain
-        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
-        run: |
-          # Install cross-compiler (available in standard repos)
-          sudo apt-get update
-          sudo apt-get install -y gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
-
-          # Add Ubuntu ports for riscv64 packages
-          . /etc/os-release
-          sudo tee /etc/apt/sources.list.d/riscv64.sources <<SRC
-          Types: deb
-          URIs: http://ports.ubuntu.com/
-          Suites: ${UBUNTU_CODENAME} ${UBUNTU_CODENAME}-updates
-          Components: main universe
-          Architectures: riscv64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          SRC
-          sudo dpkg --add-architecture riscv64
-          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/riscv64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
-          sudo apt-get install -y libdbus-1-dev:riscv64
       - name: Install AArch64 cross-compilation toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.os == 'Linux'
         run: |
@@ -250,6 +230,47 @@ jobs:
           sudo dpkg --add-architecture arm64
           sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/arm64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
           sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libdbus-1-dev:arm64 pkg-config
+      - name: Configure Android NDK linker
+        if: matrix.target == 'aarch64-linux-android' && runner.os == 'Linux'
+        shell: bash
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
+          linker=""
+          if [[ -n "${ndk}" ]]; then
+            linker="${ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          fi
+          if [[ -z "${linker}" || ! -x "${linker}" ]]; then
+            if ! command -v sdkmanager >/dev/null 2>&1; then
+              echo "sdkmanager is required to install Android NDK ${ANDROID_NDK_VERSION}" >&2
+              exit 1
+            fi
+            android_home="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            if [[ -z "${android_home}" ]]; then
+              echo "ANDROID_HOME or ANDROID_SDK_ROOT is required to install Android NDK ${ANDROID_NDK_VERSION}" >&2
+              exit 1
+            fi
+            yes | sdkmanager --licenses >/dev/null || true
+            sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+            ndk="${android_home}/ndk/${ANDROID_NDK_VERSION}"
+            linker="${ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          fi
+          ar="${ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          if [[ ! -x "${linker}" ]]; then
+            echo "Android linker not found: ${linker}" >&2
+            exit 1
+          fi
+          if [[ ! -x "${ar}" ]]; then
+            echo "Android archiver not found: ${ar}" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_ROOT=${ndk}" >> "${GITHUB_ENV}"
+          echo "ANDROID_NDK_HOME=${ndk}" >> "${GITHUB_ENV}"
+          echo "CC_aarch64_linux_android=${linker}" >> "${GITHUB_ENV}"
+          echo "AR_aarch64_linux_android=${ar}" >> "${GITHUB_ENV}"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${linker}" >> "${GITHUB_ENV}"
       - name: Build
         if: matrix.target != 'x86_64-unknown-linux-musl'
         shell: bash
@@ -257,11 +278,8 @@ jobs:
           DEEPSEEK_BUILD_SHA: ${{ needs.resolve.outputs.sha }}
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
-          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
           PKG_CONFIG_ALLOW_CROSS: 1
           PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu: /usr/lib/aarch64-linux-gnu/pkgconfig
-          PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
         run: cargo build --release --locked --target ${{ matrix.target }} -p codewhale-cli -p codewhale-tui
       - name: Stage binaries
         shell: bash
@@ -315,7 +333,7 @@ jobs:
           : > "$MANIFEST"
 
           bundle() {
-            local platform="$1"   # linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64
+            local platform="$1"   # linux-x64, linux-arm64, android-arm64, macos-x64, macos-arm64, windows-x64
             local cli_src="$2"    # artifact name for codewhale binary
             local shim_src="$3"   # artifact name for codew shim
             local tui_src="$4"    # artifact name for codewhale-tui binary
@@ -370,9 +388,9 @@ jobs:
           bundle linux-arm64 \
             codewhale-linux-arm64 codew-linux-arm64 codewhale-tui-linux-arm64 tar.gz ""
 
-          # Platform: linux-riscv64
-          bundle linux-riscv64 \
-            codewhale-linux-riscv64 codew-linux-riscv64 codewhale-tui-linux-riscv64 tar.gz ""
+          # Platform: android-arm64 (Termux)
+          bundle android-arm64 \
+            codewhale-android-arm64 codew-android-arm64 codewhale-tui-android-arm64 tar.gz ""
 
           # Platform: macos-x64
           bundle macos-x64 \

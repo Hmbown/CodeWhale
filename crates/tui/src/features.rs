@@ -222,37 +222,37 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Subagents,
         key: "subagents",
-        stage: Stage::Experimental,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WebSearch,
         key: "web_search",
-        stage: Stage::Experimental,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ApplyPatch,
         key: "apply_patch",
-        stage: Stage::Experimental,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Mcp,
         key: "mcp",
-        stage: Stage::Experimental,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ExecPolicy,
         key: "exec_policy",
-        stage: Stage::Experimental,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::VisionModel,
         key: "vision_model",
-        stage: Stage::Experimental,
+        stage: Stage::Beta,
         default_enabled: false,
     },
 ];
@@ -287,6 +287,6 @@ mod tests {
 
         assert_eq!(lines.first(), Some(&"feature\tstage\tenabled"));
         assert!(lines.contains(&"shell_tool\tstable\ttrue"));
-        assert!(lines.contains(&"mcp\texperimental\tfalse"));
+        assert!(lines.contains(&"mcp\tstable\tfalse"));
     }
 }

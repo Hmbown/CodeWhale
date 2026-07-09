@@ -23,10 +23,10 @@ Coverage today exercises the trait surface end-to-end:
 - sub-agent style independent parent/child mocks
 - capacity-gate observation of a captured request before stream drain
 
-Four full-engine tests (`engine_full_*`) are `#[ignore]`-marked. They unblock
-when `core::engine::Engine` is refactored to take `Arc<dyn LlmClient>` instead
-of a concrete `Option<DeepSeekClient>`. See the comment block at the bottom of
-`integration_mock_llm.rs` for the exact refactor surface.
+Full-engine mock coverage remains blocked until `core::engine::Engine` is
+refactored to take `Arc<dyn LlmClient>` instead of a concrete
+`Option<DeepSeekClient>`. The obsolete ignored `engine_full_*` placeholders were
+removed; add real end-to-end tests once that constructor seam exists.
 
 ## `--record` mode for `deepseek eval`
 

@@ -5,14 +5,17 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// Braille spinner frames used for running tools and background jobs.
-pub(crate) const BRAILLE_SPINNER_FRAMES: [&str; 10] = [
-    "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}", "\u{2834}", "\u{2826}", "\u{2827}",
-    "\u{2807}", "\u{280F}",
+/// Braille "whale spout" frames used for running tools and background jobs.
+///
+/// The cycle climbs, crests, and falls instead of using the stock clock-wise
+/// dots. At the shared repaint cadence it reads as a continuous spray plume.
+pub(crate) const BRAILLE_SPINNER_FRAMES: [&str; 12] = [
+    "\u{2840}", "\u{2844}", "\u{2846}", "\u{28C6}", "\u{28E6}", "\u{28F6}", "\u{28F2}", "\u{28B2}",
+    "\u{2832}", "\u{2830}", "\u{2820}", "\u{2810}",
 ];
 
 /// Match the live UI repaint cadence so running glyphs advance on every tick.
-pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 80;
+pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 50;
 
 #[must_use]
 pub(crate) fn braille_spinner_frame_for_elapsed_ms(
@@ -55,14 +58,19 @@ mod tests {
 
     #[test]
     fn braille_spinner_advances_at_shared_cadence() {
-        assert_eq!(braille_spinner_frame_for_elapsed_ms(0, false), "\u{280B}");
+        // Assert cadence behavior against the frame table rather than specific
+        // glyphs so the whale-spout pattern can be retuned without churn here.
+        assert_eq!(
+            braille_spinner_frame_for_elapsed_ms(0, false),
+            BRAILLE_SPINNER_FRAMES[0]
+        );
         assert_eq!(
             braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) - 1, false),
-            "\u{280B}"
+            BRAILLE_SPINNER_FRAMES[0]
         );
         assert_eq!(
             braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS), false),
-            "\u{2819}"
+            BRAILLE_SPINNER_FRAMES[1]
         );
     }
 
@@ -70,7 +78,7 @@ mod tests {
     fn braille_spinner_respects_low_motion() {
         assert_eq!(
             braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) * 3, true),
-            "\u{280B}"
+            BRAILLE_SPINNER_FRAMES[0]
         );
     }
 }

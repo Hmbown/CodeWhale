@@ -43,6 +43,21 @@ impl std::fmt::Display for McpAuthStatus {
     }
 }
 
+pub fn error_looks_auth_required(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    text.contains("401")
+        || text.contains("unauthorized")
+        || text.contains("authentication_required")
+        || text.contains("not logged in")
+        || text.contains("not-logged-in")
+}
+
+pub fn auth_required_login_hint(server_name: &str) -> String {
+    format!(
+        "MCP server '{server_name}' requires OAuth authentication. Run `codewhale mcp login {server_name}` to authenticate."
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredMcpOAuthTokens {
     pub server_name: String,
@@ -207,16 +222,31 @@ impl McpOAuthRuntime {
             return Ok(());
         }
 
-        {
+        let refresh_result = {
             let guard = self.inner.manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
+            guard.refresh_token().await
+        };
+        if let Err(err) = refresh_result {
+            let err = anyhow!(err);
+            if error_looks_auth_required(&err) {
+                self.clear_stored_tokens().await?;
+            }
+            return Err(err).with_context(|| {
                 format!(
                     "refreshing MCP OAuth token for server {}",
                     self.inner.server_name
                 )
-            })?;
+            });
         }
         self.persist_if_needed().await
+    }
+
+    async fn clear_stored_tokens(&self) -> Result<()> {
+        let mut last = self.inner.last_tokens.lock().await;
+        if last.take().is_some() {
+            delete_oauth_tokens(&self.inner.server_name, &self.inner.url)?;
+        }
+        Ok(())
     }
 
     async fn persist_if_needed(&self) -> Result<()> {
@@ -725,11 +755,20 @@ impl OauthLoginFlow {
         if webbrowser::open(&self.auth_url).is_err() {
             eprintln!("Browser launch failed; copy the URL above manually.");
         }
+        println!(
+            "Waiting for browser authorization for MCP server '{}'...",
+            self.server_name
+        );
 
         let result = async {
             let callback = timeout(Duration::from_secs(300), &mut self.rx)
                 .await
-                .context("timed out waiting for OAuth callback")?
+                .with_context(|| {
+                    format!(
+                        "timed out waiting for OAuth callback for MCP server '{}'. Retry from a terminal, or use task_shell_start/background shell if an agent is running the login flow.",
+                        self.server_name
+                    )
+                })?
                 .context("OAuth callback was cancelled")?;
             let OauthCallbackResult { code, state } = match callback {
                 CallbackResult::Success(callback) => callback,
@@ -1007,5 +1046,24 @@ mod tests {
         assert!(key.starts_with("mcp_oauth_"));
         assert!(!key.contains("github"));
         assert!(!key.contains("example.com"));
+    }
+
+    #[test]
+    fn auth_required_classifier_matches_http_401_shapes() {
+        let err = anyhow!("MCP Streamable HTTP rejected status=401 Unauthorized");
+        assert!(error_looks_auth_required(&err));
+
+        let err = anyhow!("authentication_required for remote server");
+        assert!(error_looks_auth_required(&err));
+
+        let err = anyhow!("connection refused");
+        assert!(!error_looks_auth_required(&err));
+    }
+
+    #[test]
+    fn auth_required_login_hint_names_server() {
+        let hint = auth_required_login_hint("nordic-mcp");
+        assert!(hint.contains("nordic-mcp"));
+        assert!(hint.contains("codewhale mcp login nordic-mcp"));
     }
 }

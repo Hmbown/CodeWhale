@@ -9,6 +9,7 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::time::Duration;
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -21,6 +22,104 @@ pub mod line_buffer;
 pub use chunking::{AdaptiveChunkingPolicy, ChunkingMode};
 pub use commit_tick::{StreamChunker, run_commit_tick};
 pub use line_buffer::LineBuffer;
+
+/// Default cadence for moving queued provider deltas into visible transcript
+/// text. This intentionally tracks animation frames rather than upstream SSE
+/// cadence, so tiny bursty deltas coalesce into one history/cache mutation.
+pub const DEFAULT_STREAM_COMMIT_INTERVAL: Duration = Duration::from_millis(33);
+
+/// Frame-clock gate for stream display commits.
+///
+/// Provider deltas may arrive in dozens of tiny chunks inside one event-loop
+/// drain. This clock lets the TUI ingest those bytes cheaply, then mutate the
+/// visible transcript at most once per display beat unless the stream is being
+/// finalized.
+#[derive(Debug, Clone)]
+pub struct StreamDisplayClock {
+    interval: Duration,
+    pending: bool,
+    next_due_at: Option<Instant>,
+    last_commit_at: Option<Instant>,
+    commit_count: u64,
+}
+
+impl Default for StreamDisplayClock {
+    fn default() -> Self {
+        Self::new(DEFAULT_STREAM_COMMIT_INTERVAL)
+    }
+}
+
+impl StreamDisplayClock {
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            pending: false,
+            next_due_at: None,
+            last_commit_at: None,
+            commit_count: 0,
+        }
+    }
+
+    /// Note that at least one stream delta is waiting to become visible.
+    pub fn note_delta(&mut self, now: Instant) {
+        self.pending = true;
+        if self.next_due_at.is_some() {
+            return;
+        }
+        self.next_due_at = Some(match self.last_commit_at {
+            Some(last) => last.checked_add(self.interval).unwrap_or(now).max(now),
+            None => now,
+        });
+    }
+
+    /// Returns the time until the pending commit is due, if any.
+    pub fn due_in(&self, now: Instant) -> Option<Duration> {
+        let due = self.next_due_at?;
+        Some(due.saturating_duration_since(now))
+    }
+
+    /// Consume a due commit beat.
+    pub fn take_due(&mut self, now: Instant) -> bool {
+        if !self.pending {
+            self.next_due_at = None;
+            return false;
+        }
+        let Some(due) = self.next_due_at else {
+            return false;
+        };
+        if now < due {
+            return false;
+        }
+        self.pending = false;
+        self.next_due_at = None;
+        self.last_commit_at = Some(now);
+        self.commit_count = self.commit_count.saturating_add(1);
+        true
+    }
+
+    /// Force a commit beat, used when the stream is being finalized.
+    pub fn flush_now(&mut self, now: Instant) -> bool {
+        let had_pending = self.pending;
+        self.pending = false;
+        self.next_due_at = None;
+        if had_pending {
+            self.last_commit_at = Some(now);
+            self.commit_count = self.commit_count.saturating_add(1);
+        }
+        had_pending
+    }
+
+    pub fn reset(&mut self) {
+        self.pending = false;
+        self.next_due_at = None;
+        self.last_commit_at = None;
+        self.commit_count = 0;
+    }
+
+    pub fn commit_count(&self) -> u64 {
+        self.commit_count
+    }
+}
 /// Collects streaming text and commits complete lines.
 #[derive(Debug, Clone)]
 pub struct MarkdownStreamCollector {
@@ -638,5 +737,87 @@ mod tests {
         assert_eq!(state.commit_text(0), "a");
 
         assert_eq!(state.finalize_block_text(0), "bc");
+    }
+
+    #[test]
+    fn stream_display_clock_coalesces_bursty_tiny_deltas() {
+        let interval = Duration::from_millis(33);
+        let mut clock = StreamDisplayClock::new(interval);
+        let t0 = Instant::now();
+
+        for _ in 0..100 {
+            clock.note_delta(t0);
+        }
+
+        assert_eq!(clock.due_in(t0), Some(Duration::ZERO));
+        assert!(clock.take_due(t0));
+        assert_eq!(clock.commit_count(), 1);
+
+        for _ in 0..25 {
+            clock.note_delta(t0 + Duration::from_millis(5));
+        }
+        assert!(!clock.take_due(t0 + Duration::from_millis(5)));
+        assert_eq!(
+            clock.due_in(t0 + Duration::from_millis(5)),
+            Some(Duration::from_millis(28))
+        );
+        assert!(clock.take_due(t0 + interval));
+        assert_eq!(clock.commit_count(), 2);
+    }
+
+    #[test]
+    fn stream_display_clock_bounds_long_reasoning_commit_count() {
+        let interval = Duration::from_millis(33);
+        let mut clock = StreamDisplayClock::new(interval);
+        let t0 = Instant::now();
+        let mut commits = 0u64;
+
+        for millis in 0..300 {
+            let now = t0 + Duration::from_millis(millis);
+            clock.note_delta(now);
+            if clock.take_due(now) {
+                commits += 1;
+            }
+        }
+
+        assert!(commits > 1, "long streams should keep advancing visibly");
+        assert!(
+            commits <= 11,
+            "300 one-ms deltas should not commit on provider cadence: {commits}"
+        );
+        assert_eq!(commits, clock.commit_count());
+    }
+
+    #[test]
+    fn stream_display_clock_final_flush_consumes_pending_delta() {
+        let mut clock = StreamDisplayClock::new(Duration::from_millis(33));
+        let t0 = Instant::now();
+
+        clock.note_delta(t0);
+        assert!(clock.take_due(t0));
+        clock.note_delta(t0 + Duration::from_millis(4));
+
+        assert!(!clock.take_due(t0 + Duration::from_millis(4)));
+        assert!(clock.flush_now(t0 + Duration::from_millis(5)));
+        assert_eq!(clock.due_in(t0 + Duration::from_millis(5)), None);
+        assert!(!clock.take_due(t0 + Duration::from_millis(33)));
+        assert_eq!(clock.commit_count(), 2);
+    }
+
+    #[test]
+    fn bursty_stream_state_has_no_text_loss_after_coalesced_flushes() {
+        let mut state = StreamingState::new();
+        state.start_text(0, None);
+        let mut expected = String::new();
+
+        for idx in 0..250 {
+            let chunk = format!("{idx}.");
+            expected.push_str(&chunk);
+            state.push_content(0, &chunk);
+        }
+
+        let first_flush = state.commit_text(0);
+        assert_eq!(first_flush, expected);
+        assert_eq!(state.finalize_block_text(0), "");
     }
 }

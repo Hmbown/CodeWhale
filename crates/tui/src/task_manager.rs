@@ -22,7 +22,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
+use crate::config::{Config, DEFAULT_TEXT_MODEL};
 use crate::runtime_threads::{
     CreateThreadRequest, RuntimeThreadManager, RuntimeThreadManagerConfig, RuntimeTurnStatus,
     SharedRuntimeThreadManager, StartTurnRequest,
@@ -314,8 +314,6 @@ pub struct TaskManagerConfig {
     pub default_mode: String,
     pub allow_shell: bool,
     pub trust_mode: bool,
-    #[allow(dead_code)]
-    pub max_subagents: usize,
 }
 
 impl TaskManagerConfig {
@@ -339,9 +337,6 @@ impl TaskManagerConfig {
             default_mode: "agent".to_string(),
             allow_shell: config.allow_shell(),
             trust_mode: false,
-            max_subagents: config
-                .max_subagents_for_provider(config.api_provider())
-                .clamp(1, MAX_SUBAGENTS),
         }
     }
 }
@@ -773,7 +768,11 @@ impl TaskManager {
             )
         })?;
 
-        let (tasks, queue) = load_state(&tasks_dir, &queue_path)?;
+        let LoadedTaskState {
+            tasks,
+            queue,
+            recovered,
+        } = load_state(&tasks_dir, &queue_path)?;
 
         let cancel_token = CancellationToken::new();
         let default_workspace = cfg.default_workspace.clone();
@@ -794,8 +793,16 @@ impl TaskManager {
         });
 
         {
+            // Persist only what boot actually changed: the reconciled queue
+            // and any running->failed recoveries. Rewriting every task record
+            // on every launch was a full-store write storm (#3757).
             let state = manager.state.lock().await;
-            manager.persist_all_locked(&state)?;
+            manager.persist_queue_locked(&state.queue)?;
+            for id in &recovered {
+                if let Some(task) = state.tasks.get(id) {
+                    manager.persist_task_locked(task)?;
+                }
+            }
         }
 
         for _ in 0..workers {
@@ -840,7 +847,13 @@ impl TaskManager {
 
         let task = TaskRecord {
             schema_version: CURRENT_TASK_SCHEMA_VERSION,
-            id: format!("task_{}", &Uuid::new_v4().to_string()[..8]),
+            // 16 random hex chars (was 8; ~60 bits of entropy once UUIDv4's
+            // fixed version nibble is discounted): task ids live in durable
+            // state that accumulates across restarts, and a collision
+            // overwrites a record while leaving a duplicate queue entry.
+            // `resolve_task_id` matches by prefix, so short references still
+            // work.
+            id: format!("task_{}", &Uuid::new_v4().simple().to_string()[..16]),
             prompt,
             model: req.model.unwrap_or_else(|| self.cfg.default_model.clone()),
             workspace: match req.workspace {
@@ -1525,11 +1538,18 @@ fn normalize_hunt_verdict(raw: &str) -> Result<&'static str> {
     }
 }
 
-fn load_state(
-    tasks_dir: &Path,
-    queue_path: &Path,
-) -> Result<(HashMap<String, TaskRecord>, VecDeque<String>)> {
+/// Outcome of loading the persisted task store at boot: the reconciled task
+/// map + queue, plus the ids whose status was flipped running->failed by
+/// crash recovery (the only records boot needs to re-persist).
+struct LoadedTaskState {
+    tasks: HashMap<String, TaskRecord>,
+    queue: VecDeque<String>,
+    recovered: Vec<String>,
+}
+
+fn load_state(tasks_dir: &Path, queue_path: &Path) -> Result<LoadedTaskState> {
     let mut tasks = HashMap::new();
+    let mut recovered = Vec::new();
     if tasks_dir.exists() {
         for entry in fs::read_dir(tasks_dir)
             .with_context(|| format!("Failed to read tasks dir {}", tasks_dir.display()))?
@@ -1581,6 +1601,7 @@ fn load_state(
                         .to_string(),
                     detail_path: None,
                 });
+                recovered.push(task.id.clone());
             }
             tasks.insert(task.id.clone(), task);
         }
@@ -1613,7 +1634,11 @@ fn load_state(
         queue.push_back(id);
     }
 
-    Ok((tasks, queue))
+    Ok(LoadedTaskState {
+        tasks,
+        queue,
+        recovered,
+    })
 }
 
 fn resolve_task_id(tasks: &HashMap<String, TaskRecord>, id_or_prefix: &str) -> Result<String> {
@@ -1827,7 +1852,6 @@ mod tests {
             default_mode: "agent".to_string(),
             allow_shell: false,
             trust_mode: false,
-            max_subagents: 2,
         }
     }
 
@@ -1857,6 +1881,40 @@ mod tests {
         assert_eq!(loaded.status, TaskStatus::Completed);
         assert!(!loaded.timeline.is_empty());
         assert_eq!(loaded.checklist.items[0].content, "read fixture");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn boot_does_not_rewrite_non_recovered_task_files() -> Result<()> {
+        // #3757 boot-persist narrowing: TaskManager::start must persist only
+        // the reconciled queue and the running->failed recoveries — a
+        // completed task's file must be byte-identical across a restart.
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
+                .await?;
+        let task = manager
+            .add_task(NewTaskRequest::from_prompt("finish then persist"))
+            .await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
+        assert_eq!(finished.status, TaskStatus::Completed);
+        drop(manager);
+
+        let task_file = root.join("tasks").join(format!("{}.json", task.id));
+        let before = fs::read(&task_file)?;
+
+        let recovered =
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
+                .await?;
+        // Give start() a beat to run its (narrowed) boot persist.
+        sleep(Duration::from_millis(50)).await;
+        drop(recovered);
+
+        let after = fs::read(&task_file)?;
+        assert_eq!(
+            before, after,
+            "a completed task file must not be rewritten on boot"
+        );
         Ok(())
     }
 
@@ -1925,8 +1983,9 @@ mod tests {
             })?,
         )?;
 
-        let (tasks, queue) = load_state(&tasks_dir, &queue_path)?;
-        let recovered = tasks.get(&task_id).expect("task loaded");
+        let loaded = load_state(&tasks_dir, &queue_path)?;
+        let queue = loaded.queue;
+        let recovered = loaded.tasks.get(&task_id).expect("task loaded");
 
         assert!(queue.is_empty(), "stale running task must not be requeued");
         assert_eq!(recovered.status, TaskStatus::Failed);

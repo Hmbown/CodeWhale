@@ -236,6 +236,61 @@ pub fn visible_mention_menu_entries(app: &mut App, limit: usize) -> Vec<String> 
         return cache.entries.clone();
     }
 
+    // Fast path (#3757): for non-path-like partials the candidate set is
+    // needle-independent, so one cached walk serves every keystroke of the
+    // mention token and ranking happens in memory. Path-like partials fall
+    // through to the live walk because local path-reference completions are
+    // needle-gated (see `should_try_local_reference_completion`).
+    let path_like = partial.starts_with('.') || partial.contains('/') || partial.contains('\\');
+    if behavior != "browser" && !path_like {
+        const CANDIDATE_TTL: std::time::Duration = std::time::Duration::from_secs(4);
+        let fresh = app
+            .composer
+            .mention_candidate_cache
+            .as_ref()
+            .is_some_and(|c| {
+                c.workspace == workspace
+                    && c.cwd == cwd
+                    && c.walk_depth == walk_depth
+                    && c.follow_links == follow_links
+                    && c.collected_at.elapsed() < CANDIDATE_TTL
+            });
+        if !fresh {
+            let ws = Workspace::with_cwd_depth_and_follow_links(
+                workspace.clone(),
+                cwd.clone(),
+                walk_depth,
+                follow_links,
+            );
+            app.composer.mention_candidate_cache = Some(crate::tui::app::MentionCandidateCache {
+                workspace: workspace.clone(),
+                cwd: cwd.clone(),
+                walk_depth,
+                follow_links,
+                collected_at: std::time::Instant::now(),
+                candidates: ws.completion_candidates(),
+            });
+        }
+        let ranked = match app.composer.mention_candidate_cache.as_ref() {
+            Some(cache) => {
+                crate::working_set::rank_completion_candidates(&cache.candidates, &partial, limit)
+            }
+            None => Vec::new(),
+        };
+        let entries = super::file_frecency::rerank_by_frecency(ranked);
+        app.composer.mention_completion_cache = Some(MentionCompletionCache {
+            workspace,
+            cwd,
+            partial,
+            limit,
+            walk_depth,
+            behavior,
+            follow_links,
+            entries: entries.clone(),
+        });
+        return entries;
+    }
+
     let ws = Workspace::with_cwd_depth_and_follow_links(
         workspace.clone(),
         cwd.clone(),

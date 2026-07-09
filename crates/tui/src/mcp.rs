@@ -9,10 +9,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 mod headers;
@@ -46,6 +48,55 @@ fn validate_mcp_config_path(path: &Path) -> Result<()> {
         anyhow::bail!("MCP config path cannot contain '..' components");
     }
     Ok(())
+}
+
+/// Expand `${NAME}` placeholders in an MCP config value from the process
+/// environment. This lets secrets (API keys, bearer tokens, …) be supplied
+/// through environment variables instead of being written in cleartext into
+/// the MCP config file on disk.
+///
+/// On a missing or malformed placeholder the error names only the offending
+/// variable, never the surrounding value, so a secret-bearing string is never
+/// echoed into logs or error output.
+fn expand_env_placeholders(value: &str) -> Result<String> {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            anyhow::bail!("unterminated environment placeholder in MCP config value");
+        };
+        let name = &after[..end];
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            anyhow::bail!("invalid environment placeholder in MCP config value");
+        }
+        let env_value = std::env::var(name).with_context(|| {
+            format!("environment variable {name} required by MCP config is not set")
+        })?;
+        out.push_str(&env_value);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Expand `${NAME}` placeholders across every value of an MCP config map
+/// (e.g. the stdio child `env`). `context` only labels expansion errors so a
+/// failure can be attributed to the right map.
+fn expand_env_placeholders_map(
+    values: &HashMap<String, String>,
+    context: &str,
+) -> Result<HashMap<String, String>> {
+    let mut expanded = HashMap::with_capacity(values.len());
+    for (key, value) in values {
+        expanded.insert(
+            key.clone(),
+            expand_env_placeholders(value)
+                .with_context(|| format!("failed to expand MCP {context} value for {key}"))?,
+        );
+    }
+    Ok(expanded)
 }
 
 /// Mask a URL so any embedded credentials in the userinfo portion (e.g.
@@ -675,6 +726,8 @@ fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
     messages
 }
 
+// Retained for tests; the SSE transport now uses the byte-oriented twin.
+#[cfg(test)]
 fn find_sse_event_separator(buffer: &str) -> Option<(usize, usize)> {
     match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
         (Some(lf), Some(crlf)) if crlf < lf => Some((crlf, 4)),
@@ -683,6 +736,32 @@ fn find_sse_event_separator(buffer: &str) -> Option<(usize, usize)> {
         _ => None,
     }
 }
+
+/// Byte-oriented twin of [`find_sse_event_separator`]. Used by the SSE
+/// transport so it can accumulate RAW bytes and decode only complete event
+/// blocks — a multi-byte UTF-8 char split across two network reads is never
+/// corrupted to U+FFFD (the `\n`/`\r` separators are ASCII and can never fall
+/// inside a multi-byte sequence).
+fn find_sse_event_separator_bytes(buffer: &[u8]) -> Option<(usize, usize)> {
+    let lf = buffer.windows(2).position(|w| w == b"\n\n");
+    let crlf = buffer.windows(4).position(|w| w == b"\r\n\r\n");
+    match (lf, crlf) {
+        (Some(lf), Some(crlf)) if crlf < lf => Some((crlf, 4)),
+        (Some(lf), _) => Some((lf, 2)),
+        (_, Some(crlf)) => Some((crlf, 4)),
+        _ => None,
+    }
+}
+
+/// Hard ceiling on the SSE frame-assembly buffer. A server that never emits a
+/// frame separator would otherwise grow it without bound (OOM DoS).
+pub(super) const MAX_SSE_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// Hard ceiling on a single MCP HTTP response body / stdio line. A misbehaving
+/// or malicious server could otherwise stream an unbounded body (or a
+/// newline-free multi-GB "line") and OOM the process at transport-read time,
+/// before any transcript-level spillover applies.
+pub(super) const MAX_MCP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     let value = line.strip_prefix(field)?;
@@ -782,8 +861,15 @@ impl McpConnection {
             // local Clash / Shadowsocks tunnel, etc. previously had MCP
             // HTTP traffic bypass the proxy entirely while every other
             // tool on the box (curl, npm, …) used it.
+            // `connect_timeout` bounds only the connect phase; the total request
+            // timeout is the read timeout (a sane backstop) so per-call
+            // execute_timeout can actually govern request duration. Previously
+            // this set reqwest's TOTAL `.timeout()` from connect_timeout (10s),
+            // which silently capped every request at 10s and made the per-server
+            // execute_timeout / read_timeout dead for HTTP transports.
             let mut client_builder = crate::tls::reqwest_client_builder()
-                .timeout(Duration::from_secs(connect_timeout_secs));
+                .connect_timeout(Duration::from_secs(connect_timeout_secs))
+                .timeout(Duration::from_secs(read_timeout_secs));
             let env_proxy_url = std::env::var("HTTPS_PROXY")
                 .or_else(|_| std::env::var("https_proxy"))
                 .or_else(|_| std::env::var("HTTP_PROXY"))
@@ -1383,6 +1469,9 @@ pub struct McpPool {
     config_hash: u64,
     /// Most recently observed mtime for `config_sources`.
     last_mtimes: Vec<Option<std::time::SystemTime>>,
+    /// Dynamically added MCP servers (from tool calls at runtime).
+    /// These are not persisted to disk and live for the process lifetime.
+    pub(crate) dynamic_servers: Arc<RwLock<HashMap<String, McpServerConfig>>>,
 }
 
 impl McpPool {
@@ -1397,6 +1486,7 @@ impl McpPool {
             workspace: None,
             config_hash,
             last_mtimes: Vec::new(),
+            dynamic_servers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -1540,12 +1630,14 @@ impl McpPool {
 
         self.drop_connection(server_name, "reconnect");
 
+        // Check static config first, then dynamic servers
         let server_config = self
             .config
             .servers
             .get(server_name)
-            .ok_or_else(|| anyhow::anyhow!("Failed to find MCP server: {server_name}"))?
-            .clone();
+            .cloned()
+            .or_else(|| self.dynamic_servers.read().get(server_name).cloned())
+            .ok_or_else(|| anyhow::anyhow!("Failed to find MCP server: {server_name}"))?;
 
         if !server_config.is_enabled() {
             anyhow::bail!("Failed to connect MCP server '{server_name}': server is disabled");
@@ -1664,11 +1756,14 @@ impl McpPool {
             return Ok(resources);
         }
 
+        let mut items = Vec::new();
         let errors = self.connect_all().await;
         for (server, err) in errors {
             tracing::warn!("Failed to connect MCP server '{server}' for resources: {err:#}");
+            if oauth::error_looks_auth_required(&err) {
+                items.push(Self::mcp_auth_required_error_item(&server));
+            }
         }
-        let mut items = Vec::new();
         for (server, conn) in &self.connections {
             for resource in conn.resources() {
                 items.push(serde_json::json!({
@@ -1705,13 +1800,16 @@ impl McpPool {
             return Ok(templates);
         }
 
+        let mut items = Vec::new();
         let errors = self.connect_all().await;
         for (server, err) in errors {
             tracing::warn!(
                 "Failed to connect MCP server '{server}' for resource templates: {err:#}"
             );
+            if oauth::error_looks_auth_required(&err) {
+                items.push(Self::mcp_auth_required_error_item(&server));
+            }
         }
-        let mut items = Vec::new();
         for (server, conn) in &self.connections {
             for template in conn.resource_templates() {
                 items.push(serde_json::json!({
@@ -1724,6 +1822,14 @@ impl McpPool {
             }
         }
         Ok(items)
+    }
+
+    fn mcp_auth_required_error_item(server: &str) -> serde_json::Value {
+        serde_json::json!({
+            "error": "authentication_required",
+            "server": server,
+            "message": oauth::auth_required_login_hint(server),
+        })
     }
 
     /// Get all discovered prompts with server-prefixed names
@@ -1817,7 +1923,13 @@ impl McpPool {
             });
         }
 
-        if !self.config.servers.is_empty() {
+        // Only advertise each resource-listing meta-tool when the servers actually
+        // expose the corresponding kind. Previously both were injected whenever any
+        // MCP server was configured, so tools-only servers left the model with
+        // meta-tools that can only ever return empty results — a wasted tool slot
+        // and prompt tokens. Gate each on its own non-empty collection, mirroring
+        // the `mcp_read_resource` guard below (`!resources.is_empty()`).
+        if !self.all_resources().is_empty() {
             api_tools.push(crate::models::Tool {
                 tool_type: None,
                 name: "list_mcp_resources".to_string(),
@@ -1834,6 +1946,8 @@ impl McpPool {
                 strict: None,
                 cache_control: None,
             });
+        }
+        if !self.all_resource_templates().is_empty() {
             api_tools.push(crate::models::Tool {
                 tool_type: None,
                 name: "list_mcp_resource_templates".to_string(),
@@ -2021,14 +2135,48 @@ impl McpPool {
         }
     }
 
-    /// Get list of configured server names
+    /// Get list of configured server names (static + dynamic)
     #[allow(dead_code)] // Public API for MCP consumers
-    pub fn server_names(&self) -> Vec<&str> {
-        self.config
-            .servers
-            .keys()
-            .map(std::string::String::as_str)
-            .collect()
+    pub fn server_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.config.servers.keys().cloned().collect();
+        let dynamic = self.dynamic_servers.read();
+        for name in dynamic.keys() {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    /// Add a runtime server configuration (in-memory only, not persisted).
+    ///
+    /// This is used for dynamically started MCP servers from chat context.
+    /// Stored in `dynamic_servers` so it doesn't interfere with file-based config reload.
+    ///
+    /// Returns `Err` if a server with the same name already exists as a static config
+    /// or a dynamic config. The caller should surface the error to the LLM/user.
+    pub fn add_runtime_server_config(
+        &self,
+        name: String,
+        config: McpServerConfig,
+    ) -> Result<(), String> {
+        if self.config.servers.contains_key(&name) {
+            return Err(format!(
+                "MCP server '{}' already exists in the config file. \
+                 Remove it from the config first, or choose a different name.",
+                name
+            ));
+        }
+        let mut dynamic = self.dynamic_servers.write();
+        if dynamic.contains_key(&name) {
+            return Err(format!(
+                "MCP server '{}' was already started earlier in this session. \
+                 Choose a different name.",
+                name
+            ));
+        }
+        dynamic.insert(name, config);
+        Ok(())
     }
 
     /// Get list of connected server names
@@ -2720,39 +2868,6 @@ fn snapshot_from_config(
         config_exists,
         restart_required,
         servers,
-    }
-}
-
-// === Helper Functions ===
-
-/// Format MCP tool result for display
-#[allow(dead_code)] // Will be used when MCP tool results are displayed in TUI
-pub fn format_tool_result(result: &serde_json::Value) -> String {
-    let is_error = result
-        .get("isError")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-
-    let content = result
-        .get("content")
-        .and_then(|v| v.as_array())
-        .map_or_else(
-            || serde_json::to_string_pretty(result).unwrap_or_default(),
-            |arr| {
-                arr.iter()
-                    .filter_map(|item| match item.get("type")?.as_str()? {
-                        "text" => item.get("text")?.as_str().map(String::from),
-                        other => Some(format!("[{other} content]")),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            },
-        );
-
-    if is_error {
-        format!("Error: {content}")
-    } else {
-        content
     }
 }
 

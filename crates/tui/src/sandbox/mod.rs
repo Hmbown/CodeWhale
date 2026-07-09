@@ -109,11 +109,22 @@ impl CommandSpec {
         #[cfg(not(windows))]
         let (program, args) = dispatcher.build_command_parts(command);
 
+        let env = {
+            #[cfg(windows)]
+            {
+                windows_shell_default_env()
+            }
+            #[cfg(not(windows))]
+            {
+                HashMap::new()
+            }
+        };
+
         Self {
             program,
             args,
             cwd,
-            env: HashMap::new(),
+            env,
             timeout,
             sandbox_policy: SandboxPolicy::default(),
             justification: None,
@@ -209,6 +220,10 @@ impl CommandSpec {
             parts.join(" ")
         }
     }
+}
+
+fn windows_shell_default_env() -> HashMap<String, String> {
+    HashMap::from([("PYTHONIOENCODING".to_string(), "utf-8".to_string())])
 }
 
 /// The type of sandbox being used for execution.
@@ -716,6 +731,16 @@ mod tests {
         assert!(matches!(spec.sandbox_policy, SandboxPolicy::ReadOnly));
         assert_eq!(spec.env.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(spec.justification, Some("Testing".to_string()));
+    }
+
+    #[test]
+    fn windows_shell_default_env_forces_python_pipe_stdio_utf8() {
+        let env = windows_shell_default_env();
+
+        assert_eq!(
+            env.get("PYTHONIOENCODING").map(String::as_str),
+            Some("utf-8")
+        );
     }
 
     #[test]

@@ -6,13 +6,16 @@
 //! refresh) and live [`ProviderCatalogDelta`]s; the HTTP `/models` fetch layer
 //! lives above this module. Nothing here performs I/O or reads credentials.
 //!
-//! Layering (lowest precedence first):
+//! Layering (lowest precedence first; #4188):
 //!
 //! ```text
-//! bundled Models.dev snapshot / built-in seeds
-//!   < provider live `/models` cache  (scoped per provider + base-URL fingerprint)
+//! bundled Models.dev snapshot       (offline/stale fallback only — not competing truth)
+//!   < live Models.dev / provider `/models` cache
 //!   < user / custom overrides        (custom endpoints, pinned models, explicit facts)
 //! ```
+//!
+//! After #4187, live Models.dev rows are preferred whenever present. The bundled
+//! asset remains so offline startup and failed refreshes still resolve defaults.
 //!
 //! Invariants preserved from #2608 / #3497:
 //! - A catalog row is **not** an executable route. Rows still compile through
@@ -41,7 +44,8 @@ use crate::route::{ModelId, ProviderId, ProviderModelOffering, RouteLimits, Wire
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CatalogSource {
-    /// Bundled, network-free seed (a Models.dev snapshot or built-in defaults).
+    /// Offline/stale bundled seed (Models.dev-shaped snapshot). Not competing
+    /// truth — live Models.dev rows override this layer (#4188).
     #[default]
     Bundled,
     /// A provider live `/models` row, scoped to a base-URL fingerprint and the
@@ -93,6 +97,9 @@ pub struct CatalogOffering {
     /// Whether this offering supports reasoning, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
+    /// Whether tool calling is supported, when known (#4115).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
     /// Provider-scoped reasoning controls / accepted effort metadata. Kept as
     /// raw JSON so the same model family served through different gateways can
     /// expose different effort vocabularies without lossy collapsing.
@@ -146,15 +153,15 @@ impl CatalogOffering {
     }
 }
 
-/// The committed, network-free Models.dev-shaped catalog snapshot (#3385).
+/// Committed offline/stale Models.dev-shaped catalog snapshot (#3385 / #4188).
 ///
-/// Curated from in-repo verified model facts (context windows / output caps from
-/// `crates/tui/src/models.rs`, USD pricing from `crates/tui/src/pricing.rs`)
-/// rather than a live models.dev dump, because the public catalog tracks a
-/// different real model generation than CodeWhale's curated forward-dated set.
-/// This is the default bundled layer feeding [`crate::route::RouteResolver::new`].
-/// See the asset's `_meta` block for sourcing and the honesty rule on omitted
-/// pricing (`UnknownOrStale`, never a fabricated zero).
+/// This is **not** a competing curated source of truth. Preferred metadata comes
+/// from the live Models.dev catalog (#4187). The bundled asset is a compact
+/// network-free seed of verified in-repo defaults (context/output from
+/// `crates/tui/src/models.rs`, USD pricing from `crates/tui/src/pricing.rs`) so
+/// [`crate::route::RouteResolver::new`] and pickers still work offline or after
+/// a failed refresh. See the asset's `_meta.role` / `_meta.source` and the
+/// honesty rule on omitted pricing (`UnknownOrStale`, never a fabricated zero).
 pub const BUNDLED_MODELS_DEV_JSON: &str = include_str!("../assets/models_dev.bundled.json");
 
 /// Parse the committed bundled Models.dev snapshot.
@@ -169,11 +176,11 @@ pub fn bundled_models_dev_catalog() -> ModelsDevCatalog {
         .expect("committed bundled Models.dev asset must be valid JSON")
 }
 
-/// The bundled-layer [`CatalogOffering`] rows from the committed snapshot.
+/// Bundled-layer [`CatalogOffering`] rows from the offline snapshot (#4188).
 ///
-/// This is the real-data source for the default resolver: every text-chat row
-/// from [`BUNDLED_MODELS_DEV_JSON`], tagged [`CatalogSource::Bundled`], with
-/// honest limits and pricing.
+/// Lowest-precedence catalog layer: every text-chat row from
+/// [`BUNDLED_MODELS_DEV_JSON`], tagged [`CatalogSource::Bundled`]. Live Models.dev
+/// rows override these on `(provider, wire_model_id)` when available.
 #[must_use]
 pub fn bundled_catalog_offerings() -> Vec<CatalogOffering> {
     bundled_offerings_from_models_dev(&bundled_models_dev_catalog())
@@ -186,14 +193,62 @@ pub fn bundled_catalog_offerings() -> Vec<CatalogOffering> {
 /// [`ModelsDevCatalog::provider_offerings`]). Each row is tagged
 /// [`CatalogSource::Bundled`]. No canonical model is inferred from a prefix; the
 /// canonical link is set only from an explicit `base_model`.
+///
+/// Provider ids are kept verbatim from the Models.dev payload (the committed
+/// bundled asset already uses CodeWhale ids). Live refresh normalizes aliases
+/// via [`live_offerings_from_models_dev`].
 #[must_use]
 pub fn bundled_offerings_from_models_dev(catalog: &ModelsDevCatalog) -> Vec<CatalogOffering> {
+    offerings_from_models_dev(catalog, CatalogSource::Bundled, false)
+}
+
+/// Hydrate live [`CatalogOffering`] rows from a fetched Models.dev catalog (#4187).
+///
+/// Same text-chat filter as [`bundled_offerings_from_models_dev`], but each row is
+/// tagged [`CatalogSource::Live`] with the Models.dev URL fingerprint and fetch
+/// timestamp. Provider keys are normalized onto CodeWhale [`crate::ProviderKind`]
+/// ids when an alias match exists (`moonshotai` → `moonshot`, `togetherai` →
+/// `together`, `zhipuai` → `zai`, …); unknown Models.dev providers keep their
+/// upstream id so they stay discoverable without becoming executable routes.
+#[must_use]
+pub fn live_offerings_from_models_dev(
+    catalog: &ModelsDevCatalog,
+    base_url_fingerprint: &str,
+    fetched_at: u64,
+) -> Vec<CatalogOffering> {
+    offerings_from_models_dev(
+        catalog,
+        CatalogSource::Live {
+            base_url_fingerprint: base_url_fingerprint.to_string(),
+            fetched_at,
+        },
+        true,
+    )
+}
+
+fn offerings_from_models_dev(
+    catalog: &ModelsDevCatalog,
+    source: CatalogSource,
+    normalize_provider_ids: bool,
+) -> Vec<CatalogOffering> {
     let mut out = Vec::new();
     for (provider_key, provider) in &catalog.providers {
-        let provider_id = if provider.id.trim().is_empty() {
-            provider_key.trim().to_string()
+        let raw_id = if provider.id.trim().is_empty() {
+            provider_key.trim()
         } else {
-            provider.id.trim().to_string()
+            provider.id.trim()
+        };
+        if raw_id.is_empty() {
+            continue;
+        }
+        let provider_id = if normalize_provider_ids {
+            // Normalize Models.dev provider ids onto CodeWhale kinds when known
+            // (#4186). Unknown upstream ids are kept verbatim for catalog browsing.
+            crate::ProviderKind::parse(raw_id)
+                .map(|kind| kind.as_str().to_string())
+                .unwrap_or_else(|| raw_id.to_string())
+        } else {
+            raw_id.to_string()
         };
         for model in provider.models.values() {
             if !model.supports_text_chat() {
@@ -210,8 +265,9 @@ pub fn bundled_offerings_from_models_dev(catalog: &ModelsDevCatalog) -> Vec<Cata
                 cost: model.cost.clone(),
                 modalities: model.modalities.clone(),
                 reasoning: model.reasoning,
+                tool_call: model.tool_call,
                 reasoning_options: model.reasoning_options.clone(),
-                source: CatalogSource::Bundled,
+                source: source.clone(),
             });
         }
     }
@@ -471,6 +527,23 @@ impl ProviderCatalogCache {
         self.entries
             .values()
             .filter(|entry| entry.is_fresh(now_unix))
+            .flat_map(|entry| entry.offerings.clone())
+            .collect()
+    }
+
+    /// Live offerings that pickers may still show: fresh rows plus stale / prior
+    /// rows that survived a failed refresh (#4139).
+    ///
+    /// Unlike [`Self::all_fresh_offerings`], this keeps past-TTL and
+    /// `Failed`-status entries as long as they still hold offering rows. Empty
+    /// entries contribute nothing; callers fall back to the bundled snapshot.
+    /// `now_unix` is accepted for API symmetry with the fresh helper (age chips
+    /// live above this layer).
+    #[must_use]
+    pub fn all_visible_offerings(&self, _now_unix: u64) -> Vec<CatalogOffering> {
+        self.entries
+            .values()
+            .filter(|entry| !entry.offerings.is_empty())
             .flat_map(|entry| entry.offerings.clone())
             .collect()
     }

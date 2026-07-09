@@ -27,7 +27,12 @@ import {
   telegramRetryDelayMs,
   telegramSendRetryDelayMs
 } from "./lib.mjs";
-import { ThreadStore as CoreThreadStore } from "../../bridge-core/src/lib.mjs";
+import {
+  createRuntimeClient,
+  readJsonSafe,
+  readSse,
+  ThreadStore as CoreThreadStore
+} from "../../bridge-core/src/lib.mjs";
 
 const TYPING_INTERVAL_MS = 2000;
 const TYPING_TIMEOUT_MS = 1500;
@@ -67,6 +72,8 @@ const config = {
   pollTimeoutSeconds: Number(process.env.TELEGRAM_POLL_TIMEOUT_SECONDS || 50),
   turnTimeoutMs: Number(envFirst(process.env, "CODEWHALE_TURN_TIMEOUT_MS", "DEEPSEEK_TURN_TIMEOUT_MS") || 900000)
 };
+
+const { runtimeJson, authHeaders } = createRuntimeClient(config);
 
 const threadStore = await ThreadStore.open(config.threadMapPath);
 const activeTurnTasks = new Map();
@@ -962,55 +969,6 @@ async function telegramApiOnce(method, body = {}, options = {}) {
     throw error;
   }
   return payload.result;
-}
-
-async function runtimeJson(route, options = {}) {
-  const response = await fetch(`${config.runtimeUrl}${route}`, {
-    method: options.method || "GET",
-    headers: {
-      ...(options.auth === false ? {} : authHeaders()),
-      ...(options.body ? { "content-type": "application/json" } : {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const body = await readJsonSafe(response);
-  if (!response.ok) {
-    throw new Error(compactRuntimeError(response.status, body));
-  }
-  return body;
-}
-
-function authHeaders() {
-  return { authorization: `Bearer ${config.runtimeToken}` };
-}
-
-async function readJsonSafe(response) {
-  const text = await response.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-async function* readSse(response) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const raw = buffer.slice(0, boundary).replace(/\r/g, "");
-      buffer = buffer.slice(boundary + 2);
-      const event = { event: "", data: "" };
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("event:")) event.event = line.slice(6).trim();
-        if (line.startsWith("data:")) event.data += line.slice(5).trim();
-      }
-      yield event;
-    }
-  }
 }
 
 function requiredEnv(name) {

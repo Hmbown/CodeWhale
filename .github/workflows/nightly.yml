@@ -39,13 +39,6 @@ jobs:
             tui_binary: codewhale-tui
             cli_artifact: codewhale-linux-arm64
             tui_artifact: codewhale-tui-linux-arm64
-          - os: ubuntu-latest
-            target: riscv64gc-unknown-linux-gnu
-            platform: linux-riscv64
-            cli_binary: codewhale
-            tui_binary: codewhale-tui
-            cli_artifact: codewhale-linux-riscv64
-            tui_artifact: codewhale-tui-linux-riscv64
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: macos-x64
@@ -94,33 +87,8 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
-      - name: Install RISC-V cross-compilation toolchain
-        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
-        run: |
-          # Install cross-compiler (available in standard repos)
-          sudo apt-get update
-          sudo apt-get install -y gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
-
-          # Add Ubuntu ports for riscv64 packages
-          . /etc/os-release
-          sudo tee /etc/apt/sources.list.d/riscv64.sources <<SRC
-          Types: deb
-          URIs: http://ports.ubuntu.com/
-          Suites: ${UBUNTU_CODENAME} ${UBUNTU_CODENAME}-updates
-          Components: main universe
-          Architectures: riscv64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          SRC
-          sudo dpkg --add-architecture riscv64
-          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/riscv64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
-          sudo apt-get install -y libdbus-1-dev:riscv64
       - name: Build
         shell: bash
-        env:
-          CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
-          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: 1
-          PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
         run: |
           for attempt in 1 2 3; do
             if cargo build --release --locked --target ${{ matrix.target }} -p codewhale-cli -p codewhale-tui; then

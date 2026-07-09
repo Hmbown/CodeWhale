@@ -330,15 +330,11 @@ impl RouteResolver {
     }
 }
 
-/// Build the default resolver offerings: the bundled Models.dev asset rows
-/// merged under the hand seam, with the seam winning a `(provider, wire id)`
-/// collision.
+/// Build the default resolver offerings from the bundled Models.dev asset.
 ///
-/// The seam is appended *after* the asset rows and de-duplicated keeping the
-/// first-seen row per identity, so seam rows (which carry the curated canonical
-/// joins and the deliberately unpriced DeepSeek-native entries the route
-/// invariants assert) shadow any asset row with the same `(provider, wire id)`.
-/// Order is otherwise preserved for deterministic resolution.
+/// [`bundled_offerings`] is an empty override seam (#4139): when it later gains
+/// curated rows again, those win a `(provider, wire id)` collision over the
+/// asset. Today the asset is the sole bundled source of truth.
 fn default_offerings() -> Vec<ProviderModelOffering> {
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut out = Vec::new();

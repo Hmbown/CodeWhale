@@ -8,15 +8,16 @@ for Claude-based agents working in this repository.
 - Treat community PRs and issues as maintainer evidence. Inspect code, tests,
   linked issues, comments, and CI before merging, harvesting, closing, or
   deferring work.
-- Do not tag, publish, create a GitHub Release, or push release artifacts
-  without Hunter's explicit approval.
-- Keep CodeWhale branding while preserving first-class DeepSeek model/provider
-  support and legacy migration care.
+- CodeWhale started as a DeepSeek-only harness; it's now about building the
+  greatest possible coding harness with the help of an open-source community.
+  Keep CodeWhale branding and every model/provider first-class — none
+  privileged — and preserve legacy migration care.
 - Preserve contributor credit for harvested work with authorship,
   `Co-authored-by`, `Harvested from PR #N by @handle`, and changelog/release
-  notes where applicable. Use canonical GitHub-noreply identities from
-  `.github/AUTHOR_MAP`; never add bot/tool `Co-authored-by` trailers (Claude,
-  codex, cursor) — the `check-coauthor-trailers.py` CI gate rejects them.
+  notes where applicable. Keep `Co-authored-by` trailers to human contributors,
+  using canonical GitHub-noreply identities from `.github/AUTHOR_MAP` — the
+  `check-coauthor-trailers.py` CI gate accepts those and rejects bot/tool ones
+  (Claude, codex, cursor), so use a plain commit body to note agent assistance.
 
 ## Scratch Integration Branches
 
@@ -24,8 +25,9 @@ for Claude-based agents working in this repository.
   branch, for example `scratch/vX.Y.Z-pr-train-YYYYMMDD`.
 - Use the scratch branch to merge or cherry-pick candidate PR heads in batches
   and learn which conflicts, tests, and overlaps are real.
-- Do not ship the scratch branch itself. It may contain noisy merge commits,
-  partial conflict resolutions, and unrelated PR interactions.
+- Treat the scratch branch as throwaway evidence — it collects noisy merge
+  commits, partial conflict resolutions, and unrelated PR interactions, so ship
+  from the release branch instead.
 - After the scratch experiment, move only the safe result back to the release
   branch as narrow commits or direct merges. Keep each final commit explainable
   and testable.
@@ -41,12 +43,9 @@ for Claude-based agents working in this repository.
 - Confirm the active branch for the current release lane from the latest handoff
   and `git branch --show-current`; recent work has landed on `main` through small
   PRs rather than a long-lived `codex/...` integration branch. This repo lives on
-  multiple devices, so do not hard-code a checkout path; work in whichever local
-  checkout you have and confirm the branch before editing. Never commit directly
-  to `main`.
-- Read the workspace version from `Cargo.toml`; it advances per release lane. Do
-  not tag, publish, create a GitHub Release, push release artifacts, or merge to
-  `main` without Hunter's explicit approval.
+  multiple devices, so work in whichever local checkout you have and confirm the
+  branch before editing.
+- Read the workspace version from `Cargo.toml`; it advances per release lane.
 - Base release triage on the current GitHub release milestone named in the active
   handoff (`gh issue list --repo Hmbown/CodeWhale --milestone "<current>" --state open`)
   unless Hunter gives a newer branch/milestone.

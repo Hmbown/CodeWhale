@@ -437,7 +437,7 @@ mod tests {
     fn light_palette_maps_dark_cells_before_depth_adaptation() {
         let mut cell = Cell::default();
         cell.set_fg(Color::White);
-        cell.set_bg(palette::DEEPSEEK_INK);
+        cell.set_bg(palette::WHALE_BG);
 
         adapt_cell_colors(
             &mut cell,
@@ -454,8 +454,8 @@ mod tests {
     #[test]
     fn grayscale_palette_maps_hued_cells_before_depth_adaptation() {
         let mut cell = Cell::default();
-        cell.set_fg(palette::DEEPSEEK_SKY);
-        cell.set_bg(palette::DEEPSEEK_INK);
+        cell.set_fg(palette::WHALE_INFO);
+        cell.set_bg(palette::WHALE_BG);
 
         adapt_cell_colors(
             &mut cell,
@@ -472,11 +472,11 @@ mod tests {
     #[test]
     fn community_theme_remap_honors_background_color_override() {
         // Tokyo Night + a custom black surface: the remap must rewrite
-        // `palette::DEEPSEEK_INK` to the *active* UiTheme's overridden
+        // `palette::WHALE_BG` to the *active* UiTheme's overridden
         // surface, not to tokyo-night's default surface.
         let active = palette::TOKYO_NIGHT_UI_THEME.with_background_color(Color::Rgb(0, 0, 0));
         let mut cell = Cell::default();
-        cell.set_bg(palette::DEEPSEEK_INK);
+        cell.set_bg(palette::WHALE_BG);
 
         adapt_cell_colors(
             &mut cell,

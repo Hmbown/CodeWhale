@@ -7,9 +7,9 @@
 use serde::Serialize;
 
 use crate::config::{
-    ApiProvider, Config, has_api_key_for, model_completion_names_for_provider,
-    normalize_model_name_for_provider, provider_capability,
+    ApiProvider, Config, has_api_key_for, normalize_model_name_for_provider, provider_capability,
 };
+use crate::provider_lake::{all_catalog_models_for_provider, models_for_provider};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,8 +67,8 @@ impl ModelInventory {
                     push_model(&mut models, provider, &active_model);
                 }
             }
-            for model in model_completion_names_for_provider(provider) {
-                push_model(&mut models, provider, model);
+            for model in models_for_provider(config, active_provider, provider) {
+                push_model(&mut models, provider, &model);
             }
             if models.is_empty() {
                 push_model(&mut models, provider, &default_model);
@@ -176,9 +176,9 @@ fn provider_default_model(config: &Config, provider: ApiProvider) -> String {
             return model;
         }
     }
-    model_completion_names_for_provider(provider)
+    all_catalog_models_for_provider(provider)
         .first()
-        .copied()
+        .map(|model| model.as_str())
         .unwrap_or(match provider {
             ApiProvider::Ollama => crate::config::DEFAULT_OLLAMA_MODEL,
             ApiProvider::Sglang => crate::config::DEFAULT_SGLANG_MODEL,

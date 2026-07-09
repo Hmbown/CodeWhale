@@ -61,6 +61,88 @@ pub(crate) fn truncate_line_to_width(text: &str, max_width: usize) -> String {
     out
 }
 
+/// Truncate `text` to `max_width` display columns, preferring whole words.
+pub(crate) fn semantic_truncate(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if text_display_width(text) <= max_width {
+        return text.to_string();
+    }
+
+    const ELLIPSIS: char = '…';
+    let ellipsis_width = char_display_width(ELLIPSIS);
+    let limit = max_width.saturating_sub(ellipsis_width);
+    if limit == 0 {
+        return ELLIPSIS.to_string();
+    }
+
+    let mut width = 0usize;
+    let mut cut_byte = 0usize;
+    let mut last_word_end = None;
+    let mut in_word = false;
+    for (byte_idx, ch) in text.char_indices() {
+        let ch_width = char_display_width(ch);
+        if width + ch_width > limit {
+            break;
+        }
+        width += ch_width;
+        cut_byte = byte_idx + ch.len_utf8();
+        if ch.is_whitespace() {
+            if in_word {
+                last_word_end = Some(byte_idx);
+                in_word = false;
+            }
+        } else {
+            in_word = true;
+        }
+    }
+    if cut_byte == 0 {
+        return ELLIPSIS.to_string();
+    }
+
+    let mut body = if let Some(word_end) = last_word_end {
+        text[..word_end].trim_end()
+    } else {
+        text[..cut_byte].trim_end()
+    };
+    if body.is_empty() {
+        body = text[..cut_byte].trim_end();
+    }
+    let mut out = body.to_string();
+    out.push(ELLIPSIS);
+    out
+}
+
+pub(crate) fn semantic_truncate_with_affixes(
+    prefix: &str,
+    text: &str,
+    suffix: &str,
+    max_width: usize,
+) -> String {
+    let fixed_width = text_display_width(prefix) + text_display_width(suffix);
+    if fixed_width > max_width {
+        return semantic_truncate(&format!("{prefix}{text}{suffix}"), max_width);
+    }
+    format!(
+        "{prefix}{}{suffix}",
+        semantic_truncate_between_affixes(prefix, text, suffix, max_width)
+    )
+}
+
+pub(crate) fn semantic_truncate_between_affixes(
+    prefix: &str,
+    text: &str,
+    suffix: &str,
+    max_width: usize,
+) -> String {
+    let fixed_width = text_display_width(prefix) + text_display_width(suffix);
+    if fixed_width > max_width {
+        return String::new();
+    }
+    semantic_truncate(text, max_width - fixed_width)
+}
+
 pub(crate) fn concise_shell_command_label(command: &str, max_width: usize) -> String {
     let normalized = normalize_shell_text(command);
     if let Some(label) = gh_command_label(&normalized) {
@@ -179,7 +261,7 @@ where
     }
 }
 
-pub(super) fn text_display_width(text: &str) -> usize {
+pub(crate) fn text_display_width(text: &str) -> usize {
     text.chars().map(char_display_width).sum()
 }
 
@@ -205,7 +287,7 @@ pub(super) fn slice_text(text: &str, start: usize, end: usize) -> String {
     out
 }
 
-fn char_display_width(ch: char) -> usize {
+pub(super) fn char_display_width(ch: char) -> usize {
     if ch == '\t' {
         4
     } else {
@@ -324,6 +406,44 @@ mod tests {
     }
 
     #[test]
+    fn semantic_truncate_prefers_word_boundaries() {
+        let out = semantic_truncate("hello world foo bar", 14);
+        assert_eq!(out, "hello world…");
+        assert!(text_display_width(&out) <= 14);
+    }
+
+    #[test]
+    fn semantic_truncate_falls_back_with_long_words_and_wide_glyphs() {
+        let long_word = semantic_truncate("supercalifragilistic", 8);
+        assert_eq!(long_word, "superca…");
+        assert!(text_display_width(&long_word) <= 8);
+
+        let cjk = semantic_truncate("中文测试文本", 7);
+        assert_eq!(cjk, "中文测…");
+        assert!(text_display_width(&cjk) <= 7);
+    }
+
+    #[test]
+    fn semantic_truncate_handles_empty_and_tiny_budgets() {
+        assert_eq!(semantic_truncate("", 10), "");
+        assert_eq!(semantic_truncate("hello", 0), "");
+        assert_eq!(semantic_truncate("hello", 1), "…");
+    }
+
+    #[test]
+    fn semantic_truncate_between_affixes_reserves_fixed_columns() {
+        let hint = semantic_truncate_between_affixes(
+            " > [ ] Prefix stability  (",
+            "whether system/tools stayed cacheable",
+            ")",
+            49,
+        );
+        let row = format!(" > [ ] Prefix stability  ({hint})");
+        assert_eq!(hint, "whether system/tools…");
+        assert!(text_display_width(&row) <= 49);
+    }
+
+    #[test]
     fn slice_text_slices_cjk_by_display_column() {
         // Columns:  中=[0,2) 文=[2,4) a=[4,5) b=[5,6)
         let text = "中文ab";
@@ -355,5 +475,67 @@ mod tests {
         );
         assert_eq!(label, "cargo test --workspace");
         assert!(!label.contains("38;2"));
+    }
+
+    // --- New #3488 fixtures: CJK/wide-glyph truncation on selector-style rows.
+    // truncate_line_to_width is the production helper behind sidebar (file_tree),
+    // statusline (footer_ui), hotbar, and picker (mouse_ui) row rendering, so
+    // these exercise the same truncation path those surfaces use.
+
+    #[test]
+    fn truncate_line_to_width_full_width_cjk_lands_on_glyph_boundary() {
+        // Each Han glyph is two columns. With an odd budget the truncation must
+        // land on a whole-glyph boundary (reserving three columns for the
+        // ellipsis), never leaving a half-rendered wide cell or emitting U+FFFD.
+        let title = "项目报告结果"; // 6 glyphs, 12 columns
+        let out = truncate_line_to_width(title, 7);
+        // Budget 7 -> limit 4 columns -> two glyphs fit, then the ellipsis.
+        assert_eq!(out, "项目...");
+        assert_eq!(text_display_width(&out), 7);
+        // The kept prefix is composed only of whole wide glyphs (each 2 cols),
+        // proving the boundary glyph was dropped whole, not split.
+        let prefix = out.strip_suffix("...").expect("ellipsis present");
+        assert!(prefix.chars().all(|c| char_display_width(c) == 2));
+        assert!(!out.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn truncate_line_to_width_mixed_ascii_cjk_row_keeps_ellipsis_within_budget() {
+        // A sidebar/selector row mixing an ASCII label with a CJK title, wider
+        // than the column budget, must truncate with a trailing ellipsis that
+        // still fits by display width and must not split a wide glyph.
+        let row = "Task: 数据库迁移任务 done"; // ASCII label + 7 Han glyphs
+        let budget = 12;
+        let out = truncate_line_to_width(row, budget);
+        assert!(out.ends_with("..."), "expected ellipsis, got {out:?}");
+        // Ellipsis-and-content fit within the budget by *display* width.
+        assert!(text_display_width(&out) <= budget);
+        // The non-ellipsis prefix stays within budget-minus-ellipsis, so the
+        // wide glyph on the boundary was dropped whole rather than half-drawn.
+        let prefix = out.strip_suffix("...").expect("ellipsis present");
+        assert!(text_display_width(prefix) <= budget - 3);
+        assert!(!out.contains('\u{FFFD}'));
+        // The semantic ASCII prefix survives truncation.
+        assert!(out.starts_with("Task:"));
+    }
+
+    #[test]
+    fn truncate_line_to_width_dense_cjk_selector_row_survives_narrow_widths() {
+        // Picker/selector rows degrade through truncate_line_to_width when the
+        // terminal is narrow. A dense row with a leading marker glyph and CJK
+        // content must stay within budget at tiny widths, without panicking or
+        // emitting a replacement char from a mid-glyph byte split.
+        let row = "▸ 中文项目 · main"; // marker + CJK + separator + branch
+        for width in [1usize, 2, 3, 4, 6, 8] {
+            let out = truncate_line_to_width(row, width);
+            assert!(
+                text_display_width(&out) <= width,
+                "width={width}: {out:?} exceeds budget"
+            );
+            assert!(
+                !out.contains('\u{FFFD}'),
+                "width={width}: truncation split a wide glyph"
+            );
+        }
     }
 }

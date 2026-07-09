@@ -81,8 +81,13 @@ Launch CodeWhale from the repository or directory you want it to work in:
 codewhale
 ```
 
-On first launch, CodeWhale needs an API key for the active provider. DeepSeek is
-the default provider. The most direct setup path is:
+On first launch, CodeWhale starts with a short constitution-first setup path:
+choose language, review provider/model readiness, review runtime posture, then
+create or confirm your CodeWhale constitution. The bundled/default
+constitution is valid, and you can revisit the setup hub later with `/setup`.
+
+DeepSeek is the default provider. If you want to configure its key before or
+after the first launch, the most direct setup path is:
 
 ```bash
 codewhale auth set --provider deepseek
@@ -99,7 +104,8 @@ New CodeWhale config is stored under `~/.codewhale/config.toml`. Legacy
 `~/.deepseek/config.toml` files are still supported for users migrating from
 the old name.
 
-After setup, run a doctor check:
+Use `/constitution` to review or change standing guidance. After setup, run a
+doctor check:
 
 ```bash
 codewhale doctor
@@ -284,6 +290,11 @@ Use `/provider` when you want to switch away from the default DeepSeek route.
 Provider IDs, environment variables, model defaults, and capability notes are
 kept in the provider registry document.
 
+Soft-auto multi-agent work: [AUTOMATIC_WORKFLOWS.md](AUTOMATIC_WORKFLOWS.md).
+
+Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_TUTORIAL.md)
+walks through Fleet task specs, monitoring, and Workflow authoring.
+
 Use `/model auto` when you want CodeWhale to choose the model and thinking
 level per turn. Use a fixed model when you need repeatable comparisons or a
 strict cost profile.
@@ -405,8 +416,7 @@ If a repository has its own instructions, treat them as part of the active
 work. Read the local guidance before editing, and keep any contribution within
 the repository's conventions.
 
-Next: see [SKILL_INVOCATION_DESIGN.md](SKILL_INVOCATION_DESIGN.md) for skill
-activation behavior, [CLAUDE_PLUGIN_COMPAT.md](CLAUDE_PLUGIN_COMPAT.md) for
+Next: see [CLAUDE_PLUGIN_COMPAT.md](CLAUDE_PLUGIN_COMPAT.md) for
 Claude Code skill/plugin compatibility, and [CONFIGURATION.md](CONFIGURATION.md)
 for config paths and project authority.
 

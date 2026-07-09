@@ -19,6 +19,35 @@ use super::spec::{
 
 /// Maximum lines of context for fuzzy matching (increased for better tolerance)
 const MAX_FUZZ: usize = 50;
+/// Default fuzz when the caller does not specify one. Matches the tool schema's
+/// documented default. Previously the default was `MAX_FUZZ` (50), so a hunk
+/// with no `fuzz` argument could silently apply up to 50 lines from its stated
+/// position — landing in the wrong region of a file with repeated blocks.
+const DEFAULT_FUZZ: usize = 3;
+
+/// Reassemble hunk-processed logical lines back into file content, preserving
+/// the base file's line-ending style (CRLF vs LF) and its trailing-newline
+/// state. Processing round-trips through `str::lines()`, which strips both the
+/// trailing `\n` and any `\r`; naively `join("\n")`-ing would silently delete
+/// the file's final newline and flip a CRLF file to LF on every patch.
+fn reassemble_preserving_newlines(lines: &[String], base_content: &str) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let terminator = if base_content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    // A newly created file (empty base) gets a conventional trailing newline;
+    // an existing file preserves whether it had one.
+    let trailing = base_content.is_empty() || base_content.ends_with('\n');
+    let mut out = lines.join(terminator);
+    if trailing {
+        out.push_str(terminator);
+    }
+    out
+}
 /// Limit how much context we print in error messages.
 const HUNK_PREVIEW_LINES: usize = 4;
 const SNIPPET_RADIUS: usize = 2;
@@ -238,8 +267,8 @@ impl ToolSpec for ApplyPatchTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let fuzz = optional_u64(&input, "fuzz", MAX_FUZZ as u64).min(MAX_FUZZ as u64);
-        let fuzz = usize::try_from(fuzz).unwrap_or(MAX_FUZZ);
+        let fuzz = optional_u64(&input, "fuzz", DEFAULT_FUZZ as u64).min(MAX_FUZZ as u64);
+        let fuzz = usize::try_from(fuzz).unwrap_or(DEFAULT_FUZZ);
         let create_if_missing = optional_bool(&input, "create_if_missing", false);
         let preflight = preflight_apply_patch_plan(&input)?;
 
@@ -946,7 +975,7 @@ fn build_pending_writes_from_patches(
                 original,
             });
         } else {
-            let new_content = lines.join("\n");
+            let new_content = reassemble_preserving_newlines(&lines, &base_content);
             pending.push(PendingWrite {
                 path: resolved,
                 content: Some(new_content),
@@ -976,7 +1005,7 @@ fn apply_pending_writes(pending: &[PendingWrite]) -> Result<(), ToolError> {
             };
 
             parent_result.and_then(|()| {
-                fs::write(&entry.path, content).map_err(|e| {
+                crate::utils::write_atomic(&entry.path, content.as_bytes()).map_err(|e| {
                     ToolError::execution_failed(format!(
                         "Failed to write {}: {}",
                         entry.path.display(),
@@ -1011,7 +1040,7 @@ fn rollback_pending_writes(applied: &[PendingWrite]) {
     for entry in applied.iter().rev() {
         match entry.original.as_ref() {
             Some(content) => {
-                let _ = fs::write(&entry.path, content);
+                let _ = crate::utils::write_atomic(&entry.path, content.as_bytes());
             }
             None => {
                 let _ = fs::remove_file(&entry.path);
@@ -1524,6 +1553,49 @@ diff --git a/same.txt b/same.txt
         let content = fs::read_to_string(tmp.path().join("test.txt")).expect("read");
         assert!(content.contains("modified"));
         assert!(!content.contains("line2"));
+        // Regression: the file's trailing newline must survive the patch.
+        assert!(content.ends_with('\n'), "trailing newline was dropped");
+    }
+
+    #[test]
+    fn reassemble_preserving_newlines_keeps_style() {
+        let lines = vec!["a".to_string(), "b".to_string()];
+        // LF with trailing newline.
+        assert_eq!(reassemble_preserving_newlines(&lines, "x\ny\n"), "a\nb\n");
+        // LF without trailing newline.
+        assert_eq!(reassemble_preserving_newlines(&lines, "x\ny"), "a\nb");
+        // CRLF is preserved (endings and trailing).
+        assert_eq!(
+            reassemble_preserving_newlines(&lines, "x\r\ny\r\n"),
+            "a\r\nb\r\n"
+        );
+        // New/empty file gets a conventional trailing newline.
+        assert_eq!(reassemble_preserving_newlines(&lines, ""), "a\nb\n");
+        // Empty result stays empty.
+        assert_eq!(reassemble_preserving_newlines(&[], "x\n"), "");
+    }
+
+    #[tokio::test]
+    async fn apply_patch_preserves_crlf_line_endings() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        fs::write(tmp.path().join("crlf.txt"), "line1\r\nline2\r\nline3\r\n").expect("write");
+        let patch =
+            "--- a/crlf.txt\n+++ b/crlf.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+modified\n line3\n";
+        let result = ApplyPatchTool
+            .execute(json!({"path": "crlf.txt", "patch": patch}), &ctx)
+            .await
+            .expect("execute");
+        assert!(result.success);
+        let content = fs::read_to_string(tmp.path().join("crlf.txt")).expect("read");
+        assert!(content.contains("modified"));
+        // Regression: a CRLF file must not be flipped to LF.
+        assert!(
+            content.contains("\r\n"),
+            "CRLF was flipped to LF: {content:?}"
+        );
+        assert!(!content.contains("\n\n"), "spurious bare LF introduced");
+        assert!(content.ends_with("\r\n"), "trailing CRLF dropped");
     }
 
     #[tokio::test]

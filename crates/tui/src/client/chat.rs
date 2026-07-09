@@ -224,11 +224,8 @@ impl DeepSeekClient {
             self.path_suffix.as_deref(),
         );
         let open_timeout = stream_open_timeout();
-        let response = match tokio_timeout(
-            open_timeout,
-            self.send_with_retry(|| self.http_client.post(&url).json(&body)),
-        )
-        .await
+        let response = match tokio_timeout(open_timeout, self.send_json_with_retry(&url, &body))
+            .await
         {
             Ok(result) => result?,
             Err(_elapsed) => {
@@ -350,9 +347,7 @@ impl DeepSeekClient {
             "chat/completions",
             self.path_suffix.as_deref(),
         );
-        let response = self
-            .send_with_retry(|| self.http_client.post(&url).json(&body))
-            .await?;
+        let response = self.send_json_with_retry(&url, &body).await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -429,6 +424,9 @@ impl DeepSeekClient {
             let stream_start = std::time::Instant::now();
             let mut last_event_at = std::time::Instant::now();
             let mut bytes_received: usize = 0;
+            // Set when a `[DONE]` sentinel was seen, so the post-loop flush does
+            // not re-process trailing post-DONE bytes.
+            let mut saw_done = false;
 
             'stream: loop {
                 let chunk_result = match tokio_timeout(idle, byte_stream.next()).await {
@@ -508,7 +506,10 @@ impl DeepSeekClient {
                                 &mut inline_reasoning_tags,
                                 reasoning_stream_style,
                             ) {
-                                SseDataFrame::Done => break 'stream,
+                                SseDataFrame::Done => {
+                                    saw_done = true;
+                                    break 'stream;
+                                }
                                 SseDataFrame::Events(events) => {
                                     for mut event in events {
                                         // Stamp the client-side replay-token estimate
@@ -533,6 +534,13 @@ impl DeepSeekClient {
                     }
 
                     if let Some(data) = super::extract_sse_data_value(&line) {
+                        // The SSE spec joins multiple `data:` fields within one
+                        // event with '\n'; concatenating with no separator would
+                        // yield `{…}{…}` and fail JSON parsing, silently dropping
+                        // the frame.
+                        if !line_buf.is_empty() {
+                            line_buf.push('\n');
+                        }
                         line_buf.push_str(data);
                     }
                     // Ignore other SSE fields (event:, id:, retry:)
@@ -541,6 +549,51 @@ impl DeepSeekClient {
                     if lines_processed >= SSE_MAX_LINES_PER_CHUNK {
                         // Yield backpressure relief to avoid starving downstream consumers.
                         break;
+                    }
+                }
+            }
+
+            // Flush a final SSE frame that arrived without a terminating blank
+            // line (the stream closed straight after the last `data:` line, or
+            // that line lacked a trailing newline). Without this the final delta
+            // — last tokens, finish_reason, and usage — is silently dropped.
+            // Skipped after `[DONE]`, whose frame was already processed.
+            if !saw_done {
+                if !byte_buf.is_empty() {
+                    let mut end = byte_buf.len();
+                    if end > 0 && byte_buf[end - 1] == b'\r' {
+                        end -= 1;
+                    }
+                    let line = String::from_utf8_lossy(&byte_buf[..end]).into_owned();
+                    if let Some(data) = super::extract_sse_data_value(&line) {
+                        if !line_buf.is_empty() {
+                            line_buf.push('\n');
+                        }
+                        line_buf.push_str(data);
+                    }
+                }
+                if !line_buf.is_empty() {
+                    let data = std::mem::take(&mut line_buf);
+                    if let SseDataFrame::Events(events) = parse_sse_data_frame(
+                        &data,
+                        &mut content_index,
+                        &mut text_started,
+                        &mut thinking_started,
+                        &mut tool_indices,
+                        &mut reasoning_detail_buffers,
+                        &mut inline_reasoning_tags,
+                        reasoning_stream_style,
+                    ) {
+                        for mut event in events {
+                            if let Some(tokens) = replay_input_tokens
+                                && let StreamEvent::MessageDelta {
+                                    usage: Some(usage), ..
+                                } = &mut event
+                            {
+                                usage.reasoning_replay_tokens = Some(tokens);
+                            }
+                            yield Ok(event);
+                        }
                     }
                 }
             }
@@ -1429,6 +1482,7 @@ fn compact_tool_result_for_wire(
          exit_status: {}\n\
          original_chars: {original_chars}\n\
          sha256: {sha}\n\
+         retrieve: retrieve_tool_result ref=sha:{sha}\n\
          first_chars:\n\
          {head}\n\n\
          [... truncated {omitted} chars from middle ...]\n\n\
@@ -2364,97 +2418,6 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
         container: None,
         usage,
     })
-}
-
-// === Streaming Helpers ===
-
-/// Build synthetic stream events from a non-streaming response (used as fallback).
-#[allow(dead_code)]
-fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
-    let mut events = Vec::new();
-    let mut index = 0u32;
-
-    events.push(StreamEvent::MessageStart {
-        message: response.clone(),
-    });
-
-    for block in &response.content {
-        match block {
-            ContentBlock::Text { text, .. } => {
-                events.push(StreamEvent::ContentBlockStart {
-                    index,
-                    content_block: ContentBlockStart::Text {
-                        text: String::new(),
-                    },
-                });
-                if !text.is_empty() {
-                    events.push(StreamEvent::ContentBlockDelta {
-                        index,
-                        delta: Delta::TextDelta { text: text.clone() },
-                    });
-                }
-                events.push(StreamEvent::ContentBlockStop { index });
-            }
-            ContentBlock::Thinking { thinking, .. } => {
-                events.push(StreamEvent::ContentBlockStart {
-                    index,
-                    content_block: ContentBlockStart::Thinking {
-                        thinking: String::new(),
-                    },
-                });
-                if !thinking.is_empty() {
-                    events.push(StreamEvent::ContentBlockDelta {
-                        index,
-                        delta: Delta::ThinkingDelta {
-                            thinking: thinking.clone(),
-                        },
-                    });
-                }
-                events.push(StreamEvent::ContentBlockStop { index });
-            }
-            ContentBlock::ToolUse {
-                id, name, input, ..
-            } => {
-                events.push(StreamEvent::ContentBlockStart {
-                    index,
-                    content_block: ContentBlockStart::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                        caller: None,
-                    },
-                });
-                events.push(StreamEvent::ContentBlockStop { index });
-            }
-            ContentBlock::ToolResult { .. } => {}
-            ContentBlock::ImageUrl { .. } => {}
-            ContentBlock::ServerToolUse { id, name, input } => {
-                events.push(StreamEvent::ContentBlockStart {
-                    index,
-                    content_block: ContentBlockStart::ServerToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                    },
-                });
-                events.push(StreamEvent::ContentBlockStop { index });
-            }
-            ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. } => {}
-        }
-        index = index.saturating_add(1);
-    }
-
-    events.push(StreamEvent::MessageDelta {
-        delta: MessageDelta {
-            stop_reason: response.stop_reason.clone(),
-            stop_sequence: response.stop_sequence.clone(),
-        },
-        usage: Some(response.usage.clone()),
-    });
-    events.push(StreamEvent::MessageStop);
-
-    events
 }
 
 #[derive(Debug, Default)]
@@ -4144,6 +4107,10 @@ mod stream_decoder_tests {
         assert!(sent.contains("command_or_query: cargo test"), "got: {sent}");
         assert!(sent.contains("original_chars: 14000"), "got: {sent}");
         assert!(sent.contains("sha256:"), "got: {sent}");
+        assert!(
+            sent.contains("retrieve: retrieve_tool_result ref=sha:"),
+            "got: {sent}"
+        );
         assert!(sent.contains(&"A".repeat(4_000)), "got: {sent}");
         assert!(sent.contains(&"Z".repeat(4_000)), "got: {sent}");
         assert!(
@@ -4151,6 +4118,45 @@ mod stream_decoder_tests {
             "got: {sent}"
         );
         assert_ne!(sent, long_output);
+    }
+
+    #[test]
+    fn request_builder_keeps_extreme_tool_output_bounded_and_retrievable() {
+        with_tool_result_sha_spillover_root(|| {
+            let huge_output = format!(
+                "{}{}{}",
+                "DIFF_HEAD\n".repeat(10_000),
+                "MIDDLE_POISON\n".repeat(10_000),
+                "DIFF_TAIL\n".repeat(10_000)
+            );
+            let sha = sha256_hex(huge_output.as_bytes());
+            let messages = vec![
+                tool_use_message("tool-huge", "exec_shell", json!({"command": "git diff"})),
+                tool_result_message("tool-huge", &huge_output),
+            ];
+
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let sent = tool_message_content(&built, 0);
+
+            assert!(sent.contains("[TOOL_RESULT_TRUNCATED]"), "got: {sent}");
+            assert!(sent.contains("tool_name: exec_shell"), "got: {sent}");
+            assert!(sent.contains("command_or_query: git diff"), "got: {sent}");
+            assert!(sent.contains(&format!("sha256: {sha}")), "got: {sent}");
+            assert!(
+                sent.contains(&format!("retrieve: retrieve_tool_result ref=sha:{sha}")),
+                "got: {sent}"
+            );
+            assert!(
+                sent.chars().count() <= TOOL_RESULT_SENT_CHAR_BUDGET,
+                "truncated result should stay bounded, sent {} chars",
+                sent.chars().count()
+            );
+            assert!(
+                !sent.contains("MIDDLE_POISON"),
+                "omitted middle should not be sent to the next model turn"
+            );
+            assert_ne!(sent, huge_output);
+        });
     }
 
     #[test]
@@ -4312,6 +4318,10 @@ mod stream_decoder_tests {
         assert!(
             first.contains(&format!("sha256: {sha}")),
             "truncation block should advertise the recovery SHA, got: {first}"
+        );
+        assert!(
+            first.contains(&format!("retrieve: retrieve_tool_result ref=sha:{sha}")),
+            "truncation block should advertise the recovery command, got: {first}"
         );
 
         // (b) The full content was persisted to the SHA store and is

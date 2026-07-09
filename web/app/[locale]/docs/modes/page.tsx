@@ -1,12 +1,16 @@
+import { buildPageMetadata } from "@/lib/page-meta";
+
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   const isZh = locale === "zh";
-  return {
+  return buildPageMetadata({
+    path: "/docs/modes",
+    locale,
     title: isZh ? "模式 · CodeWhale 文档" : "Modes · CodeWhale Docs",
     description: isZh
       ? "Plan、Agent、YOLO 三种运行模式与正交审批策略。"
       : "Plan, Agent, YOLO operating modes and orthogonal approval policies.",
-  };
+  });
 }
 
 export default async function ModesPage({ params }: { params: Promise<{ locale: string }> }) {

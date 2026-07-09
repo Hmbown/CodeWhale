@@ -357,10 +357,12 @@ fn render_preserved_output_mode(
         return lines;
     }
 
+    // Hash once; reuse for both the rows cache and the indices cache below.
     let content_hash = crate::tui::output_rows_cache::hash_str(output);
-    let all_lines = crate::tui::output_rows_cache::get_or_compute_rows(output, width, || {
-        output_rows(output, width)
-    });
+    let all_lines =
+        crate::tui::output_rows_cache::get_or_compute_rows_with_hash(content_hash, width, || {
+            output_rows(output, width)
+        });
 
     if matches!(mode, RenderMode::Transcript) {
         // Full-content path: emit every wrapped line with no head/tail split,
@@ -533,7 +535,7 @@ fn file_line_style(text: &str) -> Option<Style> {
     {
         Some(
             Style::default()
-                .fg(palette::DEEPSEEK_SKY)
+                .fg(palette::WHALE_INFO)
                 .add_modifier(ratatui::style::Modifier::UNDERLINED),
         )
     } else {
@@ -546,7 +548,7 @@ fn file_line_style(text: &str) -> Option<Style> {
 /// Returns the appropriate style for the line based on its prefix:
 /// - Lines starting with `+` (after trimming) => `palette::DIFF_ADDED` (green)
 /// - Lines starting with `-` (after trimming) => `palette::STATUS_ERROR` (red)
-/// - Lines starting with `@@` => `palette::DEEPSEEK_SKY` (cyan/blue)
+/// - Lines starting with `@@` => `palette::WHALE_INFO` (cyan/blue)
 /// - All other lines => None (use default style)
 fn diff_line_style(text: &str) -> Option<Style> {
     let trimmed = text.trim_start();

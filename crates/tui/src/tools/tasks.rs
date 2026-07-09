@@ -353,7 +353,7 @@ impl ToolSpec for TaskGateRunTool {
             "failed"
         };
         let classification = classify_gate_failure(&gate, status, timed_out, &stderr, &stdout);
-        let log_path = write_runtime_artifact(context, "gate", &full_log)?;
+        let log_path = write_runtime_artifact(context, "gate", &full_log).await?;
         let gate_record = TaskGateRecord {
             id: format!("gate_{}", &Uuid::new_v4().to_string()[..8]),
             gate: gate.clone(),
@@ -521,7 +521,7 @@ impl ToolSpec for TaskShellWaitTool {
             .and_then(Value::as_u64)
             .unwrap_or_default();
         let command = optional_str(&input, "command").unwrap_or("(background shell)");
-        let log_path = write_runtime_artifact(context, "background_gate", &result.content)?;
+        let log_path = write_runtime_artifact(context, "background_gate", &result.content).await?;
         let gate_status = if exit_code == Some(0) {
             "passed"
         } else if status == "TimedOut" {
@@ -594,21 +594,26 @@ impl ToolSpec for PrAttemptRecordTool {
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let task_id = task_id_from_input_or_context(&input, context)?;
-        let base_sha = git_output(&context.workspace, &["rev-parse", "HEAD"]).ok();
+        let base_sha = git_output(&context.workspace, &["rev-parse", "HEAD"])
+            .await
+            .ok();
         let head_sha = base_sha.clone();
-        let branch = git_output(&context.workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
-        let diff = git_output(&context.workspace, &["diff", "--binary", "--no-color"])?;
+        let branch = git_output(&context.workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .ok();
+        let diff = git_output(&context.workspace, &["diff", "--binary", "--no-color"]).await?;
         if diff.trim().is_empty() {
             return Ok(ToolResult::error(
                 "No working-tree diff to record as an attempt.",
             ));
         }
-        let changed_files = git_output(&context.workspace, &["diff", "--name-only"])?
+        let changed_files = git_output(&context.workspace, &["diff", "--name-only"])
+            .await?
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        let patch_path = write_task_artifact_for(context, &task_id, "attempt_patch", &diff)?;
+        let patch_path = write_task_artifact_for(context, &task_id, "attempt_patch", &diff).await?;
         let attempt = TaskAttemptRecord {
             id: format!("attempt_{}", &Uuid::new_v4().to_string()[..8]),
             attempt_group_id: optional_str(&input, "attempt_group_id")
@@ -776,6 +781,9 @@ impl ToolSpec for PrAttemptPreflightTool {
         })
         .await
         .map_err(|join_err| {
+            // Surface the otherwise-discarded join error for debugging; the
+            // returned ToolError (and thus user-facing behavior) is unchanged.
+            tracing::debug!(error = %join_err, "git apply --check spawn_blocking task failed to join");
             ToolError::execution_failed(format!("git apply --check panicked: {join_err}"))
         })?
         .map_err(|e| ToolError::execution_failed(format!("git apply --check failed: {e}")))?;
@@ -818,7 +826,7 @@ fn resolve_cwd(context: &ToolContext, raw: Option<&str>) -> Result<PathBuf, Tool
     }
 }
 
-fn write_runtime_artifact(
+async fn write_runtime_artifact(
     context: &ToolContext,
     label: &str,
     content: &str,
@@ -837,16 +845,27 @@ fn write_runtime_artifact(
         return Ok(None);
     };
     let artifact_dir = data_dir.join("artifacts").join(task_id);
-    std::fs::create_dir_all(&artifact_dir)
-        .map_err(|e| ToolError::execution_failed(format!("create artifact dir: {e}")))?;
     let filename = format!(
         "{}_{}.txt",
         Utc::now().format("%Y%m%dT%H%M%S%.3fZ"),
         sanitize_filename(label)
     );
     let absolute = artifact_dir.join(filename);
-    std::fs::write(&absolute, content)
-        .map_err(|e| ToolError::execution_failed(format!("write artifact: {e}")))?;
+    let content_owned = content.to_owned();
+    let abs = absolute.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&artifact_dir)?;
+        std::fs::write(&abs, content_owned)?;
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    .map_err(|e| {
+        // Surface the otherwise-discarded join error for debugging; the
+        // returned ToolError (and thus user-facing behavior) is unchanged.
+        tracing::debug!(error = %e, "artifact write spawn_blocking task failed to join");
+        ToolError::execution_failed(format!("artifact write task panicked: {e}"))
+    })?
+    .map_err(|e| ToolError::execution_failed(format!("write artifact: {e}")))?;
     Ok(Some(
         absolute
             .strip_prefix(data_dir)
@@ -855,7 +874,7 @@ fn write_runtime_artifact(
     ))
 }
 
-fn write_task_artifact_for(
+async fn write_task_artifact_for(
     context: &ToolContext,
     task_id: &str,
     label: &str,
@@ -870,7 +889,7 @@ fn write_task_artifact_for(
     if context.runtime.active_task_id.as_deref() != Some(task_id) {
         return Ok(None);
     }
-    write_runtime_artifact(context, label, content)
+    write_runtime_artifact(context, label, content).await
 }
 
 fn artifact_updates(label: &str, path: Option<PathBuf>, summary: &str) -> Value {
@@ -923,9 +942,21 @@ fn task_id_schema() -> Value {
     })
 }
 
-fn git_output(workspace: &Path, args: &[&str]) -> Result<String, ToolError> {
-    let out = crate::dependencies::Git::output(args, workspace)
-        .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
+async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, ToolError> {
+    let args_owned: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    let cwd = workspace.to_path_buf();
+    let out = tokio::task::spawn_blocking(move || {
+        let arg_refs: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+        crate::dependencies::Git::output(&arg_refs, &cwd)
+    })
+    .await
+    .map_err(|e| {
+        // Surface the otherwise-discarded join error for debugging; the
+        // returned ToolError (and thus user-facing behavior) is unchanged.
+        tracing::debug!(error = %e, "git spawn_blocking task failed to join");
+        ToolError::execution_failed(format!("git task panicked: {e}"))
+    })?
+    .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
     if !out.status.success() {
         return Err(ToolError::execution_failed(format!(
             "git {} failed: {}",

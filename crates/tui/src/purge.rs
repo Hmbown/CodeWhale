@@ -7,13 +7,14 @@
 //! and executes them.
 
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use tokio::sync::mpsc::Sender;
 
 use crate::core::events::Event;
+use crate::fast_hash::{FastHashMap, FastHashSet};
 use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest, Tool};
+use crate::regex_cache::compile_user_regex;
 
 // ── Prompt‑building constants ──────────────────────────────────────────────
 
@@ -315,7 +316,7 @@ pub fn parse_purge_operations(
                     .unwrap_or("")
                     .to_string();
 
-                let pattern = Regex::new(pattern_str)
+                let pattern = compile_user_regex(pattern_str)
                     .map_err(|e| format!("operation[{i}]: invalid regex pattern: {e}"))?;
 
                 parsed.push(PurgeOp::Replace {
@@ -346,7 +347,7 @@ pub fn parse_purge_operations(
 /// prevent orphaned blocks.
 pub fn execute_purge_operations(messages: &[Message], ops: &[PurgeOp]) -> PurgeResult {
     let mut msgs = messages.to_vec();
-    let mut msg_indices_to_remove: HashSet<usize> = HashSet::new();
+    let mut msg_indices_to_remove: FastHashSet<usize> = FastHashSet::default();
     let mut replaced_count = 0usize;
 
     // Phase 1: collect removes and apply replaces.
@@ -400,14 +401,15 @@ pub fn execute_purge_operations(messages: &[Message], ops: &[PurgeOp]) -> PurgeR
 /// When a message containing a ToolUse or ToolResult is marked for removal,
 /// cascade that removal to its counterpart so the API never sees orphaned
 /// blocks. Runs a fixpoint loop until the remove set is closed under pairing.
-fn cascade_tool_pair_removals(messages: &[Message], remove_set: &mut HashSet<usize>) {
+fn cascade_tool_pair_removals(messages: &[Message], remove_set: &mut FastHashSet<usize>) {
     if remove_set.is_empty() {
         return;
     }
 
-    // Build lookup maps: tool_use id → message index, tool_result id → message index.
-    let mut call_id_to_idx: HashMap<String, usize> = HashMap::new();
-    let mut result_id_to_idx: HashMap<String, usize> = HashMap::new();
+    // Internal transcript IDs and message indices are assigned by the engine,
+    // so this per-purge pairing pass can use the faster non-cryptographic hasher.
+    let mut call_id_to_idx: FastHashMap<String, usize> = FastHashMap::default();
+    let mut result_id_to_idx: FastHashMap<String, usize> = FastHashMap::default();
 
     for (idx, msg) in messages.iter().enumerate() {
         for block in &msg.content {

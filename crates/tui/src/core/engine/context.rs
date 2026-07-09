@@ -597,7 +597,13 @@ pub(super) fn context_input_budget_for_provider(
     context_input_budget_for_route(provider, model, None, 0)
 }
 
-pub(super) fn context_input_budget_for_route(
+/// Public so external callers (e.g. a host/bridge deriving its own compaction
+/// trigger line) can reuse the *exact* same internal input-budget math — window
+/// minus the window-dependent output reservation (`route_output_reservation_for_window`,
+/// which encodes the ≥500K→262K vs smaller-window split) minus headroom —
+/// instead of re-deriving those constants and silently drifting from the engine.
+/// Pass `input_tokens = 0` to get the full emergency input budget for the route.
+pub fn context_input_budget_for_route(
     provider: ApiProvider,
     model: &str,
     route_limits: Option<RouteLimits>,

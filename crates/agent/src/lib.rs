@@ -609,11 +609,11 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "deepseek-coder:1.3b".to_string(),
+                id: "deepseek-v4-flash".to_string(),
                 provider: ProviderKind::Ollama,
                 aliases: vec![],
                 supports_tools: true,
-                supports_reasoning: false,
+                supports_reasoning: true,
             },
             ModelInfo {
                 id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
@@ -863,6 +863,57 @@ impl Default for ModelRegistry {
                 aliases: vec!["fugu-ultra".to_string(), "sakana-fugu-ultra".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
+            },
+            // Meituan LongCat (https://longcat.chat/platform)
+            ModelInfo {
+                id: "LongCat-2.0".to_string(),
+                provider: ProviderKind::LongCat,
+                aliases: vec!["longcat".to_string(), "longcat-2.0".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // xAI / Grok (https://api.x.ai/v1)
+            ModelInfo {
+                id: "grok-4.5".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["grok".to_string(), "xai-grok-4.5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "grok-4.3".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["xai-grok-4.3".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "grok-build".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["xai-grok-build".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "grok-composer-2.5-fast".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["xai-grok-composer".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "grok-4.20-0309-reasoning".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["xai-grok-reasoning".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "grok-4.20-0309-non-reasoning".to_string(),
+                provider: ProviderKind::Xai,
+                aliases: vec!["xai-grok-fast".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
             },
         ];
         Self::new(models)
@@ -1471,6 +1522,7 @@ mod tests {
             (ProviderKind::Stepfun, "step-3.7-flash"),
             (ProviderKind::Minimax, "MiniMax-M2.1"),
             (ProviderKind::Openmodel, "deepseek-v4-flash"),
+            (ProviderKind::Xai, "grok-4.5"),
         ] {
             assert!(
                 models
@@ -1479,6 +1531,38 @@ mod tests {
                 "expected {provider:?} model {id} in registry"
             );
         }
+    }
+
+    #[test]
+    fn xai_grok_models_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+
+        let default = registry.resolve(None, Some(ProviderKind::Xai));
+        assert_eq!(default.resolved.provider, ProviderKind::Xai);
+        assert_eq!(default.resolved.id, "grok-4.5");
+        assert!(default.used_fallback);
+
+        let alias = registry.resolve(Some("grok"), Some(ProviderKind::Xai));
+        assert_eq!(alias.resolved.provider, ProviderKind::Xai);
+        assert_eq!(alias.resolved.id, "grok-4.5");
+        assert!(!alias.used_fallback);
+
+        let fast = registry.resolve(
+            Some("grok-4.20-0309-non-reasoning"),
+            Some(ProviderKind::Xai),
+        );
+        assert_eq!(fast.resolved.provider, ProviderKind::Xai);
+        assert_eq!(fast.resolved.id, "grok-4.20-0309-non-reasoning");
+        assert!(!fast.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn grok_ids_stay_in_grok_family() {
+        assert_eq!(model_family("grok-4.5"), ModelFamily::Grok);
+        assert_eq!(
+            model_family("grok-4.20-0309-non-reasoning"),
+            ModelFamily::Grok
+        );
     }
 
     #[test]
@@ -1582,8 +1666,8 @@ mod tests {
         let resolved = registry.resolve(None, Some(ProviderKind::Ollama));
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Ollama);
-        assert_eq!(resolved.resolved.id, "deepseek-coder:1.3b");
-        assert!(!resolved.resolved.supports_reasoning);
+        assert_eq!(resolved.resolved.id, "deepseek-v4-flash");
+        assert!(resolved.resolved.supports_reasoning);
     }
 
     #[test]

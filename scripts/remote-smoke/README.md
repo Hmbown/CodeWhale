@@ -12,7 +12,7 @@ nothing in them is Tencent-specific).
 ## Layout
 
 - `setup-vm.sh` — provider-agnostic. Run on any fresh Ubuntu 24.04 VM:
-  bootstrap + prebuilt v0.8.57 release binaries (sha256-verified, no Rust
+  bootstrap + prebuilt release binaries (sha256-verified, no Rust
   build) + `gh` CLI + 4G swapfile + Telegram bridge services + secrets +
   validator + doctor.
 - `digitalocean/provision.sh`, `digitalocean/teardown.sh` — active lane.
@@ -120,8 +120,7 @@ git config --global user.email "whalebro-agent@users.noreply.github.com"
 
 ```bash
 # 1. Pick an agent-ready issue
-gh issue list --repo Hmbown/CodeWhale --milestone v0.8.58 \
-  --label agent-ready --state open --json number,title,url
+gh issue list --repo Hmbown/CodeWhale --label agent-ready --state open --json number,title,url
 
 # 2. Claim it
 gh issue edit <N> --add-label agent-in-progress --remove-label agent-ready
@@ -140,7 +139,7 @@ gh issue view <N> --json body -q .body | \
 # 5. Verify (run the issue's Verification block verbatim)
 # 6. Deliver
 gh pr create --repo Hmbown/CodeWhale --base main \
-  --title "<title>" --body "Closes #<N>" --label v0.8.58
+  --title "<title>" --body "Closes #<N>"
 
 # 7. On blockage: swap label to needs-human + comment
 gh issue edit <N> --add-label needs-human --remove-label agent-in-progress

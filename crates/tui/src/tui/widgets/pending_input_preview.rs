@@ -17,7 +17,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
-use unicode_width::UnicodeWidthChar;
 
 use crate::palette;
 use crate::tui::widgets::Renderable;
@@ -352,10 +351,12 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+// Delegates to the canonical width contract (`ui_text::text_display_width`):
+// tabs are 4 columns and control chars occupy one, matching what the renderer
+// draws. The old local copy used `unwrap_or(0)` and ignored tabs, so preview
+// word-wrap disagreed with the real layout on those inputs (#3924).
 fn display_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-        .sum()
+    crate::tui::ui_text::text_display_width(s)
 }
 
 #[cfg(test)]

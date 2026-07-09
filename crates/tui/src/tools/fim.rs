@@ -162,7 +162,7 @@ impl ToolSpec for FimEditTool {
         // 7. Build the new content and write it back
         let generated_len = generated_text.len();
         let new_content = format!("{fim_prompt}{generated_text}{fim_suffix}");
-        fs::write(&resolved, &new_content).map_err(|e| {
+        crate::utils::write_atomic(&resolved, new_content.as_bytes()).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", resolved.display(), e))
         })?;
 

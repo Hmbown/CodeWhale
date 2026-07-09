@@ -472,12 +472,13 @@ pub(super) async fn save_current_session(
                     snapshot.system_prompt.as_ref(),
                 );
                 updated.metadata.model = snapshot.model.clone();
+                updated.metadata.model_provider = snapshot.model_provider.clone();
                 updated.metadata.mode = Some(snapshot.mode.clone());
                 updated
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    crate::session_manager::create_saved_session_with_id_and_mode(
+                    let mut session = crate::session_manager::create_saved_session_with_id_and_mode(
                         existing_id.clone(),
                         &snapshot.messages,
                         &snapshot.model,
@@ -485,7 +486,9 @@ pub(super) async fn save_current_session(
                         snapshot.total_tokens,
                         snapshot.system_prompt.as_ref(),
                         Some(snapshot.mode.as_str()),
-                    )
+                    );
+                    session.metadata.model_provider = snapshot.model_provider.clone();
+                    session
                 } else {
                     return Err(ApiError::internal(format!(
                         "Failed to load session {existing_id}: {e}"
@@ -494,14 +497,16 @@ pub(super) async fn save_current_session(
             }
         }
     } else {
-        crate::session_manager::create_saved_session_with_mode(
+        let mut session = crate::session_manager::create_saved_session_with_mode(
             &snapshot.messages,
             &snapshot.model,
             &snapshot.workspace,
             snapshot.total_tokens,
             snapshot.system_prompt.as_ref(),
             Some(snapshot.mode.as_str()),
-        )
+        );
+        session.metadata.model_provider = snapshot.model_provider.clone();
+        session
     };
 
     // Save the session.

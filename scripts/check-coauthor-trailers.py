@@ -180,14 +180,14 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
                 )
 
         for coauthor in coauthors:
-            if CANONICAL_NOREPLY_RE.match(coauthor.email):
-                continue
             if is_bot_identity(coauthor.name, coauthor.email):
-                if is_harvested_commit and not commit.is_merge_commit():
+                if not commit.is_merge_commit():
                     errors.append(
                         f"{prefix}: remove bot/tool co-author trailer "
                         f"{coauthor.name} <{coauthor.email}>; contributor trailers are for humans."
                     )
+                continue
+            if CANONICAL_NOREPLY_RE.match(coauthor.email):
                 continue
             expected = lookup_identity(aliases, coauthor.email, coauthor.name)
             if expected:

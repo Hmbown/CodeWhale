@@ -24,13 +24,15 @@ verifies them against `codewhale-artifacts-sha256.txt`, installs to
 
 CodeWhale ships matched `codewhale`, `codew`, and `codewhale-tui` prebuilt binaries for
 these platform/architecture combinations. Linux ARM64 is available from
-v0.8.8 onward; Linux RISC-V starts with the first release after v0.8.47.
+v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
+`rquickjs-sys` dependency does not ship `riscv64gc-unknown-linux-gnu` bindings.
 
 | Platform     | Architecture | npm install | `cargo install` | GitHub release asset                                  |
 | ------------ | ------------ | :---------: | :-------------: | ----------------------------------------------------- |
 | Linux        | x64 (x86_64) |     ✅      |       ✅        | `codewhale-linux-x64`, `codew-linux-x64`, `codewhale-tui-linux-x64`        |
 | Linux        | arm64        |     ✅      |       ✅        | `codewhale-linux-arm64`, `codew-linux-arm64`, `codewhale-tui-linux-arm64`    |
-| Linux        | riscv64      |     ✅      |       ✅        | `codewhale-linux-riscv64`, `codew-linux-riscv64`, `codewhale-tui-linux-riscv64`|
+| Android / Termux | arm64 (aarch64) | ❌¹ | ✅² | `codewhale-android-arm64.tar.gz` Termux archive when published |
+| Linux        | riscv64      |     ❌¹     |       ❌³       | temporarily unsupported until upstream bindings land |
 | macOS        | x64          |     ✅      |       ✅        | `codewhale-macos-x64`, `codew-macos-x64`, `codewhale-tui-macos-x64`        |
 | macOS        | arm64 (M-series) | ✅      |       ✅        | `codewhale-macos-arm64`, `codew-macos-arm64`, `codewhale-tui-macos-arm64`    |
 | Windows      | x64          |     ✅      |       ✅        | `codewhale-windows-x64.exe`, `codew-windows-x64.exe`, `codewhale-tui-windows-x64.exe` |
@@ -41,24 +43,30 @@ v0.8.8 onward; Linux RISC-V starts with the first release after v0.8.47.
 ¹ The npm package will exit with a clear error and point you here.
 ² Provided your toolchain can compile a recent Rust workspace; see
   [Build from source](#7-build-from-source) below.
+³ RISC-V source builds currently need upstream `rquickjs-sys` RISC-V bindings or
+  a bindgen-enabled dependency build.
 
-The Linux **x64** release assets are **static (musl) builds** as of v0.8.65.
+Android / Termux is not the same target as Linux arm64. Do not install the
+GNU libc `codewhale-linux-arm64` archive in Termux; use the Termux-specific
+Android archive when a release or release candidate publishes one, or build
+from source inside Termux.
+
+The Linux **x64** release assets have been **static (musl) builds** since v0.8.65.
 They have no glibc dependency and run on any x86_64 Linux, including Ubuntu
 22.04, Debian stable, RHEL/CentOS, and Alpine/musl. SQLite is bundled into the
 binary through `rusqlite`, so no separate `libsqlite3` runtime package is needed.
 
-The Linux **arm64** and **riscv64** release assets are still GNU libc (glibc)
-builds. They dynamically link normal Linux runtime libraries such as
-`libdbus-1` and `libc`, and are built on Ubuntu 24.04, so they can require
-`GLIBC_2.39`.
+The Linux **arm64** release assets are still GNU libc (glibc) builds. They
+dynamically link normal Linux runtime libraries such as `libdbus-1` and `libc`,
+and are built on Ubuntu 24.04, so they can require `GLIBC_2.39`.
 
-### Linux glibc floor (arm64 / riscv64)
+### Linux glibc floor (arm64)
 
-This floor applies only to the **GNU libc** assets (arm64, riscv64). The static
-x64 (musl) asset has no `GLIBC_*` symbols, so it passes the install preflight
-and runs on older systems without error. In the current v0.8.65 release lane,
-the GNU assets are built on Ubuntu 24.04 and can require `GLIBC_2.39`. Ubuntu
-22.04 ships glibc 2.35, so those arm64/riscv64 binaries fail with errors such as:
+This floor applies only to the **GNU libc** arm64 asset. The static x64 (musl)
+asset has no `GLIBC_*` symbols, so it passes the install preflight and runs on
+older systems without error. In the current v0.8.67 release lane, the GNU asset
+is built on Ubuntu 24.04 and can require `GLIBC_2.39`. Ubuntu 22.04 ships glibc
+2.35, so those arm64 binaries fail with errors such as:
 
 ```text
 version `GLIBC_2.39' not found
@@ -74,9 +82,9 @@ cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
 ```
 
-Future release engineering may add static (musl) arm64/riscv64 assets so the
-glibc floor goes away entirely; until then, x64 is static and arm64/riscv64
-build from source on older distros.
+Future release engineering may add static (musl) arm64 assets so the glibc floor
+goes away entirely; until then, x64 is static and arm64 users on older distros
+should build from source.
 
 > **Linux ARM64 note (v0.8.7 and earlier).** v0.8.7 and earlier do **not**
 > publish a Linux ARM64 prebuilt; users on HarmonyOS thin-and-light, Asahi
@@ -88,6 +96,83 @@ build from source on older distros.
 > For HarmonyOS PC and OpenHarmony cross-build setup, see
 > [HarmonyOS and OpenHarmony](HarmonyOS.md).
 
+### Android / Termux arm64
+
+Termux runs on Android's Bionic libc and uses `$PREFIX` as its Unix prefix, so
+it needs a Termux-specific Android arm64 archive. The Linux arm64 release asset
+is a GNU libc build for normal Linux distributions and should not be used on
+Android.
+
+Install the minimum archive/runtime tools first:
+
+```bash
+pkg update
+pkg install -y ca-certificates curl tar gzip coreutils
+```
+
+When the release includes `codewhale-android-arm64.tar.gz`, install it with the
+archive's bundled installer. Passing `PREFIX="$PREFIX"` matters: the installer
+defaults to `~/.local`, while Termux users normally expect commands under
+`$PREFIX/bin`.
+
+```bash
+cd "$HOME"
+curl -L -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-android-arm64.tar.gz
+curl -L -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-bundles-sha256.txt
+sha256sum -c codewhale-bundles-sha256.txt --ignore-missing
+
+tar xzf codewhale-android-arm64.tar.gz
+cd codewhale-android-arm64
+PREFIX="$PREFIX" ./install.sh
+hash -r
+```
+
+If you are validating from source or building a release candidate locally,
+install the build packages before running Cargo:
+
+```bash
+pkg install -y rust clang pkg-config make git
+cargo install codewhale-cli --locked
+cargo install codewhale-tui --locked
+```
+
+First-run setup is the same as other platforms. Prefer `codewhale auth set` or
+provider environment variables; do not assume a desktop Secret Service keyring
+exists inside Termux.
+
+```bash
+codewhale auth set --provider deepseek
+codewhale auth status
+codewhale doctor
+```
+
+Maintainers should use this repeatable smoke checklist for a Termux / Android
+arm64 release candidate:
+
+```bash
+command -v codewhale codew codewhale-tui
+test -x "$PREFIX/bin/codewhale"
+test -x "$PREFIX/bin/codew"
+test -x "$PREFIX/bin/codewhale-tui"
+
+codewhale --version
+codewhale doctor
+codewhale exec --auto "run pwd"
+codewhale-tui --no-alt-screen
+```
+
+Known limitations:
+
+- Sandbox behavior must be verified on-device. Android kernels and Termux
+  packaging may not expose the same Landlock, seccomp, or Bubblewrap behavior
+  documented for desktop/server Linux.
+- OS keyring behavior is best-effort. If Termux cannot provide a usable secret
+  store, use `codewhale auth status` to confirm the actual source and fall back
+  to provider env vars or config-backed auth.
+- Terminal rendering varies by Android terminal app. Use
+  `codewhale-tui --no-alt-screen` in smoke tests before trying the full-screen
+  TUI.
+
 ---
 
 ## 2. Download safety and checksums
@@ -97,8 +182,10 @@ Official release binaries are published only from
 `codewhale`. Do not install release assets from look-alike repositories,
 archives, or search-result mirrors unless you deliberately trust that mirror.
 
-Every GitHub release includes `codewhale-artifacts-sha256.txt`. If you download
-binaries manually, verify them before running:
+Every GitHub release includes checksum manifests. Use
+`codewhale-artifacts-sha256.txt` for bare binaries and
+`codewhale-bundles-sha256.txt` for `.tar.gz` / `.zip` platform archives. If you
+download binaries manually, verify them before running:
 
 ```bash
 # Run from the directory containing the downloaded binaries.
@@ -127,11 +214,11 @@ a download sourced from an impersonating repository or mirror.
 ## 3. Install via npm
 
 npm is the recommended install path. The `codewhale` wrapper is published at
-v0.8.65 (Node 18+; wrapper available for v0.8.56 and later).
+v0.8.67 (Node 18+; wrapper available for v0.8.56 and later).
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.65
+codewhale --version   # 0.8.67
 ```
 
 `postinstall` downloads the right pair of binaries from the matching GitHub
@@ -458,8 +545,10 @@ commands.
 
 ## 7. Build from source
 
-This is the catch-all for any platform we don't ship — including musl, riscv64,
-LoongArch, FreeBSD, and pre-2024 ARM64 distros.
+This is the catch-all for platforms we don't ship, including musl non-x64,
+LoongArch, FreeBSD, and pre-2024 ARM64 distros. Linux RISC-V currently also
+needs upstream `rquickjs-sys` RISC-V bindings or a bindgen-enabled dependency
+build before source builds are expected to work.
 
 ### Prerequisites
 

@@ -1,10 +1,9 @@
 //! Compact receipts for oversized tool outputs in saved session history.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::artifacts::{ArtifactKind, ArtifactRecord, format_artifact_relative_path};
+use crate::fast_hash::FastHashMap;
 use crate::models::{ContentBlock, Message};
 use crate::tools::truncate;
 
@@ -50,8 +49,10 @@ pub fn compact_messages_for_persistence(
     messages: &[Message],
     artifacts: &[ArtifactRecord],
 ) -> (Vec<Message>, ToolOutputReceiptStats) {
+    // Tool-call IDs here come from engine transcript blocks and artifact records,
+    // making this save/resume bookkeeping a safe FastHashMap target.
     let artifacts_by_call = artifacts_by_tool_call(artifacts);
-    let mut tool_uses: HashMap<String, ToolUseInfo> = HashMap::new();
+    let mut tool_uses: FastHashMap<String, ToolUseInfo> = FastHashMap::default();
     let mut stats = ToolOutputReceiptStats::default();
     let mut compacted = Vec::with_capacity(messages.len());
 
@@ -181,7 +182,7 @@ pub fn format_tool_output_status(status: &ToolOutputStatus) -> String {
     }
 }
 
-fn artifacts_by_tool_call(artifacts: &[ArtifactRecord]) -> HashMap<&str, &ArtifactRecord> {
+fn artifacts_by_tool_call(artifacts: &[ArtifactRecord]) -> FastHashMap<&str, &ArtifactRecord> {
     artifacts
         .iter()
         .filter(|artifact| artifact.kind == ArtifactKind::ToolOutput)

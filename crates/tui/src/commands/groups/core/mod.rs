@@ -6,6 +6,7 @@ mod acceptance;
 mod agent;
 mod anchor;
 mod clear;
+mod constitution;
 // This group dir intentionally has a `core.rs` child module with the same
 // name. The module_inception allow is a permanent structure rationale, not
 // migration scaffolding; see docs/architecture/command-dispatch.md.
@@ -27,11 +28,13 @@ mod profile;
 mod provider;
 mod queue;
 mod rlm;
+mod setup;
 mod stash;
 mod subagents;
 mod translate;
 pub mod util;
 pub mod voice;
+mod workflow;
 mod workspace;
 
 pub(in crate::commands) use self::core::reset_conversation_state;
@@ -42,8 +45,8 @@ use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCo
 pub struct CoreCommands;
 
 impl CommandGroup for CoreCommands {
-    fn commands(&self) -> Vec<Box<dyn Command>> {
-        vec![
+    fn commands(&self) -> &'static [Box<dyn Command>] {
+        cached_command_list!(vec![
             Box::new(FunctionCommand::new(
                 anchor::AnchorCmd::info(),
                 anchor::AnchorCmd::execute,
@@ -97,8 +100,20 @@ impl CommandGroup for CoreCommands {
                 fleet::FleetCmd::execute,
             )),
             Box::new(FunctionCommand::new(
+                workflow::WorkflowCmd::info(),
+                workflow::WorkflowCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
                 hotbar::HotbarCmd::info(),
                 hotbar::HotbarCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                setup::SetupCmd::info(),
+                setup::SetupCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                constitution::ConstitutionCmd::info(),
+                constitution::ConstitutionCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 agent::AgentCmd::info(),
@@ -145,6 +160,6 @@ impl CommandGroup for CoreCommands {
                 voice::VoiceControlCmd::info(),
                 voice::VoiceControlCmd::execute,
             )),
-        ]
+        ])
     }
 }

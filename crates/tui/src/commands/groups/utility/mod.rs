@@ -12,8 +12,8 @@ use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCo
 pub struct UtilityCommands;
 
 impl CommandGroup for UtilityCommands {
-    fn commands(&self) -> Vec<Box<dyn Command>> {
-        vec![
+    fn commands(&self) -> &'static [Box<dyn Command>] {
+        cached_command_list!(vec![
             Box::new(FunctionCommand::new(
                 attachment::AttachCmd::info(),
                 attachment::AttachCmd::execute,
@@ -34,6 +34,6 @@ impl CommandGroup for UtilityCommands {
                 network::NetworkCmd::info(),
                 network::NetworkCmd::execute,
             )),
-        ]
+        ])
     }
 }

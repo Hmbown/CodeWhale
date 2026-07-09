@@ -1,7 +1,7 @@
 export default workflow({
   "id": "issue-audit-js",
   "goal": "Audit an issue fix with parallel specialist agents, then synthesize a release note",
-  "description": "Declarative JavaScript authoring example lowered to typed WhaleFlow IR without executing JS.",
+  "description": "Declarative JavaScript authoring example lowered to typed Workflow IR without executing JS.",
   "nodes": [
     {
       "branch": {

@@ -4,7 +4,6 @@
 //! instructions and context to the AI agent. These include:
 //!
 //! - `AGENTS.md` - Cross-agent project instructions (canonical, highest priority)
-//! - `WHALE.md` - **Deprecated** legacy CodeWhale-native instructions (read-only fallback)
 //! - `.claude/instructions.md` - Claude-style hidden instructions (compat)
 //! - `CLAUDE.md` - Claude-style instructions (compat)
 //! - `.codewhale/instructions.md` - Hidden instructions file (compat)
@@ -26,25 +25,32 @@ use thiserror::Error;
 /// Names of project context files to look for, in priority order.
 ///
 /// `AGENTS.md` is the canonical cross-agent project-instructions file.
-/// `WHALE.md` is **deprecated** (kept only as a read-only legacy fallback, now
-/// below `AGENTS.md`) — CodeWhale-specific repo authority now lives in
-/// `.codewhale/constitution.json`, not a bespoke markdown file. `CLAUDE.md` and
-/// the `*/instructions.md` variants are read-only compatibility fallbacks;
-/// CodeWhale never creates or recommends them.
+/// `WHALE.md` is no longer an active context surface; when present, CodeWhale
+/// reports a migration warning but ignores it. CodeWhale-specific repo
+/// authority now lives in `.codewhale/constitution.json`, not a bespoke
+/// markdown file. `CLAUDE.md` and the `*/instructions.md` variants are
+/// read-only compatibility fallbacks; CodeWhale never creates or recommends
+/// them.
 const PROJECT_CONTEXT_FILES: &[&str] = &[
     "AGENTS.md",
-    "WHALE.md", // deprecated: legacy CodeWhale-native, read-only fallback (#WHALE.md deprecation)
     ".claude/instructions.md",
     "CLAUDE.md",
     ".codewhale/instructions.md",
     ".deepseek/instructions.md",
 ];
 
+/// Rules directories auto-discovered at workspace level, in priority order.
+/// `.codewhale/rules/` is CodeWhale-native; `.claude/rules/` is Claude compatibility.
+/// All `.md` files in these directories are loaded as project rules in filename order.
+/// Security model: same trust class as AGENTS.md — workspace-contained content only,
+/// no absolute-path escape. Does not require #417 project-config relaxation.
+const RULES_DIRS: &[&str] = &[".codewhale/rules", ".claude/rules"];
+
 /// File name of the deprecated CodeWhale-native instructions file.
 const DEPRECATED_WHALE_FILENAME: &str = "WHALE.md";
 
-/// Warning surfaced when a `WHALE.md` is still the active instruction source.
-const WHALE_DEPRECATION_WARNING: &str = "WHALE.md is deprecated; move project instructions to AGENTS.md, or CodeWhale-specific authority policy to .codewhale/constitution.json. WHALE.md is still read for now but will be dropped from default discovery in a future release.";
+/// Warning surfaced when an ignored `WHALE.md` is present.
+const WHALE_IGNORED_WARNING: &str = "WHALE.md is ignored; move project instructions to AGENTS.md, or CodeWhale-specific authority policy to .codewhale/constitution.json.";
 
 /// Relative path (within a workspace or one of its parents) to the
 /// CodeWhale-specific repo authority/prioritization policy.
@@ -55,10 +61,10 @@ const SUPPORTED_CONSTITUTION_SCHEMA: u32 = 1;
 
 /// User-level project instructions loaded as a fallback when the workspace and
 /// its parents do not define project context. Any global AGENTS.md takes
-/// priority over a global instructions.md (#3012), which takes priority over
-/// any deprecated global WHALE.md; within each file name,
+/// priority over a global instructions.md (#3012). Within each file name,
 /// `.codewhale/` takes priority over vendor-neutral `.agents/`, which takes
-/// priority over legacy `.deepseek/`.
+/// priority over legacy `.deepseek/`. Global `WHALE.md` files are ignored and
+/// reported as migration-only diagnostics.
 const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".codewhale", "AGENTS.md"];
 const GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "AGENTS.md"];
 const GLOBAL_AGENTS_LEGACY_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
@@ -66,14 +72,24 @@ const GLOBAL_WHALE_RELATIVE_PATH: &[&str] = &[".codewhale", "WHALE.md"];
 const GLOBAL_WHALE_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "WHALE.md"];
 const GLOBAL_WHALE_LEGACY_PATH: &[&str] = &[".deepseek", "WHALE.md"];
 /// Global `instructions.md` (#3012): auto-loaded as a fallback context layer,
-/// ranked between AGENTS.md (higher priority) and the deprecated WHALE.md
-/// (lower), mirroring the project-level precedence.
+/// ranked below AGENTS.md, mirroring the project-level precedence.
 const GLOBAL_INSTRUCTIONS_RELATIVE_PATH: &[&str] = &[".codewhale", "instructions.md"];
 const GLOBAL_INSTRUCTIONS_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "instructions.md"];
 const GLOBAL_INSTRUCTIONS_LEGACY_PATH: &[&str] = &[".deepseek", "instructions.md"];
 
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
+
+/// Maximum number of rule files loaded per rules directory.
+/// Prevents a project from silently injecting hundreds of rule files.
+const MAX_RULES_FILES: usize = 50;
+
+/// Maximum total bytes across the assembled rules_block.
+/// 50 files × 100 KB per file could reach ~5 MB; this caps the
+/// cumulative injected content so a large rules directory can't
+/// dominate the context window. Exceeded bytes are truncated with
+/// an explicit marker.
+const MAX_RULES_BLOCK_BYTES: usize = 500 * 1024; // 500 KB
 const PACK_README_MAX_CHARS: usize = 4_000;
 const PACK_MAX_ENTRIES: usize = 220;
 const PACK_MAX_SOURCE_FILES: usize = 60;
@@ -135,6 +151,10 @@ enum ProjectContextError {
 pub struct ProjectContext {
     /// The loaded instructions content
     pub instructions: Option<String>,
+    /// Auto-discovered rules from `.codewhale/rules/` / `.claude/rules/`.
+    /// Kept separate from `instructions` so rules alone don't block
+    /// parent-directory AGENTS.md discovery via `has_instructions()`.
+    pub rules_block: Option<String>,
     /// Path to the loaded file (for display)
     pub source_path: Option<PathBuf>,
     /// Any warnings during loading
@@ -157,6 +177,7 @@ impl ProjectContext {
     pub fn empty(project_root: PathBuf) -> Self {
         Self {
             instructions: None,
+            rules_block: None,
             source_path: None,
             warnings: Vec::new(),
             constitution_block: None,
@@ -183,18 +204,36 @@ impl ProjectContext {
                 .as_ref()
                 .map_or_else(|| "project".to_string(), |p| p.display().to_string());
 
-            format!(
+            let mut block = format!(
                 "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
-            )
+            );
+            // Append rules after instructions, inside the same logical block.
+            // Rules are kept separate from `instructions` so they don't block
+            // parent-directory AGENTS.md discovery via `has_instructions()`.
+            if let Some(rules) = &self.rules_block {
+                block.push('\n');
+                block.push_str(rules);
+            }
+            block
         });
 
         match (self.constitution_block.as_ref(), instructions_block) {
             (Some(constitution), Some(instructions)) => {
                 Some(format!("{constitution}\n\n{instructions}"))
             }
-            (Some(constitution), None) => Some(constitution.clone()),
+            (Some(constitution), None) => {
+                // Constitution present but no main instructions — still emit rules if any
+                if let Some(rules) = &self.rules_block {
+                    Some(format!("{constitution}\n\n{rules}"))
+                } else {
+                    Some(constitution.clone())
+                }
+            }
             (None, Some(instructions)) => Some(instructions),
-            (None, None) => None,
+            (None, None) => {
+                // No main instructions, but rules may exist on their own
+                self.rules_block.clone()
+            }
         }
     }
 }
@@ -210,9 +249,12 @@ struct RepoConstitution {
     /// (highest authority first).
     #[serde(default)]
     authority: Option<Vec<String>>,
-    /// Repo invariants the agent must not break.
+    /// Repo invariants the agent must not break. Plain strings are advisory
+    /// prose (rendered into the prompt only); object entries with `paths`
+    /// are additionally compiled into mechanical write holds (see
+    /// `crate::repo_law`). Law can only tighten — there is no allow shape.
     #[serde(default)]
-    protected_invariants: Option<Vec<String>>,
+    protected_invariants: Option<Vec<ProtectedInvariant>>,
     /// Branch / release policy in effect (e.g. "PRs target codex/v0.8.53").
     #[serde(default)]
     branch_policy: Option<String>,
@@ -230,13 +272,129 @@ struct VerificationPolicy {
     before_claiming_done: Option<Vec<String>>,
 }
 
+/// One protected invariant: either advisory prose (the historical shape) or
+/// an enforced entry carrying path globs. Untagged so existing files keep
+/// parsing unchanged.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ProtectedInvariant {
+    Advisory(String),
+    Enforced(EnforcedInvariant),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EnforcedInvariant {
+    text: String,
+    /// Workspace-relative path globs this invariant protects (e.g.
+    /// `crates/protocol/**`). Empty means advisory-only despite the shape.
+    #[serde(default)]
+    paths: Vec<String>,
+    /// What the harness does when a write targets a protected path.
+    #[serde(default)]
+    action: RepoLawAction,
+}
+
+/// Enforcement level for a protected path. `Ask` force-prompts (in every
+/// mode, including YOLO — law can add holds, never remove them); `Block`
+/// denies outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RepoLawAction {
+    #[default]
+    Ask,
+    Block,
+}
+
+/// A compiled, mechanically-enforceable repo-law rule.
+pub(crate) struct RepoLawRule {
+    pub(crate) text: String,
+    pub(crate) patterns: Vec<String>,
+    pub(crate) globs: globset::GlobSet,
+    pub(crate) action: RepoLawAction,
+}
+
+/// Load and compile the enforceable rules from the workspace's repo
+/// constitution. Any failure — missing file, parse error, invalid glob —
+/// degrades to fewer (or zero) rules: enforcement can silently do less,
+/// never more, and never poisons the tool gate. Parse warnings still reach
+/// the user through the prompt-side load path, which reads the same file.
+pub(crate) fn load_repo_law_rules(workspace: &Path) -> Vec<RepoLawRule> {
+    let Some((_, constitution)) = discover_repo_constitution(workspace) else {
+        return Vec::new();
+    };
+    let mut rules = Vec::new();
+    for invariant in constitution.protected_invariants.into_iter().flatten() {
+        let ProtectedInvariant::Enforced(enforced) = invariant else {
+            continue;
+        };
+        if enforced.text.trim().is_empty() {
+            continue;
+        }
+        let mut builder = globset::GlobSetBuilder::new();
+        let mut patterns = Vec::new();
+        for pattern in &enforced.paths {
+            let trimmed = pattern.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(glob) = globset::Glob::new(trimmed) {
+                builder.add(glob);
+                patterns.push(trimmed.to_string());
+            }
+        }
+        if patterns.is_empty() {
+            continue;
+        }
+        let Ok(globs) = builder.build() else {
+            continue;
+        };
+        rules.push(RepoLawRule {
+            text: enforced.text.trim().to_string(),
+            patterns,
+            globs,
+            action: enforced.action,
+        });
+    }
+    rules
+}
+
+/// Walk from `workspace` toward the git root looking for the repo
+/// constitution; parse best-effort. Shared by the enforcement loader; the
+/// prompt-side loader keeps its richer warning handling.
+fn discover_repo_constitution(workspace: &Path) -> Option<(PathBuf, RepoConstitution)> {
+    let git_root = find_git_root(workspace);
+    let mut current = workspace.to_path_buf();
+    loop {
+        let mut path = current.clone();
+        for component in REPO_CONSTITUTION_RELATIVE_PATH {
+            path.push(component);
+        }
+        if context_candidate_exists(&path) {
+            let constitution = load_context_file(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<RepoConstitution>(&raw).ok())?;
+            return Some((path, constitution));
+        }
+        if let Some(ref root) = git_root
+            && current == *root
+        {
+            break;
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    None
+}
+
 impl RepoConstitution {
     /// True when the file carried no usable policy (so we can skip emitting an
     /// empty block).
     fn is_empty(&self) -> bool {
         let list_empty = |l: &Option<Vec<String>>| l.as_ref().is_none_or(Vec::is_empty);
         list_empty(&self.authority)
-            && list_empty(&self.protected_invariants)
+            && self.protected_invariants.as_ref().is_none_or(Vec::is_empty)
             && list_empty(&self.escalate_when)
             && self
                 .branch_policy
@@ -264,7 +422,27 @@ impl RepoConstitution {
         if let Some(invariants) = self.protected_invariants.as_ref().filter(|i| !i.is_empty()) {
             body.push_str("\nProtected invariants — do not break:\n");
             for item in invariants {
-                body.push_str(&format!("- {item}\n"));
+                match item {
+                    ProtectedInvariant::Advisory(text) => {
+                        body.push_str(&format!("- {text}\n"));
+                    }
+                    ProtectedInvariant::Enforced(enforced) => {
+                        let paths = enforced
+                            .paths
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if paths.is_empty() {
+                            body.push_str(&format!("- {}\n", enforced.text));
+                        } else {
+                            body.push_str(&format!(
+                                "- {} (mechanically enforced for: {paths})\n",
+                                enforced.text
+                            ));
+                        }
+                    }
+                }
             }
         }
         if let Some(policy) = self.branch_policy.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -288,7 +466,7 @@ impl RepoConstitution {
             }
         }
         format!(
-            "<codewhale_repo_constitution source=\"{}\">\nCodeWhale-specific repo authority policy (local law: subordinate to the global Constitution and the current user request, but above memory and old handoffs; takes precedence over a legacy WHALE.md).\n\n{}</codewhale_repo_constitution>",
+            "<codewhale_repo_constitution source=\"{}\">\nCodeWhale-specific repo authority policy (local law: subordinate to the global Constitution and the current user request, but above memory and old handoffs; WHALE.md is ignored and should be migrated, not treated as law).\n\n{}</codewhale_repo_constitution>",
             source.display(),
             body.trim_end()
         )
@@ -339,7 +517,7 @@ fn load_repo_constitution_block(
     workspace: &Path,
 ) -> (Option<String>, Option<PathBuf>, Vec<String>) {
     let mut warnings = Vec::new();
-    let git_root = crate::project_doc::find_git_root(workspace);
+    let git_root = find_git_root(workspace);
     let mut current = workspace.to_path_buf();
     loop {
         let mut path = current.clone();
@@ -678,7 +856,7 @@ fn is_source_file(path: &str) -> bool {
 pub fn load_project_context(workspace: &Path) -> ProjectContext {
     let mut ctx = ProjectContext::empty(workspace.to_path_buf());
 
-    // Search for project context files
+    // Search for active project context files.
     for filename in PROJECT_CONTEXT_FILES {
         let file_path = workspace.join(filename);
 
@@ -690,10 +868,6 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
                         file_path.display(),
                         content.len()
                     );
-                    if *filename == DEPRECATED_WHALE_FILENAME {
-                        tracing::warn!("{WHALE_DEPRECATION_WARNING}");
-                        ctx.warnings.push(WHALE_DEPRECATION_WARNING.to_string());
-                    }
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(file_path);
                     break;
@@ -703,6 +877,47 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
                 }
             }
         }
+    }
+
+    ctx.warnings
+        .extend(ignored_project_whale_warnings(workspace));
+
+    // Load rules from auto-discovered directories (.codewhale/rules/, .claude/rules/)
+    // Each rule file is wrapped in a <project_rule> block and appended after
+    // the main instructions content. Security model: same as AGENTS.md —
+    // workspace-contained content only, no absolute-path escape.
+    let mut rules_content = String::new();
+    for rules_dir in RULES_DIRS {
+        let rules = load_rules_from_dir(workspace, rules_dir);
+        for (path, content) in rules {
+            if !rules_content.is_empty() {
+                rules_content.push('\n');
+            }
+            rules_content.push_str(&format!(
+                "<project_rule source=\"{}\">\n{}\n</project_rule>",
+                path.display(),
+                content.trim()
+            ));
+        }
+    }
+
+    if !rules_content.is_empty() {
+        // Cap total rules bytes so a large rules dir can't dominate the context window
+        if rules_content.len() > MAX_RULES_BLOCK_BYTES {
+            let mut end = MAX_RULES_BLOCK_BYTES;
+            while !rules_content.is_char_boundary(end) {
+                end -= 1;
+            }
+            rules_content.truncate(end);
+            rules_content.push_str("\n\n[…rules block truncated at 500 KB…]");
+            tracing::warn!(
+                target: "project_context",
+                total_bytes = rules_content.len(),
+                cap = MAX_RULES_BLOCK_BYTES,
+                "Truncating rules block to total byte budget"
+            );
+        }
+        ctx.rules_block = Some(rules_content);
     }
 
     // Check for trust file
@@ -808,7 +1023,8 @@ fn load_project_context_with_parents_and_home(
     // Load the CodeWhale-specific repo authority policy
     // (.codewhale/constitution.json) independently of the prose instructions —
     // it is a distinct, higher-authority artifact and may exist with or without
-    // an AGENTS.md. When present it takes precedence over a legacy WHALE.md.
+    // an AGENTS.md. Legacy WHALE.md files are ignored and reported as
+    // migration-only diagnostics.
     // Loaded last so the auto-generate fallback above (which rebuilds `ctx`)
     // cannot clobber it.
     let (constitution_block, constitution_source_path, constitution_warnings) =
@@ -840,11 +1056,15 @@ pub(crate) fn project_context_cache_candidate_paths(
         for filename in PROJECT_CONTEXT_FILES {
             paths.push(dir.join(filename));
         }
+        paths.push(dir.join(DEPRECATED_WHALE_FILENAME));
         current = dir.parent();
     }
 
     if let Some(home) = home_dir {
         for candidate in global_context_relative_paths() {
+            paths.push(join_relative_components(home, candidate));
+        }
+        for candidate in legacy_global_whale_relative_paths() {
             paths.push(join_relative_components(home, candidate));
         }
     }
@@ -854,11 +1074,32 @@ pub(crate) fn project_context_cache_candidate_paths(
     paths.push(workspace.join(".deepseek").join("trust.json"));
     paths.extend(crate::config::workspace_trust_config_candidate_paths());
 
+    // Include auto-discovered rules directory files so cache invalidates
+    // when rules change (not just when AGENTS.md changes).
+    for rules_dir in RULES_DIRS {
+        let dir_path = workspace.join(rules_dir);
+        // Skip symlinked rules directories (same guard as load_rules_from_dir)
+        if fs::symlink_metadata(&dir_path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "md") {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+
     paths
 }
 
 fn repo_constitution_candidate_paths(workspace: &Path) -> Vec<PathBuf> {
-    let git_root = crate::project_doc::find_git_root(workspace);
+    let git_root = find_git_root(workspace);
     let mut current = workspace.to_path_buf();
     let mut paths = Vec::new();
     loop {
@@ -879,7 +1120,7 @@ fn repo_constitution_candidate_paths(workspace: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn global_context_relative_paths() -> [&'static [&'static str]; 9] {
+fn global_context_relative_paths() -> [&'static [&'static str]; 6] {
     [
         GLOBAL_AGENTS_RELATIVE_PATH,
         GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH,
@@ -887,6 +1128,11 @@ fn global_context_relative_paths() -> [&'static [&'static str]; 9] {
         GLOBAL_INSTRUCTIONS_RELATIVE_PATH,
         GLOBAL_INSTRUCTIONS_VENDOR_NEUTRAL_PATH,
         GLOBAL_INSTRUCTIONS_LEGACY_PATH,
+    ]
+}
+
+fn legacy_global_whale_relative_paths() -> [&'static [&'static str]; 3] {
+    [
         GLOBAL_WHALE_RELATIVE_PATH,
         GLOBAL_WHALE_VENDOR_NEUTRAL_PATH,
         GLOBAL_WHALE_LEGACY_PATH,
@@ -901,8 +1147,43 @@ fn join_relative_components(base: &Path, relative: &[&str]) -> PathBuf {
     path
 }
 
+fn ignored_project_whale_warnings(dir: &Path) -> Vec<String> {
+    let path = dir.join(DEPRECATED_WHALE_FILENAME);
+    ignored_whale_warning_for_path(&path).into_iter().collect()
+}
+
+fn ignored_global_whale_warnings(home: &Path) -> Vec<String> {
+    legacy_global_whale_relative_paths()
+        .iter()
+        .filter_map(|candidate| {
+            let path = join_relative_components(home, candidate);
+            ignored_whale_warning_for_path(&path)
+        })
+        .collect()
+}
+
+fn ignored_whale_warning_for_path(path: &Path) -> Option<String> {
+    context_candidate_exists(path)
+        .then(|| format!("{WHALE_IGNORED_WARNING} Ignored file: {}", path.display()))
+}
+
 fn canonicalize_workspace_or_keep(workspace: &Path) -> PathBuf {
     fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf())
+}
+
+fn find_git_root(cwd: &Path) -> Option<PathBuf> {
+    let mut current = cwd.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        match current.parent() {
+            Some(parent) if parent != current => {
+                current = parent.to_path_buf();
+            }
+            _ => return None,
+        }
+    }
 }
 
 fn project_context_parent_search_stop_dir() -> Option<PathBuf> {
@@ -932,18 +1213,16 @@ fn merge_global_and_project_instructions(
 fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
     let home = home_dir?;
 
-    // Priority order (AGENTS.md preferred; instructions.md next, #3012;
-    // WHALE.md deprecated and last):
+    // Priority order (AGENTS.md preferred; instructions.md next, #3012):
     // 1. ~/.codewhale/AGENTS.md       (canonical)
     // 2. ~/.agents/AGENTS.md          (vendor-neutral fallback)
     // 3. ~/.deepseek/AGENTS.md        (legacy fallback)
     // 4. ~/.codewhale/instructions.md (canonical)
     // 5. ~/.agents/instructions.md    (vendor-neutral fallback)
     // 6. ~/.deepseek/instructions.md  (legacy fallback)
-    // 7. ~/.codewhale/WHALE.md        (deprecated, legacy fallback)
-    // 8. ~/.agents/WHALE.md           (deprecated, vendor-neutral legacy)
-    // 9. ~/.deepseek/WHALE.md         (deprecated, legacy)
-    let mut warnings = Vec::new();
+    // Global WHALE.md files are ignored and reported as migration-only
+    // diagnostics, never loaded as fallback law.
+    let mut warnings = ignored_global_whale_warnings(home);
 
     for candidate in global_context_relative_paths() {
         let path = join_relative_components(home, candidate);
@@ -951,11 +1230,6 @@ fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Opti
         if context_candidate_exists(&path) {
             match load_context_file(&path) {
                 Ok(content) => {
-                    if path.file_name().and_then(|n| n.to_str()) == Some(DEPRECATED_WHALE_FILENAME)
-                    {
-                        tracing::warn!("{WHALE_DEPRECATION_WARNING}");
-                        warnings.push(WHALE_DEPRECATION_WARNING.to_string());
-                    }
                     let mut ctx = ProjectContext::empty(workspace.to_path_buf());
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(path);
@@ -1046,6 +1320,85 @@ fn context_candidate_exists(path: &Path) -> bool {
         let file_type = metadata.file_type();
         file_type.is_file() || file_type.is_symlink()
     })
+}
+
+/// Scan a rules directory for `.md` files and load them in filename order.
+/// Missing or unreadable directories return an empty vec (no error).
+/// Each file is verified through `load_context_file` (size check, symlink safety).
+fn load_rules_from_dir(workspace: &Path, rules_dir_name: &str) -> Vec<(PathBuf, String)> {
+    let rules_dir = workspace.join(rules_dir_name);
+    let mut entries: Vec<(PathBuf, String)> = Vec::new();
+
+    // Refuse a symlinked rules directory: the real .md files behind it
+    // would pass per-file is_symlink checks and be read from outside the
+    // workspace subtree — same escape class as #417.
+    if fs::symlink_metadata(&rules_dir)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        tracing::warn!(
+            target: "project_context",
+            dir = %rules_dir.display(),
+            "Refusing symlinked rules directory"
+        );
+        return entries;
+    }
+
+    let dir_iter = match fs::read_dir(&rules_dir) {
+        Ok(iter) => iter,
+        Err(_) => return entries,
+    };
+
+    let mut file_paths: Vec<PathBuf> = Vec::new();
+    for entry in dir_iter.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md") && context_candidate_exists(&path) {
+            file_paths.push(path);
+        }
+    }
+
+    // Sort by filename for deterministic order
+    file_paths.sort_by(|a, b| {
+        a.file_name()
+            .unwrap_or_default()
+            .cmp(b.file_name().unwrap_or_default())
+    });
+
+    // Enforce per-directory cap
+    let total = file_paths.len();
+    if total > MAX_RULES_FILES {
+        tracing::warn!(
+            target: "project_context",
+            dir = %rules_dir.display(),
+            total,
+            cap = MAX_RULES_FILES,
+            "Truncating rules directory to cap"
+        );
+        file_paths.truncate(MAX_RULES_FILES);
+    }
+
+    for path in file_paths {
+        match load_context_file(&path) {
+            Ok(content) => {
+                tracing::info!(
+                    "Loaded project rule from {} ({} bytes)",
+                    path.display(),
+                    content.len()
+                );
+                entries.push((path, content));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "project_context",
+                    ?error,
+                    ?path,
+                    "Skipping unreadable rules file"
+                );
+            }
+        }
+    }
+
+    entries
 }
 
 #[cfg(unix)]
@@ -1173,6 +1526,64 @@ pub fn merge_contexts(contexts: &[ProjectContext]) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn mixed_advisory_and_enforced_invariants_render_and_back_compat_holds() {
+        let tmp = tempdir().expect("tempdir");
+        let dir = tmp.path().join(".codewhale");
+        fs::create_dir_all(&dir).expect("law dir");
+        fs::write(
+            dir.join("constitution.json"),
+            r#"{
+                "protected_invariants": [
+                    "Plain advisory prose.",
+                    { "text": "The wire format is frozen", "paths": ["crates/protocol/**"], "action": "block" }
+                ]
+            }"#,
+        )
+        .expect("write law");
+
+        let (block, path, warnings) = load_repo_constitution_block(tmp.path());
+        let block = block.expect("law renders");
+        assert!(path.is_some());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(block.contains("- Plain advisory prose."), "{block}");
+        assert!(
+            block.contains(
+                "- The wire format is frozen (mechanically enforced for: crates/protocol/**)"
+            ),
+            "{block}"
+        );
+
+        // The enforcement loader compiles only the enforced entry.
+        let rules = load_repo_law_rules(tmp.path());
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].text, "The wire format is frozen");
+        assert_eq!(rules[0].action, RepoLawAction::Block);
+        assert!(rules[0].globs.is_match("crates/protocol/wire.rs"));
+    }
+
+    #[test]
+    fn legacy_string_only_invariants_render_unchanged_and_compile_nothing() {
+        let tmp = tempdir().expect("tempdir");
+        let dir = tmp.path().join(".codewhale");
+        fs::create_dir_all(&dir).expect("law dir");
+        fs::write(
+            dir.join("constitution.json"),
+            r#"{"protected_invariants": ["Keep DeepSeek support first-class."]}"#,
+        )
+        .expect("write law");
+
+        let (block, _, warnings) = load_repo_constitution_block(tmp.path());
+        let block = block.expect("law renders");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            block.contains("- Keep DeepSeek support first-class."),
+            "{block}"
+        );
+        assert!(!block.contains("mechanically enforced"), "{block}");
+        assert!(load_repo_law_rules(tmp.path()).is_empty());
+    }
 
     #[test]
     fn test_load_project_context_empty() {
@@ -1382,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn agents_md_preferred_over_deprecated_whale_md() {
+    fn agents_md_used_while_whale_md_is_ignored() {
         let tmp = tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "AGENTS canonical").expect("write agents");
         fs::write(tmp.path().join("WHALE.md"), "WHALE legacy").expect("write whale");
@@ -1391,31 +1802,30 @@ mod tests {
         let instructions = ctx.instructions.expect("instructions loaded");
         assert!(instructions.contains("AGENTS canonical"), "{instructions}");
         assert!(!instructions.contains("WHALE legacy"), "{instructions}");
-        // No deprecation warning since AGENTS.md won.
         assert!(
-            !ctx.warnings
+            ctx.warnings
                 .iter()
-                .any(|w| w.contains("WHALE.md is deprecated")),
+                .any(|w| w.contains("WHALE.md is ignored")),
             "{:?}",
             ctx.warnings
         );
     }
 
     #[test]
-    fn whale_md_alone_is_still_read_with_deprecation_warning() {
+    fn whale_md_alone_is_ignored_with_migration_warning() {
         let tmp = tempdir().expect("tempdir");
         fs::write(tmp.path().join("WHALE.md"), "WHALE legacy body").expect("write whale");
 
         let ctx = load_project_context(tmp.path());
         assert!(
-            ctx.instructions.as_deref() == Some("WHALE legacy body"),
-            "legacy WHALE.md must still be read"
+            ctx.instructions.is_none(),
+            "legacy WHALE.md must not be read"
         );
         assert!(
             ctx.warnings
                 .iter()
-                .any(|w| w.contains("WHALE.md is deprecated")),
-            "expected deprecation warning, got {:?}",
+                .any(|w| w.contains("WHALE.md is ignored")),
+            "expected ignored-file warning, got {:?}",
             ctx.warnings
         );
     }
@@ -1449,7 +1859,7 @@ mod tests {
         assert!(block.contains("keep the tool-catalog head byte-stable"));
         assert!(block.contains("Start from live branch truth"));
         assert!(block.contains("a destructive action was not authorized"));
-        assert!(block.contains("takes precedence over a legacy WHALE.md"));
+        assert!(block.contains("WHALE.md is ignored and should be migrated"));
         assert!(
             ctx.constitution_source_path
                 .as_ref()
@@ -1616,10 +2026,10 @@ mod tests {
         fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}").expect("write src");
         fs::write(tmp.path().join(".DS_Store"), "noise").expect("write ds store");
         fs::write(tmp.path().join("paper.pdf"), "not a real pdf").expect("write pdf");
-        fs::create_dir_all(tmp.path().join(".deepseek").join("state")).expect("mkdir state");
+        fs::create_dir_all(tmp.path().join(".codewhale").join("state")).expect("mkdir state");
         fs::write(
             tmp.path()
-                .join(".deepseek")
+                .join(".codewhale")
                 .join("state")
                 .join("subagents.v1.json"),
             "{}",
@@ -2015,17 +2425,17 @@ mod tests {
             "global WHALE.md content should be skipped when any global AGENTS.md exists:\n{instructions}"
         );
         assert!(
-            !ctx.warnings
+            ctx.warnings
                 .iter()
-                .any(|warning| warning.contains("WHALE.md is deprecated")),
-            "losing WHALE.md should not emit deprecation warning: {:?}",
+                .any(|warning| warning.contains("WHALE.md is ignored")),
+            "ignored WHALE.md should emit migration warning: {:?}",
             ctx.warnings
         );
         assert_eq!(ctx.source_path, Some(global_agents));
     }
 
     #[test]
-    fn test_global_whale_fallback_warns_when_no_global_agents_exists() {
+    fn test_global_whale_is_ignored_when_no_global_agents_exists() {
         let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
 
@@ -2036,26 +2446,25 @@ mod tests {
 
         let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
 
-        assert!(ctx.has_instructions());
-        let instructions = ctx.instructions.as_ref().unwrap();
+        let instructions = ctx.instructions.as_deref().unwrap_or("");
         assert!(
-            instructions.contains("Global WHALE legacy"),
-            "legacy WHALE.md must still be read when no global AGENTS.md exists:\n{instructions}"
+            !instructions.contains("Global WHALE legacy"),
+            "legacy WHALE.md must not be read when no global AGENTS.md exists:\n{instructions}"
         );
         assert!(
             ctx.warnings
                 .iter()
-                .any(|warning| warning.contains("WHALE.md is deprecated")),
-            "expected global WHALE.md deprecation warning, got {:?}",
+                .any(|warning| warning.contains("WHALE.md is ignored")),
+            "expected global WHALE.md ignored warning, got {:?}",
             ctx.warnings
         );
-        assert_eq!(ctx.source_path, Some(global_whale));
+        assert_ne!(ctx.source_path, Some(global_whale));
     }
 
     #[test]
-    fn test_global_instructions_md_is_autoloaded_and_outranks_whale() {
+    fn test_global_instructions_md_is_autoloaded_while_whale_is_ignored() {
         // #3012: a global ~/.codewhale/instructions.md should be auto-loaded as
-        // a fallback context layer, ahead of the deprecated WHALE.md.
+        // a fallback context layer while legacy WHALE.md remains ignored.
         let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
 
@@ -2077,13 +2486,13 @@ mod tests {
         );
         assert!(
             !instructions.contains("Global WHALE legacy"),
-            "instructions.md should outrank the deprecated WHALE.md:\n{instructions}"
+            "instructions.md should load without reading ignored WHALE.md:\n{instructions}"
         );
         assert!(
-            !ctx.warnings
+            ctx.warnings
                 .iter()
-                .any(|warning| warning.contains("WHALE.md is deprecated")),
-            "loading instructions.md should not emit a WHALE deprecation warning: {:?}",
+                .any(|warning| warning.contains("WHALE.md is ignored")),
+            "ignored WHALE.md should emit migration warning: {:?}",
             ctx.warnings
         );
         assert_eq!(ctx.source_path, Some(global_instructions));
@@ -2212,6 +2621,269 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("Project Context (Auto-generated, ephemeral)")
+        );
+    }
+
+    // ── Rules directory auto-discovery tests ──
+
+    #[test]
+    fn rules_from_codewhale_dir_are_loaded_as_project_context() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(
+            rules_dir.join("security.md"),
+            "# Security\nNo hardcoded secrets.",
+        )
+        .expect("write");
+
+        let ctx = load_project_context(tmp.path());
+
+        let rules = ctx.rules_block.as_ref().expect("rules_block should be set");
+        assert!(
+            rules.contains("Security"),
+            "expected rules content, got: {rules}"
+        );
+        assert!(
+            rules.contains("<project_rule source="),
+            "expected <project_rule> wrapper, got: {rules}"
+        );
+    }
+
+    #[test]
+    fn rules_are_loaded_in_filename_order() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("zzz.md"), "last").expect("write");
+        fs::write(rules_dir.join("aaa.md"), "first").expect("write");
+        fs::write(rules_dir.join("mmm.md"), "middle").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        let pos_aaa = rules.find("first").unwrap();
+        let pos_mmm = rules.find("middle").unwrap();
+        let pos_zzz = rules.find("last").unwrap();
+        assert!(pos_aaa < pos_mmm, "aaa should come before mmm");
+        assert!(pos_mmm < pos_zzz, "mmm should come before zzz");
+    }
+
+    #[test]
+    fn rules_from_claude_dir_are_compat_loaded() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".claude/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("style.md"), "Use tabs").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+
+        let rules = ctx.rules_block.as_ref().expect("rules should be loaded");
+        assert!(
+            rules.contains("Use tabs"),
+            "expected .claude/rules/ compat loading"
+        );
+    }
+
+    #[test]
+    fn rules_directory_missing_does_not_crash() {
+        let tmp = tempdir().expect("tempdir");
+        // No .codewhale/rules/ or .claude/rules/ directories exist
+        let ctx = load_project_context(tmp.path());
+        // Rules block should be None when no rules directories exist
+        assert!(
+            ctx.rules_block.is_none(),
+            "rules_block should be None when no rules exist"
+        );
+    }
+
+    #[test]
+    fn rules_coexist_with_agents_md() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "Main project instructions").expect("write");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("extra.md"), "Extra rule").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(
+            instructions.contains("Main project instructions"),
+            "AGENTS.md content missing"
+        );
+        assert!(rules.contains("Extra rule"), "rules content missing");
+        // AGENTS.md should come first in system block
+        let block = ctx.as_system_block().unwrap();
+        let pos_agents = block.find("Main project instructions").unwrap();
+        let pos_rule = block.find("Extra rule").unwrap();
+        assert!(pos_agents < pos_rule, "AGENTS.md should precede rules");
+    }
+
+    #[test]
+    fn non_md_files_in_rules_dir_are_ignored() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        fs::write(rules_dir.join("notes.txt"), "should be ignored").expect("write");
+        fs::write(rules_dir.join("valid.md"), "loaded").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(rules.contains("loaded"), "valid .md should be loaded");
+        assert!(
+            !rules.contains("should be ignored"),
+            ".txt should be ignored"
+        );
+    }
+
+    #[test]
+    fn rules_cap_truncates_excess_files() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        // Create more files than the cap
+        for i in 0..60 {
+            fs::write(
+                rules_dir.join(format!("rule_{i:04}.md")),
+                format!("content {i}"),
+            )
+            .expect("write");
+        }
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        // The last file (by sorted name) should NOT be present
+        assert!(
+            !rules.contains("content 59"),
+            "rule_0059 should be above cap"
+        );
+        // The first file should be present
+        assert!(
+            rules.contains("content 0"),
+            "rule_0000 should be within cap"
+        );
+        // Count <project_rule> blocks
+        let count = rules.matches("<project_rule source=").count();
+        assert_eq!(
+            count, MAX_RULES_FILES,
+            "exactly {MAX_RULES_FILES} rules should be loaded"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rules_rejects_symlinked_files() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let outside = tempdir().expect("outside tempdir");
+        let rules_dir = workspace.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        let outside_rule = outside.path().join("outside.md");
+        fs::write(&outside_rule, "outside content").expect("write outside");
+        std::os::unix::fs::symlink(&outside_rule, rules_dir.join("outside.md"))
+            .expect("symlink rule");
+
+        let ctx = load_project_context(workspace.path());
+
+        // Symlinked rules must not be loaded
+        assert!(
+            ctx.rules_block.is_none()
+                || !ctx
+                    .rules_block
+                    .as_ref()
+                    .unwrap()
+                    .contains("outside content"),
+            "symlinked rules must not be loaded"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rules_rejects_symlinked_directory() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let outside = tempdir().expect("outside tempdir");
+        let outside_dir = outside.path().join("real_rules");
+        fs::create_dir_all(&outside_dir).expect("mkdir outside dir");
+        fs::write(outside_dir.join("secret.md"), "outside content").expect("write outside");
+        fs::create_dir_all(workspace.path().join(".codewhale")).expect("mkdir codewhale");
+
+        // Symlink the directory itself, not individual files
+        std::os::unix::fs::symlink(&outside_dir, workspace.path().join(".codewhale/rules"))
+            .expect("symlink rules dir");
+
+        let ctx = load_project_context(workspace.path());
+
+        // Symlinked rules directory must be refused at the directory level
+        assert!(
+            ctx.rules_block.is_none()
+                || !ctx
+                    .rules_block
+                    .as_ref()
+                    .unwrap()
+                    .contains("outside content"),
+            "symlinked rules directory must be refused"
+        );
+    }
+
+    #[test]
+    fn rules_from_both_dirs_are_loaded_together() {
+        let tmp = tempdir().expect("tempdir");
+        let codewhale_rules = tmp.path().join(".codewhale/rules");
+        let claude_rules = tmp.path().join(".claude/rules");
+        fs::create_dir_all(&codewhale_rules).expect("mkdir codewhale rules");
+        fs::create_dir_all(&claude_rules).expect("mkdir claude rules");
+        fs::write(codewhale_rules.join("cw.md"), "codewhale-rule").expect("write");
+        fs::write(claude_rules.join("claude.md"), "claude-rule").expect("write");
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(
+            rules.contains("codewhale-rule"),
+            ".codewhale/rules/ should be loaded"
+        );
+        assert!(
+            rules.contains("claude-rule"),
+            ".claude/rules/ should be loaded"
+        );
+        // .codewhale/rules/ content should appear before .claude/rules/ (RULES_DIRS order)
+        let pos_cw = rules.find("codewhale-rule").unwrap();
+        let pos_claude = rules.find("claude-rule").unwrap();
+        assert!(
+            pos_cw < pos_claude,
+            ".codewhale/rules/ should precede .claude/rules/"
+        );
+    }
+
+    #[test]
+    fn rules_block_truncated_at_total_byte_budget() {
+        let tmp = tempdir().expect("tempdir");
+        let rules_dir = tmp.path().join(".codewhale/rules");
+        fs::create_dir_all(&rules_dir).expect("mkdir rules");
+
+        // Create files whose combined content exceeds MAX_RULES_BLOCK_BYTES
+        let per_file = "X".repeat(20 * 1024); // 20 KB each
+        for i in 0..30 {
+            fs::write(rules_dir.join(format!("rule_{i:04}.md")), &per_file).expect("write");
+        }
+
+        let ctx = load_project_context(tmp.path());
+        let rules = ctx.rules_block.as_ref().unwrap();
+
+        assert!(
+            rules.len() <= MAX_RULES_BLOCK_BYTES + 200, // + marker overhead
+            "rules block should be truncated to budget: {} > {}",
+            rules.len(),
+            MAX_RULES_BLOCK_BYTES
+        );
+        assert!(
+            rules.contains("truncated at 500 KB"),
+            "truncation marker missing"
         );
     }
 }

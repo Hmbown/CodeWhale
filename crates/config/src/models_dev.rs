@@ -325,11 +325,60 @@ pub struct ModelsDevCost {
     pub cache_write: Option<f64>,
 }
 
-/// Interleaved reasoning field metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ModelsDevInterleaved {
-    #[serde(default)]
-    pub field: Option<String>,
+/// Interleaved reasoning metadata from a Models.dev provider row.
+///
+/// Live Models.dev uses two shapes for this field, verified against
+/// `https://models.dev/catalog.json` on 2026-07-07:
+///
+/// - a bare boolean (`interleaved: true`) on ~32 provider rows, signalling the
+///   provider supports interleaved reasoning without naming a wire field, and
+/// - an object (`interleaved: { "field": "reasoning_content" }`) on the
+///   majority of rows, naming the wire field that carries reasoning deltas.
+///
+/// Modeling only the object shape made `serde_json::from_str::<ModelsDevCatalog>`
+/// reject every boolean row before the live catalog could be used at all
+/// (#4185). This untagged enum accepts both shapes while preserving the `field`
+/// hint whenever the object form supplies one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ModelsDevInterleaved {
+    /// Boolean form: `interleaved: true` / `interleaved: false`.
+    Enabled(bool),
+    /// Object form: `interleaved: { "field": "reasoning_content" }`.
+    ///
+    /// `field` stays optional so an empty or partial object still parses, and
+    /// unknown sibling keys are ignored rather than rejected.
+    Field {
+        #[serde(default)]
+        field: Option<String>,
+    },
+}
+
+impl ModelsDevInterleaved {
+    /// Whether interleaved reasoning is enabled for this row.
+    ///
+    /// The boolean form reports its literal value. The object form is treated as
+    /// enabled because upstream only emits the object (naming a wire field) for
+    /// interleaved-capable rows.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        match self {
+            Self::Enabled(enabled) => *enabled,
+            Self::Field { .. } => true,
+        }
+    }
+
+    /// The provider wire field carrying reasoning deltas, when upstream names
+    /// one.
+    ///
+    /// Only the object form supplies this; the boolean form returns `None`.
+    #[must_use]
+    pub fn field(&self) -> Option<&str> {
+        match self {
+            Self::Enabled(_) => None,
+            Self::Field { field } => field.as_deref(),
+        }
+    }
 }
 
 fn supports_text_chat(modalities: Option<&ModelsDevModalities>) -> bool {
@@ -572,6 +621,170 @@ mod tests {
             ..Default::default()
         };
         assert!(!audio_only.supports_text_chat());
+    }
+
+    #[test]
+    fn interleaved_boolean_true_parses_and_reports_enabled() {
+        // 32 live provider rows (e.g. `vercel`, `amazon-bedrock`) send
+        // `interleaved: true`; the object-only model rejected all of them.
+        let raw = r#"{
+          "providers": {
+            "vercel": {
+              "models": {
+                "zai/glm-4.7": { "id": "zai/glm-4.7", "interleaved": true }
+              }
+            }
+          }
+        }"#;
+        let catalog = ModelsDevCatalog::parse_json(raw).expect("boolean interleaved parses");
+        let model = catalog
+            .provider_model("vercel", "zai/glm-4.7")
+            .expect("provider model");
+        let interleaved = model.interleaved.as_ref().expect("interleaved present");
+        assert_eq!(interleaved, &ModelsDevInterleaved::Enabled(true));
+        assert!(interleaved.is_enabled());
+        assert_eq!(interleaved.field(), None);
+    }
+
+    #[test]
+    fn interleaved_boolean_false_parses_and_reports_disabled() {
+        let raw = r#"{
+          "providers": {
+            "custom": {
+              "models": {
+                "house-model": { "id": "house-model", "interleaved": false }
+              }
+            }
+          }
+        }"#;
+        let catalog = ModelsDevCatalog::parse_json(raw).expect("boolean interleaved parses");
+        let model = catalog
+            .provider_model("custom", "house-model")
+            .expect("provider model");
+        let interleaved = model.interleaved.as_ref().expect("interleaved present");
+        assert_eq!(interleaved, &ModelsDevInterleaved::Enabled(false));
+        assert!(!interleaved.is_enabled());
+        assert_eq!(interleaved.field(), None);
+    }
+
+    #[test]
+    fn interleaved_object_form_preserves_field_metadata() {
+        // The majority of live rows use `{ "field": "reasoning_content" }`; the
+        // fix must keep parsing them and surface the named wire field.
+        let raw = r#"{
+          "providers": {
+            "alibaba-cn": {
+              "models": {
+                "glm-5.2": {
+                  "id": "glm-5.2",
+                  "interleaved": { "field": "reasoning_content" }
+                }
+              }
+            }
+          }
+        }"#;
+        let catalog = ModelsDevCatalog::parse_json(raw).expect("object interleaved parses");
+        let model = catalog
+            .provider_model("alibaba-cn", "glm-5.2")
+            .expect("provider model");
+        let interleaved = model.interleaved.as_ref().expect("interleaved present");
+        assert_eq!(interleaved.field(), Some("reasoning_content"));
+        assert!(interleaved.is_enabled());
+    }
+
+    #[test]
+    fn interleaved_object_tolerates_empty_and_unknown_keys() {
+        // An empty object and an object with only unmodeled sibling keys must
+        // still parse (object form, no named field) rather than erroring.
+        let raw = r#"{
+          "providers": {
+            "custom": {
+              "models": {
+                "empty-obj": { "id": "empty-obj", "interleaved": {} },
+                "future-obj": {
+                  "id": "future-obj",
+                  "interleaved": { "future_hint": "x" }
+                }
+              }
+            }
+          }
+        }"#;
+        let catalog = ModelsDevCatalog::parse_json(raw).expect("tolerant interleaved parses");
+
+        let empty = catalog
+            .provider_model("custom", "empty-obj")
+            .and_then(|m| m.interleaved.clone())
+            .expect("empty object interleaved present");
+        assert_eq!(empty, ModelsDevInterleaved::Field { field: None });
+        assert_eq!(empty.field(), None);
+        assert!(empty.is_enabled());
+
+        let future = catalog
+            .provider_model("custom", "future-obj")
+            .and_then(|m| m.interleaved.clone())
+            .expect("future object interleaved present");
+        assert_eq!(future.field(), None);
+    }
+
+    #[test]
+    fn live_ish_mixed_interleaved_sample_deserializes() {
+        // A representative slice of live `catalog.json`: boolean and object
+        // interleaved rows side by side, plus an unmodeled top-level provider
+        // key (`doc`) and an unmodeled model key to prove unknown upstream
+        // fields are ignored safely. This is the acceptance "live-ish sample".
+        let raw = r#"{
+          "providers": {
+            "amazon-bedrock": {
+              "id": "amazon-bedrock",
+              "doc": "https://docs.aws.amazon.com/bedrock/",
+              "models": {
+                "anthropic.claude-opus": {
+                  "id": "anthropic.claude-opus",
+                  "reasoning": true,
+                  "interleaved": true,
+                  "some_future_flag": 7,
+                  "modalities": { "input": ["text"], "output": ["text"] }
+                }
+              }
+            },
+            "alibaba-cn": {
+              "id": "alibaba-cn",
+              "models": {
+                "deepseek-v4-flash": {
+                  "id": "deepseek-v4-flash",
+                  "interleaved": { "field": "reasoning_content" },
+                  "modalities": { "input": ["text"], "output": ["text"] }
+                }
+              }
+            }
+          }
+        }"#;
+        let catalog = ModelsDevCatalog::parse_json(raw).expect("live-ish sample parses");
+
+        let bedrock = catalog
+            .provider_model("amazon-bedrock", "anthropic.claude-opus")
+            .expect("bedrock row");
+        assert_eq!(
+            bedrock.interleaved,
+            Some(ModelsDevInterleaved::Enabled(true))
+        );
+
+        let alibaba = catalog
+            .provider_model("alibaba-cn", "deepseek-v4-flash")
+            .expect("alibaba row");
+        assert_eq!(
+            alibaba.interleaved.as_ref().and_then(|i| i.field()),
+            Some("reasoning_content")
+        );
+
+        // Both rows still resolve as chat offerings; interleaved does not
+        // interfere with route resolution.
+        assert_eq!(
+            catalog
+                .provider_offerings("amazon-bedrock")
+                .map(|rows| rows.len()),
+            Some(1)
+        );
     }
 
     #[test]

@@ -32,7 +32,7 @@ git diff --check
 
 # 2. Library/protocol/cli/flow/state tests, locked
 cargo test -p codewhale-config -p codewhale-protocol -p codewhale-cli \
-  -p codewhale-whaleflow -p codewhale-state --locked
+  -p codewhale-workflow -p codewhale-state --locked
 
 # 3. TUI test binaries, locked
 cargo test -p codewhale-tui --bins --locked

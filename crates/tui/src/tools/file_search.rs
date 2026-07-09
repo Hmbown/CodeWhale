@@ -485,7 +485,14 @@ mod tests {
             .expect("execute");
 
         assert!(result.success);
-        assert!(result.content.contains("\"path\": \"needle.txt\""));
+        let matches: Value = serde_json::from_str(&result.content).expect("search json");
+        assert!(
+            matches
+                .as_array()
+                .expect("matches")
+                .iter()
+                .any(|item| item.get("path").and_then(Value::as_str) == Some("needle.txt"))
+        );
         assert!(!result.content.contains("fixtures/needle.txt"));
     }
 
@@ -505,7 +512,14 @@ mod tests {
             .expect("execute");
 
         assert!(result.success);
-        assert!(result.content.contains("\"path\": \"needle.txt\""));
+        let matches: Value = serde_json::from_str(&result.content).expect("search json");
+        assert!(
+            matches
+                .as_array()
+                .expect("matches")
+                .iter()
+                .any(|item| item.get("path").and_then(Value::as_str) == Some("needle.txt"))
+        );
         assert!(!result.content.contains("target/needle.txt"));
     }
 

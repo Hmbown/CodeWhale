@@ -32,7 +32,8 @@ The canonical provider IDs are:
 `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`,
 `siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`,
 `ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`,
-`openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, and `sakana`.
+`openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, `sakana`, `longcat`, and
+`xai`.
 
 Use any of these surfaces to select a provider:
 
@@ -106,6 +107,8 @@ the listed provider env vars.
 | `minimax` | `[providers.minimax]` | OpenAI Chat Completions | `MINIMAX_API_KEY` |
 | `deepinfra` | `[providers.deepinfra]` | OpenAI Chat Completions | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
 | `sakana` | `[providers.sakana]` | OpenAI Chat Completions | `FUGU_API_KEY`, `SAKANA_API_KEY` |
+| `longcat` | `[providers.longcat]` | OpenAI Chat Completions | `LONGCAT_API_KEY` |
+| `xai` | `[providers.xai]` | OpenAI Chat Completions | `XAI_API_KEY` |
 
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
@@ -143,6 +146,10 @@ Instead, choose the closest shipped route and override its endpoint/model:
 - Generic OpenAI-compatible gateway: use `provider = "openai"` with
   `[providers.openai].base_url` plus `[providers.openai].model`, or launch with
   `OPENAI_BASE_URL` and `OPENAI_MODEL`.
+- Multiple named OpenAI-compatible gateways, or local routes you want to pin
+  from an AgentProfile, can use a custom table such as
+  `[providers.lm-studio] kind = "openai-compatible"` and select it with
+  `provider = "lm-studio"` or a profile `provider = "lm-studio"`.
 - Local OpenAI-compatible runtimes: use `provider = "vllm"`, `"sglang"`, or
   `"ollama"` with the matching provider-specific base URL/model values.
 
@@ -235,6 +242,8 @@ the same links where possible.
 | `openai-codex` | Reuses `codex login`; no CodeWhale API key is stored. |
 | `sglang`, `vllm`, `ollama` | Local OpenAI-compatible endpoints can run without an API key on localhost. |
 | `sakana` | [Sakana AI API](https://api.sakana.ai/) |
+| `longcat` | [Meituan LongCat platform](https://longcat.chat/platform) |
+| `xai` | [xAI Console](https://console.x.ai/) |
 
 ## Shipped Providers
 
@@ -256,7 +265,7 @@ the same links where possible.
 | `arcee` | `[providers.arcee]` | `ARCEE_API_KEY` | `ARCEE_BASE_URL`; default `https://api.arcee.ai/api/v1` | `trinity-large-thinking`, `trinity-large-preview` | Arcee AI direct OpenAI-compatible route, tracked as 256K-context BF16 serving. `ARCEE_MODEL` is accepted. OpenRouter's `arcee-ai/trinity-large-thinking` remains the OpenRouter namespaced model ID; direct Arcee uses the bare `trinity-large-thinking` ID. |
 | `moonshot` | `[providers.moonshot]` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | `MOONSHOT_BASE_URL`, `KIMI_BASE_URL`; default `https://api.moonshot.ai/v1` | `kimi-k2.7-code`, `kimi-k2.6`; Kimi Code path uses `kimi-for-coding` at `https://api.kimi.com/coding/v1` | Moonshot/Kimi route. `kimi` and `kimi-k2` aliases select `kimi-k2.7-code`; `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, and `KIMI_MODEL` are accepted. Kimi thinking streams through `reasoning_content`; CodeWhale keeps it in Thinking cells and replays it for thinking/tool-call continuity. `[providers.moonshot] auth_mode = "kimi_oauth"` reads Kimi Code OAuth credentials from `KIMI_CODE_HOME`/`~/.kimi-code`, with legacy `KIMI_SHARE_DIR`/`~/.kimi` fallback. |
 | `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.2` default; `GLM-5.1`, `GLM-5-Turbo` available | Z.AI GLM Coding Plan route. `GLM-5.2` is the default; set `model = "GLM-5.1"` or `ZAI_MODEL=GLM-5.1` for the smaller model, or `GLM-5-Turbo` for the fast variant used by faster/explore sub-agents. |
-| `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`, `STEP_BASE_URL`; default `https://api.stepfun.ai/v1` | `step-3.7-flash` | StepFun / StepFlash direct OpenAI-compatible route. `STEPFUN_MODEL` and `STEP_MODEL` are accepted. |
+| `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`, `STEP_BASE_URL`; default `https://api.stepfun.ai/v1`; Coding Plan endpoint `https://api.stepfun.com/step_plan/v1` | `step-3.7-flash` | StepFun / StepFlash direct OpenAI-compatible route. Set `[providers.stepfun].base_url` or `STEP_BASE_URL` to the Coding Plan URL when using that plan. `STEPFUN_MODEL` and `STEP_MODEL` are accepted. |
 | `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; Anthropic-compatible routes are `https://api.minimax.io/anthropic` globally and `https://api.minimaxi.com/anthropic` in China | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. CodeWhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text, and direct MiniMax IDs stay distinct from OpenRouter namespaced IDs such as `minimax/minimax-m3`. |
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
@@ -269,6 +278,8 @@ the same links where possible.
 | `anthropic` | `[providers.anthropic]` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`; default `https://api.anthropic.com` | `claude-opus-4-8`, `claude-sonnet-4-6` (default), `claude-haiku-4-5` | Native Anthropic Messages API route (`/v1/messages`, `x-api-key` + `anthropic-version: 2023-06-01`) — not OpenAI-compatible. Prompt caching via `cache_control` breakpoints, adaptive thinking + `output_config.effort`, signed thinking blocks replayed verbatim, cache telemetry normalized per #2961. `ANTHROPIC_MODEL` is accepted. |
 | `openmodel` | `[providers.openmodel]` | `OPENMODEL_API_KEY` | `OPENMODEL_BASE_URL`; default `https://api.openmodel.ai` | `deepseek-v4-flash`; provider-scoped custom model IDs pass through | OpenModel Anthropic-compatible Messages route. Uses `/v1/messages`, Bearer auth, and `anthropic-version: 2023-06-01`; OpenModel selects DeepSeek, DashScope, Xiaomi, Claude, and other routes by model id. `OPENMODEL_MODEL` is accepted. |
 | `sakana` | `[providers.sakana]` | `FUGU_API_KEY`, `SAKANA_API_KEY` | `SAKANA_BASE_URL`; default `https://api.sakana.ai/v1` | `fugu` (default), `fugu-ultra-20260615` | Sakana AI Fugu OpenAI-compatible route. Standard Chat Completions wire protocol; streaming supported. `fugu-ultra-20260615` is the heavy/reasoning variant. Env var aliases: `FUGU_API_KEY` (primary), `SAKANA_API_KEY`; provider aliases: `sakana-ai`, `sakana_ai`, `fugu`. |
+| `longcat` | `[providers.longcat]` | `LONGCAT_API_KEY` | `LONGCAT_BASE_URL`; default `https://api.longcat.chat/openai/v1` | `LongCat-2.0` (default) | Meituan LongCat curated model gateway. OpenAI-compatible Chat Completions wire protocol. Sign up at https://longcat.chat/platform for an API key. Provider aliases: `long-cat`, `meituan-longcat`, `meituan`. |
+| `xai` | `[providers.xai]` | `XAI_API_KEY` | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.5` (default), `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. API-key auth uses Bearer tokens from console.x.ai; OAuth/device-code support remains follow-up work. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
 
 ### Hugging Face Provider vs MCP vs Hub
 
@@ -293,15 +304,20 @@ upload to Hugging Face and does not perform direct Hugging Face Hub HTTP search.
 `xiaomi-mimo` defaults to `mimo-v2.5-pro` for long-context reasoning and coding
 work. The chat picker also exposes `mimo-v2.5-pro-ultraspeed` and the latest
 Omni model `mimo-v2.5`. Xiaomi MiMo TTS is available through
-`codewhale --provider xiaomi-mimo speech "text"
---model tts` (or the `tts` alias) plus model-visible `speech` / `tts` tools in
-Agent/YOLO mode.
+`codewhale --provider xiaomi-mimo speech "text" --model tts` (or the `tts`
+alias) plus model-visible `speech` / `tts` tools in Agent/YOLO mode.
+
+`/provider xiaomi-mimo ultraspeed` and `/provider xiaomi-mimo pro-ultraspeed`
+both select `mimo-v2.5-pro-ultraspeed`. Speech aliases such as `tts`,
+`voice-design`, and `voice-clone` are separate from normal chat defaults.
 
 Token Plan keys default to the Singapore endpoint
 `https://token-plan-sgp.xiaomimimo.com/v1`. If your MiMo account is provisioned
 for the China region, set `base_url = "https://token-plan-cn.xiaomimimo.com/v1"`
 explicitly in `[providers.xiaomi_mimo]` or set `mode = "token-plan-cn"`. Europe
-Token Plan accounts can use `mode = "token-plan-ams"`; `mode = "pay-as-you-go"`
+Token Plan accounts can set
+`base_url = "https://token-plan-ams.xiaomimimo.com/v1"` or use
+`mode = "token-plan-ams"`; `mode = "pay-as-you-go"`
 selects the standard API endpoint and standard MiMo key family. Xiaomi Token
 Plan docs and console expose credit/quota semantics, but CodeWhale does not
 currently have a documented balance endpoint to poll, so cost display remains
@@ -394,6 +410,8 @@ endpoint when the endpoint supports model listing.
 | `anthropic` | `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5` | yes | yes for `claude-opus-4-8` and `claude-sonnet-4-6`; no for `claude-haiku-4-5` |
 | `openmodel` | `deepseek-v4-flash`; provider-scoped custom model IDs pass through | yes | model-dependent |
 | `sakana` | `fugu`, `fugu-ultra-20260615` | yes | yes for `fugu-ultra-20260615` |
+| `longcat` | `LongCat-2.0` | yes | yes |
+| `xai` | `grok-4.5`, `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | yes | yes for `grok-4.5`, `grok-4.3`, `grok-build`, and `grok-4.20-0309-reasoning` |
 
 AtlasCloud keeps the same default model as the config layer and adds
 provider-scoped aliases for the Pro and Flash rows. Other AtlasCloud model IDs

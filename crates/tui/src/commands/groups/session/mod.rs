@@ -25,8 +25,8 @@ use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCo
 pub struct SessionCommands;
 
 impl CommandGroup for SessionCommands {
-    fn commands(&self) -> Vec<Box<dyn Command>> {
-        vec![
+    fn commands(&self) -> &'static [Box<dyn Command>] {
+        cached_command_list!(vec![
             Box::new(FunctionCommand::new(
                 rename::RenameCmd::info(),
                 rename::RenameCmd::execute,
@@ -67,6 +67,6 @@ impl CommandGroup for SessionCommands {
                 export::ExportCmd::info(),
                 export::ExportCmd::execute,
             )),
-        ]
+        ])
     }
 }

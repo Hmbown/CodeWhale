@@ -32,6 +32,7 @@ fn modal_block(title: &str) -> Block<'static> {
         )]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::BORDER_COLOR))
+        .style(Style::default().bg(palette::WHALE_BG))
         .padding(Padding::uniform(1))
 }
 
@@ -653,14 +654,18 @@ fn build_list_lines(
     } else if let Some(status) = status {
         lines.push(Line::from(Span::styled(
             truncate(status, width),
-            Style::default().fg(palette::DEEPSEEK_SKY),
+            Style::default().fg(palette::WHALE_INFO),
         )));
     }
 
     if sessions.is_empty() {
         lines.push(Line::from(Span::styled(
-            "No sessions available.",
+            "No saved sessions yet.",
             Style::default().fg(palette::TEXT_MUTED),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Send a message to start one; it is saved automatically.",
+            Style::default().fg(palette::TEXT_HINT),
         )));
         return lines;
     }
@@ -958,6 +963,7 @@ mod tests {
             message_count: idx + 1,
             total_tokens: 100,
             model: "deepseek-v4-pro".to_string(),
+            model_provider: "deepseek".to_string(),
             workspace: std::path::PathBuf::from("/tmp"),
             mode: Some("agent".to_string()),
             cost: crate::session_manager::SessionCostSnapshot::default(),
@@ -1490,5 +1496,66 @@ mod tests {
         view.selected = 9;
         view.ensure_selected_visible();
         assert_eq!(view.list_scroll.get(), 7);
+    }
+
+    #[test]
+    fn session_picker_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+
+        const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+        for (w, h) in BLOCKER_SIZES {
+            let sessions = vec![
+                test_session(1, "first session"),
+                test_session(2, "second session"),
+            ];
+            let mut view = picker_with(sessions, None);
+            view.current_preview = vec![
+                "Title: preview".to_string(),
+                "Updated: 2026-06-25 10:30".to_string(),
+                String::new(),
+                "USER: hello".to_string(),
+            ];
+
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(view);
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+                .collect();
+            let text = rows.join("\n");
+
+            // Both panes and their key hints survive at every size. The long
+            // in-pane action header truncates to the (sometimes narrow) list
+            // pane width, so assert the pane titles, which carry the digit-jump
+            // and paging shortcuts and always fit.
+            assert!(text.contains("Sessions"), "{w}x{h}: missing Sessions pane");
+            assert!(text.contains("History"), "{w}x{h}: missing History pane");
+            assert!(text.contains("1-9"), "{w}x{h}: missing 1-9 shortcut hint");
+            assert!(text.contains("PgUp/PgDn"), "{w}x{h}: missing paging hint");
+
+            // Composited frame is fully opaque.
+            assert!(!text.contains('X'), "{w}x{h}: background bleed-through");
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+
+            // No horizontal overflow.
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 }

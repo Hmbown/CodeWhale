@@ -9,6 +9,7 @@ description = "Session/thread persistence and recovery model for CodeWhale"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+codewhale-protocol = { path = "../protocol", version = "0.8.67" }
 dirs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

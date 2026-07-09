@@ -72,7 +72,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
         if !snapshot.items.is_empty() {
             let _ = writeln!(
                 out,
-                "\nWork checklist (primary progress surface, {}% complete):",
+                "\nTo-do (primary progress surface, {}% complete):",
                 snapshot.completion_pct
             );
             for item in snapshot.items {
@@ -86,10 +86,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
             }
         }
     } else {
-        let _ = writeln!(
-            out,
-            "\nWork checklist: unavailable because the checklist is busy."
-        );
+        let _ = writeln!(out, "\nTo-do: unavailable because the list is busy.");
     }
 
     if let Ok(plan) = app.plan_state.try_lock() {
@@ -147,7 +144,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
          [the user's objective and any explicit constraints]\n\
          \n\
          ## Current work\n\
-         [the active Work checklist item, progress, and what is mid-flight]\n\
+         [the active To-do item, progress, and what is mid-flight]\n\
          \n\
          ## Files and state\n\
          [changed files, important paths, sub-agents/RLM sessions, commands run]\n\

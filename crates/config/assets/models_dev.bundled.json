@@ -1,11 +1,12 @@
 {
   "_meta": {
-    "about": "Bundled, network-free Models.dev-shaped catalog snapshot for CodeWhale (#3385).",
+    "about": "Offline/stale fallback Models.dev-shaped catalog snapshot for CodeWhale (#3385, demoted by #4188).",
     "schema": "Matches crates/config/src/models_dev.rs ModelsDevCatalog ({ models, providers }).",
-    "source": "Curated from in-repo verified facts, NOT a live models.dev dump. Context windows and max-output are sourced from crates/tui/src/models.rs (context_window_for_model / max_output_tokens_for_model); USD-per-million pricing is sourced from crates/tui/src/pricing.rs. The public models.dev catalog tracks a different (real) model generation than CodeWhale's curated forward-dated model set, so a live transform would disagree with the repo's own model registry and tests. Curated-but-accurate is preferred per the issue.",
+    "role": "NOT a competing source of truth. Preferred metadata is the live Models.dev catalog published into ProviderLake (#4187). This asset is used only when live/cache rows are unavailable (offline startup, failed refresh, or empty cache).",
+    "source": "Compact offline seed of verified in-repo defaults (context/output from crates/tui/src/models.rs; USD pricing from crates/tui/src/pricing.rs) for providers CodeWhale ships with. It is intentionally smaller than a full Models.dev dump; live refresh supersedes these rows on (provider, wire_model_id) identity.",
     "honesty": "Pricing is intentionally OMITTED where the repo does not publish a trustworthy per-token rate: DeepSeek-native rows (priced via the time-aware DeepSeek table elsewhere, kept UnknownOrStale at the route layer), aggregator-hosted DeepSeek rows (aggregator account terms, not DeepSeek Platform pricing), Anthropic rows (no in-repo per-token table), and Xiaomi MiMo Token-Plan rows (credit/quota based). Absent pricing surfaces as PricingSku::UnknownOrStale, never a fabricated zero.",
-    "default_rows": "Each provider's `default: true` wire id equals that provider's built-in DEFAULT_*_MODEL so RouteResolver::new() and the descriptor stay in agreement.",
-    "coverage": "13 providers, 27 chat offerings."
+    "default_rows": "Each provider's `default: true` wire id equals that provider's built-in DEFAULT_*_MODEL so RouteResolver::new() and the descriptor stay in agreement when offline.",
+    "coverage": "13 providers, 31 chat offerings (offline seed only)."
   },
   "models": {
     "deepseek-v4-pro": {
@@ -87,6 +88,15 @@
           "modalities": { "input": ["text"], "output": ["text"] },
           "limit": { "context": 202752, "output": 131072 },
           "cost": { "input": 0.98, "output": 3.08, "cache_read": 0.182 }
+        },
+        "GLM-5-Turbo": {
+          "id": "GLM-5-Turbo",
+          "name": "GLM-5 Turbo",
+          "family": "glm",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 202752, "output": 131072 }
         }
       }
     },
@@ -242,6 +252,16 @@
           "modalities": { "input": ["text"], "output": ["text"] },
           "limit": { "context": 1000000, "output": 384000 }
         },
+        "deepseek/deepseek-v4-flash": {
+          "id": "deepseek/deepseek-v4-flash",
+          "base_model": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash (OpenRouter)",
+          "family": "deepseek",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 }
+        },
         "qwen/qwen3.6-flash": {
           "id": "qwen/qwen3.6-flash",
           "name": "Qwen3.6 Flash",
@@ -281,6 +301,15 @@
           "modalities": { "input": ["text"], "output": ["text"] },
           "limit": { "context": 1000000, "output": 524288 },
           "cost": { "input": 0.30, "output": 1.20, "cache_read": 0.06 }
+        },
+        "z-ai/glm-5.2": {
+          "id": "z-ai/glm-5.2",
+          "name": "GLM-5.2 (OpenRouter)",
+          "family": "glm",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 131072 }
         }
       }
     },
@@ -297,6 +326,16 @@
           "name": "DeepSeek V4 Pro (Together)",
           "family": "deepseek",
           "default": true,
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-ai/DeepSeek-V4-Flash": {
+          "id": "deepseek-ai/DeepSeek-V4-Flash",
+          "base_model": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash (Together)",
+          "family": "deepseek",
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
@@ -341,6 +380,16 @@
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },
           "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek/deepseek-v4-flash": {
+          "id": "deepseek/deepseek-v4-flash",
+          "base_model": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash (Novita)",
+          "family": "deepseek",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 }
         }
       }
     },
@@ -357,6 +406,16 @@
           "name": "DeepSeek V4 Pro (SiliconFlow)",
           "family": "deepseek",
           "default": true,
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-ai/DeepSeek-V4-Flash": {
+          "id": "deepseek-ai/DeepSeek-V4-Flash",
+          "base_model": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash (SiliconFlow)",
+          "family": "deepseek",
           "reasoning": true,
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["text"] },

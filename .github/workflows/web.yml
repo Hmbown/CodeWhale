@@ -32,16 +32,19 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
-      - name: Generate derived facts
-        # facts.generated.ts is gitignored and produced by derive-facts.mjs;
-        # tsc --noEmit fails without it (TS2307) and downstream inferences
-        # cascade into spurious TS7006 errors, so regenerate before type check.
-        run: npm run prebuild
       - name: Check facts drift
-        # Fails CI when facts.generated.ts is stale (version, providers, etc.
-        # differ from the workspace sources). Catches mechanical drift before
-        # deploy so the website never serves wrong version/provider data.
+        # facts.generated.ts is TRACKED (committed), so verify the committed
+        # copy matches the workspace BEFORE regenerating. Running prebuild first
+        # would self-heal the working tree and let a stale committed file pass
+        # (#3771). check:facts ignores the volatile generatedAt/latestRelease
+        # fields by design, so it is safe to run against the committed copy that
+        # exists at checkout.
         run: npm run check:facts
+      - name: Generate derived facts
+        # Regenerate after the drift gate so tsc --noEmit (TS2307 without it) and
+        # the build use a current facts.generated.ts. When the gate passes this
+        # only refreshes the generatedAt timestamp.
+        run: npm run prebuild
       - name: Check docs parity
         # Fails CI when docs-map.ts references non-existent repo files or
         # when website version / command snippets are stale.

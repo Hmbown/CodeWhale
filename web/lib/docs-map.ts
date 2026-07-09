@@ -138,18 +138,6 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "extending",
   },
   {
-    id: "skills",
-    slug: "skills",
-    label: { en: "Skills", zh: "技能" },
-    description: {
-      en: "Skill loading, invocation design, and the community skill ecosystem.",
-      zh: "技能加载、调用设计和社区技能生态。",
-    },
-    repoSource: ["docs/SKILL_INVOCATION_DESIGN.md"],
-    hasPage: false,
-    category: "extending",
-  },
-  {
     id: "hooks",
     slug: "hooks",
     label: { en: "Hooks", zh: "钩子" },
@@ -188,12 +176,12 @@ export const DOC_TOPICS: DocTopic[] = [
   {
     id: "fleet",
     slug: "fleet",
-    label: { en: "Fleet / WhaleFlow", zh: "Fleet / WhaleFlow" },
+    label: { en: "Fleet / Workflow", zh: "Fleet / Workflow" },
     description: {
-      en: "Durable task execution, fleet management, and WhaleFlow authoring.",
-      zh: "持久任务执行、Fleet 管理和 WhaleFlow 编写。",
+      en: "Durable task execution, fleet management, and Workflow authoring.",
+      zh: "持久任务执行、Fleet 管理和 Workflow 编写。",
     },
-    repoSource: ["docs/FLEET.md", "docs/WHALEFLOW_AUTHORING.md"],
+    repoSource: ["docs/FLEET.md", "docs/WORKFLOW_AUTHORING.md"],
     hasPage: false,
     category: "operations",
   },

@@ -250,7 +250,30 @@ pub(super) fn handle_tool_call_started(
         return;
     }
 
-    let input_summary = summarize_tool_args(input);
+    let mut input_summary = summarize_tool_args(input);
+    // Lead the `agent` args summary with the non-default action so renderers
+    // can tell inspections (peek/status/wait) apart from spawns without a
+    // schema change — a peek must not draw the same "delegate done" line as
+    // a launch (#4112, dogfood A5).
+    if name == "agent"
+        && let Some(action) = input.get("action").and_then(serde_json::Value::as_str)
+    {
+        let action = action.trim().to_ascii_lowercase();
+        let already_leads = input_summary
+            .as_deref()
+            .is_some_and(|summary| summary.starts_with("action:"));
+        if !action.is_empty()
+            && !already_leads
+            && action != "start"
+            && action != "spawn"
+            && action != "run"
+        {
+            input_summary = Some(match input_summary {
+                Some(rest) => format!("action: {action} {rest}"),
+                None => format!("action: {action}"),
+            });
+        }
+    }
     push_active_tool_cell(
         app,
         &id,
@@ -521,6 +544,7 @@ pub(super) fn handle_tool_call_complete(
     let in_active = cell_index >= app.history.len();
 
     let status = tool_status_from_result(result);
+    let mut workflow_panel_output: Option<String> = None;
 
     if let Some(cell) = app.cell_at_virtual_index_mut(cell_index) {
         match cell {
@@ -686,10 +710,22 @@ pub(super) fn handle_tool_call_complete(
                         generic.is_diff = false;
                     }
                 }
+                // #4121: capture workflow JSON before releasing the cell borrow
+                // so we can hydrate the panel without overlapping borrows.
+                if generic.name == "workflow" {
+                    workflow_panel_output = generic.output.clone();
+                }
                 app.mark_history_updated();
             }
             _ => {}
         }
+    }
+
+    // #4121 / #4122: feed typed workflow events into the panel *and* keep the
+    // history card snapshot in sync. Live streaming also arrives via
+    // `Event::WorkflowUi`; this path covers tool-complete hydration.
+    if let Some(output) = workflow_panel_output.as_deref() {
+        apply_workflow_output_to_panel(app, output);
     }
 
     // If the mutated cell lived inside the active group, bump the active-cell
@@ -740,6 +776,247 @@ pub(super) fn handle_tool_call_complete(
         tool_name: name.to_string(),
         summary: evidence_summary,
     });
+}
+
+/// Hydrate or advance the WorkflowPanel from a workflow tool JSON payload.
+/// Accepts a single run record (with optional `events` array) or a status
+/// list. Log-only events are filtered by the panel itself so the transcript
+/// stays free of progress spam (#4121). Also keeps the matching history card
+/// snapshot aligned (#4122).
+fn apply_workflow_output_to_panel(app: &mut App, output: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return;
+    };
+
+    // Prefer the typed event stream when present.
+    if let Some(events) = value.get("events").and_then(|e| e.as_array()) {
+        // Ensure a panel exists before applying — seed from run_id/goal if needed.
+        if app.workflow_panel.is_none() {
+            let run_id = value
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("workflow")
+                .to_string();
+            let label = value
+                .get("workflow_goal")
+                .and_then(|v| v.as_str())
+                .or_else(|| value.get("workflow_id").and_then(|v| v.as_str()))
+                .unwrap_or("workflow")
+                .to_string();
+            let at_ms = value
+                .get("started_at_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            app.workflow_panel = Some(crate::tui::widgets::workflow_panel::WorkflowPanel::new(
+                run_id, label, at_ms,
+            ));
+        }
+        if let Some(panel) = app.workflow_panel.as_mut() {
+            let run_id = value
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&panel.run_id)
+                .to_string();
+            let mut injected = Vec::with_capacity(events.len());
+            for event in events {
+                let mut event = event.clone();
+                if let Some(obj) = event.as_object_mut() {
+                    obj.entry("run_id".to_string())
+                        .or_insert_with(|| serde_json::Value::String(run_id.clone()));
+                }
+                injected.push(event);
+            }
+            panel.apply_json_events(&injected);
+            // Carry final result / source into panel for expanded history card.
+            if let Some(summary) = value
+                .get("result")
+                .map(|v| v.to_string())
+                .filter(|s| s != "null")
+            {
+                panel.result_summary = Some(summary);
+            }
+            if let Some(path) = value.get("source_path").and_then(|v| v.as_str()) {
+                panel.source_path = Some(PathBuf::from(path));
+            }
+            app.needs_redraw = true;
+        }
+        sync_workflow_history_card_from_panel(app);
+        return;
+    }
+
+    // Fallback: status list — show the most recent run as a shell panel.
+    if value.get("action").and_then(|v| v.as_str()) == Some("status") {
+        if let Some(runs) = value.get("runs").and_then(|r| r.as_array())
+            && let Some(run) = runs.last()
+        {
+            apply_workflow_output_to_panel(app, &run.to_string());
+        }
+        return;
+    }
+
+    // Prefer full panel hydration from summary/phases snapshot when present.
+    if let Some(panel) = crate::tui::widgets::workflow_panel::WorkflowPanel::from_run_json(&value) {
+        app.workflow_panel = Some(panel);
+        app.needs_redraw = true;
+        sync_workflow_history_card_from_panel(app);
+        return;
+    }
+
+    // Fallback: bare run record without events — at least surface header state.
+    if let Some(run_id) = value.get("run_id").and_then(|v| v.as_str()) {
+        use crate::tui::widgets::workflow_panel::{WorkflowPanelEvent, WorkflowPanelLifecycle};
+        let label = value
+            .get("workflow_goal")
+            .and_then(|v| v.as_str())
+            .or_else(|| value.get("workflow_id").and_then(|v| v.as_str()))
+            .unwrap_or(run_id)
+            .to_string();
+        let at_ms = value
+            .get("started_at_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let status = value
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("running");
+        app.apply_workflow_panel_event(WorkflowPanelEvent::RunStarted {
+            run_id: run_id.to_string(),
+            workflow_id: value
+                .get("workflow_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            workflow_goal: Some(label),
+            source_path: value
+                .get("source_path")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from),
+            token_budget: value.get("token_budget").and_then(|v| v.as_u64()),
+            at_ms,
+        });
+        if status != "running" {
+            let life = match status {
+                "completed" | "succeeded" => WorkflowPanelLifecycle::Succeeded,
+                "failed" => WorkflowPanelLifecycle::Failed,
+                "cancelled" | "canceled" => WorkflowPanelLifecycle::Cancelled,
+                _ => WorkflowPanelLifecycle::Running,
+            };
+            if life != WorkflowPanelLifecycle::Running {
+                app.apply_workflow_panel_event(WorkflowPanelEvent::RunCompleted {
+                    status: life,
+                    error: value
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    at_ms: value
+                        .get("completed_at_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(at_ms),
+                });
+            }
+        }
+        sync_workflow_history_card_from_panel(app);
+    }
+}
+
+/// Apply one live `WorkflowUi` engine event to the panel and history card.
+pub(super) fn apply_workflow_ui_event(app: &mut App, run_id: &str, event: &serde_json::Value) {
+    use crate::tui::widgets::workflow_panel::WorkflowPanelEvent;
+
+    let mut event = event.clone();
+    if let Some(obj) = event.as_object_mut() {
+        obj.entry("run_id".to_string())
+            .or_insert_with(|| serde_json::Value::String(run_id.to_string()));
+    }
+    if let Some(panel_event) = WorkflowPanelEvent::from_json_value(&event) {
+        app.apply_workflow_panel_event(panel_event);
+    }
+    sync_workflow_history_card_from_panel(app);
+}
+
+/// Mirror the live WorkflowPanel snapshot into the in-flight (or most recent)
+/// workflow history tool cell so compact/expanded cards stay current.
+fn sync_workflow_history_card_from_panel(app: &mut App) {
+    let Some(panel) = app.workflow_panel.as_ref() else {
+        return;
+    };
+    let run_id = panel.run_id.clone();
+    let snapshot = panel.to_run_json().to_string();
+
+    // Prefer an in-flight Generic(workflow) cell whose output already carries
+    // this run_id, else the newest running workflow cell, else any workflow
+    // cell (tool-complete path already wrote the final output).
+    let mut target: Option<usize> = None;
+    let history_len = app.history.len();
+    let total = history_len
+        + app
+            .active_cell
+            .as_ref()
+            .map(|a| a.entries().len())
+            .unwrap_or(0);
+
+    for idx in (0..total).rev() {
+        let Some(cell) = app.cell_at_virtual_index(idx) else {
+            continue;
+        };
+        let HistoryCell::Tool(ToolCell::Generic(generic)) = cell else {
+            continue;
+        };
+        if generic.name != "workflow" {
+            continue;
+        }
+        let matches_run = generic
+            .output
+            .as_deref()
+            .and_then(|out| serde_json::from_str::<serde_json::Value>(out).ok())
+            .and_then(|v| {
+                v.get("run_id")
+                    .and_then(|id| id.as_str())
+                    .map(|id| id == run_id)
+            })
+            .unwrap_or(false);
+        let is_running = generic.status == ToolStatus::Running;
+        if matches_run || (is_running && target.is_none()) {
+            target = Some(idx);
+            if matches_run {
+                break;
+            }
+        }
+    }
+
+    let Some(idx) = target else {
+        return;
+    };
+    if let Some(HistoryCell::Tool(ToolCell::Generic(generic))) = app.cell_at_virtual_index_mut(idx)
+    {
+        // Preserve a richer final output if the tool completion already wrote
+        // a full run record with an events array longer than the snapshot.
+        let replace = match generic.output.as_deref() {
+            None => true,
+            Some(existing) => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(existing) else {
+                    return;
+                };
+                let existing_run = value.get("run_id").and_then(|v| v.as_str()).unwrap_or("");
+                if !existing_run.is_empty() && existing_run != run_id {
+                    return;
+                }
+                // Prefer full event-bearing records when the tool has completed.
+                if generic.status == ToolStatus::Running {
+                    true
+                } else {
+                    value
+                        .get("events")
+                        .and_then(|e| e.as_array())
+                        .map_or(true, |e| e.is_empty())
+                }
+            }
+        };
+        if replace {
+            generic.output = Some(snapshot);
+            generic.output_summary = Some(format!("workflow {}", run_id));
+            app.mark_history_updated();
+        }
+    }
 }
 
 fn refresh_active_tool_completion_timestamp(app: &mut App, cell_index: usize) {

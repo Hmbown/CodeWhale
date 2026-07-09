@@ -25,7 +25,7 @@ Current packaging note:
   - `codewhale-tools`
   - `codewhale-core`
   - `codewhale-app-server`
-  - `codewhale-whaleflow`
+  - `codewhale-workflow`
 
 ## Version Coordination
 
@@ -195,7 +195,7 @@ and fails branch-only release sources before assets are published.
    - `codewhale-release`
    - `codewhale-secrets`
    - `codewhale-state`
-   - `codewhale-whaleflow`
+   - `codewhale-workflow`
    - `codewhale-execpolicy`
    - `codewhale-hooks`
    - `codewhale-tools`
@@ -213,8 +213,7 @@ The publish helper is idempotent for reruns: already-published crate versions ar
 
 `.github/workflows/release.yml` builds these binaries:
 
-- `codewhale-*` CLI binaries for Linux x64/arm64/riscv64, macOS x64/arm64,
-  and Windows x64
+- `codewhale-*` CLI binaries for Linux x64/arm64, macOS x64/arm64, and Windows x64
 - `codewhale-tui-*` TUI binaries for the same target matrix
 - `codew-*` shortcut binaries for the same target matrix
 - `codewhale.bat` for the Windows npm launcher

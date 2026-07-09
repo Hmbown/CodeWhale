@@ -12,8 +12,8 @@ use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCo
 pub struct MemoryCommands;
 
 impl CommandGroup for MemoryCommands {
-    fn commands(&self) -> Vec<Box<dyn Command>> {
-        vec![
+    fn commands(&self) -> &'static [Box<dyn Command>] {
+        cached_command_list!(vec![
             Box::new(FunctionCommand::new(
                 note::NoteCmd::info(),
                 note::NoteCmd::execute,
@@ -22,6 +22,6 @@ impl CommandGroup for MemoryCommands {
                 memory::MemoryCmd::info(),
                 memory::MemoryCmd::execute,
             )),
-        ]
+        ])
     }
 }

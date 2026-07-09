@@ -93,7 +93,9 @@ fn assert_viewport_starts_at_top(frame: &qa_harness::Frame) {
     );
     assert!(
         frame.row(0).contains("Plan")
+            || frame.row(0).contains("Act")
             || frame.row(0).contains("Agent")
+            || frame.row(0).contains("Operate")
             || frame.row(0).contains("Yolo")
             || frame.row(0).contains("DeepSeek"),
         "expected header content on row 0:\n{dump}"

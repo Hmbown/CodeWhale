@@ -36,14 +36,16 @@ SENTINEL="${SMOKE_SENTINEL:-Reply with exactly the single word: pong}"
 EXEC_TIMEOUT="${SMOKE_EXEC_TIMEOUT:-60}"
 declare -a ONLY_PROVIDERS=()
 
-# Best-effort cheap models per provider slot. These are intentionally overridable
+# Best-effort CHEAP models per provider slot. These are intentionally overridable
 # (SMOKE_MODEL_<SLUG>) because there is no committed route-effective model
 # inventory yet (#3205); unmapped configured providers fail loudly in --real mode
-# instead of guessing. Keep this list conservative.
+# instead of guessing. Keep this list conservative: only add a provider here when
+# its mapped id is a genuinely cheap/small model. Providers without a verified
+# cheap default (e.g. arcee, openrouter, xiaomi-mimo, openai-codex) are left
+# unmapped on purpose and must be given a model per run via SMOKE_MODEL_<SLUG>.
 default_model_for() {
     case "$1" in
         deepseek) echo "deepseek-chat" ;;
-        arcee) echo "trinity-large-thinking" ;;
         zai) echo "glm-4-flash" ;;
         moonshot) echo "moonshot-v1-8k" ;;
         openai) echo "gpt-4o-mini" ;;

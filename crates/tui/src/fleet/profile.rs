@@ -13,6 +13,8 @@ pub use codewhale_config::{
     FleetDelegationHints, FleetLoadout, FleetProfile, FleetProfilePermissions, FleetRole, FleetSlot,
 };
 
+pub use super::roster::ProfileOrigin;
+
 pub const WORKSPACE_AGENT_PROFILE_DIR: &str = ".codewhale/agents";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +24,10 @@ pub struct AgentProfile {
     pub description: Option<String>,
     pub profile: FleetProfile,
     pub source: PathBuf,
+    /// Roster layer this profile came from (#fleet-roster cutover (v0.8.67)).
+    /// File-based loading in this module always yields `Workspace`; the
+    /// roster stamps `BuiltIn` / `Config` for the other layers.
+    pub origin: ProfileOrigin,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,13 +48,22 @@ struct AgentProfileToml {
     #[serde(default)]
     persona: Option<String>,
     #[serde(default)]
-    model_class_hint: Option<String>,
-    #[serde(default)]
-    route_tier: Option<String>,
-    #[serde(default)]
     loadout: Option<String>,
     #[serde(default, alias = "model_hint", alias = "model_id")]
     model: Option<String>,
+    /// Explicit provider id for `model` (#4093), e.g. `"deepseek"` or
+    /// `"openrouter"`. Validated against the known `ApiProvider` vocabulary at
+    /// load time — never inferred by sniffing `model` for a provider-shaped
+    /// substring (EPIC #2608). `deny_unknown_fields` no longer needs to guard
+    /// this name: it is now a first-class, validated field instead of a
+    /// smuggled one.
+    #[serde(default)]
+    provider: Option<String>,
+    /// Optional saved thinking tier for this profile (#4137). TOML may use
+    /// the canonical `reasoning_effort` spelling or the UI-facing `thinking`
+    /// / `reasoning` aliases; loading normalizes to a canonical setting label.
+    #[serde(default, alias = "thinking", alias = "reasoning")]
+    reasoning_effort: Option<String>,
     #[serde(default)]
     instructions: Option<AgentProfileInstructions>,
     #[serde(default)]
@@ -146,15 +161,18 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
     .to_string();
     validate_agent_profile_token(path, "base_role/role_hint", &role_name)?;
 
-    let loadout = first_present([
-        parsed.model_class_hint.as_deref(),
-        parsed.route_tier.as_deref(),
-        parsed.loadout.as_deref(),
-    ])
-    .map(FleetLoadout::from_name)
-    .unwrap_or_default();
+    let loadout = first_present([parsed.loadout.as_deref()])
+        .map(FleetLoadout::from_name)
+        .unwrap_or_default();
     let model = non_empty_trimmed(parsed.model.as_deref()).map(str::to_string);
     validate_agent_profile_model_hint(path, model.as_deref())?;
+
+    let provider = non_empty_trimmed(parsed.provider.as_deref())
+        .map(str::to_string)
+        .map(|provider| validate_agent_profile_provider(path, &provider).map(|()| provider))
+        .transpose()?;
+    let reasoning_effort =
+        normalize_agent_profile_reasoning_effort(path, parsed.reasoning_effort.as_deref())?;
 
     let instructions = parsed
         .instructions
@@ -173,6 +191,8 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
         },
         loadout,
         model,
+        provider,
+        reasoning_effort,
         permissions: FleetProfilePermissions::default(),
         delegation: FleetDelegationHints::default(),
     };
@@ -183,6 +203,7 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
         description,
         profile,
         source: path.to_path_buf(),
+        origin: ProfileOrigin::Workspace,
     })
 }
 
@@ -254,6 +275,50 @@ fn validate_agent_profile_model_hint(path: &Path, value: Option<&str>) -> Result
     Ok(())
 }
 
+/// Validate an explicit `provider` field as a safe provider id (#4093).
+///
+/// Built-in providers are accepted by the runtime vocabulary, and user-named
+/// OpenAI-compatible custom providers are accepted as simple tokens so the
+/// launch path can resolve `[providers.<id>]` from the session config (#3965).
+/// This field remains the ONLY place a profile's provider is established:
+/// callers never infer it from `model` (EPIC #2608).
+fn validate_agent_profile_provider(path: &Path, value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("agent profile {} provider cannot be empty", path.display());
+    }
+    if trimmed != value || !trimmed.chars().all(is_agent_profile_token_char) {
+        bail!(
+            "agent profile {} provider must be a simple provider id",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn normalize_agent_profile_reasoning_effort(
+    path: &Path,
+    value: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(value) = non_empty_trimmed(value) else {
+        return Ok(None);
+    };
+    let normalized = match value.to_ascii_lowercase().as_str() {
+        "inherit" | "parent" | "same" | "current" | "default" | "unset" => return Ok(None),
+        "off" | "disabled" | "none" | "false" => "off",
+        "low" | "minimal" => "low",
+        "medium" | "mid" => "medium",
+        "high" => "high",
+        "auto" | "automatic" => "auto",
+        "max" | "maximum" | "xhigh" | "ultracode" => "max",
+        _ => bail!(
+            "agent profile {} reasoning_effort {value:?} must be one of: inherit, auto, off, low, medium, high, max",
+            path.display()
+        ),
+    };
+    Ok(Some(normalized.to_string()))
+}
+
 fn is_agent_profile_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
 }
@@ -280,10 +345,499 @@ fn trimmed_non_empty(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// Outcome of parsing untrusted model output into a fleet profile draft.
+/// Mirrors `UntrustedDraftParse` from the constitution pipeline: the reply is
+/// data, never trusted, and any failure is a reason string for the status
+/// line — drafting failures degrade to the manual authoring flow.
+#[derive(Debug)]
+pub enum UntrustedProfileParse {
+    Drafted(Box<FleetProfileDraft>),
+    Empty,
+    Invalid(String),
+}
+
+/// A model-drafted fleet agent profile that has passed the untrusted gate:
+/// balanced-JSON extraction, serde parse with `deny_unknown_fields` (so
+/// provider/base_url/api_key/permissions/tools cannot ride along), the same
+/// escalation rejections the profile loader applies, token and model-hint
+/// validation, prose bounds, and control-character stripping. The persisted
+/// TOML is rendered deterministically from this struct — model bytes are
+/// never written to disk verbatim.
+///
+/// `provider` (#4093) is set ONLY by the structured Fleet setup picker (a
+/// user's explicit, credential-checked selection) — never by
+/// [`Self::from_untrusted_json`], whose wire schema
+/// ([`FleetProfileDraftJson`]) has no `provider` field and rejects one via
+/// `deny_unknown_fields`. A model's untrusted reply can never smuggle a
+/// provider; only an interactive pick can set this field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetProfileDraft {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub role_hint: String,
+    pub model_class_hint: Option<String>,
+    pub model: Option<String>,
+    /// Explicit provider id for `model` (e.g. `"deepseek"`), set only by the
+    /// structured picker. `None` means "no route pin" (inherit) — matching
+    /// `model: None` — or a legacy/untrusted draft that predates this field.
+    pub provider: Option<String>,
+    /// Explicit saved thinking tier, set only by structured setup controls.
+    /// `None` means inherit the operator/session reasoning tier.
+    pub reasoning_effort: Option<String>,
+    pub instructions: Option<String>,
+}
+
+/// Bounds for model-drafted profile prose. Same philosophy as the
+/// constitution bounds: roomy enough for a real profile, hard enough that a
+/// misbehaving provider cannot bloat the store.
+pub const MAX_PROFILE_DESCRIPTION_LEN: usize = 1000;
+pub const MAX_PROFILE_INSTRUCTIONS_LEN: usize = 4000;
+const MAX_PROFILE_DISPLAY_NAME_LEN: usize = 80;
+const MAX_PROFILE_TOKEN_LEN: usize = 64;
+
+/// The JSON shape the drafting prompt asks for. `deny_unknown_fields` is the
+/// first escalation gate: a draft that tries to smuggle `permissions`,
+/// `tools`, `provider`, `base_url`, or `api_key` fails the parse outright
+/// instead of being silently stripped.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FleetProfileDraftJson {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    role_hint: Option<String>,
+    #[serde(default)]
+    model_class_hint: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    instructions: Option<String>,
+}
+
+impl FleetProfileDraft {
+    /// Parse untrusted model output. Any structural problem is `Invalid`
+    /// with a short reason; a parse that carries no usable content is
+    /// `Empty`.
+    #[must_use]
+    pub fn from_untrusted_json(raw: &str) -> UntrustedProfileParse {
+        let Some(json) = extract_first_json_object(raw) else {
+            return UntrustedProfileParse::Invalid("no JSON object found".to_string());
+        };
+        let parsed: FleetProfileDraftJson = match serde_json::from_str(json) {
+            Ok(parsed) => parsed,
+            Err(err) => return UntrustedProfileParse::Invalid(err.to_string()),
+        };
+
+        let role_hint = match parsed
+            .role_hint
+            .as_deref()
+            .and_then(trimmed_non_empty)
+            .map(sanitize_profile_token)
+        {
+            Some(token) if !token.is_empty() => token,
+            _ => return UntrustedProfileParse::Invalid("role_hint missing".to_string()),
+        };
+        let id = parsed
+            .id
+            .as_deref()
+            .and_then(trimmed_non_empty)
+            .map(sanitize_profile_token)
+            .filter(|token| !token.is_empty())
+            .unwrap_or_else(|| role_hint.clone());
+        let model_class_hint = parsed
+            .model_class_hint
+            .as_deref()
+            .and_then(trimmed_non_empty)
+            .map(sanitize_profile_token)
+            .filter(|token| !token.is_empty());
+        let model = parsed
+            .model
+            .as_deref()
+            .and_then(trimmed_non_empty)
+            .map(str::to_string);
+        if let Some(ref model) = model
+            && !is_model_hint(model)
+        {
+            return UntrustedProfileParse::Invalid(
+                "model must be a visible model id without whitespace or secrets".to_string(),
+            );
+        }
+        let display_name = parsed
+            .display_name
+            .as_deref()
+            .map(|text| sanitize_profile_prose(text, MAX_PROFILE_DISPLAY_NAME_LEN))
+            .and_then(|text| trimmed_non_empty(&text).map(str::to_string));
+        let description = parsed
+            .description
+            .as_deref()
+            .map(|text| sanitize_profile_prose(text, MAX_PROFILE_DESCRIPTION_LEN))
+            .and_then(|text| trimmed_non_empty(&text).map(str::to_string));
+        let instructions = parsed
+            .instructions
+            .as_deref()
+            .map(|text| sanitize_profile_prose(text, MAX_PROFILE_INSTRUCTIONS_LEN))
+            .and_then(|text| trimmed_non_empty(&text).map(str::to_string));
+
+        let draft = FleetProfileDraft {
+            id,
+            display_name,
+            description,
+            role_hint,
+            model_class_hint,
+            model,
+            // Never set from untrusted model output — `FleetProfileDraftJson`
+            // has no `provider` field, so there is nothing to read here.
+            provider: None,
+            reasoning_effort: None,
+            instructions,
+        };
+        if draft.description.is_none() && draft.instructions.is_none() {
+            return UntrustedProfileParse::Empty;
+        }
+        UntrustedProfileParse::Drafted(Box::new(draft))
+    }
+
+    /// Deterministic TOML rendering — the exact bytes the ratify keypress
+    /// would persist. Loading this back through the profile loader must
+    /// succeed with the default (floor) permissions.
+    #[must_use]
+    pub fn render_toml(&self) -> String {
+        let mut root = toml::value::Table::new();
+        root.insert("id".to_string(), toml::Value::String(self.id.clone()));
+        if let Some(ref display_name) = self.display_name {
+            root.insert(
+                "display_name".to_string(),
+                toml::Value::String(display_name.clone()),
+            );
+        }
+        if let Some(ref description) = self.description {
+            root.insert(
+                "description".to_string(),
+                toml::Value::String(description.clone()),
+            );
+        }
+        root.insert(
+            "role_hint".to_string(),
+            toml::Value::String(self.role_hint.clone()),
+        );
+        if let Some(ref hint) = self.model_class_hint {
+            root.insert("loadout".to_string(), toml::Value::String(hint.clone()));
+        }
+        if let Some(ref model) = self.model {
+            root.insert("model".to_string(), toml::Value::String(model.clone()));
+            // A provider pin is only meaningful alongside a concrete model
+            // (#4093): an `inherit` draft (`model: None`) never carries one,
+            // so the rendered TOML can't imply a route it doesn't have.
+            if let Some(ref provider) = self.provider {
+                root.insert(
+                    "provider".to_string(),
+                    toml::Value::String(provider.clone()),
+                );
+            }
+        }
+        if let Some(ref reasoning_effort) = self.reasoning_effort {
+            root.insert(
+                "reasoning_effort".to_string(),
+                toml::Value::String(reasoning_effort.clone()),
+            );
+        }
+        if let Some(ref instructions) = self.instructions {
+            let mut table = toml::value::Table::new();
+            table.insert(
+                "text".to_string(),
+                toml::Value::String(instructions.clone()),
+            );
+            root.insert("instructions".to_string(), toml::Value::Table(table));
+        }
+        toml::to_string_pretty(&toml::Value::Table(root))
+            .unwrap_or_else(|_| String::from("# failed to render profile"))
+    }
+
+    /// File name (stem + `.toml`) for this draft, always derived from the
+    /// sanitized id — never a model-chosen free-form path.
+    #[must_use]
+    pub fn file_name(&self) -> String {
+        format!("{}.toml", self.id)
+    }
+}
+
+/// Keep only the loader's token alphabet, lowercased, bounded.
+fn sanitize_profile_token(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| ch.to_ascii_lowercase())
+        .filter(|ch| is_agent_profile_token_char(*ch))
+        .take(MAX_PROFILE_TOKEN_LEN)
+        .collect()
+}
+
+/// Strip control characters (newline/tab survive) and bound length by chars.
+fn sanitize_profile_prose(text: &str, max_len: usize) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+        .take(max_len)
+        .collect()
+}
+
+/// Extract the first balanced `{...}` object from untrusted output, so fenced
+/// or prose-wrapped JSON still parses. Mirrors the constitution pipeline's
+/// extractor (which is private to codewhale-config).
+fn extract_first_json_object(raw: &str) -> Option<&str> {
+    let start = raw.find('{')?;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in raw[start..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escaped = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&raw[start..=start + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn draft_gate_rejects_unknown_and_escalation_fields() {
+        for raw in [
+            r#"{"id":"x","role_hint":"reviewer","description":"d","permissions":{"allow_shell":true}}"#,
+            r#"{"id":"x","role_hint":"reviewer","description":"d","tools":{"posture":"full"}}"#,
+            r#"{"id":"x","role_hint":"reviewer","description":"d","provider":"openai"}"#,
+            r#"{"id":"x","role_hint":"reviewer","description":"d","api_key":"sk-nope"}"#,
+        ] {
+            assert!(
+                matches!(
+                    FleetProfileDraft::from_untrusted_json(raw),
+                    UntrustedProfileParse::Invalid(_)
+                ),
+                "{raw} must be rejected, not stripped"
+            );
+        }
+    }
+
+    #[test]
+    fn draft_gate_bounds_and_sanitizes() {
+        let huge = "x".repeat(MAX_PROFILE_INSTRUCTIONS_LEN + 500);
+        // \u0007 (BEL) inside the description must be stripped by the
+        // prose sanitizer; the oversized instructions must be bounded.
+        let raw = format!(
+            "{{\"id\":\"  Weird ID!!  \",\"role_hint\":\"Code Reviewer\",\"description\":\"has\\u0007control\",\"instructions\":\"{huge}\"}}"
+        );
+        let UntrustedProfileParse::Drafted(draft) = FleetProfileDraft::from_untrusted_json(&raw)
+        else {
+            panic!("draft should parse");
+        };
+        assert_eq!(draft.id, "weirdid");
+        assert_eq!(draft.role_hint, "codereviewer");
+        assert_eq!(draft.description.as_deref(), Some("hascontrol"));
+        assert_eq!(
+            draft.instructions.as_deref().unwrap().chars().count(),
+            MAX_PROFILE_INSTRUCTIONS_LEN
+        );
+    }
+
+    #[test]
+    fn draft_gate_rejects_secret_shaped_model_and_missing_role() {
+        assert!(matches!(
+            FleetProfileDraft::from_untrusted_json(
+                r#"{"id":"x","role_hint":"reviewer","description":"d","model":"has secret ="}"#
+            ),
+            UntrustedProfileParse::Invalid(_)
+        ));
+        assert!(matches!(
+            FleetProfileDraft::from_untrusted_json(r#"{"id":"x","description":"d"}"#),
+            UntrustedProfileParse::Invalid(_)
+        ));
+        assert!(matches!(
+            FleetProfileDraft::from_untrusted_json(r#"{"id":"x","role_hint":"reviewer"}"#),
+            UntrustedProfileParse::Empty
+        ));
+    }
+
+    #[test]
+    fn draft_gate_accepts_fenced_output() {
+        let raw = "Here you go:\n```json\n{\"id\":\"reviewer\",\"role_hint\":\"reviewer\",\"description\":\"Reviews diffs.\"}\n```";
+        assert!(matches!(
+            FleetProfileDraft::from_untrusted_json(raw),
+            UntrustedProfileParse::Drafted(_)
+        ));
+    }
+
+    #[test]
+    fn rendered_draft_round_trips_through_the_loader_with_floor_permissions() {
+        let UntrustedProfileParse::Drafted(draft) = FleetProfileDraft::from_untrusted_json(
+            r#"{"id":"reviewer","display_name":"Reviewer","description":"Reviews diffs for correctness.","role_hint":"reviewer","model_class_hint":"cheap","model":"glm-5.2","instructions":"Read the diff.\nReport findings, then stop."}"#,
+        ) else {
+            panic!("draft should parse");
+        };
+
+        let dir = TempDir::new().unwrap();
+        let path = write_profile(dir.path(), &draft.file_name(), &draft.render_toml());
+        let profiles = load_agent_profiles_from_dir(dir.path()).expect("rendered TOML loads");
+        assert_eq!(profiles.len(), 1);
+        let loaded = &profiles[0];
+        assert_eq!(loaded.id, "reviewer");
+        assert_eq!(loaded.display_name.as_deref(), Some("Reviewer"));
+        assert_eq!(loaded.profile.model.as_deref(), Some("glm-5.2"));
+        assert_eq!(
+            loaded.profile.role.instructions.as_deref(),
+            Some("Read the diff.\nReport findings, then stop.")
+        );
+        // The loader always installs the permission floor, no matter what.
+        assert_eq!(
+            loaded.profile.permissions,
+            FleetProfilePermissions::default()
+        );
+        assert_eq!(path, loaded.source);
+    }
+
+    #[test]
+    fn draft_with_explicit_provider_round_trips_through_the_loader() {
+        // A structured (picker-driven) draft that pins a model on a provider
+        // other than whatever the parent session happens to use (#4093): the
+        // rendered TOML must carry both fields explicitly, and the loader
+        // must read the provider back out verbatim — never re-derive it by
+        // sniffing `model` for a provider-shaped substring.
+        let draft = FleetProfileDraft {
+            id: "scout-deepseek".to_string(),
+            display_name: Some("Scout".to_string()),
+            description: Some("Cross-provider scout profile.".to_string()),
+            role_hint: "scout".to_string(),
+            model_class_hint: None,
+            model: Some("deepseek-v4-flash".to_string()),
+            provider: Some("deepseek".to_string()),
+            reasoning_effort: None,
+            instructions: None,
+        };
+
+        let rendered = draft.render_toml();
+        assert!(
+            rendered.contains("provider = \"deepseek\""),
+            "rendered TOML must persist the explicit provider: {rendered}"
+        );
+        assert!(rendered.contains("model = \"deepseek-v4-flash\""));
+
+        let dir = TempDir::new().unwrap();
+        write_profile(dir.path(), &draft.file_name(), &rendered);
+        let profiles = load_agent_profiles_from_dir(dir.path()).expect("rendered TOML loads");
+        assert_eq!(profiles.len(), 1);
+        let loaded = &profiles[0];
+        assert_eq!(loaded.profile.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(loaded.profile.provider.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn draft_with_reasoning_effort_round_trips_through_the_loader() {
+        let draft = FleetProfileDraft {
+            id: "scout-deep".to_string(),
+            display_name: Some("Scout".to_string()),
+            description: Some("Deep scout profile.".to_string()),
+            role_hint: "scout".to_string(),
+            model_class_hint: None,
+            model: Some("deepseek-v4-pro".to_string()),
+            provider: Some("deepseek".to_string()),
+            reasoning_effort: Some("max".to_string()),
+            instructions: None,
+        };
+
+        let rendered = draft.render_toml();
+        assert!(
+            rendered.contains("reasoning_effort = \"max\""),
+            "rendered TOML must persist explicit reasoning: {rendered}"
+        );
+
+        let dir = TempDir::new().unwrap();
+        write_profile(dir.path(), &draft.file_name(), &rendered);
+        let profiles = load_agent_profiles_from_dir(dir.path()).expect("rendered TOML loads");
+        assert_eq!(profiles.len(), 1);
+        let loaded = &profiles[0];
+        assert_eq!(loaded.profile.provider.as_deref(), Some("deepseek"));
+        assert_eq!(loaded.profile.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(loaded.profile.reasoning_effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn profile_loader_normalizes_reasoning_aliases() {
+        let dir = TempDir::new().unwrap();
+        write_profile(
+            dir.path(),
+            "scout.toml",
+            r#"
+id = "scout"
+role_hint = "scout"
+thinking = "xhigh"
+
+[instructions]
+text = "Scout deeply."
+"#,
+        );
+
+        let profiles = load_agent_profiles_from_dir(dir.path()).expect("profile TOML loads");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.reasoning_effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn profile_loader_rejects_unknown_reasoning_effort() {
+        let dir = TempDir::new().unwrap();
+        write_profile(
+            dir.path(),
+            "scout.toml",
+            r#"
+id = "scout"
+role_hint = "scout"
+reasoning = "expensive"
+"#,
+        );
+
+        let err = load_agent_profiles_from_dir(dir.path()).expect_err("invalid effort must fail");
+        assert!(
+            err.to_string().contains("reasoning_effort"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn inherit_draft_never_renders_a_provider_without_a_model() {
+        // `provider` is only meaningful alongside a concrete model pin; an
+        // `inherit` draft (no `model`) must never render one even if a stale
+        // caller sets the field.
+        let draft = FleetProfileDraft {
+            id: "inherit".to_string(),
+            display_name: None,
+            description: None,
+            role_hint: "general".to_string(),
+            model_class_hint: None,
+            model: None,
+            provider: Some("deepseek".to_string()),
+            reasoning_effort: None,
+            instructions: None,
+        };
+        let rendered = draft.render_toml();
+        assert!(!rendered.contains("provider"), "{rendered}");
+    }
 
     fn write_profile(dir: &Path, filename: &str, contents: &str) -> PathBuf {
         let path = dir.join(filename);
@@ -338,7 +892,10 @@ concurrency = 2
             profile.role.instructions.as_deref(),
             Some("Review the patch and produce verification evidence.")
         );
-        assert_eq!(profile.loadout, FleetLoadout::DeepReasoning);
+        assert_eq!(
+            profile.loadout,
+            FleetLoadout::Custom("deep-reasoning".to_string())
+        );
         assert!(profile.permissions.allow_shell);
         assert!(profile.permissions.trust);
         assert!(!profile.permissions.approval_required);
@@ -385,7 +942,7 @@ name = "adversarial_reviewer"
 display_name = "Adversarial Reviewer"
 description = "Skeptical read-only review posture"
 role_hint = "reviewer"
-model_class_hint = "balanced"
+loadout = "balanced"
 model = "deepseek-v4-pro"
 
 [instructions]
@@ -415,7 +972,10 @@ posture = "read-only"
             profile.profile.role.instructions.as_deref(),
             Some("Focus on regressions, missing tests, and fragile assumptions.")
         );
-        assert_eq!(profile.profile.loadout, FleetLoadout::Balanced);
+        assert_eq!(
+            profile.profile.loadout,
+            FleetLoadout::Custom("balanced".to_string())
+        );
         assert_eq!(profile.profile.model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(
             profile.profile.permissions,
@@ -425,7 +985,37 @@ posture = "read-only"
     }
 
     #[test]
-    fn agent_profile_loader_rejects_hidden_provider_policy_fields() {
+    fn agent_profile_loader_rejects_retired_model_policy_aliases() {
+        for (field, value) in [("model_class_hint", "balanced"), ("route_tier", "fast")] {
+            let tmp = TempDir::new().unwrap();
+            write_profile(
+                tmp.path(),
+                "reviewer.toml",
+                &format!(
+                    r#"
+name = "reviewer"
+role_hint = "reviewer"
+{field} = "{value}"
+"#
+                ),
+            );
+
+            let err = load_agent_profiles_from_dir(tmp.path())
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains(field) || err.contains("unknown field"),
+                "unexpected error for {field}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_profile_loader_accepts_and_round_trips_explicit_provider_field() {
+        // #4093: `provider` is now a first-class, validated field — a Fleet
+        // profile can name its own route explicitly, independent of whatever
+        // provider is active when the profile is later loaded/launched.
         let tmp = TempDir::new().unwrap();
         write_profile(
             tmp.path(),
@@ -437,12 +1027,56 @@ model = "deepseek/deepseek-v4-pro"
 "#,
         );
 
+        let profiles = load_agent_profiles_from_dir(tmp.path()).expect("profile loads");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.provider.as_deref(), Some("openrouter"));
+        assert_eq!(
+            profiles[0].profile.model.as_deref(),
+            Some("deepseek/deepseek-v4-pro")
+        );
+    }
+
+    #[test]
+    fn agent_profile_loader_accepts_custom_provider_name() {
+        // #3965: LM Studio and other user-named OpenAI-compatible providers
+        // are resolved from `[providers.<id>]` at launch time, so the profile
+        // loader must preserve the safe id instead of requiring a built-in.
+        let tmp = TempDir::new().unwrap();
+        write_profile(
+            tmp.path(),
+            "reviewer.toml",
+            r#"
+name = "reviewer"
+provider = "lm-studio"
+model = "qwen-2.5-7b"
+"#,
+        );
+
+        let profiles = load_agent_profiles_from_dir(tmp.path()).expect("profile loads");
+
+        assert_eq!(profiles[0].profile.provider.as_deref(), Some("lm-studio"));
+        assert_eq!(profiles[0].profile.model.as_deref(), Some("qwen-2.5-7b"));
+    }
+
+    #[test]
+    fn agent_profile_loader_rejects_malformed_provider_name() {
+        let tmp = TempDir::new().unwrap();
+        write_profile(
+            tmp.path(),
+            "reviewer.toml",
+            r#"
+name = "reviewer"
+provider = "lm studio"
+model = "some-model"
+"#,
+        );
+
         let err = load_agent_profiles_from_dir(tmp.path())
             .unwrap_err()
             .to_string();
 
         assert!(
-            err.contains("provider") || err.contains("unknown field"),
+            err.contains("provider must be a simple provider id"),
             "unexpected error: {err}"
         );
     }

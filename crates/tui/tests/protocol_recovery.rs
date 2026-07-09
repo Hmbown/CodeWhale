@@ -6,7 +6,8 @@
 //!
 //! 1. The known wrapper markers are still present in `core/engine.rs` so the
 //!    streaming filter has something to scrub.
-//! 2. The legacy text-based `tool_parser` does NOT treat the newer
+//! 2. The legacy text-based `tool_parser` flags fake wrappers for
+//!    stripping/status bookkeeping but does NOT treat the newer
 //!    `<function_calls>` wrapper as a real tool call — only the legacy
 //!    `[TOOL_CALL]` and `<invoke>` shapes ever produced structured calls, and
 //!    nothing should silently re-enable text-based execution.
@@ -145,20 +146,24 @@ fn legacy_parser_does_not_execute_function_calls_wrapper() {
 }
 
 #[test]
-fn legacy_parser_has_marker_helper_for_legacy_shapes_only() {
-    // The legacy parser's `has_tool_call_markers` is documentation of which
-    // shapes it ever knew how to handle. If it ever starts returning true for
-    // `<function_calls>`, the parser may also have started producing fake
-    // tool calls — we want to fail loudly in that case.
+fn legacy_parser_marker_helper_flags_fake_wrappers_without_enabling_execution() {
+    // `has_tool_call_markers` now also flags forged wrappers so the engine can
+    // scrub them from visible text and keep reasoning-placeholder bookkeeping.
+    // The parser still must not turn those wrappers into executable calls.
     assert!(tool_parser::has_tool_call_markers(
         "noise [TOOL_CALL]x[/TOOL_CALL]"
     ));
     assert!(tool_parser::has_tool_call_markers(
         "noise <invoke name=\"x\"></invoke>"
     ));
-    assert!(!tool_parser::has_tool_call_markers(
+    assert!(tool_parser::has_tool_call_markers(
         "noise <function_calls>{}</function_calls>"
     ));
+    assert!(
+        tool_parser::parse_tool_calls("noise <function_calls>{}</function_calls>")
+            .tool_calls
+            .is_empty()
+    );
 }
 
 #[test]

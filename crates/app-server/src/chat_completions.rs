@@ -693,6 +693,31 @@ api_key = "arcee-configured-key"
     }
 
     #[tokio::test]
+    async fn requires_bearer_token_when_auth_enabled() {
+        install_crypto_provider();
+        let (mock_url, _mock) = start_mock_upstream().await;
+        let (app, _tmp) = app_with_mock_upstream(Some("test-token"), &mock_url);
+
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn non_chat_completions_provider_rejected() {
         // Use the test to verify WireFormat checks work for non-ChatCompletions providers.
         // Anthropic's wire format is AnthropicMessages; OpenaiCodex is Responses.

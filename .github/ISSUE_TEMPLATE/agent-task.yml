@@ -1,7 +1,7 @@
 name: Agent task
 description: Create a self-contained task that a headless agent (DeepSeek V4, remote droplet) can execute end-to-end without human context.
-title: "v0.8.58: "
-labels: ["agent-ready", "v0.8.58"]
+title: "v0.8.68: "
+labels: ["agent-ready", "v0.8.68"]
 body:
   - type: markdown
     attributes:
@@ -25,7 +25,7 @@ body:
       description: "What problem does this fix, and why now? (2-4 sentences)"
       placeholder: |
         e.g. "The TUI freezes when 4+ sub-agents run concurrently because
-        AgentProgress events trigger a full redraw each.  This blocks v0.8.58's
+        AgentProgress events trigger a full redraw each.  This blocks
         recommended sub-agent fanout."
     validations:
       required: true

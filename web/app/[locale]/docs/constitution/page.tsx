@@ -1,14 +1,17 @@
 import Link from "next/link";
+import { buildPageMetadata } from "@/lib/page-meta";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   const isZh = locale === "zh";
-  return {
-    title: isZh ? "嵌套宪法 · CodeWhale 文档" : "Constitution · CodeWhale Docs",
+  return buildPageMetadata({
+    path: "/docs/constitution",
+    locale,
+    title: isZh ? "宪法与 /constitution · CodeWhale 文档" : "Constitution and /constitution · CodeWhale Docs",
     description: isZh
-      ? "Agent 自我模型、嵌套权威系统和证据规则。"
-      : "Agent identity, nested authority system, and evidence rules.",
-  };
+      ? "用户全局宪法、仓库本地法、项目说明和运行时边界。"
+      : "User-global constitution, repo-local law, project instructions, and runtime boundaries.",
+  });
 }
 
 export default async function ConstitutionPage({ params }: { params: Promise<{ locale: string }> }) {
@@ -19,46 +22,50 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
     <section className="space-y-10">
       <section id="overview" className="scroll-mt-32">
         <h2 className="font-display text-3xl mb-1">
-          {isZh ? "嵌套宪法" : "Constitution"}{" "}
+          {isZh ? "宪法与 /constitution" : "Constitution and /constitution"}{" "}
           <span className="font-cjk text-indigo text-2xl ml-2">
-            {isZh ? "Constitution" : "嵌套宪法"}
+            {isZh ? "Constitution" : "宪法与 /constitution"}
           </span>
         </h2>
         {isZh ? (
           <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
-            CodeWhale 先给 Agent 一个可追责的地址，再给上下文冲突一套法律。全局 Constitution 处理
-            truth、user agency、行动和验证；仓库可以通过{" "}
+            CodeWhale 先给 Agent 一个可追责的地址，再给上下文冲突一套法律。
+            <code className="inline">/constitution</code> 是管理个人常驻宪法的主入口：
+            它把结构化的用户全局设置保存在 <code className="inline">$CODEWHALE_HOME/constitution.json</code>，
+            再渲染成模型可读的 prose block。仓库仍可通过{" "}
             <code className="inline">.codewhale/constitution.json</code> 增加本地 law；runtime
-            policy 再把模式、审批、沙箱、成本和工具边界落到代码里。
+            policy 独立负责模式、审批、沙箱、成本和工具边界。
           </p>
         ) : (
           <p className="text-ink-soft mt-3 leading-relaxed">
             CodeWhale gives the agent an accountable address, then a legal system for
-            context conflicts. The global Constitution handles truth, user agency,
-            action, and verification; repos can add local law via{" "}
+            context conflicts. <code className="inline">/constitution</code> is the
+            primary personal constitution surface: guided setup stores structured
+            user-global data in <code className="inline">$CODEWHALE_HOME/constitution.json</code>
+            and renders it as model-facing prose. Repos can still add local law via{" "}
             <code className="inline">.codewhale/constitution.json</code>; runtime policy
-            encodes modes, approval, sandbox, cost, and tool boundaries.
+            separately encodes modes, approval, sandbox, cost, and tool boundaries.
           </p>
         )}
         <div className="hairline-t hairline-b mt-6 grid md:grid-cols-3 col-rule">
           {[
             {
-              name: "Identity",
-              cn: "自我",
-              en: "The agent is an instance in this terminal, workspace, and session; accountability starts with an address.",
-              zh: "Agent 是当前终端、工作区和会话里的实例；责任先有地址。",
+              name: "User-global",
+              cn: "用户全局",
+              en: "Use /constitution for standing personal law across projects. It is structured data rendered to prose, not a raw prompt editor.",
+              zh: "用 /constitution 管理跨项目个人常驻法。它是结构化数据渲染成 prose，不是裸 prompt 编辑器。",
             },
             {
-              name: "Authority",
-              cn: "权威",
-              en: "User request, runtime policy, repo local law, live evidence, and memory each have a rank.",
-              zh: "当前用户请求、运行时规则、仓库本地 law、实时证据、记忆各有顺位。",
+              name: "Repo-local",
+              cn: "仓库本地",
+              en: ".codewhale/constitution.json is optional project policy for protected invariants, branch rules, verification, and escalation.",
+              zh: ".codewhale/constitution.json 是可选项目 law，用于不变量、分支规则、验证和升级条件。",
             },
             {
-              name: "Evidence",
-              cn: "证据",
-              en: "Tool output, file contents, test results, and diagnostic feedback are the source of truth; no claim of success without evidence.",
-              zh: "工具输出、文件内容、测试结果和诊断反馈是事实来源；没有证据就不声明完成。",
+              name: "Runtime",
+              cn: "运行时",
+              en: "Constitution text may express preferences, but approval, sandbox, shell, network, trust, and MCP permissions remain enforced config.",
+              zh: "宪法文本可以表达偏好；审批、沙箱、Shell、网络、信任和 MCP 权限仍由运行时配置强制执行。",
             },
           ].map((row) => (
             <div key={row.name} className="p-5">
@@ -73,13 +80,13 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
         </div>
         <p className={`mt-4 text-sm text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
           {isZh
-            ? "普通项目说明仍放在 AGENTS.md；CodeWhale 专属的冲突解决和验证策略放在 .codewhale/constitution.json。详见 "
-            : "Standard project instructions still live in AGENTS.md; CodeWhale-specific conflict resolution and verification policies go in .codewhale/constitution.json. See "}
+            ? "普通项目说明仍放在 AGENTS.md；记忆和交接低于宪法与项目说明；完整 base prompt Markdown 覆盖只是专家逃生口，不是普通设置路径。详见 "
+            : "Standard project instructions still live in AGENTS.md; memory and handoffs rank below constitutions and project instructions; the full base-prompt Markdown override is an expert escape hatch, not the normal setup path. See "}
           <Link
-            href="https://github.com/Hmbown/CodeWhale/blob/main/docs/CONFIGURATION.md#project-instructions--repo-authority"
+            href="https://github.com/Hmbown/CodeWhale/blob/main/docs/CONFIGURATION.md#constitution-project-instructions-and-repo-authority"
             className="body-link"
           >
-            {isZh ? "repo authority docs" : "repo authority docs"}
+            {isZh ? "configuration docs" : "configuration docs"}
           </Link>
           {isZh ? "。" : "."}
         </p>

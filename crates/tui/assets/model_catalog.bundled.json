@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source": "bundled",
-  "fetched_at": "2026-06-14T00:00:00Z",
+  "fetched_at": "2026-07-06T00:00:00Z",
   "ttl_secs": 315360000,
   "entries": {
     "deepseek-v4-pro": {
@@ -36,6 +36,8 @@
       "context_window": 262144,
       "max_output": 262144,
       "supports_reasoning": true,
+      "input_usd_per_million": 0.95,
+      "output_usd_per_million": 4.0,
       "modalities": ["text"],
       "supported_parameters": ["reasoning"],
       "provenance": "bundled"
@@ -45,6 +47,8 @@
       "context_window": 262144,
       "max_output": 262144,
       "supports_reasoning": true,
+      "input_usd_per_million": 0.95,
+      "output_usd_per_million": 4.0,
       "modalities": ["text"],
       "supported_parameters": ["reasoning"],
       "provenance": "bundled"
@@ -54,6 +58,19 @@
       "context_window": 1000000,
       "max_output": 131072,
       "supports_reasoning": true,
+      "input_usd_per_million": 1.4,
+      "output_usd_per_million": 4.4,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "glm-5.2": {
+      "id": "glm-5.2",
+      "context_window": 1000000,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "input_usd_per_million": 1.4,
+      "output_usd_per_million": 4.4,
       "modalities": ["text"],
       "supported_parameters": [],
       "provenance": "bundled"
@@ -64,6 +81,28 @@
       "max_output": 524288,
       "supports_reasoning": true,
       "modalities": ["text", "image"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "minimax/minimax-m2.7": {
+      "id": "minimax/minimax-m2.7",
+      "context_window": 204800,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "input_usd_per_million": 0.3,
+      "output_usd_per_million": 1.2,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "minimax-m2.7": {
+      "id": "minimax-m2.7",
+      "context_window": 204800,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "input_usd_per_million": 0.3,
+      "output_usd_per_million": 1.2,
+      "modalities": ["text"],
       "supported_parameters": [],
       "provenance": "bundled"
     },
@@ -81,6 +120,94 @@
       "context_window": 262144,
       "max_output": 262144,
       "supports_reasoning": true,
+      "modalities": ["text"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
+    "trinity-mini": {
+      "id": "trinity-mini",
+      "context_window": 128000,
+      "max_output": 64000,
+      "supports_reasoning": false,
+      "input_usd_per_million": 0.045,
+      "output_usd_per_million": 0.15,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "arcee-ai/trinity-mini": {
+      "id": "arcee-ai/trinity-mini",
+      "context_window": 128000,
+      "max_output": 64000,
+      "supports_reasoning": false,
+      "input_usd_per_million": 0.045,
+      "output_usd_per_million": 0.15,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "claude-opus-4-8": {
+      "id": "claude-opus-4-8",
+      "context_window": 1000000,
+      "max_output": 128000,
+      "supports_reasoning": true,
+      "input_usd_per_million": 5.0,
+      "output_usd_per_million": 25.0,
+      "modalities": ["text"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
+    "claude-sonnet-4-6": {
+      "id": "claude-sonnet-4-6",
+      "context_window": 1000000,
+      "max_output": 64000,
+      "supports_reasoning": true,
+      "input_usd_per_million": 3.0,
+      "output_usd_per_million": 15.0,
+      "modalities": ["text"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
+    "claude-haiku-4-5": {
+      "id": "claude-haiku-4-5",
+      "context_window": 200000,
+      "max_output": 64000,
+      "supports_reasoning": false,
+      "input_usd_per_million": 1.0,
+      "output_usd_per_million": 5.0,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "step-3.7-flash": {
+      "id": "step-3.7-flash",
+      "context_window": 256000,
+      "max_output": 32000,
+      "supports_reasoning": false,
+      "input_usd_per_million": 0.2,
+      "output_usd_per_million": 1.15,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "fugu-ultra-20260615": {
+      "id": "fugu-ultra-20260615",
+      "context_window": 200000,
+      "max_output": 64000,
+      "supports_reasoning": true,
+      "input_usd_per_million": 5.0,
+      "output_usd_per_million": 30.0,
+      "modalities": ["text"],
+      "supported_parameters": ["reasoning"],
+      "provenance": "bundled"
+    },
+    "fugu-ultra": {
+      "id": "fugu-ultra",
+      "context_window": 200000,
+      "max_output": 64000,
+      "supports_reasoning": true,
+      "input_usd_per_million": 5.0,
+      "output_usd_per_million": 30.0,
       "modalities": ["text"],
       "supported_parameters": ["reasoning"],
       "provenance": "bundled"

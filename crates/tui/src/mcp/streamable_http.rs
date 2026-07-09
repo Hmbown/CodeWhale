@@ -115,10 +115,21 @@ impl StreamableHttpTransport {
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let body = response
-            .text()
+        // Reject an over-large declared body before reading anything (fast
+        // path), then bound the read itself so chunked / length-less
+        // responses cannot OOM us either — Content-Length alone does not
+        // protect against a server that streams without declaring a length.
+        if let Some(len) = response.content_length()
+            && len > super::MAX_MCP_RESPONSE_BYTES as u64
+        {
+            return Err(StreamableSendError::Other(anyhow::anyhow!(
+                "MCP response Content-Length {len} exceeds {} bytes — aborting",
+                super::MAX_MCP_RESPONSE_BYTES
+            )));
+        }
+        let body = read_body_capped(response, super::MAX_MCP_RESPONSE_BYTES)
             .await
-            .map_err(|err| StreamableSendError::Other(err.into()))?;
+            .map_err(StreamableSendError::Other)?;
         self.store_response_body(content_type.as_deref(), &body)
             .map_err(StreamableSendError::Other)
     }
@@ -150,6 +161,29 @@ impl StreamableHttpTransport {
         self.pending_messages.push_back(body.as_bytes().to_vec());
         Ok(())
     }
+}
+
+/// Read a response body through the byte stream, failing as soon as it
+/// exceeds `max_bytes`. This bounds chunked and missing-Content-Length
+/// responses exactly like declared ones (the declared-length fast path in
+/// `send` only covers servers honest enough to announce their size).
+/// MCP bodies are JSON or SSE, so lossy UTF-8 matches `.text()` behavior.
+pub(super) async fn read_body_capped(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String> {
+    use futures_util::StreamExt;
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("failed to read MCP response body")?;
+        if buf.len().saturating_add(chunk.len()) > max_bytes {
+            anyhow::bail!("MCP response body exceeds {max_bytes} bytes — aborting");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn is_streamable_http_incompatible_status(status: StatusCode) -> bool {

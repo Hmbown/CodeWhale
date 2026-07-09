@@ -10,18 +10,19 @@ use super::{
     DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
     DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_FIREWORKS_BASE_URL,
     DEFAULT_FIREWORKS_MODEL, DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL,
-    DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL, DEFAULT_MOONSHOT_BASE_URL,
-    DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL, DEFAULT_NOVITA_MODEL,
-    DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL,
-    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENMODEL_BASE_URL,
-    DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
-    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
-    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
-    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
-    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
-    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
-    DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
+    DEFAULT_LONGCAT_BASE_URL, DEFAULT_LONGCAT_MODEL, DEFAULT_MINIMAX_BASE_URL,
+    DEFAULT_MINIMAX_MODEL, DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL,
+    DEFAULT_NOVITA_BASE_URL, DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL,
+    DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
+    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL,
+    DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL,
+    DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL,
+    DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL,
+    DEFAULT_VOLCENGINE_BASE_URL, DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL,
+    DEFAULT_WANJIE_ARK_MODEL, DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL,
     DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
     DEFAULT_ZAI_MODEL, ProviderKind,
 };
@@ -277,7 +278,10 @@ provider!(
     DEFAULT_NOVITA_MODEL,
     ["NOVITA_API_KEY"],
     "novita",
-    aliases: []
+    // `novita-ai` is the id Models.dev publishes for this provider; without it a
+    // live/full Models.dev catalog row keyed `novita-ai` would fail to normalize
+    // onto ProviderKind::Novita (Refs #4186).
+    aliases: ["novita-ai", "novita_ai"]
 );
 provider!(
     Fireworks,
@@ -338,7 +342,10 @@ provider!(
     DEFAULT_MOONSHOT_MODEL,
     ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
     "moonshot",
-    aliases: ["moonshot-ai", "kimi", "kimi-k2"]
+    // `moonshotai` is the id Models.dev publishes for Moonshot/Kimi; without
+    // it a live/full Models.dev catalog row keyed `moonshotai` would fail to
+    // normalize onto ProviderKind::Moonshot (Refs #4186).
+    aliases: ["moonshot-ai", "moonshotai", "moonshot_ai", "kimi", "kimi-k2"]
 );
 provider!(
     Sglang,
@@ -393,7 +400,11 @@ provider!(
     DEFAULT_TOGETHER_MODEL,
     ["TOGETHER_API_KEY"],
     "together",
-    aliases: ["together-ai", "together_ai"]
+    // `togetherai` (no separator) is the id Models.dev publishes for Together;
+    // the hyphen/underscore spellings are legacy config aliases. All three must
+    // normalize onto ProviderKind::Together so live-catalog rows keyed
+    // `togetherai` resolve to the right kind (Refs #4186).
+    aliases: ["together-ai", "together_ai", "togetherai"]
 );
 provider!(
     Qianfan,
@@ -594,6 +605,30 @@ provider!(
     aliases: ["sakana-ai", "sakana_ai", "fugu"]
 );
 
+provider!(
+    LongCat,
+    LongCat,
+    "longcat",
+    "Meituan LongCat",
+    DEFAULT_LONGCAT_BASE_URL,
+    DEFAULT_LONGCAT_MODEL,
+    ["LONGCAT_API_KEY"],
+    "longcat",
+    aliases: ["long-cat", "meituan-longcat", "meituan"]
+);
+
+provider!(
+    Xai,
+    Xai,
+    "xai",
+    "xAI",
+    DEFAULT_XAI_BASE_URL,
+    DEFAULT_XAI_MODEL,
+    ["XAI_API_KEY"],
+    "xai",
+    aliases: ["x-ai", "x_ai", "grok"]
+);
+
 /// User-defined OpenAI-compatible endpoint (#1519).
 ///
 /// A single dynamic provider identity for arbitrary `[providers.<name>]
@@ -676,9 +711,11 @@ static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
 static DEEPINFRA: Deepinfra = Deepinfra;
 static SAKANA: Sakana = Sakana;
+static LONGCAT: LongCat = LongCat;
+static XAI: Xai = Xai;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 30] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 32] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -708,6 +745,8 @@ static PROVIDER_REGISTRY: [&dyn Provider; 30] = [
     &MINIMAX,
     &DEEPINFRA,
     &SAKANA,
+    &LONGCAT,
+    &XAI,
     &CUSTOM,
 ];
 

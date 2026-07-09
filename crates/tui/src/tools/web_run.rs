@@ -14,6 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "pdf")]
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
@@ -1159,6 +1160,7 @@ async fn fetch_page(url: &str, timeout_ms: u64) -> Result<WebPage, ToolError> {
         )));
     }
 
+    #[cfg(feature = "pdf")]
     if is_pdf(&content_type, url) {
         return parse_pdf_page(url, content_type, &bytes);
     }
@@ -1176,6 +1178,7 @@ async fn fetch_page(url: &str, timeout_ms: u64) -> Result<WebPage, ToolError> {
     })
 }
 
+#[cfg(feature = "pdf")]
 fn is_pdf(content_type: &Option<String>, url: &str) -> bool {
     if let Some(ct) = content_type
         && ct.to_lowercase().contains("application/pdf")
@@ -1185,6 +1188,7 @@ fn is_pdf(content_type: &Option<String>, url: &str) -> bool {
     url.to_lowercase().ends_with(".pdf")
 }
 
+#[cfg(feature = "pdf")]
 fn parse_pdf_page(
     url: &str,
     content_type: Option<String>,
@@ -1204,11 +1208,13 @@ fn parse_pdf_page(
     })
 }
 
+#[cfg(feature = "pdf")]
 fn pdf_extract_text(bytes: &[u8]) -> Result<String, ToolError> {
     guard_pdf_extract(|| pdf_extract::extract_text_from_mem(bytes))
         .map_err(|e| ToolError::execution_failed(format!("PDF extract failed: {e}")))
 }
 
+#[cfg(feature = "pdf")]
 fn guard_pdf_extract<T, E, F>(extract: F) -> Result<T, String>
 where
     E: Display,
@@ -1224,6 +1230,7 @@ where
     }
 }
 
+#[cfg(feature = "pdf")]
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -1234,6 +1241,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+#[cfg(feature = "pdf")]
 fn split_pdf_pages(text: &str) -> Vec<Vec<String>> {
     let raw_pages: Vec<&str> = text.split('\x0C').collect();
     raw_pages
@@ -1820,6 +1828,7 @@ mod tests {
         assert_eq!(percent_decode("foo+bar%20baz"), "foo+bar baz");
     }
 
+    #[cfg(feature = "pdf")]
     #[test]
     fn pdf_extract_panic_is_returned_as_tool_error_text() {
         let err = guard_pdf_extract(|| -> Result<String, &'static str> {

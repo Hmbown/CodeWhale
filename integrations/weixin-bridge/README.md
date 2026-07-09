@@ -11,7 +11,7 @@
 
 - `codewhale serve --http` 绑定于 `127.0.0.1`。
 - `/v1/*` runtime 调用使用 `CODEWHALE_RUNTIME_TOKEN`。
-- 微信用户必须加入白名单，除非首次配对时设置 `WEXIN_ALLOW_UNLISTED=true`。
+- 微信用户必须加入白名单，除非首次配对时设置 `WEIXIN_ALLOW_UNLISTED=true`。
 - 仅支持私聊；暂不支持群聊。
 - 工具审批通过文本命令：`/allow <approval_id>` 或 `/deny <approval_id>`。
 - bridge 主动向微信服务器发起长轮询请求，无需公网端口。
@@ -45,11 +45,11 @@ node src/index.mjs
 
 ## 首次配对
 
-1. 设置 `WEXIN_ALLOW_UNLISTED=true` 启动 bridge。
+1. 设置 `WEIXIN_ALLOW_UNLISTED=true` 启动 bridge。
 2. 扫码登录后，在微信中发送 `/status`。
 3. Bridge 会将你的 `user_id` 返回给你（若白名单为空则显示在拒绝消息中）。
-4. 将 `user_id` 加入 `WEXIN_CHAT_ALLOWLIST`。
-5. 将 `WEXIN_ALLOW_UNLISTED` 改回 `false` 并重启 bridge。
+4. 将 `user_id` 加入 `WEIXIN_CHAT_ALLOWLIST`。
+5. 将 `WEIXIN_ALLOW_UNLISTED` 改回 `false` 并重启 bridge。
 
 ## 环境变量
 
@@ -60,13 +60,15 @@ node src/index.mjs
 | `CODEWHALE_WORKSPACE` | 否 | 工作区路径（默认 cwd） |
 | `CODEWHALE_MODEL` | 否 | 模型名称（默认 `auto`） |
 | `CODEWHALE_MODE` | 否 | 运行模式（默认 `agent`） |
-| `WEXIN_CHAT_ALLOWLIST` | 否 | 逗号分隔的允许用户 ID |
-| `WEXIN_ALLOW_UNLISTED` | 否 | 首次配对模式（默认 `false`） |
-| `WEXIN_STATE_DIR` | 否 | 状态持久化目录 |
-| `WEXIN_THREAD_MAP_PATH` | 否 | 线程映射文件路径 |
-| `WEXIN_MAX_REPLY_CHARS` | 否 | 单条回复最大字符数（默认 `3500`） |
+| `WEIXIN_CHAT_ALLOWLIST` | 否 | 逗号分隔的允许用户 ID |
+| `WEIXIN_ALLOW_UNLISTED` | 否 | 首次配对模式（默认 `false`） |
+| `WEIXIN_STATE_DIR` | 否 | 状态持久化目录 |
+| `WEIXIN_THREAD_MAP_PATH` | 否 | 线程映射文件路径 |
+| `WEIXIN_MAX_REPLY_CHARS` | 否 | 单条回复最大字符数（默认 `3500`） |
 | `CODEWHALE_TURN_TIMEOUT_MS` | 否 | Turn 超时（默认 `900000`） |
-| `WEXIN_LONGPOLL_TIMEOUT_MS` | 否 | 长轮询超时（默认 `35000`） |
+| `WEIXIN_LONGPOLL_TIMEOUT_MS` | 否 | 长轮询超时（默认 `35000`） |
+
+旧的 `WEXIN_*`（拼写错误）变量名仍作为已弃用别名被识别，启动时会打印一次弃用警告。
 
 ## 架构
 

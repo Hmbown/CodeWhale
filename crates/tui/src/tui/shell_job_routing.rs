@@ -125,7 +125,9 @@ fn format_shell_job_detail(detail: &ShellJobDetail) -> String {
         lines.push(format!("Linked Task: {task_id}"));
     }
     if job.stale {
-        lines.push("Completion State: stale after restart; process is not attached.".to_string());
+        lines.push(
+            "Completion state: stale after restart; the process is no longer running.".to_string(),
+        );
     } else {
         lines.push("Completion State: live in this TUI process.".to_string());
     }

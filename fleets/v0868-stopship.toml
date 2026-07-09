@@ -1,0 +1,42 @@
+# Fleet roster: v0868-stopship (#4178)
+#
+# Named stopship fleet binding roles → AgentProfile ids. Fleet resolves roles
+# only — it does NOT spawn tmux or manage worktrees (Runtime owns those).
+#
+# Load path (when wired by workflow run --fleet):
+#   1. $CODEWHALE_HOME/fleets/v0868-stopship.toml
+#   2. <workspace>/fleets/v0868-stopship.toml  (this file)
+#
+# Built-in roster members used as profile ids: scout, builder, reviewer,
+# verifier, manager. Role aliases match Phase 2 / Phase 3 vocabulary.
+
+name = "v0868-stopship"
+description = "Stopship dogfood fleet for #4090 / #4093 / #4094"
+
+[roles]
+# role name = AgentProfile id (built-in or workspace profile)
+scout = "scout"
+implementer = "builder"
+reviewer = "reviewer"
+verifier = "verifier"
+release_lead = "manager"
+
+[role_intents.scout]
+mode = "read_only"
+summary = "Read-only recon on issue + codebase"
+
+[role_intents.implementer]
+mode = "write"
+summary = "Minimal fix branch from main"
+
+[role_intents.reviewer]
+mode = "read_only"
+summary = "Diff review, regression focus"
+
+[role_intents.verifier]
+mode = "read_only"
+summary = "cargo test, clippy, fmt gate"
+
+[role_intents.release_lead]
+mode = "write"
+summary = "Stopship checklist + PR draft"

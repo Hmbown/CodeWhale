@@ -497,6 +497,12 @@ fn all_fresh_offerings_spans_providers_and_skips_stale() {
     let fresh = cache.all_fresh_offerings(1_100);
     assert_eq!(fresh.len(), 1);
     assert_eq!(fresh[0].wire_model_id, "fresh-row");
+
+    // #4139: pickers still see stale rows; only the fresh helper drops them.
+    let visible = cache.all_visible_offerings(1_100);
+    assert_eq!(visible.len(), 2);
+    assert!(visible.iter().any(|row| row.wire_model_id == "fresh-row"));
+    assert!(visible.iter().any(|row| row.wire_model_id == "stale-row"));
 }
 
 #[test]
@@ -521,7 +527,7 @@ fn snapshot_feeds_route_resolver_offerings() {
 }
 
 // ---------------------------------------------------------------------------
-// #3385: the committed bundled Models.dev asset.
+// #3385 / #4188: the committed offline/stale bundled Models.dev asset.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -537,6 +543,30 @@ fn bundled_asset_parses() {
     );
     // The helper returns the same parsed catalog.
     assert_eq!(bundled_models_dev_catalog(), catalog);
+}
+
+#[test]
+fn bundled_asset_meta_describes_offline_fallback_not_competing_truth() {
+    // #4188: the asset must document itself as offline/stale fallback, not a
+    // competing curated source of truth alongside live Models.dev.
+    let raw: serde_json::Value =
+        serde_json::from_str(BUNDLED_MODELS_DEV_JSON).expect("bundled JSON");
+    let meta = raw
+        .get("_meta")
+        .and_then(|m| m.as_object())
+        .expect("_meta object");
+    let role = meta
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        role.to_ascii_lowercase().contains("not a competing"),
+        "_meta.role must demote the bundled asset: {role}"
+    );
+    assert!(
+        role.to_ascii_lowercase().contains("live"),
+        "_meta.role must point at live Models.dev preference: {role}"
+    );
 }
 
 #[test]
@@ -597,4 +627,67 @@ fn bundled_asset_pricing_is_honest() {
     let cost = glm51.cost.as_ref().expect("glm-5.1 is priced");
     assert_eq!(cost.input, Some(0.98));
     assert_eq!(cost.output, Some(3.08));
+}
+
+#[test]
+fn live_offerings_normalize_models_dev_provider_aliases() {
+    // Live Models.dev ids that must map onto CodeWhale kinds (#4186/#4187).
+    let raw = r#"{
+      "models": {},
+      "providers": {
+        "moonshotai": {
+          "id": "moonshotai",
+          "models": {
+            "kimi-k2.5": {
+              "id": "kimi-k2.5",
+              "modalities": { "input": ["text"], "output": ["text"] }
+            }
+          }
+        },
+        "togetherai": {
+          "id": "togetherai",
+          "models": {
+            "deepseek-ai/DeepSeek-V4-Pro": {
+              "id": "deepseek-ai/DeepSeek-V4-Pro",
+              "modalities": { "input": ["text"], "output": ["text"] }
+            }
+          }
+        },
+        "zhipuai": {
+          "id": "zhipuai",
+          "models": {
+            "glm-5.2": {
+              "id": "glm-5.2",
+              "modalities": { "input": ["text"], "output": ["text"] }
+            }
+          }
+        },
+        "brand-new-gateway": {
+          "id": "brand-new-gateway",
+          "models": {
+            "x-1": {
+              "id": "x-1",
+              "modalities": { "input": ["text"], "output": ["text"] }
+            }
+          }
+        }
+      }
+    }"#;
+    let catalog = ModelsDevCatalog::parse_json(raw).expect("fixture parses");
+    let rows = live_offerings_from_models_dev(&catalog, "fp-models-dev", 1_700);
+
+    assert_eq!(
+        find(&rows, "moonshot", "kimi-k2.5").source,
+        CatalogSource::Live {
+            base_url_fingerprint: "fp-models-dev".into(),
+            fetched_at: 1_700,
+        }
+    );
+    find(&rows, "together", "deepseek-ai/DeepSeek-V4-Pro");
+    find(&rows, "zai", "glm-5.2");
+    // Unknown upstream providers keep their Models.dev id.
+    find(&rows, "brand-new-gateway", "x-1");
+    assert!(rows.iter().all(|r| r.provider != "moonshotai"));
+    assert!(rows.iter().all(|r| r.provider != "togetherai"));
+    assert!(rows.iter().all(|r| r.provider != "zhipuai"));
 }

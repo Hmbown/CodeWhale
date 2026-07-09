@@ -43,19 +43,6 @@ pub(super) fn registered_tool_approval_required(
     !auto_approve
 }
 
-pub(super) fn auto_review_force_prompt_overrides_auto_approve(
-    audit_event: &serde_json::Value,
-) -> bool {
-    audit_event
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        == Some("hold_for_review")
-        && audit_event
-            .get("action_kind")
-            .and_then(serde_json::Value::as_str)
-            == Some("publish")
-}
-
 pub(super) fn tool_error_degradation_runtime_hint(
     consecutive_tool_error_steps: u32,
     step_error_tool_names: &[String],
@@ -203,7 +190,7 @@ fn normalize_domain_candidate(value: &str) -> Option<String> {
 }
 
 fn registered_tool_requires_non_bypassable_approval(tool_name: &str) -> bool {
-    matches!(tool_name, "rlm_eval")
+    matches!(tool_name, "rlm_eval" | "start_mcp_server")
 }
 
 impl Engine {
@@ -398,7 +385,7 @@ impl Engine {
                         // Only update if we got valid messages (never corrupt state)
                         if !result.messages.is_empty() || self.session.messages.is_empty() {
                             let auto_messages_after = result.messages.len();
-                            self.session.messages = result.messages.into();
+                            self.session.replace_messages(result.messages);
                             self.merge_compaction_summary(result.summary_prompt);
                             self.emit_session_updated().await;
                             let removed = auto_messages_before.saturating_sub(auto_messages_after);
@@ -698,7 +685,7 @@ impl Engine {
             // tool call except the last one in the batch.
             let mut current_tool_indices: std::collections::HashMap<u32, usize> =
                 std::collections::HashMap::new();
-            let mut in_tool_call_block = false;
+            let mut tool_call_filter = ToolCallDeltaFilterState::default();
             let mut fake_wrapper_notice_emitted = false;
             let mut pending_message_complete = false;
             let mut last_text_index: Option<usize> = None;
@@ -902,9 +889,11 @@ impl Engine {
                         ContentBlockStart::Text { text } => {
                             current_text_raw = text;
                             current_text_visible.clear();
-                            in_tool_call_block = false;
-                            let filtered =
-                                filter_tool_call_delta(&current_text_raw, &mut in_tool_call_block);
+                            tool_call_filter = ToolCallDeltaFilterState::default();
+                            let filtered = filter_tool_call_delta_with_state(
+                                &current_text_raw,
+                                &mut tool_call_filter,
+                            );
                             if !fake_wrapper_notice_emitted
                                 && filtered.len() < current_text_raw.len()
                                 && contains_fake_tool_wrapper(&current_text_raw)
@@ -977,10 +966,11 @@ impl Engine {
                         Delta::TextDelta { text } => {
                             stream_content_bytes = stream_content_bytes.saturating_add(text.len());
                             current_text_raw.push_str(&text);
-                            let filtered = filter_tool_call_delta(&text, &mut in_tool_call_block);
+                            let filtered =
+                                filter_tool_call_delta_with_state(&text, &mut tool_call_filter);
                             if !fake_wrapper_notice_emitted
                                 && filtered.len() < text.len()
-                                && contains_fake_tool_wrapper(&text)
+                                && contains_fake_tool_wrapper(&current_text_raw)
                             {
                                 let _ =
                                     self.tx_event.send(Event::status(FAKE_WRAPPER_NOTICE)).await;
@@ -1042,6 +1032,17 @@ impl Engine {
                         let stopped_kind = current_block_kind.take();
                         match stopped_kind {
                             Some(ContentBlockKind::Text) => {
+                                let flushed = flush_tool_call_delta_state(&mut tool_call_filter);
+                                if !flushed.is_empty() {
+                                    current_text_visible.push_str(&flushed);
+                                    let _ = self
+                                        .tx_event
+                                        .send(Event::MessageDelta {
+                                            index: index as usize,
+                                            content: flushed,
+                                        })
+                                        .await;
+                                }
                                 pending_message_complete = true;
                                 last_text_index = Some(index as usize);
                             }
@@ -1353,6 +1354,10 @@ impl Engine {
                                 "Turn ending with {running} sub-agent(s) still running in the background; they'll report when done."
                             )))
                             .await;
+                        // Inject a waiting hint so the model does not poll
+                        // with peek/status/sleep on the next turn (issue #4097).
+                        self.add_session_message(waiting_for_subagents_runtime_message(running))
+                            .await;
                     }
                 }
                 if subagent_completions > 0 {
@@ -1586,7 +1591,7 @@ impl Engine {
                 let mut read_only = false;
                 let mut detached_start = false;
                 let mut blocked_error: Option<ToolError> = None;
-                let mut guard_result: Option<ToolResult> = None;
+                let guard_result: Option<ToolResult> = None;
                 // #3026: set by a hook `ask` decision; applied AFTER the
                 // registry-based approval computation below so it cannot be
                 // clobbered by it.
@@ -1605,7 +1610,7 @@ impl Engine {
                     )
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode — switch to Agent or YOLO mode to run commands and code."
+                        "'{tool_name}' is not available in Plan mode — switch to Act mode (`/mode act`) to run commands and code."
                     )));
                 }
 
@@ -1642,8 +1647,17 @@ impl Engine {
                     )));
                 }
 
+                // Fail closed: a tool with no execution path — not MCP, not
+                // code/js/search, and with no registry spec — must be blocked,
+                // NOT run unguarded. Previously this only checked
+                // `tool_def.is_none()`, so a tool present in the model-facing
+                // catalog but absent from the execution registry (or when the
+                // registry itself is None) fell through every approval branch
+                // with approval_required=false and executed with no gate.
+                let registry_has_spec =
+                    tool_registry.is_some_and(|registry| registry.get(&tool_name).is_some());
                 if blocked_error.is_none()
-                    && tool_def.is_none()
+                    && !registry_has_spec
                     && !McpPool::is_mcp_tool(&tool_name)
                     && tool_name != CODE_EXECUTION_TOOL_NAME
                     && tool_name != JS_EXECUTION_TOOL_NAME
@@ -1716,7 +1730,7 @@ impl Engine {
                 if McpPool::is_mcp_tool(&tool_name) {
                     read_only = mcp_tool_is_read_only(&tool_name);
                     supports_parallel = mcp_tool_is_parallel_safe(&tool_name);
-                    approval_required = !read_only;
+                    approval_required = !read_only && !self.session.auto_approve;
                     approval_description = mcp_tool_approval_description(&tool_name);
                 } else if let Some(registry) = tool_registry
                     && let Some(spec) = registry.get(&tool_name)
@@ -1731,13 +1745,13 @@ impl Engine {
                     read_only = spec.is_read_only_for(&tool_input);
                     detached_start = spec.starts_detached_for(&tool_input);
                 } else if tool_name == CODE_EXECUTION_TOOL_NAME {
-                    approval_required = true;
+                    approval_required = !self.session.auto_approve;
                     approval_description =
                         "Run model-provided Python code in local execution sandbox".to_string();
                     supports_parallel = false;
                     read_only = false;
                 } else if tool_name == JS_EXECUTION_TOOL_NAME {
-                    approval_required = true;
+                    approval_required = !self.session.auto_approve;
                     approval_description =
                         "Run model-provided JavaScript code in local Node.js execution sandbox"
                             .to_string();
@@ -1755,7 +1769,7 @@ impl Engine {
                     && plan_mode_blocks_write_capable_tool(&tool_name, read_only)
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode - switch to Agent or YOLO mode to modify files or run write-capable tools."
+                        "'{tool_name}' is not available in Plan mode - switch to Act mode (`/mode act`) to modify files or run write-capable tools."
                     )));
                 }
 
@@ -1763,7 +1777,7 @@ impl Engine {
                 // for tools the registry would auto-run. Must stay after the
                 // registry-based computation above, which assigns rather than
                 // ORs `approval_required`.
-                if hook_requires_approval {
+                if hook_requires_approval && !self.session.auto_approve {
                     approval_required = true;
                 }
 
@@ -1787,13 +1801,10 @@ impl Engine {
                     if let Some(decision) = ask_rule_decision {
                         match decision {
                             ToolAskRuleDecision::Prompt(reason) => {
-                                // YOLO mode (auto_approve) is the explicit
-                                // "no approvals" contract: a typed ask-rule
-                                // must not pop a modal in YOLO. The
-                                // auto_review safety floor below still
-                                // independently holds publish/destructive
-                                // actions, and a typed deny rule still
-                                // blocks hard.
+                                // #3790: the mode is the sole authority — a typed
+                                // ask-rule prompts in Agent/Plan but never in YOLO
+                                // (auto_approve). A typed deny rule still blocks
+                                // hard, in every mode.
                                 if !self.session.auto_approve {
                                     approval_required = true;
                                     approval_description = reason;
@@ -1828,24 +1839,52 @@ impl Engine {
                     match decision {
                         AutoReviewPlanDecision::NoChange => {}
                         AutoReviewPlanDecision::ForcePrompt(reason) => {
-                            // YOLO mode (auto_approve) skips ordinary review
-                            // holds, including Background+Destructive shell
-                            // holds created by the coarse shell risk fallback.
-                            // Publish-like actions are different: the
-                            // safety_floor marks them as durable-review holds
-                            // regardless of mode, so they must still surface a
-                            // forced prompt. A Block decision (typed deny
-                            // rules / hard blocks) still holds below
-                            // regardless of mode.
-                            if !self.session.auto_approve
-                                || auto_review_force_prompt_overrides_auto_approve(&audit_event)
-                            {
-                                approval_required = true;
-                                approval_description = reason;
-                                approval_force_prompt = true;
-                            }
+                            // The built-in safety floor is deliberately
+                            // non-bypassable: YOLO auto-approves ordinary tool
+                            // calls, but publish-like and background/headless
+                            // destructive holds still require review.
+                            approval_required = true;
+                            approval_description = reason;
+                            approval_force_prompt = true;
                         }
                         AutoReviewPlanDecision::Block(reason) => {
+                            approval_required = false;
+                            approval_force_prompt = false;
+                            blocked_error = Some(ToolError::permission_denied(reason));
+                        }
+                    }
+                }
+
+                // Repo law: protected invariants with path globs compile into
+                // mechanical write holds. Like the safety floor, law is not
+                // bypassable by mode — it can only add holds, never remove
+                // one, so this cannot weaken any gate above.
+                if blocked_error.is_none()
+                    && let Some(decision) = crate::repo_law::repo_law_plan_decision(
+                        &self.session.workspace,
+                        &tool_name,
+                        &tool_input,
+                    )
+                {
+                    emit_tool_audit(json!({
+                        "event": "tool.repo_law_decision",
+                        "tool_id": tool_id.clone(),
+                        "decision": match &decision {
+                            crate::repo_law::RepoLawPlanDecision::ForcePrompt(_) => "force_prompt",
+                            crate::repo_law::RepoLawPlanDecision::Block(_) => "block",
+                        },
+                        "reason": match &decision {
+                            crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason)
+                            | crate::repo_law::RepoLawPlanDecision::Block(reason) => reason.clone(),
+                        },
+                    }));
+                    match decision {
+                        crate::repo_law::RepoLawPlanDecision::ForcePrompt(reason) => {
+                            approval_required = true;
+                            approval_description = reason;
+                            approval_force_prompt = true;
+                        }
+                        crate::repo_law::RepoLawPlanDecision::Block(reason) => {
                             approval_required = false;
                             approval_force_prompt = false;
                             blocked_error = Some(ToolError::permission_denied(reason));
@@ -1864,17 +1903,27 @@ impl Engine {
                         &mut deferred_tools_hydrated_this_batch,
                     )
                 {
+                    emit_tool_audit(json!({
+                        "event": "tool.schema_hydrated",
+                        "tool_id": tool_id.clone(),
+                        "tool_name": tool_name.clone(),
+                        "auto_retry_same_turn": true,
+                        "metadata": result.metadata,
+                    }));
                     if should_emit_hydration_status {
                         let status = if requested_tool_name == tool_name {
-                            format!("Auto-loaded deferred tool '{tool_name}' after model request.")
+                            format!(
+                                "Auto-loaded deferred tool '{tool_name}' and retrying the pending call in the same turn."
+                            )
                         } else {
                             format!(
-                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'."
+                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}' and retrying in the same turn."
                             )
                         };
                         let _ = self.tx_event.send(Event::status(status)).await;
                     }
-                    guard_result = Some(result);
+                    // Do not set guard_result: the tool is activated for this batch
+                    // and will execute immediately with the model's original input.
                 }
 
                 plans.push(ToolExecutionPlan {
@@ -2247,10 +2296,11 @@ impl Engine {
                             continue;
                         }
 
-                        // Handle approval flow: returns (result_override, context_override)
-                        let (result_override, context_override): (
+                        // Handle approval flow: returns (result_override, context_override, approval_stamp)
+                        let (result_override, context_override, approval_stamp): (
                             Option<Result<ToolResult, ToolError>>,
                             Option<crate::tools::ToolContext>,
+                            Option<ToolApprovalStamp>,
                         ) = if plan.approval_required {
                             emit_tool_audit(json!({
                                 "event": "tool.approval_required",
@@ -2295,7 +2345,7 @@ impl Engine {
                                         "decision": "approved",
                                         "caller": caller_type_for_tool_use(tool_caller.as_ref()),
                                     }));
-                                    (None, None)
+                                    (None, None, Some(ToolApprovalStamp::ApprovedByUser))
                                 }
                                 Ok(ApprovalResult::Denied) => {
                                     emit_tool_audit(json!({
@@ -2309,6 +2359,7 @@ impl Engine {
                                         Some(Err(ToolError::permission_denied(format!(
                                             "Tool '{tool_name}' denied by user"
                                         )))),
+                                        None,
                                         None,
                                     )
                                 }
@@ -2324,12 +2375,16 @@ impl Engine {
                                     let elevated_context = tool_registry.map(|r| {
                                         r.context().clone().with_elevated_sandbox_policy(policy)
                                     });
-                                    (None, elevated_context)
+                                    (
+                                        None,
+                                        elevated_context,
+                                        Some(ToolApprovalStamp::ApprovedWithPolicy),
+                                    )
                                 }
-                                Err(err) => (Some(Err(err)), None),
+                                Err(err) => (Some(Err(err)), None, None),
                             }
                         } else {
-                            (None, None)
+                            (None, None, None)
                         };
 
                         // Per-tool snapshot for surgical undo (#384): capture workspace
@@ -2368,6 +2423,12 @@ impl Engine {
                             )
                             .await
                         };
+
+                        if let Some(approval_stamp) = approval_stamp
+                            && let Ok(tool_result) = result.as_mut()
+                        {
+                            stamp_tool_result_approval(tool_result, approval_stamp);
+                        }
 
                         // #500: spill outsized tool outputs to disk before the
                         // result fans out to the model context and the UI cell.
@@ -2423,10 +2484,19 @@ impl Engine {
             let mut step_error_tool_names: Vec<String> = Vec::new();
             let mut step_error_tool_inputs: Vec<serde_json::Value> = Vec::new();
             let mut stop_after_plan_tool = false;
+            // #dogfood 0.8.67: if the model mutates the goal mid-turn via
+            // create_goal/update_goal, push the change to the sidebar right after
+            // this tool batch instead of waiting for turn end — otherwise the
+            // sidebar "Goal:" line stays stale for the whole (possibly long)
+            // goal-loop turn while get_goal already reflects the new objective.
+            let mut goal_tool_ran = false;
 
             for outcome in outcomes.into_iter().flatten() {
                 let tool_input = outcome.input.clone();
                 let tool_name_for_ws = outcome.name.clone();
+                if matches!(outcome.name.as_str(), "create_goal" | "update_goal") {
+                    goal_tool_ran = true;
+                }
                 let should_stop_this_turn =
                     should_stop_after_plan_tool(mode, &outcome.name, &outcome.result);
 
@@ -2522,6 +2592,13 @@ impl Engine {
 
                 turn.record_tool_call();
                 stop_after_plan_tool |= should_stop_this_turn;
+            }
+
+            // Reflect a mid-turn goal change on the sidebar immediately (idempotent:
+            // emit_goal_updated only sends when an objective is set, and the UI
+            // applies it behind a `changed` guard).
+            if goal_tool_ran {
+                self.emit_goal_updated().await;
             }
 
             if stop_after_plan_tool {
@@ -2670,6 +2747,28 @@ XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 {payload}\n\
 </codewhale:runtime_event>"
     )
+}
+
+fn waiting_for_subagents_runtime_message(running: usize) -> Message {
+    Message {
+        role: "user".to_string(),
+        content: vec![
+            ContentBlock::Text {
+                text: format!(
+                    "<codewhale:runtime_event kind=\"waiting_for_subagents\" visibility=\"internal\">\n\
+This is an internal runtime event, not user input. Your {running} sub-agent(s) \
+are still running. Do NOT poll them with agent(action=\"peek\") or \
+agent(action=\"status\"). Do NOT use sleep or any shell blocking primitive as a \
+waiting strategy. The runtime will deliver <codewhale:subagent.done> sentinels \
+automatically when each child finishes — polling will never make that happen \
+sooner. Stop immediately: emit zero tool calls and end the turn.\n\
+</codewhale:runtime_event>"
+                ),
+                cache_control: None,
+            },
+            runtime_event_turn_metadata_block(UserInputProvenance::SubAgentHandoff),
+        ],
+    }
 }
 
 fn subagent_completion_runtime_message(payload: &str) -> Message {
@@ -2917,7 +3016,19 @@ pub(super) fn command_allows_tool(allowed_tools: Option<&[String]>, tool_name: &
     let Some(allowed_tools) = allowed_tools else {
         return true;
     };
-    allowed_tools.contains(&tool_name.to_ascii_lowercase())
+    // Symmetric with `command_denies_tool`: support a trailing `*` wildcard
+    // and lowercase both sides, so `allowed_tools = ["mcp_*"]` or `["ReadFile"]`
+    // work instead of silently matching nothing (which strips the whole
+    // catalog).
+    let tool_name = tool_name.to_ascii_lowercase();
+    allowed_tools.iter().any(|rule| {
+        let rule = rule.to_ascii_lowercase();
+        if let Some(prefix) = rule.strip_suffix('*') {
+            tool_name.starts_with(prefix)
+        } else {
+            tool_name == rule
+        }
+    })
 }
 
 /// Folded outcome of all `tool_call_before` hook results for one tool call
@@ -3001,7 +3112,15 @@ pub(super) fn command_denies_tool(disallowed_tools: Option<&[String]>, tool_name
     let Some(disallowed_tools) = disallowed_tools else {
         return false;
     };
-    disallowed_tools.contains(&tool_name.to_ascii_lowercase())
+    let tool_name = tool_name.to_ascii_lowercase();
+    disallowed_tools.iter().any(|rule| {
+        let rule = rule.to_ascii_lowercase();
+        if let Some(prefix) = rule.strip_suffix('*') {
+            tool_name.starts_with(prefix)
+        } else {
+            tool_name == rule
+        }
+    })
 }
 
 fn resolve_tool_definition<'a>(
@@ -3052,6 +3171,10 @@ fn should_emit_thinking_only_status(
     tool_uses_empty && turn_error_is_none && !cancelled && !steers_pending && !holding_for_subagents
 }
 
+/// Sentinel reasoning-effort value meaning "let the auto-reasoning system
+/// decide" (#4158).
+const REASONING_EFFORT_AUTO: &str = "auto";
+
 /// Resolve an `"auto"` reasoning-effort tier to a concrete value.
 ///
 /// When the configured effort is `"auto"`, inspects the last user message
@@ -3063,7 +3186,7 @@ fn resolve_auto_effort(
     provider: crate::config::ApiProvider,
 ) -> Option<String> {
     match reasoning_effort {
-        Some("auto") => {
+        Some(effort) if effort == REASONING_EFFORT_AUTO => {
             // Find the last user message in the conversation.
             let last_msg = messages
                 .iter()
@@ -3366,6 +3489,16 @@ mod tests {
     }
 
     #[test]
+    fn allowed_tools_gate_supports_wildcard_and_case() {
+        // Symmetric with the deny list: `mcp_*` and mixed-case rules match.
+        let allowed = vec!["mcp_*".to_string(), "ReadFile".to_string()];
+        assert!(command_allows_tool(Some(&allowed), "mcp_slack_send"));
+        assert!(command_allows_tool(Some(&allowed), "readfile"));
+        assert!(command_allows_tool(Some(&allowed), "ReadFile"));
+        assert!(!command_allows_tool(Some(&allowed), "exec_shell"));
+    }
+
+    #[test]
     fn disallowed_tools_gate_blocks_listed_tool() {
         let disallowed = vec!["exec_shell".to_string()];
         assert!(command_denies_tool(Some(&disallowed), "exec_shell"));
@@ -3376,6 +3509,19 @@ mod tests {
     fn disallowed_tools_gate_blocks_case_insensitively() {
         let disallowed = vec!["exec_shell".to_string()];
         assert!(command_denies_tool(Some(&disallowed), "Exec_Shell"));
+    }
+
+    #[test]
+    fn disallowed_tools_gate_blocks_prefix_wildcard() {
+        let disallowed = vec!["mcp_acme_*".to_string()];
+        assert!(command_denies_tool(
+            Some(&disallowed),
+            "mcp_acme_get_profile"
+        ));
+        assert!(!command_denies_tool(
+            Some(&disallowed),
+            "mcp_other_make_thing"
+        ));
     }
 
     #[test]

@@ -30,7 +30,7 @@ const UPDATE = `codewhale update`;
 const SET_KEY_BASH = `export DEEPSEEK_API_KEY=sk-...`;
 const SET_KEY_AUTH = `codewhale auth set --provider deepseek --api-key sk-...`;
 
-const RELEASE_DOWNLOAD = `# Download your platform archive (incl. Linux riscv64):
+const RELEASE_DOWNLOAD = `# Download your platform archive:
 https://github.com/Hmbown/CodeWhale/releases/latest`;
 const cnbInstall = (tag: string) => `cargo install --git https://cnb.cool/codewhale.net/codewhale --tag ${tag} codewhale-cli --locked --force
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag ${tag} codewhale-tui --locked --force`;

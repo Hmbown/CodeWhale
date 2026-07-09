@@ -108,16 +108,16 @@ fn scan_plugin_dir(dir: &std::path::Path) -> Vec<(PathBuf, TestPluginMeta)> {
             continue;
         }
 
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') || name == "README.md" {
-                continue;
-            }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && (name.starts_with('.') || name == "README.md")
+        {
+            continue;
         }
 
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Some(meta) = parse_frontmatter(&content) {
-                results.push((path, meta));
-            }
+        if let Ok(content) = std::fs::read_to_string(&path)
+            && let Some(meta) = parse_frontmatter(&content)
+        {
+            results.push((path, meta));
         }
     }
 

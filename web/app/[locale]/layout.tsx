@@ -68,8 +68,17 @@ export default async function LocaleLayout({
     <html
       lang={locale === "zh" ? "zh" : "en"}
       className={`${display.variable} ${body.variable} ${mono.variable} ${cjk.variable}`}
+      suppressHydrationWarning
     >
       <body>
+        {/* Apply the persisted docs theme before paint so there is no flash.
+            "auto" leaves data-theme unset and defers to prefers-color-scheme. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('cw-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();",
+          }}
+        />
         <Nav locale={locale as Locale} />
         <main>{children}</main>
         <Footer locale={locale as Locale} />

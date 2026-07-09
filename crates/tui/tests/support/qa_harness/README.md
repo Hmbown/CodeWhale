@@ -1,14 +1,14 @@
 # PTY/frame-capture TUI QA harness
 
 Tiny helper for integration tests that need to drive `deepseek-tui` like a real
-user typing in a real terminal — keys, paste, resize, plus assertions over the
+user typing in a real terminal — keys and paste, plus assertions over the
 parsed terminal frame and the workspace filesystem.
 
 ## When to use this
 
 Reach for this harness when a bug only shows up in the **interactive**
 terminal: paste behaviour, slash menus, mode switching, viewport rendering,
-onboarding flow, resize, mouse capture. Anything where a `TestBackend` or a
+onboarding flow, mouse capture. Anything where a `TestBackend` or a
 unit test on the underlying state machine is too divorced from what the user
 actually sees.
 
@@ -20,11 +20,11 @@ spin up a PTY just to assert a function returns the right value.
 
 - `pty.rs` — `PtySession`. Spawns a binary in a real PTY (via `portable-pty`),
   pumps the child's stdout into a buffer on a background thread, exposes
-  `write_bytes`, `resize`, `drain`, `shutdown`.
+  `write_bytes`, `drain`, `shutdown`.
 - `frame.rs` — `Frame`. Wraps `vt100::Parser`. Feed bytes in, ask questions
   out: `text()`, `row(y)`, `contains(s)`, `cursor()`, `debug_dump()`.
-- `keys.rs` — byte-sequence builders for keys (`key::ctrl('c')`,
-  `key::enter()`, `key::tab()`, …) and for paste (`paste::bracketed(s)`,
+- `keys.rs` — byte-sequence builders for keys (`key::ch('/')`,
+  `key::enter()`, `key::text("hello")`) and for paste (`paste::bracketed(s)`,
   `paste::unbracketed(s)`).
 - `harness.rs` — `Harness`. Composes the two. Has `wait_for`, `wait_for_text`,
   `wait_for_idle`, plus `make_sealed_workspace()` for a tempdir HOME.

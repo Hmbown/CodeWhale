@@ -36,6 +36,8 @@ export class ThreadStore {
       privateMode: options.privateMode === true
     };
     this.data = { chats: {} };
+    this.saveDirty = false;
+    this.savePending = null;
     this.ensureShape();
   }
 
@@ -152,6 +154,28 @@ export class ThreadStore {
   }
 
   async save() {
+    // Batch bursts of small updates: saves issued while a write is in flight
+    // coalesce into a single follow-up write. The returned promise resolves
+    // only after this mutation is durable on disk (temp file + rename).
+    this.saveDirty = true;
+    if (!this.savePending) {
+      this.savePending = this.flushSaves();
+    }
+    return this.savePending;
+  }
+
+  async flushSaves() {
+    try {
+      while (this.saveDirty) {
+        this.saveDirty = false;
+        await this.writeSnapshot();
+      }
+    } finally {
+      this.savePending = null;
+    }
+  }
+
+  async writeSnapshot() {
     const dir = path.dirname(this.filePath);
     await mkdir(dir, { recursive: true, mode: 0o700 });
     if (this.options.privateMode) await chmodBestEffort(dir, 0o700);
@@ -322,63 +346,63 @@ export function preservedChatStateFields(state = {}, fields = ["model"]) {
 export function splitMessage(text, maxChars = 3500) {
   const value = String(text || "");
   const limit = Math.max(1, Math.floor(Number(maxChars) || 3500));
+  // Materialize code points once; all chunking below works on index ranges
+  // instead of re-running Array.from over the shrinking remainder.
   const chars = Array.from(value);
   if (chars.length <= limit) return value ? [value] : [];
   const chunks = [];
-  let remaining = value;
+  let offset = 0;
   let openFence = null;
-  while (remaining) {
-    const next = takeRenderedSplitMessageChunk(remaining, limit, openFence);
+  while (offset < chars.length) {
+    const next = takeRenderedSplitMessageChunk(chars, offset, limit, openFence);
     chunks.push(next.chunk);
-    remaining = next.remaining;
+    offset = next.offset;
     openFence = next.openFence;
   }
   return chunks;
 }
 
-function takeRenderedSplitMessageChunk(text, maxChars, openFence) {
+function takeRenderedSplitMessageChunk(chars, offset, maxChars, openFence) {
   const prefix = openFence !== null ? `\`\`\`${openFence}\n` : "";
-  let payloadLimit = Math.max(1, maxChars - charLength(prefix));
+  const prefixLength = charLength(prefix);
+  let payloadLimit = Math.max(1, maxChars - prefixLength);
 
   while (true) {
-    const next = takeSplitMessageChunk(text, payloadLimit);
-    const body = `${prefix}${next.chunk}`;
-    const nextOpenFence = updateCodeFenceState(openFence, next.chunk);
-    const suffix = nextOpenFence !== null && next.remaining ? (body.endsWith("\n") ? "```" : "\n```") : "";
-    const chunk = `${body}${suffix}`;
-    const overflow = charLength(chunk) - maxChars;
+    const splitAt = splitMessageChunkEnd(chars, offset, payloadLimit);
+    const payload = chars.slice(offset, splitAt).join("");
+    const body = `${prefix}${payload}`;
+    const nextOpenFence = updateCodeFenceState(openFence, payload);
+    const suffix =
+      nextOpenFence !== null && splitAt < chars.length ? (body.endsWith("\n") ? "```" : "\n```") : "";
+    // prefix/suffix are ASCII fence markup, so string length == code points.
+    const overflow = prefixLength + (splitAt - offset) + suffix.length - maxChars;
     if (overflow <= 0 || payloadLimit === 1) {
-      return { chunk, remaining: next.remaining, openFence: nextOpenFence };
+      return { chunk: `${body}${suffix}`, offset: splitAt, openFence: nextOpenFence };
     }
     payloadLimit = Math.max(1, payloadLimit - overflow);
   }
 }
 
-function takeSplitMessageChunk(text, maxChars) {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return { chunk: text, remaining: "" };
-  }
-  const splitAt = preferredSplitIndex(chars, maxChars);
-  return {
-    chunk: chars.slice(0, splitAt).join(""),
-    remaining: chars.slice(splitAt).join("")
-  };
+function splitMessageChunkEnd(chars, offset, maxChars) {
+  if (chars.length - offset <= maxChars) return chars.length;
+  return offset + preferredSplitIndex(chars, offset, maxChars);
 }
 
-function preferredSplitIndex(chars, maxChars) {
-  const limit = Math.min(chars.length, maxChars);
+function preferredSplitIndex(chars, offset, maxChars) {
+  const limit = Math.min(chars.length - offset, maxChars);
   for (let i = limit - 1; i > 0; i -= 1) {
-    if (chars[i] === "\n") return i + 1;
+    if (chars[offset + i] === "\n") return i + 1;
   }
   for (let i = limit - 1; i > 0; i -= 1) {
-    if (/\s/u.test(chars[i])) return i + 1;
+    if (/\s/u.test(chars[offset + i])) return i + 1;
   }
   return limit;
 }
 
 function charLength(text) {
-  return Array.from(text).length;
+  let length = 0;
+  for (const _ of text) length += 1;
+  return length;
 }
 
 function updateCodeFenceState(openFence, text) {
@@ -391,6 +415,59 @@ function updateCodeFenceState(openFence, text) {
     }
   }
   return current;
+}
+
+export async function readJsonSafe(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export async function* readSse(response) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const raw = buffer.slice(0, boundary).replace(/\r/g, "");
+      buffer = buffer.slice(boundary + 2);
+      const event = { event: "", data: "" };
+      for (const line of raw.split("\n")) {
+        if (line.startsWith("event:")) event.event = line.slice(6).trim();
+        if (line.startsWith("data:")) event.data += line.slice(5).trim();
+      }
+      yield event;
+    }
+  }
+}
+
+export function createRuntimeClient({ runtimeUrl, runtimeToken }) {
+  function authHeaders() {
+    return { authorization: `Bearer ${runtimeToken}` };
+  }
+
+  async function runtimeJson(route, options = {}) {
+    const response = await fetch(`${runtimeUrl}${route}`, {
+      method: options.method || "GET",
+      headers: {
+        ...(options.auth === false ? {} : authHeaders()),
+        ...(options.body ? { "content-type": "application/json" } : {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    const body = await readJsonSafe(response);
+    if (!response.ok) {
+      throw new Error(compactRuntimeError(response.status, body));
+    }
+    return body;
+  }
+
+  return { runtimeJson, authHeaders };
 }
 
 export function compactRuntimeError(status, body) {

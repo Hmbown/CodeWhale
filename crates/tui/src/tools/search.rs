@@ -11,8 +11,9 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -178,80 +179,59 @@ impl ToolSpec for GrepFilesTool {
         let result = run_blocking_grep(GREP_FILES_TIMEOUT, cancel_token.clone(), move || {
             let cancel_token = cancel_token.as_ref();
 
-            // Collect files to search
-            let files = collect_files(
+            // Stream the walk: each file is searched as it is discovered and
+            // the traversal stops as soon as the match budget is exhausted.
+            // Files are never materialized in a big Vec and file contents are
+            // read line-by-line, so memory stays bounded by the result set.
+            let mut results: Vec<GrepMatch> = Vec::new();
+            let mut files_searched = 0;
+            let mut total_matches = 0;
+
+            visit_files(
                 &search_path,
                 &include_patterns,
                 &exclude_patterns,
                 cancel_token,
                 follow_symlinks,
-            )?;
-
-            // Search files
-            let mut results: Vec<GrepMatch> = Vec::new();
-            let mut files_searched = 0;
-            let mut total_matches = 0;
-
-            for file_path in files {
-                check_cancelled(cancel_token)?;
-
-                if results.len() >= max_results {
-                    break;
-                }
-
-                // Skip files that are too large
-                if let Ok(metadata) = fs::metadata(&file_path)
-                    && metadata.len() > MAX_FILE_SIZE
-                {
-                    continue;
-                }
-
-                // Read file content
-                let Ok(file_content) = fs::read_to_string(&file_path) else {
-                    continue; // Skip binary or unreadable files
-                };
-
-                files_searched += 1;
-                let lines: Vec<&str> = file_content.lines().collect();
-
-                for (line_idx, line) in lines.iter().enumerate() {
+                &mut |file_path| {
+                    if results.len() >= max_results {
+                        return Ok(WalkControl::Stop);
+                    }
                     check_cancelled(cancel_token)?;
 
-                    if regex.is_match(line) {
-                        total_matches += 1;
-
-                        // Get context lines
-                        let context_before: Vec<String> = (line_idx.saturating_sub(context_lines)
-                            ..line_idx)
-                            .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
-                            .collect();
-
-                        let context_after: Vec<String> = ((line_idx + 1)
-                            ..=(line_idx + context_lines).min(lines.len() - 1))
-                            .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
-                            .collect();
-
-                        // Get relative path from workspace
-                        let relative_path = file_path
-                            .strip_prefix(&workspace)
-                            .unwrap_or(&file_path)
-                            .to_string_lossy()
-                            .to_string();
-
-                        results.push(GrepMatch {
-                            file: relative_path,
-                            line_number: line_idx + 1,
-                            line: (*line).to_string(),
-                            context_before,
-                            context_after,
-                        });
-
-                        if results.len() >= max_results {
-                            break;
-                        }
+                    // Skip files that are too large
+                    if let Ok(metadata) = fs::metadata(file_path)
+                        && metadata.len() > MAX_FILE_SIZE
+                    {
+                        return Ok(WalkControl::Continue);
                     }
-                }
-            }
+
+                    // Get relative path from workspace
+                    let relative_path = file_path
+                        .strip_prefix(&workspace)
+                        .unwrap_or(file_path)
+                        .to_string_lossy()
+                        .to_string();
+
+                    let budget = max_results - results.len();
+                    let Some(file_matches) = search_file_streaming(
+                        file_path,
+                        &relative_path,
+                        &regex,
+                        context_lines,
+                        budget,
+                        cancel_token,
+                    )?
+                    else {
+                        return Ok(WalkControl::Continue); // Skip binary or unreadable files
+                    };
+
+                    files_searched += 1;
+                    total_matches += file_matches.len();
+                    results.extend(file_matches);
+                    Ok(WalkControl::Continue)
+                },
+            )?;
 
             let matches_json: Vec<Value> = results
                 .iter()
@@ -333,55 +313,148 @@ fn grep_match_to_json(item: &GrepMatch, context_lines: usize) -> Value {
     }
 }
 
-/// Collect files to search based on include/exclude patterns
-struct CollectFilesState {
-    files: Vec<PathBuf>,
-    visited_dirs: HashSet<PathBuf>,
+/// Search a single file line-by-line with a small ring buffer for
+/// before-context, so file contents are never fully materialized.
+///
+/// Returns `Ok(None)` when the file is unreadable or contains invalid UTF-8
+/// anywhere — the same "skip binary or unreadable files" semantics as the
+/// previous `read_to_string` implementation, which required the whole file to
+/// be valid before contributing any match. At most `budget` matches are
+/// recorded; the scan still runs to EOF so late invalid bytes disqualify the
+/// file and pending after-context is completed.
+fn search_file_streaming(
+    path: &Path,
+    relative_path: &str,
+    regex: &Regex,
+    context_lines: usize,
+    budget: usize,
+    cancel_token: Option<&CancellationToken>,
+) -> Result<Option<Vec<GrepMatch>>, ToolError> {
+    let Ok(file) = fs::File::open(path) else {
+        return Ok(None);
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut raw: Vec<u8> = Vec::new();
+    let mut before: VecDeque<String> = VecDeque::new();
+    let mut matches: Vec<GrepMatch> = Vec::new();
+    // Matches still waiting for after-context lines: (index into `matches`,
+    // lines still needed). Entries complete in FIFO order.
+    let mut pending: VecDeque<(usize, usize)> = VecDeque::new();
+    let mut line_idx = 0usize;
+
+    loop {
+        raw.clear();
+        let n = match reader.read_until(b'\n', &mut raw) {
+            Ok(n) => n,
+            Err(_) => return Ok(None),
+        };
+        if n == 0 {
+            break;
+        }
+        check_cancelled(cancel_token)?;
+
+        // Mirror `str::lines`: strip the trailing '\n', and a '\r' only when
+        // it directly precedes that '\n'.
+        let mut end = raw.len();
+        if raw[..end].ends_with(b"\n") {
+            end -= 1;
+            if raw[..end].ends_with(b"\r") {
+                end -= 1;
+            }
+        }
+        let Ok(line) = std::str::from_utf8(&raw[..end]) else {
+            return Ok(None);
+        };
+
+        for (idx, remaining) in &mut pending {
+            matches[*idx].context_after.push(line.to_string());
+            *remaining -= 1;
+        }
+        while pending
+            .front()
+            .is_some_and(|(_, remaining)| *remaining == 0)
+        {
+            pending.pop_front();
+        }
+
+        if matches.len() < budget && regex.is_match(line) {
+            matches.push(GrepMatch {
+                file: relative_path.to_string(),
+                line_number: line_idx + 1,
+                line: line.to_string(),
+                context_before: before.iter().cloned().collect(),
+                context_after: Vec::new(),
+            });
+            if context_lines > 0 {
+                pending.push_back((matches.len() - 1, context_lines));
+            }
+        }
+
+        if context_lines > 0 {
+            if before.len() == context_lines {
+                before.pop_front();
+            }
+            before.push_back(line.to_string());
+        }
+        line_idx += 1;
+    }
+
+    Ok(Some(matches))
 }
 
-fn collect_files(
+/// Flow control for the streaming file walk.
+enum WalkControl {
+    Continue,
+    Stop,
+}
+
+/// Walk files matching the include/exclude patterns, invoking `visit` for
+/// each one in traversal order. The walk stops early when `visit` returns
+/// [`WalkControl::Stop`].
+fn visit_files(
     root: &Path,
     include_patterns: &[String],
     exclude_patterns: &[String],
     cancel_token: Option<&CancellationToken>,
     follow_symlinks: bool,
-) -> Result<Vec<PathBuf>, ToolError> {
-    let mut state = CollectFilesState {
-        files: Vec::new(),
-        visited_dirs: HashSet::new(),
-    };
+    visit: &mut dyn FnMut(&Path) -> Result<WalkControl, ToolError>,
+) -> Result<(), ToolError> {
+    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
     check_cancelled(cancel_token)?;
 
     if root.is_file() {
-        state.files.push(root.to_path_buf());
-        return Ok(state.files);
+        visit(root)?;
+        return Ok(());
     }
 
     if follow_symlinks && let Ok(canonical_root) = root.canonicalize() {
-        state.visited_dirs.insert(canonical_root);
+        visited_dirs.insert(canonical_root);
     }
 
-    collect_files_recursive(
+    visit_files_recursive(
         root,
         root,
         include_patterns,
         exclude_patterns,
         cancel_token,
-        &mut state,
+        &mut visited_dirs,
         follow_symlinks,
+        visit,
     )?;
-    Ok(state.files)
+    Ok(())
 }
 
-fn collect_files_recursive(
+#[allow(clippy::too_many_arguments)]
+fn visit_files_recursive(
     root: &Path,
     current: &Path,
     include_patterns: &[String],
     exclude_patterns: &[String],
     cancel_token: Option<&CancellationToken>,
-    state: &mut CollectFilesState,
+    visited_dirs: &mut HashSet<PathBuf>,
     follow_symlinks: bool,
-) -> Result<(), ToolError> {
+    visit: &mut dyn FnMut(&Path) -> Result<WalkControl, ToolError>,
+) -> Result<WalkControl, ToolError> {
     check_cancelled(cancel_token)?;
 
     let entries = fs::read_dir(current).map_err(|e| {
@@ -435,28 +508,33 @@ fn collect_files_recursive(
                     Ok(canonical) => canonical,
                     Err(_) => continue,
                 };
-                if !state.visited_dirs.insert(canonical_dir) {
+                if !visited_dirs.insert(canonical_dir) {
                     continue;
                 }
             }
-            collect_files_recursive(
+            if let WalkControl::Stop = visit_files_recursive(
                 root,
                 &path,
                 include_patterns,
                 exclude_patterns,
                 cancel_token,
-                state,
+                visited_dirs,
                 follow_symlinks,
-            )?;
+                visit,
+            )? {
+                return Ok(WalkControl::Stop);
+            }
         } else if effective_type.is_file() {
             // Check inclusions (if any specified)
-            if include_patterns.is_empty() || should_include(&relative_str, include_patterns) {
-                state.files.push(path);
+            if (include_patterns.is_empty() || should_include(&relative_str, include_patterns))
+                && let WalkControl::Stop = visit(&path)?
+            {
+                return Ok(WalkControl::Stop);
             }
         }
     }
 
-    Ok(())
+    Ok(WalkControl::Continue)
 }
 
 fn check_cancelled(cancel_token: Option<&CancellationToken>) -> Result<(), ToolError> {
@@ -868,6 +946,103 @@ mod tests {
             format!("{err:?}").contains("cancelled"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_streaming_stops_at_max_results() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        // Two files with many matches each; the walk must stop once the
+        // budget is exhausted without dropping context for the last match.
+        for name in ["a.txt", "b.txt"] {
+            let body: String = (1..=20).map(|n| format!("needle {n}\n")).collect();
+            fs::write(tmp.path().join(name), body).expect("write");
+        }
+
+        let tool = GrepFilesTool;
+        let result = tool
+            .execute(json!({"pattern": "needle", "max_results": 5}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        let matches = parsed["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 5);
+        assert_eq!(parsed["total_matches"].as_u64().unwrap(), 5);
+        // All five matches must come from the first file walked, in file
+        // order (streaming preserves walk order).
+        let first_file = matches[0]["file"].as_str().unwrap().to_string();
+        for m in matches {
+            assert_eq!(m["file"].as_str().unwrap(), first_file);
+        }
+        // The final in-budget match still gets its full after-context even
+        // though the match budget was exhausted on it.
+        assert_eq!(
+            matches[4]["context_after"],
+            json!(["needle 6", "needle 7"]),
+            "last match must keep after-context lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_ring_buffer_context_matches_full_read() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        // Matches at the start, middle, and end of the file exercise the
+        // partial before-context (ring not yet full) and truncated
+        // after-context (EOF) paths.
+        fs::write(
+            tmp.path().join("ctx.txt"),
+            "MATCH first\nb1\nb2\nb3\nMATCH mid\na1\na2\na3\nMATCH last\n",
+        )
+        .expect("write");
+
+        let tool = GrepFilesTool;
+        let result = tool
+            .execute(json!({"pattern": "MATCH", "context_lines": 2}), &ctx)
+            .await
+            .expect("execute");
+
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        let matches = parsed["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0]["context_before"], json!([]));
+        assert_eq!(matches[0]["context_after"], json!(["b1", "b2"]));
+        assert_eq!(matches[1]["context_before"], json!(["b2", "b3"]));
+        assert_eq!(matches[1]["context_after"], json!(["a1", "a2"]));
+        assert_eq!(matches[2]["context_before"], json!(["a2", "a3"]));
+        assert_eq!(matches[2]["context_after"], json!([]));
+        assert_eq!(matches[2]["line_number"].as_u64().unwrap(), 9);
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_streaming_skips_invalid_utf8_files() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        // Invalid UTF-8 after a matching line: the whole file must be
+        // skipped, matching the historical read_to_string behavior.
+        fs::write(
+            tmp.path().join("binary.txt"),
+            [b"needle\n".as_slice(), &[0xFF, 0xFE, 0x00]].concat(),
+        )
+        .expect("write");
+        fs::write(tmp.path().join("clean.txt"), "needle\n").expect("write");
+
+        let tool = GrepFilesTool;
+        let result = tool
+            .execute(json!({"pattern": "needle"}), &ctx)
+            .await
+            .expect("execute");
+
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["total_matches"].as_u64().unwrap(), 1);
+        assert_eq!(parsed["files_searched"].as_u64().unwrap(), 1);
+        let matches = parsed["matches"].as_array().unwrap();
+        assert!(matches[0]["file"].as_str().unwrap().ends_with("clean.txt"));
     }
 
     #[test]

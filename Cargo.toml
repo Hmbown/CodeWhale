@@ -2,11 +2,13 @@
 members = [
     "crates/agent",
     "crates/app-server",
+    "crates/build-support",
     "crates/cli",
     "crates/config",
     "crates/core",
     "crates/execpolicy",
     "crates/hooks",
+    "crates/lane",
     "crates/mcp",
     "crates/protocol",
     "crates/release",
@@ -14,13 +16,14 @@ members = [
     "crates/state",
     "crates/tools",
     "crates/tui",
-    "crates/whaleflow",
+    "crates/workflow",
+    "crates/workflow-js",
 ]
 default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.65"
+version = "0.8.67"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older
@@ -38,7 +41,11 @@ chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.54", features = ["derive"] }
 clap_complete = "4.5"
 dirs = "6.0.0"
+jsonschema = { version = "0.46", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
+# NOT "parallel": the Workflow VM stays single-threaded and bridges to the
+# multi-thread engine over channels (see crates/workflow-js).
+rquickjs = { version = "0.12", features = ["futures"] }
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -46,12 +53,21 @@ serde_json = "1.0.149"
 semver = "1.0.28"
 thiserror = "2.0"
 tempfile = "3.27"
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["fs", "io-util", "io-std", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "1.0.6"
 toml_edit = "0.25.12"
 sha2 = "0.11"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.11", features = ["v4"] }
+mimalloc = { version = "0.1", default-features = false }
+
+[profile.release]
+lto = true
+strip = true
+# NOTE: no `panic = "abort"` here — the TUI's panic supervision
+# (catch_unwind/spawn_supervised) needs unwinding so one panicking tool call
+# or task fails gracefully instead of aborting the whole session.
+codegen-units = 1

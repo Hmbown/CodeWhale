@@ -7,12 +7,18 @@
 //! `config.rs` with a private `use`, so no new external surface is created
 //! (#3311).
 
-pub const DEFAULT_MAX_SUBAGENTS: usize = 20;
-pub const MAX_SUBAGENTS: usize = 20;
+/// Temporary high-throughput default while the shared-context cutover makes
+/// agent fanout cheap. This should eventually be governed by API/backpressure
+/// budgets rather than memory-driven count throttles.
+pub const DEFAULT_MAX_SUBAGENTS: usize = 64;
+/// User-configurable ceiling for concurrent sub-agent execution. Keep this
+/// above the default so operators can opt into larger API-bound fanout without
+/// code changes while the full resource budget gate lands.
+pub const MAX_SUBAGENTS: usize = 128;
 /// Upper bound for queued + running sub-agent admissions. This is deliberately
 /// higher than the instantaneous concurrency cap so Workflow-style fanout can
 /// opt into large bounded populations without unbounded queue growth.
-pub const MAX_SUBAGENT_ADMISSION: usize = 200;
+pub const MAX_SUBAGENT_ADMISSION: usize = 1024;
 /// Default per-step DeepSeek API timeout for sub-agent requests, in seconds.
 /// Matches the legacy hardcoded value so existing configs keep their old
 /// behavior when `[subagents] api_timeout_secs` is unset (#1806, #1808).
@@ -33,7 +39,7 @@ pub const MIN_SUBAGENT_HEARTBEAT_TIMEOUT_SECS: u64 = 30;
 /// Maximum accepted `[subagents] heartbeat_timeout_secs` (1 hour).
 pub const MAX_SUBAGENT_HEARTBEAT_TIMEOUT_SECS: u64 = 3600;
 /// Default per-SSE-chunk idle timeout, in seconds.
-pub const DEFAULT_STREAM_CHUNK_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_STREAM_CHUNK_TIMEOUT_SECS: u64 = 900;
 /// Minimum accepted stream chunk timeout.
 pub const MIN_STREAM_CHUNK_TIMEOUT_SECS: u64 = 1;
 /// Maximum accepted stream chunk timeout.

@@ -489,7 +489,8 @@ impl ToolSpec for ReviewTool {
                 .clamp(1, MAX_MAX_CHARS);
 
         let source =
-            resolve_review_source(target, kind.as_deref(), staged, base.as_deref(), context)?;
+            resolve_review_source(target, kind.as_deref(), staged, base.as_deref(), context)
+                .await?;
         let prompt = build_review_prompt(&source, max_chars);
 
         let request = MessageRequest {
@@ -547,7 +548,7 @@ enum ReviewSource {
     PullRequest { label: String, diff: String },
 }
 
-fn resolve_review_source(
+async fn resolve_review_source(
     target: &str,
     kind: Option<&str>,
     staged: bool,
@@ -557,16 +558,17 @@ fn resolve_review_source(
     if let Some(kind) = kind {
         return match kind {
             "file" => resolve_file_target(target, context),
-            "diff" => resolve_diff_target(context.workspace.as_path(), staged, base).map(|diff| {
-                ReviewSource::Diff {
+            "diff" => {
+                let diff = resolve_diff_target(context.workspace.as_path(), staged, base).await?;
+                Ok(ReviewSource::Diff {
                     label: "git diff".to_string(),
                     diff,
-                }
-            }),
+                })
+            }
             "pr" | "pull" | "pull_request" => {
                 let pr = parse_pr_url(target)
                     .ok_or_else(|| ToolError::invalid_input("Invalid pull request URL"))?;
-                let diff = gh_pr_diff(&pr, &context.workspace)?;
+                let diff = gh_pr_diff(&pr, &context.workspace).await?;
                 Ok(ReviewSource::PullRequest {
                     label: pr.label(),
                     diff,
@@ -579,7 +581,7 @@ fn resolve_review_source(
     }
 
     if let Some(pr) = parse_pr_url(target) {
-        let diff = gh_pr_diff(&pr, &context.workspace)?;
+        let diff = gh_pr_diff(&pr, &context.workspace).await?;
         return Ok(ReviewSource::PullRequest {
             label: pr.label(),
             diff,
@@ -588,7 +590,7 @@ fn resolve_review_source(
 
     if let Some(staged_override) = diff_mode_from_target(target) {
         let staged = staged || staged_override;
-        let diff = resolve_diff_target(context.workspace.as_path(), staged, base)?;
+        let diff = resolve_diff_target(context.workspace.as_path(), staged, base).await?;
         return Ok(ReviewSource::Diff {
             label: if staged {
                 "git diff --cached"
@@ -622,7 +624,7 @@ fn resolve_file_target(target: &str, context: &ToolContext) -> Result<ReviewSour
     Ok(ReviewSource::File { display, content })
 }
 
-fn resolve_diff_target(
+async fn resolve_diff_target(
     workspace: &Path,
     staged: bool,
     base: Option<&str>,
@@ -641,8 +643,9 @@ fn resolve_diff_target(
     }
     cmd.current_dir(workspace);
 
-    let output = cmd
-        .output()
+    let output = tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("git diff task panicked: {e}")))?
         .map_err(|e| ToolError::execution_failed(format!("Failed to run git diff: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -658,7 +661,7 @@ fn resolve_diff_target(
     Ok(diff)
 }
 
-fn gh_pr_diff(pr: &PullRequestRef, workspace: &Path) -> Result<String, ToolError> {
+async fn gh_pr_diff(pr: &PullRequestRef, workspace: &Path) -> Result<String, ToolError> {
     let Some(mut cmd) = crate::dependencies::Gh::command() else {
         return Err(ToolError::execution_failed("gh not found"));
     };
@@ -669,9 +672,12 @@ fn gh_pr_diff(pr: &PullRequestRef, workspace: &Path) -> Result<String, ToolError
         .arg(format!("{}/{}", pr.owner, pr.repo))
         .current_dir(workspace);
 
-    let output = cmd.output().map_err(|e| {
-        ToolError::execution_failed(format!("Failed to run gh pr diff (is gh installed?): {e}"))
-    })?;
+    let output = tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("gh pr diff task panicked: {e}")))?
+        .map_err(|e| {
+            ToolError::execution_failed(format!("Failed to run gh pr diff (is gh installed?): {e}"))
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ToolError::execution_failed(format!(

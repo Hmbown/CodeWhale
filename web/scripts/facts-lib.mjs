@@ -68,7 +68,7 @@ const PROVIDER_LABEL_MAP = {
   WanjieArk: { id: "wanjie-ark", label: "Wanjie Ark", env: "WANJIE_ARK_API_KEY / WANJIE_API_KEY / WANJIE_MAAS_API_KEY" },
   Volcengine: { id: "volcengine", label: "Volcengine Ark", env: "VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY" },
   Openrouter: { id: "openrouter", label: "OpenRouter", env: "OPENROUTER_API_KEY" },
-  XiaomiMimo: { id: "xiaomi-mimo", label: "Xiaomi MiMo", env: "XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY" },
+  XiaomiMimo: { id: "xiaomi-mimo", label: "Xiaomi MiMo", env: "XIAOMI_MIMO_TOKEN_PLAN_API_KEY / MIMO_TOKEN_PLAN_API_KEY / XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY" },
   Novita: { id: "novita", label: "Novita AI", env: "NOVITA_API_KEY" },
   Fireworks: { id: "fireworks", label: "Fireworks AI", env: "FIREWORKS_API_KEY" },
   Siliconflow: { id: "siliconflow", label: "SiliconFlow", env: "SILICONFLOW_API_KEY" },
@@ -87,6 +87,9 @@ const PROVIDER_LABEL_MAP = {
   Zai: { id: "zai", label: "Z.ai", env: "ZAI_API_KEY / Z_AI_API_KEY" },
   Stepfun: { id: "stepfun", label: "StepFun", env: "STEPFUN_API_KEY / STEP_API_KEY" },
   Minimax: { id: "minimax", label: "MiniMax", env: "MINIMAX_API_KEY" },
+  Openmodel: { id: "openmodel", label: "OpenModel", env: "OPENMODEL_API_KEY" },
+  Sakana: { id: "sakana", label: "Sakana AI", env: "FUGU_API_KEY / SAKANA_API_KEY" },
+  LongCat: { id: "longcat", label: "Meituan LongCat", env: "LONGCAT_API_KEY" },
 };
 
 // DeepseekCN: not wired through shared ProviderKind (#1104).
@@ -94,22 +97,37 @@ const PROVIDER_LABEL_MAP = {
 // catch-all for user-defined endpoints, not a website-listable provider.
 const EXCLUDED_PROVIDERS = new Set(["DeepseekCN", "Custom"]);
 
-export function deriveProviders() {
+function providerEnumVariants() {
   const cfg = read("crates/tui/src/config.rs");
   if (!cfg) return [];
   const enumBlock = cfg.match(/pub enum ApiProvider \{([\s\S]*?)\}/);
   if (!enumBlock) return [];
-  const variants = [...enumBlock[1].matchAll(/^\s*(\w+)\s*,\s*$/gm)].map((m) => m[1]);
+  return [...enumBlock[1].matchAll(/^\s*(\w+)\s*,\s*$/gm)].map((m) => m[1]);
+}
 
-  const unmapped = variants.filter((v) => !EXCLUDED_PROVIDERS.has(v) && !PROVIDER_LABEL_MAP[v]);
+/**
+ * ApiProvider variants that are neither mapped to a website label nor
+ * intentionally excluded. Exposed so the CI gate (`check-facts.mjs`) can
+ * hard-fail on provider-inventory drift (#3772); the generator stays lenient
+ * and merely warns so local `prebuild` is not blocked mid-development.
+ */
+export function unmappedProviderVariants() {
+  return providerEnumVariants().filter(
+    (v) => !EXCLUDED_PROVIDERS.has(v) && !PROVIDER_LABEL_MAP[v],
+  );
+}
+
+export function deriveProviders() {
+  const variants = providerEnumVariants();
+
+  const unmapped = unmappedProviderVariants();
   if (unmapped.length > 0) {
     console.error(
       `[facts-lib] ApiProvider variants missing from PROVIDER_LABEL_MAP: ${unmapped.join(", ")}. ` +
         "Add them to PROVIDER_LABEL_MAP here AND in web/lib/facts-drift.ts (or to EXCLUDED_PROVIDERS if intentionally hidden).",
     );
-    // In check mode we don't want to crash the entire gate just because
-    // a new provider variant hasn't been mapped yet — but we do want to
-    // surface it loudly. Return what we can map.
+    // The generator stays lenient and returns what it can map; the hard gate
+    // lives in check-facts.mjs via unmappedProviderVariants() (#3772).
   }
   return variants.map((v) => PROVIDER_LABEL_MAP[v]).filter(Boolean);
 }

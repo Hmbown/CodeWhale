@@ -184,6 +184,23 @@ __pycache__/
 ";
 
 impl SnapshotRepo {
+    /// Open an existing snapshot repo for `workspace` without creating or
+    /// initializing anything on disk.
+    ///
+    /// This is useful for read-only UI surfaces that want to report checkpoint
+    /// availability without paying the first-init size walk or surprising the
+    /// user by creating a side repo from a view action.
+    pub fn open_existing(workspace: &Path) -> io::Result<Option<Self>> {
+        let work_tree = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let git_dir = snapshot_git_dir(&work_tree);
+        if !git_dir.exists() || !git_dir.join("HEAD").exists() {
+            return Ok(None);
+        }
+        Ok(Some(Self { git_dir, work_tree }))
+    }
+
     /// Open or initialize the snapshot repo for `workspace`.
     ///
     /// On first use this:
@@ -1011,6 +1028,28 @@ mod tests {
         // The user's workspace must NOT have a real `.git` because we
         // never created one in their workspace — only in the side dir.
         assert!(!repo.work_tree().join(".git").exists());
+    }
+
+    #[test]
+    fn open_existing_is_read_only_and_does_not_initialize() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _home = scoped_home(tmp.path());
+
+        let before = SnapshotRepo::open_existing(&workspace).expect("open existing");
+        assert!(before.is_none());
+        assert!(
+            !snapshot_git_dir(&workspace).exists(),
+            "read-only open must not create the side repo"
+        );
+
+        let repo = SnapshotRepo::open_or_init(&workspace).expect("open_or_init");
+        std::fs::write(repo.work_tree().join("a.txt"), b"alpha").unwrap();
+        repo.snapshot("pre-turn:1").expect("snapshot");
+
+        let after = SnapshotRepo::open_existing(&workspace).expect("open existing");
+        assert!(after.is_some());
     }
 
     #[test]

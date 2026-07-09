@@ -9,6 +9,33 @@ use crate::models::{ContentBlock, Message};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use serde_json::Value;
+use std::io;
+
+/// A writer that counts bytes written without storing them.
+pub(crate) struct CountingWriter {
+    count: usize,
+}
+
+impl CountingWriter {
+    pub(crate) fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.count
+    }
+}
+
+impl io::Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.count += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 const LOG_FINGERPRINT_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const LOG_FINGERPRINT_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -33,6 +60,26 @@ pub fn redacted_identifier_for_log(identifier: &str) -> String {
 
     format!("<redacted:{hash:016x}>")
 }
+
+#[cfg(windows)]
+pub(crate) fn suppress_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn suppress_console_window(_cmd: &mut Command) {}
+
+#[cfg(windows)]
+pub(crate) fn suppress_tokio_console_window(cmd: &mut tokio::process::Command) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn suppress_tokio_console_window(_cmd: &mut tokio::process::Command) {}
 
 // === Project Mapping Helpers ===
 
@@ -208,6 +255,14 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     std::io::Write::write_all(&mut tmp, contents)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path)?;
+    // Fsync the parent directory so the rename (the new directory entry) is
+    // itself durable — otherwise a power loss right after the rename can lose
+    // it even though the file data was synced, silently dropping a
+    // crash-recovery checkpoint. Best-effort: not all platforms permit
+    // opening a directory for sync, so a failure here is not fatal.
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
@@ -523,7 +578,11 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
             match block {
                 ContentBlock::Text { text, .. } => total += text.len(),
                 ContentBlock::Thinking { thinking, .. } => total += thinking.len(),
-                ContentBlock::ToolUse { input, .. } => total += input.to_string().len(),
+                ContentBlock::ToolUse { input, .. } => {
+                    let mut cw = CountingWriter::new();
+                    let _ = serde_json::to_writer(&mut cw, input);
+                    total += cw.count();
+                }
                 ContentBlock::ToolResult { content, .. } => total += content.len(),
                 ContentBlock::ServerToolUse { .. }
                 | ContentBlock::ToolSearchToolResult { .. }

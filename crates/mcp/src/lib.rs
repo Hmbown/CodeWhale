@@ -568,12 +568,22 @@ pub fn run_stdio_server(
             .as_deref()
             .is_some_and(|version| version != "2.0")
         {
-            let response = jsonrpc_error(
-                request.id,
-                JsonRpcError::invalid_request("jsonrpc version must be 2.0"),
-            );
-            writeln!(stdout, "{response}")?;
-            stdout.flush()?;
+            if should_respond_to_jsonrpc(&request.id) {
+                let response = jsonrpc_error(
+                    request.id,
+                    JsonRpcError::invalid_request("jsonrpc version must be 2.0"),
+                );
+                writeln!(stdout, "{response}")?;
+                stdout.flush()?;
+            }
+            continue;
+        }
+
+        if !should_respond_to_jsonrpc(&request.id) {
+            match dispatch_stdio_request(&mut state, &request.method, request.params) {
+                Ok((_, should_exit)) if should_exit => break,
+                Ok(_) | Err(_) => {}
+            }
             continue;
         }
 
@@ -936,6 +946,10 @@ fn jsonrpc_result(id: Option<Value>, result: Value) -> Value {
         "id": id.unwrap_or(Value::Null),
         "result": result
     })
+}
+
+fn should_respond_to_jsonrpc(id: &Option<Value>) -> bool {
+    id.is_some()
 }
 
 fn jsonrpc_error(id: Option<Value>, err: JsonRpcError) -> Value {
@@ -1382,6 +1396,12 @@ mod tests {
         assert_eq!(err["jsonrpc"], "2.0");
         assert_eq!(err["id"], 2);
         assert_eq!(err["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn jsonrpc_notifications_do_not_require_responses() {
+        assert!(!should_respond_to_jsonrpc(&None));
+        assert!(should_respond_to_jsonrpc(&Some(json!(1))));
     }
 
     // ── McpServerConfig serialization ──────────────────────────────────

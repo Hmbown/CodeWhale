@@ -4,6 +4,16 @@
 
 /* ---------- root tokens — DeepSeek-aligned ---------- */
 :root {
+  /* RGB channel triples backing the Tailwind surface/ink tokens (see
+     tailwind.config.ts). These carry the same light values as the hex vars
+     below; the docs routes override them for dark mode. */
+  --c-paper: 255 255 255;
+  --c-paper-deep: 244 246 251;
+  --c-paper-edge: 229 232 240;
+  --c-ink: 14 14 16;
+  --c-ink-soft: 46 46 51;
+  --c-ink-mute: 107 114 128;
+
   --paper: #ffffff;
   --paper-deep: #f4f6fb;
   --paper-edge: #e5e8f0;
@@ -18,6 +28,12 @@
   --ochre: #9c7a3f;
   --jade: #0ab68b;
   --cobalt: #1f3a8a;
+
+  /* Hairline + code surfaces routed through vars so the docs dark theme can
+     lighten hairlines and raise the code panel without touching every rule. */
+  --hairline: rgba(14, 14, 16, 0.18);
+  --code-bg: #0e0e10;
+  --code-fg: #e6e8f0;
 }
 
 /* ---------- base ---------- */
@@ -107,16 +123,16 @@ h3 { font-size: 1.18rem; line-height: 1.25; }
 /* ---------- structural primitives ---------- */
 /* Hairlines stay charcoal but softened with a touch of opacity so a pure-white
    background doesn't read as harsh black-on-white office stationery. */
-.hairline { border-color: rgba(14,14,16,0.18); }
-.hairline-t { border-top: 1px solid rgba(14,14,16,0.18); }
-.hairline-b { border-bottom: 1px solid rgba(14,14,16,0.18); }
-.hairline-l { border-left: 1px solid rgba(14,14,16,0.18); }
-.hairline-r { border-right: 1px solid rgba(14,14,16,0.18); }
+.hairline { border-color: var(--hairline); }
+.hairline-t { border-top: 1px solid var(--hairline); }
+.hairline-b { border-bottom: 1px solid var(--hairline); }
+.hairline-l { border-left: 1px solid var(--hairline); }
+.hairline-r { border-right: 1px solid var(--hairline); }
 
 .double-rule {
   background-image:
-    linear-gradient(rgba(14,14,16,0.18), rgba(14,14,16,0.18)),
-    linear-gradient(rgba(14,14,16,0.18), rgba(14,14,16,0.18));
+    linear-gradient(var(--hairline), var(--hairline)),
+    linear-gradient(var(--hairline), var(--hairline));
   background-size: 100% 1px, 100% 1px;
   background-position: top, bottom;
   background-repeat: no-repeat;
@@ -124,11 +140,11 @@ h3 { font-size: 1.18rem; line-height: 1.25; }
 }
 
 .col-rule > * + * {
-  border-left: 1px solid rgba(14,14,16,0.18);
+  border-left: 1px solid var(--hairline);
 }
 /* Single-column phones: drop the column rules so cards stack flush. */
 @media (max-width: 767px) {
-  .col-rule > * + * { border-left: 0; border-top: 1px solid rgba(14,14,16,0.18); }
+  .col-rule > * + * { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
 /* small-caps eyebrow */
@@ -213,15 +229,15 @@ h3 { font-size: 1.18rem; line-height: 1.25; }
 
 /* ---------- code blocks ---------- */
 pre.code-block {
-  background: #0e0e10;
-  color: #e6e8f0;
+  background: var(--code-bg);
+  color: var(--code-fg);
   max-width: 100%;
   min-width: 0;
   padding: 1rem 1.1rem;
   font-family: var(--font-mono), monospace;
   font-size: 0.82rem;
   line-height: 1.55;
-  border: 1px solid rgba(14,14,16,0.18);
+  border: 1px solid var(--hairline);
   overflow-x: auto;
   position: relative;
   white-space: pre;
@@ -244,7 +260,7 @@ pre.code-block .key { color: var(--ochre); }
 
 code.inline {
   background: var(--paper-deep);
-  border: 1px solid rgba(14,14,16,0.14);
+  border: 1px solid var(--hairline);
   padding: 0.05rem 0.32rem;
   font-family: var(--font-mono), monospace;
   font-size: 0.85em;
@@ -283,6 +299,25 @@ code.inline {
 @keyframes ticker {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
+}
+
+/* ---------- terminal player caret ---------- */
+.tp-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--indigo);
+  animation: tp-blink 1.06s steps(1, end) infinite;
+}
+@keyframes tp-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-caret { animation: none; }
+  .ticker-track { animation: none; }
 }
 
 /* ---------- decorative big CJK in margin ---------- */
@@ -341,3 +376,63 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 /* Anchor fallback; page-level scroll-mt utilities should be able to override it. */
 :where([id]) { scroll-margin-top: 5rem; }
+
+/* ------------------------------------------------------------------ */
+/*  Dark mode — scoped to the /docs routes                            */
+/*                                                                    */
+/*  A full site-wide inversion is unsafe here: several marketing      */
+/*  surfaces are intentionally dark (`bg-ink text-paper` — the hero   */
+/*  closer, the terminal player, the LIVE ticker badge) and would     */
+/*  invert into light blocks. The reference-site minimum is dark      */
+/*  docs, so the dark token overrides are set ON the `.docs-theme`    */
+/*  wrapper only. Because the Tailwind surface/ink utilities resolve  */
+/*  through these vars, everything inside the docs subtree re-themes  */
+/*  while the rest of the site (and the shared nav/footer) stays      */
+/*  light. Default follows prefers-color-scheme; an explicit          */
+/*  data-theme on <html> wins.                                        */
+/* ------------------------------------------------------------------ */
+
+.docs-theme {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .docs-theme {
+    color-scheme: dark;
+    --c-paper: 13 13 15;
+    --c-paper-deep: 22 23 28;
+    --c-paper-edge: 42 43 51;
+    --c-ink: 230 232 240;
+    --c-ink-soft: 187 191 202;
+    --c-ink-mute: 141 146 158;
+    --paper: #0d0d0f;
+    --paper-deep: #16171c;
+    --paper-edge: #2a2b33;
+    --ink: #e6e8f0;
+    --ink-soft: #bbbfca;
+    --ink-mute: #8d929e;
+    --hairline: rgba(230, 232, 240, 0.16);
+    --code-bg: #17181e;
+    --code-fg: #e6e8f0;
+  }
+}
+
+[data-theme="dark"] .docs-theme {
+  color-scheme: dark;
+  --c-paper: 13 13 15;
+  --c-paper-deep: 22 23 28;
+  --c-paper-edge: 42 43 51;
+  --c-ink: 230 232 240;
+  --c-ink-soft: 187 191 202;
+  --c-ink-mute: 141 146 158;
+  --paper: #0d0d0f;
+  --paper-deep: #16171c;
+  --paper-edge: #2a2b33;
+  --ink: #e6e8f0;
+  --ink-soft: #bbbfca;
+  --ink-mute: #8d929e;
+  --hairline: rgba(230, 232, 240, 0.16);
+  --code-bg: #17181e;
+  --code-fg: #e6e8f0;
+}

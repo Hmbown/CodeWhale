@@ -65,18 +65,18 @@ Prebuilt binaries for the GitHub release are downloaded automatically:
 
 - Linux x64
 - Linux arm64
-- Linux riscv64
 - macOS x64 / arm64
 - Windows x64
 
 HarmonyOS PC (`openharmony`) is treated as `linux`, so it gets the Linux
-binaries matching your CPU architecture (x64, arm64, or riscv64). Other
-platform/architecture combinations (musl, FreeBSD, …) aren't
-shipped as prebuilts. Unsupported platforms, checksum failures, and glibc
-compatibility problems still fail with a clear error pointing you at
-`cargo install codewhale-cli codewhale-tui --locked` and the full
+binaries matching your CPU architecture (x64 or arm64). Linux riscv64 prebuilts
+are temporarily paused while the locked `rquickjs-sys` dependency lacks
+`riscv64gc-unknown-linux-gnu` bindings. Other platform/architecture combinations
+(musl, FreeBSD, …) aren't shipped as prebuilts. Unsupported platforms, checksum
+failures, and glibc compatibility problems still fail with a clear error pointing
+you at the full
 [docs/INSTALL.md](https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md)
-build-from-source guide.
+guide.
 
 ## Wrapper configuration
 

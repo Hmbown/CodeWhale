@@ -35,7 +35,7 @@ CodeWhale이 실제 라우트를 해석해 실행합니다.
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.65
+codewhale --version   # 0.8.67
 ```
 
 npm 래퍼(Node 18+)는 GitHub Releases에서 SHA-256으로 검증된 바이너리를
@@ -64,18 +64,19 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # or the NSIS installer from GitHub Releases
 
 # CNB mirror for users who cannot reliably reach GitHub
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-tui --locked --force
 
 # Legacy Homebrew compatibility while the formula is renamed
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 ```
 
-모든 플랫폼용 사전 빌드 아카이브는 Linux riscv64를 포함해
+Linux x64/arm64, macOS x64/arm64, Windows x64용 사전 빌드 아카이브는
 [GitHub Releases](https://github.com/Hmbown/CodeWhale/releases)에
-첨부되어 있습니다. 체크섬, 중국 미러, Windows 관련 세부 사항, 문제
-해결은 [docs/INSTALL.md](docs/INSTALL.md)에 있습니다.
+첨부되어 있습니다. Linux riscv64 사전 빌드는 upstream QuickJS bindings
+지원이 준비될 때까지 잠시 중단되었습니다. 체크섬, 중국 미러, Windows
+관련 세부 사항, 문제 해결은 [docs/INSTALL.md](docs/INSTALL.md)에 있습니다.
 
 **레거시 `deepseek-tui` 패키지에서 업그레이드하나요?** 설정, 세션,
 스킬, MCP 설정은 보존됩니다. [docs/REBRAND.md](docs/REBRAND.md)를
@@ -247,17 +248,23 @@ CodeWhale은 파일을 편집하고 명령을 실행하므로, 안전 태세는 
 
 1. **전역 헌장** — 모든 바이너리에 컴파일되는 기본 법입니다. 그
    우선순위 조항은 모든 충돌에 대한 권한 순서를 고정합니다.
-2. **프로젝트의 법** — 저장소에 `.codewhale/constitution.json`을 두어
+2. **사용자 전역 헌장** — `/constitution`과 `/setup`에서 관리하며,
+   `$CODEWHALE_HOME/constitution.json`에 구조화된 데이터로 저장되고
+   모델이 읽는 prose block으로 렌더링됩니다. 일반 설정 경로이며 원시
+   프롬프트 편집기가 아닙니다.
+3. **프로젝트의 법** — 저장소에 `.codewhale/constitution.json`을 두어
    `protected_invariants`, `branch_policy`, `verification_policy`,
    `escalate_when`을 선언합니다. 이는 메모리와 핸드오프보다 위에 있는
    독립 권한 블록으로 로드됩니다.
-3. **현재 요청** — 이번 턴에서 작동하는 지시사항입니다.
-4. **실시간 증거** — 도구가 실제로 반환한 내용입니다. 정답 기준이며,
+4. **현재 요청** — 이번 턴에서 작동하는 지시사항입니다.
+5. **실시간 증거** — 도구가 실제로 반환한 내용입니다. 정답 기준이며,
    모델은 그 너머로 지시받을 수는 있지만 존재하지 않는 사실을 보고해서는
    안 됩니다.
 
 두 지시사항이 충돌하면 각각은 위에 있는 것에 양보합니다. 이 법은 모델이
 아니라 하네스 안에 있으므로, 모델을 바꿔도 구조는 그대로 유지됩니다.
+헌장 텍스트는 선호를 표현할 수 있지만 승인, 샌드박스, 네트워크, 신뢰,
+MCP 권한 같은 런타임 보안 설정을 조용히 바꾸지는 않습니다.
 
 ## 세부 정보 위치
 
@@ -271,7 +278,7 @@ README는 짧은 버전입니다. 나머지는 docs와
   출력 계약, 복구 동작.
 - [아키텍처](docs/ARCHITECTURE.md) — 크레이트 구성, 런타임 흐름, 도구 시스템,
   확장 지점, 보안 모델.
-- [WhaleFlow 작성](docs/WHALEFLOW_AUTHORING.md) · [MCP](docs/MCP.md) ·
+- [Workflow 작성](docs/WORKFLOW_AUTHORING.md) · [MCP](docs/MCP.md) ·
   [Runtime API](docs/RUNTIME_API.md) · [Model Lab](docs/MODEL_LAB.md)
 - [키 바인딩](docs/KEYBINDINGS.md) · [샌드박스와 승인](docs/SANDBOX.md)
   · [접근성](docs/ACCESSIBILITY.md) · [Docker](docs/DOCKER.md)

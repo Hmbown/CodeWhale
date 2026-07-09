@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// Unique identifier for a workroom.
 ///
@@ -209,12 +210,12 @@ impl WorkroomLink {
     pub fn to_url(&self) -> String {
         let mut url = format!("codewhale://workroom/{}", self.workroom_id);
         if let Some(ref thread_id) = self.thread_id {
-            url.push_str(&format!("/thread/{thread_id}"));
+            write!(url, "/thread/{thread_id}").unwrap();
             if let Some(ref event_id) = self.event_id {
-                url.push_str(&format!("/event/{event_id}"));
+                write!(url, "/event/{event_id}").unwrap();
             }
         } else if let Some(ref event_id) = self.event_id {
-            url.push_str(&format!("/event/{event_id}"));
+            write!(url, "/event/{event_id}").unwrap();
         }
         url
     }

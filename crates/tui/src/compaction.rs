@@ -74,6 +74,8 @@ const LARGE_CONTEXT_SUMMARY_INPUT_MAX_CHARS: usize = 120_000;
 const LARGE_CONTEXT_SUMMARY_INPUT_HEAD_CHARS: usize = 72_000;
 const LARGE_CONTEXT_SUMMARY_INPUT_TAIL_CHARS: usize = 36_000;
 const TOOL_PRUNE_STOP_CHECK_BYTES: usize = 16 * 1024;
+const RETAINED_TOOL_RESULT_MAX_CHARS: usize = 64 * 1024;
+const RETAINED_THINKING_MAX_CHARS: usize = 16 * 1024;
 const LARGE_CONTEXT_SUMMARY_MAX_TOKENS: u32 = 2_048;
 const LARGE_CONTEXT_WINDOW_TOKENS: u32 = 500_000;
 const CACHE_ALIGNED_SUMMARY_CONTEXT_BUDGET_PERCENT: usize = 85;
@@ -563,13 +565,24 @@ fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usi
                 .map(|s| s.len() / 4)
                 .unwrap_or(100),
             ContentBlock::ToolResult { content, .. } => content.len() / 4,
+            // An inline image is real input the model pays for; estimating it
+            // at 0 undercounts the budget and risks overflow in image-heavy
+            // sessions. Use a conservative flat per-image estimate (vision
+            // tiles are typically ~1k tokens); erring high compacts slightly
+            // early rather than overflowing.
+            ContentBlock::ImageUrl { .. } => IMAGE_TOKEN_ESTIMATE,
             ContentBlock::ServerToolUse { .. }
             | ContentBlock::ToolSearchToolResult { .. }
-            | ContentBlock::CodeExecutionToolResult { .. }
-            | ContentBlock::ImageUrl { .. } => 0,
+            | ContentBlock::CodeExecutionToolResult { .. } => 0,
         })
         .sum::<usize>()
 }
+
+/// Conservative flat token estimate for an inline image (`ContentBlock::ImageUrl`).
+/// Vision models bill images by resized tile count; ~1k tokens is a safe
+/// mid-range estimate that keeps the compaction trigger from under-reading an
+/// image-heavy session.
+const IMAGE_TOKEN_ESTIMATE: usize = 1000;
 
 pub fn estimate_tokens(messages: &[Message]) -> usize {
     // Rough estimate: ~4 chars per token. DeepSeek thinking-mode rule: any
@@ -841,6 +854,59 @@ where
     bytes_saved
 }
 
+fn truncate_retained_block(label: &str, content: &mut String, max_chars: usize) -> bool {
+    let char_count = content.chars().count();
+    if char_count <= max_chars {
+        return false;
+    }
+
+    let snippet_budget = max_chars.saturating_sub(256).max(1024);
+    let head_chars = snippet_budget / 2;
+    let tail_chars_budget = snippet_budget.saturating_sub(head_chars);
+    let head = truncate_chars(content, head_chars).to_string();
+    let tail = tail_chars(content, tail_chars_budget);
+    *content =
+        format!("[{label} retained-history truncated from {char_count} chars]\n{head}\n…\n{tail}");
+    true
+}
+
+fn sanitize_retained_messages(mut messages: Vec<Message>) -> Vec<Message> {
+    for message in &mut messages {
+        for block in &mut message.content {
+            match block {
+                ContentBlock::ToolResult {
+                    content,
+                    content_blocks,
+                    ..
+                } => {
+                    if truncate_retained_block(
+                        "tool result",
+                        content,
+                        RETAINED_TOOL_RESULT_MAX_CHARS,
+                    ) {
+                        *content_blocks = None;
+                    }
+                }
+                // Signed thinking must stay byte-for-byte valid for providers that
+                // verify replay signatures. Unsigned thinking is local memory pressure
+                // and can be capped once compaction has summarized the old turn.
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } if signature.is_none() => {
+                    truncate_retained_block(
+                        "thinking block",
+                        thinking,
+                        RETAINED_THINKING_MAX_CHARS,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    messages
+}
+
 /// Result of a compaction operation with metadata.
 #[derive(Debug)]
 pub struct CompactionResult {
@@ -848,10 +914,6 @@ pub struct CompactionResult {
     pub messages: Vec<Message>,
     /// Summary system prompt
     pub summary_prompt: Option<SystemPrompt>,
-    /// Messages that were removed from the active window
-    // TODO(v0.8.71): kept for replay compatibility; dead in production, see #3490
-    #[allow(dead_code)]
-    pub removed_messages: Vec<Message>,
     /// Number of retries used before success
     pub retries_used: u32,
 }
@@ -940,9 +1002,8 @@ pub async fn compact_messages_safe(
         ));
         if was_over_threshold && now_under_threshold {
             return Ok(CompactionResult {
-                messages: pruned_messages,
+                messages: sanitize_retained_messages(pruned_messages),
                 summary_prompt: None,
-                removed_messages: Vec::new(),
                 retries_used: 0,
             });
         }
@@ -971,10 +1032,10 @@ pub async fn compact_messages_safe(
         .await
         {
             Ok((msgs, prompt, removed)) => {
+                drop(removed);
                 return Ok(CompactionResult {
-                    messages: msgs,
+                    messages: sanitize_retained_messages(msgs),
                     summary_prompt: prompt,
-                    removed_messages: removed,
                     retries_used: attempt,
                 });
             }
@@ -1070,6 +1131,7 @@ pub async fn compact_messages(
 
     // Extract workflow context (files touched, tasks in progress, etc.)
     let workflow_context = extract_workflow_context(&to_summarize, workspace);
+    drop(to_summarize);
 
     let anchors_section = anchor_summary_section(workspace);
 
@@ -1107,9 +1169,9 @@ pub async fn compact_messages(
         .collect();
 
     Ok((
-        pinned_messages,
+        sanitize_retained_messages(pinned_messages),
         Some(SystemPrompt::Blocks(vec![summary_block])),
-        to_summarize,
+        Vec::new(),
     ))
 }
 
@@ -1129,10 +1191,16 @@ async fn create_summary(
     let mut telemetry_cache_aligned = used_cache_aligned;
     let response = match client.create_message(request).await {
         Ok(response) => response,
-        Err(err) if used_cache_aligned && is_context_window_error(&err) => {
+        // The cache-aligned request replays a non-contiguous message
+        // subsequence (pinned messages removed from the middle), which can
+        // exceed the window OR violate strict role-ordering (a non-transient
+        // InvalidInput). Fall back to the bounded formatted summary on ANY
+        // cache-aligned failure rather than aborting compaction entirely and
+        // letting context keep growing.
+        Err(err) if used_cache_aligned => {
             logging::warn(format!(
-                "Cache-aligned compaction summary exceeded the model context window ({err}); \
-                 retrying with bounded formatted summary input"
+                "Cache-aligned compaction summary failed ({err}); retrying with \
+                 bounded formatted summary input"
             ));
             telemetry_cache_aligned = false;
             let fallback_request = build_formatted_summary_request(model, messages, limits);
@@ -1168,6 +1236,9 @@ async fn create_summary(
     Ok(summary)
 }
 
+// Retained for tests; production compaction now falls back on any
+// cache-aligned summary failure, not only context-window errors.
+#[cfg(test)]
 fn is_context_window_error(e: &anyhow::Error) -> bool {
     let text = e.to_string();
     if crate::error_taxonomy::classify_error_message(&text)
@@ -1537,6 +1608,24 @@ pub fn merge_system_prompts(
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{ImageUrlContent, Message};
+
+    #[test]
+    fn inline_image_estimates_nonzero_tokens() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ImageUrl {
+                image_url: ImageUrlContent {
+                    url: "data:image/png;base64,AAAA".to_string(),
+                },
+            }],
+        };
+        assert!(
+            estimate_tokens_for_message(&msg, false) >= IMAGE_TOKEN_ESTIMATE,
+            "an inline image must not estimate to 0 tokens"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -2727,13 +2816,11 @@ mod tests {
         let result = CompactionResult {
             messages: vec![],
             summary_prompt: None,
-            removed_messages: vec![],
             retries_used: 2,
         };
 
         assert_eq!(result.retries_used, 2);
         assert!(result.messages.is_empty());
-        assert!(result.removed_messages.is_empty());
     }
 
     #[test]

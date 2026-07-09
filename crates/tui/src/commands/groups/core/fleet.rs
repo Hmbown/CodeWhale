@@ -9,7 +9,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "fleet",
     aliases: &["loadout", "party"],
-    usage: "/fleet",
+    usage: "/fleet [roster|setup|status]",
     description_id: MessageId::CmdFleetDescription,
 };
 
@@ -23,17 +23,18 @@ impl RegisterCommand for FleetCmd {
     fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
         match arg.map(str::trim).filter(|arg| !arg.is_empty()) {
             None
-            | Some("setup" | "roles" | "role" | "profiles" | "profile" | "party" | "loadout") => {
-                CommandResult::action(AppAction::OpenFleetSetup)
+            | Some("roster" | "party" | "loadout" | "roles" | "role" | "profiles" | "profile") => {
+                CommandResult::action(AppAction::OpenFleetRoster)
             }
+            Some("setup" | "edit" | "new") => CommandResult::action(AppAction::OpenFleetSetup),
             Some("status" | "workers" | "worker" | "agents" | "subagents" | "list") => {
                 super::core::subagents(app)
             }
             Some("help" | "?") => CommandResult::message(
-                "Usage: /fleet [setup|status]\n\n/fleet opens the setup flow. /fleet status shows Fleet worker status; /subagents is a compatibility shortcut for the same status view.",
+                "Usage: /fleet [roster|setup|status]\n\n/fleet (or /fleet roster) opens Fleet workers and orchestration state — each member's posture, routing, and origin. Use Operate mode when managing delegated work. /fleet setup opens the authoring wizard for a new or overriding profile. /fleet status shows live Fleet worker status; /subagents is a compatibility shortcut for the same status view.",
             ),
             Some(other) => CommandResult::error(format!(
-                "Unknown /fleet target '{other}'. Use `/fleet setup` or `/fleet status`."
+                "Unknown /fleet target '{other}'. Use `/fleet roster`, `/fleet setup`, or `/fleet status`."
             )),
         }
     }
@@ -72,13 +73,39 @@ mod tests {
     }
 
     #[test]
-    fn fleet_command_opens_setup_view() {
+    fn fleet_command_opens_roster_view() {
         let mut app = test_app();
 
         let result = FleetCmd::execute(&mut app, None);
 
-        assert_eq!(result.action, Some(AppAction::OpenFleetSetup));
+        assert_eq!(result.action, Some(AppAction::OpenFleetRoster));
         assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn fleet_roster_aliases_open_roster_view() {
+        for arg in [
+            "roster", "party", "loadout", "roles", "role", "profiles", "profile",
+        ] {
+            let mut app = test_app();
+
+            let result = FleetCmd::execute(&mut app, Some(arg));
+
+            assert_eq!(result.action, Some(AppAction::OpenFleetRoster), "{arg}");
+            assert!(result.message.is_none(), "{arg}");
+        }
+    }
+
+    #[test]
+    fn fleet_setup_args_open_setup_wizard() {
+        for arg in ["setup", "edit", "new"] {
+            let mut app = test_app();
+
+            let result = FleetCmd::execute(&mut app, Some(arg));
+
+            assert_eq!(result.action, Some(AppAction::OpenFleetSetup), "{arg}");
+            assert!(result.message.is_none(), "{arg}");
+        }
     }
 
     #[test]
@@ -101,12 +128,10 @@ mod tests {
 
         assert!(!result.is_error);
         assert!(result.action.is_none());
-        assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("/fleet status"))
-        );
+        let message = result.message.as_deref().unwrap_or_default();
+        for surface in ["/fleet roster", "/fleet setup", "/fleet status"] {
+            assert!(message.contains(surface), "help must describe {surface}");
+        }
     }
 
     #[test]

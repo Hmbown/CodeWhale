@@ -174,6 +174,14 @@ async function responseArray<T>(res: Response): Promise<T[]> {
   return Array.isArray(body) ? (body as T[]) : [];
 }
 
+/** Compact star-count label, e.g. 39312 → "39.3k". */
+export function formatStars(n: number): string {
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(n);
+}
+
 export function relativeTime(iso: string): string {
   const diff = Date.now() - +new Date(iso);
   const mins = Math.round(diff / 60000);

@@ -25,11 +25,24 @@ impl RegisterCommand for HotbarCmd {
             None | Some("setup" | "edit" | "configure" | "config") => {
                 CommandResult::action(AppAction::OpenHotbarSetup)
             }
+            // Hide the Hotbar: persist `hotbar = []` and clear the live slots.
+            Some("off" | "disable" | "hide") => CommandResult::action(AppAction::DisableHotbar),
+            // Restore the default recommended slots (explicit reset).
+            Some("on" | "reset" | "defaults" | "default") => {
+                CommandResult::action(AppAction::RestoreHotbarDefaults)
+            }
             Some("help" | "?") => CommandResult::message(
-                "Usage: /hotbar [setup]\n\n/hotbar opens the Hotbar setup wizard.",
+                "Hotbar gives you Alt+1 through Alt+8 shortcuts (Option key on macOS, Alt \
+                 elsewhere). Use `/hotbar` to customize, `/hotbar off` to hide it \
+                 (`hotbar = []`), and `/hotbar on` to restore the default slots. \
+                 Hotbar slots dispatch only when no modal, inline picker, or \
+                 onboarding surface owns input. Bare 1-8 insert text in the \
+                 composer. Cmd-number and F-keys are not Hotbar shortcuts unless \
+                 a future release documents and implements them.",
             ),
             Some(other) => CommandResult::error(format!(
-                "Unknown /hotbar target '{other}'. Use `/hotbar` or `/hotbar setup`."
+                "Unknown /hotbar target '{other}'. Try `/hotbar`, `/hotbar off`, \
+                 `/hotbar on`, or `/hotbar help`."
             )),
         }
     }
@@ -88,19 +101,64 @@ mod tests {
     }
 
     #[test]
-    fn hotbar_help_arg_returns_usage() {
+    fn hotbar_help_arg_explains_customize_and_disable() {
         let mut app = test_app();
 
         let result = HotbarCmd::execute(&mut app, Some("help"));
 
         assert!(!result.is_error);
         assert!(result.action.is_none());
+        let message = result
+            .message
+            .as_deref()
+            .expect("help should return a message");
         assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("/hotbar opens"))
+            message.contains("/hotbar")
+                && message.contains("customize")
+                && message.contains("Alt+1 through Alt+8"),
+            "help should point at /hotbar to customize: {message:?}"
         );
+        assert!(
+            message.contains("hotbar = []"),
+            "help should mention the explicit disabled config: {message:?}"
+        );
+        assert!(
+            message.contains("/hotbar off") && message.contains("/hotbar on"),
+            "help should mention both disable and restore paths: {message:?}"
+        );
+        assert!(message.contains("Bare 1-8 insert text"));
+        assert!(message.contains("Cmd-number and F-keys are not Hotbar shortcuts"));
+    }
+
+    #[test]
+    fn hotbar_off_and_disable_aliases_return_disable_action() {
+        for arg in ["off", "disable", "hide"] {
+            let mut app = test_app();
+            let result = HotbarCmd::execute(&mut app, Some(arg));
+            assert_eq!(
+                result.action,
+                Some(AppAction::DisableHotbar),
+                "`/hotbar {arg}` should disable the hotbar"
+            );
+            assert!(
+                result.message.is_none(),
+                "`/hotbar {arg}` should not also emit a message"
+            );
+        }
+    }
+
+    #[test]
+    fn hotbar_on_and_reset_aliases_return_restore_action() {
+        for arg in ["on", "reset", "defaults", "default"] {
+            let mut app = test_app();
+            let result = HotbarCmd::execute(&mut app, Some(arg));
+            assert_eq!(
+                result.action,
+                Some(AppAction::RestoreHotbarDefaults),
+                "`/hotbar {arg}` should restore default hotbar slots"
+            );
+            assert!(result.message.is_none());
+        }
     }
 
     #[test]

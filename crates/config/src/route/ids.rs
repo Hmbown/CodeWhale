@@ -24,6 +24,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// The `"auto"` router sentinel for [`LogicalModelRef`].
+///
+/// `auto` is an opt-in router sentinel — it never refers to a literal model
+/// named "auto". Centralized here so every comparison site uses the same
+/// spelling (#4158).
+pub const AUTO_SENTINEL: &str = "auto";
+
 use crate::ProviderKind;
 
 macro_rules! string_newtype {
@@ -137,7 +144,7 @@ impl LogicalModelRef {
     /// `auto` is an opt-in router sentinel, never a literal model id.
     #[must_use]
     pub fn is_auto(&self) -> bool {
-        self.raw() == "auto"
+        self.raw() == AUTO_SENTINEL
     }
 
     /// Parse the leading namespace prefix, if any.

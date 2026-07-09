@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use codewhale_config::catalog::{
-    CatalogOffering, CatalogRefreshError, CatalogSource, CatalogStatus, ProviderCatalogCache,
-    ProviderCatalogDelta, base_url_fingerprint, now_unix,
+    CatalogOffering, CatalogRefreshError, CatalogSnapshot, CatalogSource, CatalogStatus,
+    ProviderCatalogCache, ProviderCatalogDelta, base_url_fingerprint, now_unix,
 };
 use codewhale_config::route::ReadyRouteCandidate;
 
@@ -183,7 +183,13 @@ const DEFAULT_CLIENT_RATE_LIMIT_RPS: f64 = 8.0;
 const DEFAULT_CLIENT_RATE_LIMIT_BURST: f64 = 16.0;
 const ALLOW_INSECURE_HTTP_ENV: &str = "DEEPSEEK_ALLOW_INSECURE_HTTP";
 
-pub(super) const SSE_BACKPRESSURE_HIGH_WATERMARK: usize = 8 * 1024 * 1024; // 8 MB
+/// Upper bound on a single sleep inside the provider-wide rate-limit pause
+/// loop in `send_with_retry`. The pause window lives in process-global state
+/// (`retry_status`), so waiting requests re-poll it on this cadence instead
+/// of committing to the full remaining window up front.
+const RATE_LIMIT_PAUSE_RECHECK_INTERVAL: Duration = Duration::from_millis(250);
+
+pub(super) const SSE_BACKPRESSURE_HIGH_WATERMARK: usize = 1024 * 1024; // 1 MB
 pub(super) const SSE_BACKPRESSURE_SLEEP_MS: u64 = 10;
 pub(super) const SSE_MAX_LINES_PER_CHUNK: usize = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -937,6 +943,58 @@ fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
     matches!(api_provider, ApiProvider::DeepseekAnthropic)
 }
 
+/// Verify a provider API key by hitting the `/models` endpoint
+/// (#3875). Builds a minimal HTTP client with the canonical auth
+/// headers for `provider`, issues a single GET, and returns
+/// `Ok(())` on a 2xx response or `Err(reason)` on any failure.
+///
+/// This is intentionally a one-shot call — no retry, no rate-limit
+/// wait — so a bad key is surfaced immediately.
+pub async fn verify_provider_api_key(
+    provider: ApiProvider,
+    api_key: &str,
+    base_url: &str,
+) -> Result<(), String> {
+    if api_provider_skips_models_probe(provider) {
+        // Providers without a /models endpoint can't be verified this
+        // way; accept the key optimistically (same as health_check).
+        return Ok(());
+    }
+    let headers = build_default_headers(api_key, &Default::default(), provider, base_url)
+        .map_err(|err| format!("failed to build auth headers: {err:#}"))?;
+    let client = crate::tls::reqwest_client_builder()
+        .default_headers(headers)
+        .user_agent(concat!(
+            "Mozilla/5.0 (compatible; codewhale/",
+            env!("CARGO_PKG_VERSION"),
+            "; +https://github.com/Hmbown/CodeWhale)"
+        ))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|err| format!("failed to build HTTP client: {err:#}"))?;
+    let url = api_url(base_url, "models");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|err| format!("request failed: {err:#}"))?;
+    let status = response.status();
+    if status.is_success() {
+        // Consume the body so the connection returns to the pool.
+        let _ = response.text().await;
+        Ok(())
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        let summary = if body.chars().count() > 200 {
+            format!("{}...", body.chars().take(200).collect::<String>())
+        } else {
+            body
+        };
+        Err(format!("HTTP {status}: {summary}"))
+    }
+}
+
 fn translation_system_prompt(target_language: &str) -> String {
     format!(
         "You are a professional translator. Your ONLY task is to translate text to {target_language}. \
@@ -1104,9 +1162,7 @@ impl DeepSeekClient {
         });
         apply_reasoning_effort(&mut body, Some("off"), self.api_provider);
 
-        let response = self
-            .send_with_retry(|| self.http_client.post(&url).json(&body))
-            .await?;
+        let response = self.send_json_with_retry(&url, &body).await?;
 
         let value: serde_json::Value = response.json().await?;
         let translated = value["choices"][0]["message"]["content"]
@@ -1194,41 +1250,53 @@ impl DeepSeekClient {
             .text()
             .await
             .map_err(|_| CatalogRefreshError::Network)?;
-        let models =
-            parse_models_response(&body).map_err(|_| CatalogRefreshError::InvalidResponse)?;
-        if models.is_empty() {
-            return Err(CatalogRefreshError::EmptyList);
-        }
 
         let provider = self.catalog_provider_id();
         let fingerprint = base_url_fingerprint(&self.base_url);
         let fetched_at = now_unix();
-        let offerings = models
-            .into_iter()
-            .map(|model| CatalogOffering {
-                provider: provider.clone(),
-                wire_model_id: model.id,
-                canonical_model: None,
-                // This refresh calls the chat-model listing endpoint. A future
-                // provider-specific catalog adapter can split image/TTS/embed
-                // rows before they become executable route candidates.
-                endpoint_key: "chat".to_string(),
-                default_for_provider: false,
-                family: None,
-                limit: None,
-                cost: None,
-                // The chat-model listing endpoint does not state modalities; a
-                // future per-provider catalog adapter can fill this in. Left
-                // unknown rather than assumed text-only.
-                modalities: None,
-                reasoning: None,
-                reasoning_options: Vec::new(),
-                source: CatalogSource::Live {
-                    base_url_fingerprint: fingerprint.clone(),
-                    fetched_at,
-                },
-            })
-            .collect();
+
+        // OpenRouter returns extended capability metadata in its /models
+        // response (#3385). Capture limits, pricing, reasoning, and modalities
+        // from the live API instead of leaving them unknown.
+        let offerings: Vec<CatalogOffering> = if provider == "openrouter" {
+            let or_models = parse_openrouter_models_response(&body)?;
+            if or_models.is_empty() {
+                return Err(CatalogRefreshError::EmptyList);
+            }
+            or_models
+                .iter()
+                .map(|item| {
+                    openrouter_to_catalog_offering(item, &provider, &fingerprint, fetched_at)
+                })
+                .collect()
+        } else {
+            let models =
+                parse_models_response(&body).map_err(|_| CatalogRefreshError::InvalidResponse)?;
+            if models.is_empty() {
+                return Err(CatalogRefreshError::EmptyList);
+            }
+            models
+                .into_iter()
+                .map(|model| CatalogOffering {
+                    provider: provider.clone(),
+                    wire_model_id: model.id,
+                    canonical_model: None,
+                    endpoint_key: "chat".to_string(),
+                    default_for_provider: false,
+                    family: None,
+                    limit: None,
+                    cost: None,
+                    modalities: None,
+                    reasoning: None,
+                    tool_call: None,
+                    reasoning_options: Vec::new(),
+                    source: CatalogSource::Live {
+                        base_url_fingerprint: fingerprint.clone(),
+                        fetched_at,
+                    },
+                })
+                .collect()
+        };
 
         Ok(ProviderCatalogDelta {
             provider,
@@ -1250,6 +1318,7 @@ impl DeepSeekClient {
         match self.fetch_catalog_delta().await {
             Ok(delta) => {
                 cache.record_success(delta, ttl_secs);
+                publish_provider_lake_snapshot(cache);
                 CatalogStatus::Fresh
             }
             Err(reason) => {
@@ -1258,6 +1327,7 @@ impl DeepSeekClient {
                     &base_url_fingerprint(&self.base_url),
                     reason,
                 );
+                publish_provider_lake_snapshot(cache);
                 CatalogStatus::Failed { reason }
             }
         }
@@ -1325,9 +1395,7 @@ impl DeepSeekClient {
         let body = build_speech_synthesis_body(&model, &text, instruction, audio);
 
         let url = api_url(&self.base_url, "chat/completions");
-        let response = self
-            .send_with_retry(|| self.http_client.post(&url).json(&body))
-            .await?;
+        let response = self.send_json_with_retry(&url, &body).await?;
         let status = response.status();
         if !status.is_success() {
             let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
@@ -1425,8 +1493,13 @@ impl DeepSeekClient {
             || {
                 let request = build();
                 async move {
+                    // Sleep in bounded slices rather than the full remaining
+                    // window: the pause is process-global, so a concurrent
+                    // `clear_rate_limit()` (or a shortened deadline) must
+                    // release requests that are already waiting instead of
+                    // stranding them for the whole original window.
                     while let Some(delay) = crate::retry_status::rate_limit_remaining() {
-                        tokio::time::sleep(delay).await;
+                        tokio::time::sleep(delay.min(RATE_LIMIT_PAUSE_RECHECK_INTERVAL)).await;
                     }
                     self.wait_for_rate_limit().await;
                     let response = request
@@ -1488,9 +1561,28 @@ impl DeepSeekClient {
                 }
                 self.mark_request_failure(&last).await;
                 self.maybe_probe_recovery().await;
-                Err(anyhow::anyhow!(last))
+                // Keep the structured `LlmError` downcastable so failure
+                // surfaces can classify auth/rate-limit/invalid-request
+                // instead of reporting an opaque string (#3884).
+                Err(anyhow::Error::new(err.last_error))
             }
         }
+    }
+
+    pub(super) async fn send_json_with_retry(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let request_body =
+            serde_json::to_vec(body).context("Failed to serialize JSON request body")?;
+        self.send_with_retry(|| {
+            self.http_client
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .body(request_body.clone())
+        })
+        .await
     }
 }
 
@@ -1593,12 +1685,72 @@ struct ModelsListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModelItem>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ModelListItem {
     id: String,
     #[serde(default)]
     owned_by: Option<String>,
     #[serde(default)]
     created: Option<u64>,
+}
+
+/// OpenRouter `/models` response item with full capability metadata (#3385).
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelItem {
+    id: String,
+    // Captured from OpenRouter for future display/deprecation surfaces. The
+    // current CatalogOffering shape has no honest fields for these yet.
+    #[allow(dead_code)]
+    #[serde(default)]
+    name: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    created: Option<u64>,
+    #[serde(default)]
+    context_length: Option<u32>,
+    #[serde(default)]
+    pricing: Option<OpenRouterPricing>,
+    #[serde(default)]
+    top_provider: Option<OpenRouterTopProvider>,
+    #[serde(default)]
+    supported_parameters: Option<Vec<String>>,
+    #[serde(default)]
+    architecture: Option<OpenRouterArchitecture>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    expiration_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterPricing {
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    completion: Option<String>,
+    #[serde(default)]
+    input_cache_read: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterTopProvider {
+    #[serde(default)]
+    context_length: Option<u32>,
+    #[serde(default)]
+    max_completion_tokens: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterArchitecture {
+    #[serde(default)]
+    modality: Option<String>,
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
+    #[serde(default)]
+    output_modalities: Option<Vec<String>>,
 }
 
 pub(super) fn parse_models_response(payload: &str) -> Result<Vec<AvailableModel>> {
@@ -1617,6 +1769,138 @@ pub(super) fn parse_models_response(payload: &str) -> Result<Vec<AvailableModel>
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
     Ok(models)
+}
+
+/// Parse an OpenRouter `/models` response, preserving server-side ordering and
+/// capturing full capability metadata (#3385).
+fn parse_openrouter_models_response(
+    payload: &str,
+) -> Result<Vec<OpenRouterModelItem>, CatalogRefreshError> {
+    let parsed: OpenRouterModelsResponse =
+        serde_json::from_str(payload).map_err(|_| CatalogRefreshError::InvalidResponse)?;
+    let mut seen = std::collections::HashSet::new();
+    let models: Vec<_> = parsed
+        .data
+        .into_iter()
+        .filter(|item| seen.insert(item.id.clone()))
+        .collect();
+    Ok(models)
+}
+
+fn publish_provider_lake_snapshot(cache: &ProviderCatalogCache) {
+    // Publish fresh *and* stale/prior rows so pickers keep live catalog coverage
+    // after TTL expiry or a failed refresh (#4139). Empty caches clear the live
+    // layer and fall back to the bundled snapshot.
+    let offerings = cache.all_visible_offerings(now_unix());
+    if offerings.is_empty() {
+        crate::provider_lake::clear_live_snapshot();
+    } else {
+        crate::provider_lake::set_live_snapshot(CatalogSnapshot { offerings });
+    }
+}
+
+/// Convert an OpenRouter model item into a [`CatalogOffering`] with live-sourced
+/// limits, pricing, reasoning, and modalities (#3385).
+fn openrouter_to_catalog_offering(
+    item: &OpenRouterModelItem,
+    provider: &str,
+    base_url_fingerprint: &str,
+    fetched_at: u64,
+) -> CatalogOffering {
+    use codewhale_config::models_dev::{ModelsDevCost, ModelsDevLimit, ModelsDevModalities};
+
+    let context_length = item
+        .top_provider
+        .as_ref()
+        .and_then(|tp| tp.context_length)
+        .or(item.context_length);
+
+    let max_output = item
+        .top_provider
+        .as_ref()
+        .and_then(|tp| tp.max_completion_tokens);
+
+    let limit = if context_length.is_some() || max_output.is_some() {
+        Some(ModelsDevLimit {
+            context: context_length.map(u64::from),
+            input: context_length.map(u64::from),
+            output: max_output.map(u64::from),
+        })
+    } else {
+        None
+    };
+
+    let cost = item.pricing.as_ref().map(|p| {
+        let parse_price = |s: &Option<String>| -> Option<f64> {
+            s.as_ref()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|price_per_token| price_per_token * 1_000_000.0)
+        };
+        ModelsDevCost {
+            input: parse_price(&p.prompt),
+            output: parse_price(&p.completion),
+            cache_read: parse_price(&p.input_cache_read),
+            cache_write: None,
+        }
+    });
+
+    let reasoning = item.supported_parameters.as_ref().map(|params| {
+        params
+            .iter()
+            .any(|p| p == "reasoning" || p == "include_reasoning" || p.contains("reasoning"))
+    });
+
+    let tool_call = item.supported_parameters.as_ref().map(|params| {
+        params
+            .iter()
+            .any(|p| p == "tools" || p == "tool_choice" || p == "functions" || p.contains("tool"))
+    });
+
+    let modalities = item.architecture.as_ref().map(|arch| {
+        let mut input = arch.input_modalities.clone().unwrap_or_default();
+        let mut output = arch.output_modalities.clone().unwrap_or_default();
+        if input.is_empty()
+            && output.is_empty()
+            && let Some((left, right)) = arch
+                .modality
+                .as_deref()
+                .and_then(|value| value.split_once("->"))
+        {
+            input.extend(
+                left.split('+')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            );
+            output.extend(
+                right
+                    .split('+')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        ModelsDevModalities { input, output }
+    });
+
+    CatalogOffering {
+        provider: provider.to_string(),
+        wire_model_id: item.id.clone(),
+        canonical_model: None,
+        endpoint_key: "chat".to_string(),
+        default_for_provider: false,
+        family: None,
+        limit,
+        cost,
+        modalities,
+        reasoning,
+        tool_call,
+        reasoning_options: Vec::new(),
+        source: CatalogSource::Live {
+            base_url_fingerprint: base_url_fingerprint.to_string(),
+            fetched_at,
+        },
+    }
 }
 
 pub(super) fn system_to_instructions(system: Option<SystemPrompt>) -> Option<String> {
@@ -1718,6 +2002,8 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::Stepfun => {}
             ApiProvider::Sakana => {}
+            ApiProvider::LongCat => {}
+            ApiProvider::Xai => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
             // DeepSeek compatibility: low/medium both map to high
@@ -1807,6 +2093,8 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::Stepfun => {}
             ApiProvider::Sakana => {}
+            ApiProvider::LongCat => {}
+            ApiProvider::Xai => {}
         },
         "xhigh" | "max" | "highest" | "ultracode" => match provider {
             ApiProvider::Deepseek
@@ -1876,6 +2164,8 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::Stepfun => {}
             ApiProvider::Sakana => {}
+            ApiProvider::LongCat => {}
+            ApiProvider::Xai => {}
         },
         _ => {}
     }
@@ -1974,9 +2264,7 @@ impl DeepSeekClient {
             "suffix": suffix,
             "max_tokens": max_tokens,
         });
-        let response = self
-            .send_with_retry(|| self.http_client.post(&url).json(&body))
-            .await?;
+        let response = self.send_json_with_retry(&url, &body).await?;
         let status = response.status();
         if !status.is_success() {
             let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
@@ -2010,6 +2298,21 @@ fn extract_sse_data_value(line: &str) -> Option<&str> {
         .map(|value| value.strip_prefix(' ').unwrap_or(value))
 }
 
+/// Take the next COMPLETE line (up to the first `\n`) off a raw byte buffer,
+/// draining it, and return it trimmed. Returns `None` when no full line is
+/// buffered yet. Decoding only complete lines (never an arbitrary network-read
+/// boundary) means a multi-byte UTF-8 char — CJK, emoji, accented letter —
+/// split across two reads is never corrupted to U+FFFD, since the `\n`
+/// delimiter is ASCII and can never fall inside a multi-byte sequence.
+fn take_sse_line(buffer: &mut Vec<u8>) -> Option<String> {
+    let line_end = buffer.iter().position(|&b| b == b'\n')?;
+    let line = String::from_utf8_lossy(&buffer[..line_end])
+        .trim()
+        .to_string();
+    buffer.drain(..=line_end);
+    Some(line)
+}
+
 pub(crate) use chat::{CacheWarmupKey, PromptInspection};
 
 pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
@@ -2034,7 +2337,7 @@ mod tests {
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool,
     };
     use serde_json::json;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_tool(name: &str) -> Tool {
@@ -4283,6 +4586,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_provider_api_key_accepts_mocked_models_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+            .mount(&server)
+            .await;
+
+        verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
+            .await
+            .expect("mocked /models success should verify");
+    }
+
+    #[tokio::test]
+    async fn verify_provider_api_key_returns_status_and_unicode_body_without_panic() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("密钥无效"))
+            .mount(&server)
+            .await;
+
+        let err = verify_provider_api_key(ApiProvider::Openrouter, "bad-key", &server.uri())
+            .await
+            .expect_err("mocked /models failure should be reported");
+
+        assert!(err.contains("HTTP 401"), "status is preserved: {err}");
+        assert!(err.contains("密钥无效"), "unicode body is preserved: {err}");
+    }
+
+    #[tokio::test]
     async fn fetch_catalog_delta_success_builds_scoped_secret_free_live_delta() {
         let server = MockServer::start().await;
         mount_models_json(
@@ -4403,6 +4738,16 @@ mod tests {
             "rows from the prior success must survive a failed refresh"
         );
         assert!(matches!(cached.status, CatalogStatus::Failed { .. }));
+
+        // #4139: failed/stale rows must still publish into ProviderLake so
+        // pickers keep live coverage instead of dropping back to bundled-only.
+        let visible = cache.all_visible_offerings(now_unix());
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].wire_model_id, "synthetic-model-gamma");
+        assert!(
+            cache.all_fresh_offerings(now_unix()).is_empty(),
+            "Failed entries are not fresh, but they remain visible"
+        );
     }
 
     #[tokio::test]
@@ -5020,6 +5365,33 @@ mod tests {
             redacted,
             "https://***:***@example.com/v1?api_key=***&region=us&refresh-token=***"
         );
+    }
+
+    #[test]
+    fn take_sse_line_preserves_multibyte_split_across_reads() {
+        // "你好" streamed so the 3-byte '好' straddles a read boundary.
+        let full = "data: 你好\n";
+        let bytes = full.as_bytes();
+        let split = bytes.len() - 2; // mid '好'
+        let mut buffer: Vec<u8> = Vec::new();
+        // First read: no complete line yet.
+        buffer.extend_from_slice(&bytes[..split]);
+        assert_eq!(take_sse_line(&mut buffer), None);
+        // Second read completes the line; '好' must be intact, not U+FFFD.
+        buffer.extend_from_slice(&bytes[split..]);
+        let line = take_sse_line(&mut buffer).expect("a complete line");
+        assert_eq!(line, "data: 你好");
+        assert!(!line.contains('\u{FFFD}'), "multibyte char was corrupted");
+        assert_eq!(extract_sse_data_value(&line), Some("你好"));
+        // Buffer fully drained.
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn take_sse_line_returns_none_without_newline() {
+        let mut buffer = b"data: partial".to_vec();
+        assert_eq!(take_sse_line(&mut buffer), None);
+        assert_eq!(buffer, b"data: partial");
     }
 
     #[test]

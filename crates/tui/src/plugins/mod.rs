@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::{Mutex, OnceLock};
 
 pub mod discovery;

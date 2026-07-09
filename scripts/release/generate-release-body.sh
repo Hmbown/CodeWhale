@@ -62,7 +62,6 @@ Each archive below contains the \`codewhale\` dispatcher, \`codew\` shim, and \`
 |---|---|---|
 | Linux x64 | \`codewhale-linux-x64.tar.gz\` | \`install.sh\` |
 | Linux ARM64 | \`codewhale-linux-arm64.tar.gz\` | \`install.sh\` |
-| Linux RISC-V | \`codewhale-linux-riscv64.tar.gz\` | \`install.sh\` |
 | macOS x64 | \`codewhale-macos-x64.tar.gz\` | \`install.sh\` |
 | macOS ARM | \`codewhale-macos-arm64.tar.gz\` | \`install.sh\` |
 | Windows x64 (installer) | \`CodeWhaleSetup.exe\` | NSIS setup |

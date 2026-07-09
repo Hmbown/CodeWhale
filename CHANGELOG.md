@@ -7,6 +7,446 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Wire live catalog cache into provider/model pickers without dropping stale or
+  prior rows after TTL expiry / refresh failure (#4139). Remove the dead
+  `OFFERING_SEEDS` hand table so the bundled Models.dev catalog is the sole
+  seed source; pickers show a compact `stale` / `cache failed` chrome chip when
+  the Models.dev layer is past TTL or last refresh failed.
+- Make `work_update` the sole model-facing To-do / Work progress tool (#4132).
+  `checklist_*` and `todo_*` remain registered as hidden compat aliases for
+  transcript replay; `update_plan` stays Strategy metadata/context/route, not
+  a second checklist. Mode/approval prompts nudge the single surface.
+- Demote the bundled Models.dev snapshot to an offline/stale fallback after
+  live catalog refresh (#4188). ProviderLake precedence is live Models.dev >
+  bundled seed > legacy hardcoded completion names; pickers, inventory, and
+  subagent validation stay catalog-backed, and CodeWhale-only providers keep
+  defaults when Models.dev has no rows.
+
+### Added
+- Catalog automation: `scripts/catalog_models_dev.py` refreshes secret-free
+  Models.dev / OpenRouter listings and validates the offline seed snapshot
+  (`snapshot --check`) without ever persisting API keys (#4117).
+- `/model` picker cycles six catalog views with `A` (Configured → Catalog →
+  Recent → Coding → Cheap → Long context) and richer row metadata from the
+  live/bundled catalog (context, max output, tools, reasoning, price/M,
+  freshness). Discoverability views do not auto-apply a surprising route
+  (#4115).
+
+- Workflow runs are now durable: every run appends to a
+  `.codewhale/workflow-runs.jsonl` journal and hydrates on startup, so
+  `workflow status` survives restarts; runs left `running` by a dead process
+  are recovered as failed (#4011). The transcript renders workflow tool
+  output as a run card (status, goal, children, progress, verification)
+  instead of a generic one-liner (#4038), and `workflow` accepts a `verify`
+  flag that runs post-completion verification gates and fails the run when
+  gates fail (#4013).
+- Hotbar sources for MCP tools and skills: MCP tool slots prefill the
+  composer (execution stays behind the normal tool-approval flow) and skill
+  slots activate through the existing `$skill` alias (#2068, #2069).
+- Mode & permission surface: Tab cycles Plan → Act → Operate; Shift+Tab
+  cycles the Agent permission posture (Ask / Auto-Review / Full Access) with
+  a footer permission chip; Ctrl+T cycles reasoning effort and Ctrl+Shift+T
+  opens the live transcript overlay. Operate is the orchestration mode
+  (delegate, wait, inspect, dispatch) and raises sub-agent fan-out while
+  focusing the Agents sidebar.
+- Provider lake facade: the provider/model pickers, hotbar, and model
+  inventory now enumerate configured providers' models from the bundled
+  catalog (with an `A` toggle to browse the full catalog), replacing the
+  hardcoded per-provider model table (#3830 follow-up).
+- Added Cursor-integrated-terminal dogfood evidence for the published v0.8.67
+  release, covering installed binary provenance, release/publication checks,
+  headless runtime smoke, setup QA, and remaining manual visual TUI checks.
+- README and README.zh-CN now point users to the community-maintained
+  CodeWhale for VS Code GUI frontend while clarifying that this repository's
+  `extensions/vscode/` scaffold remains the read-only Phase 0 viewer (#4035).
+
+### Fixed
+
+- Sub-agent waiting no longer peek→sleep polls: `agent(action="wait")` joins
+  children, unchanged peeks are throttled (~30s) with an anti-polling nudge,
+  and mode prompts teach the join primitive (#4097). Harvested from PR #4098
+  by [@Mr-Moon121](https://github.com/Mr-Moon121) (Jeffrey Luna).
+- `/provider` picker remembers catalog/configured view and highlighted row
+  across reopen, matching `/model` picker memory.
+- Mode picker roster is exactly Act / Plan / Operate (no Multitask, no
+  numeric `4`/`5` gaps). Legacy `yolo`/`4` remain invisible one-way
+  permission shorthand for Act + Bypass.
+
+- Fleet setup is a role/profile roster editor, not a provider-scoped model
+  picker: the Model step lists routes from every configured provider (not
+  only the active one), a picked route's provider is persisted explicitly in
+  the saved profile TOML (`provider = "..."`, never inferred from the model
+  id), and the loader/route resolver read that field back out verbatim. The
+  draft-preview ratify keypress no longer competes with a separate pager's
+  `g`/`G` scroll bindings — the exact TOML preview now renders inline on the
+  same Review step that ratifies it (#4093).
+- The headless `codewhale fleet run` CLI now launches workers on their profile-pinned route, not just records it on the receipt: `codewhale exec` gains a non-secret `--provider` flag, and a worker whose profile pins provider B is dispatched with `--provider B --model <B's model>` even when the parent session is on provider A (credentials still resolve from the worker's own environment; provider is never inferred from the model id). Workers with no profile-bound provider are unchanged — no `--provider`, run-level model. The interactive TUI spawns roster members in-process and does not yet honor the pinned provider (it uses the session provider); that remainder is tracked in #4193 (#4093).
+- The Fleet setup `m` model-assisted redraft no longer drops a picked
+  cross-provider route: the provider/model the operator chose are re-pinned
+  onto the drafted profile (a model draft is always `provider: None`), so
+  ratifying it keeps the explicit route instead of persisting an ambiguous,
+  provider-scoped profile (#4093).
+- Ratifying a Fleet profile now fails with a clear message when it pins a
+  provider that has no configured credentials, using the same
+  configured-provider check the model picker uses (#4093).
+- Workflow correctness: completion polling fails closed instead of
+  fabricating success when a sub-agent reports no terminal status; cancel
+  interrupts the JS VM (cancel handle + abort) and blocks further spawns;
+  and `budget.spent()` reports real manager-scope usage instead of always 0.
+- Sub-agent spawns validate the model↔provider pair before dispatch:
+  inherited/faster routes remap foreign models to the provider's catalog
+  default, and explicit pins fail fast with a diagnostic instead of an
+  upstream model-not-found error.
+- TUI stability: engine event drains break every 8–16 events / 8 ms to keep
+  input live (#1830, #2317, #1198); the terminal input pump restarts after
+  stall recovery on macOS/Linux too; the startup raw-mode probe no longer
+  leaks raw mode on timeout; recovery snapshots persist every 45 s during
+  long turns and the offline queue persists on every push (#1830);
+  queue/steer paths surface toasts while streaming (#2317, #1338); and
+  modal submit errors re-open the modal instead of being swallowed (#1198).
+- app-server hardening: `/v1/chat/completions` requires the bearer token;
+  errors return real 4xx/5xx statuses; request bodies and SSE frames are
+  size-limited; stdio `config get` redacts secrets and stdio shutdown reaps
+  the runtime child; graceful shutdown on SIGTERM/Ctrl+C; constant-time
+  token comparison; dropping the runtime bridge no longer blocks the
+  runtime.
+- Policy/config/secrets: user-layer ExecPolicy rules outrank agent-layer
+  rules; chained commands no longer propose trusted-prefix amendments;
+  config and secrets writes are atomic (with fsync) on all platforms; empty
+  provider chains no longer panic.
+- Core/state: paused jobs persist as paused across restarts; unarchive
+  updates the in-memory cache; tool dispatch has a timeout; MCP
+  notifications no longer receive responses; corrupted checkpoints surface
+  errors instead of loading empty state; the session index compacts instead
+  of growing unbounded; and recording thread-goal usage no longer
+  self-deadlocks the state store.
+- Runtime compaction summaries are now persisted into `/v1` thread records so
+  engine reloads and restarts preserve compacted context. Contributed by
+  MXAntian (@MXAntian) (#4091).
+- The TUI leaves xterm alternate-scroll mode off when mouse capture is disabled,
+  preserving native terminal text selection in light-theme/no-mouse-capture
+  sessions. Contributed by Nightt (@nightt5879) (#4088, #4026).
+- The public `/api/github/feed` endpoint is now forced dynamic on Cloudflare so
+  it returns live GitHub activity instead of a build-time empty feed.
+
+### Changed
+
+- Tool-hang watchdog trimmed from 15 minutes to 10 (#1862); approval modal
+  footer hints use a higher-contrast tier (#3380); status/mode copy is
+  disclosed once across header, footer, cards, and sidebar instead of
+  repeated per layer.
+- Removed the unused `tui::whale_routes` taxonomy module and its tests.
+  Contributed by Darrell Thomas (@DarrellThomas) (#4041, #3852).
+
+### Deprecated
+
+- YOLO mode: `--yolo`, `default_mode = "yolo"`, and the hotbar YOLO action
+  now map to Act + Full Access permissions via a compatibility shim and
+  show a one-shot deprecation notice; removal is planned for 0.9.0.
+
+## [0.8.67] - 2026-07-06
+
+### Added
+
+- The model you select in `/model` is now the operator: fleet workers whose
+  task spec and roster profile pin no model inherit the active session route
+  instead of a hardcoded `auto` sentinel, matching the pinned operator row in
+  `/fleet roster`. Task-level and profile model overrides still win, and
+  route receipts record which source applied (`task.model`,
+  `agent_profile.model`, or `run.model`).
+- Added the `/workflow` command (aliases `/workflows`, `/wf`) as the user
+  opt-in to workflow orchestration. Bare `/workflow` orchestrates the current
+  work — the model synthesizes the objective from the conversation context;
+  `/workflow <objective>` narrows the run; `/workflow status [run_id]` and
+  `/workflow cancel <run_id>` relay typed run receipts without starting new
+  runs.
+- Bare `/goal` with no active goal now declares a goal from the conversation
+  context via `create_goal` instead of printing usage; with an active goal it
+  remains the status readout, and explicit `/goal <objective>` is unchanged.
+- Added the constitution-first setup wizard: a unified `/setup` shell with
+  resume, back navigation, and skip-retry state; provider/model readiness
+  cards with a custom-provider form and provider-picker detail layout; a
+  runtime posture card with preset application and project-override warnings;
+  a setup verification report; and transactional setup persistence with
+  secret redaction and rollback (#3402, #3403, #3404, #3405, #3406, #3410,
+  #3411).
+- Added a structured user-global constitution with a deterministic renderer,
+  prompt-block injection, guided principle authoring with preview and preset
+  save, and a `/constitution` manager command as the primary constitution
+  management surface, with file state shown in setup and actions surfaced in
+  diagnostics (#3793, #3806, #3811).
+- Added model-assisted constitution and fleet-profile drafting behind an
+  explicit ratify gate, with untrusted-draft provenance recorded so
+  model-authored text is never applied silently. Updating users keep their
+  existing constitution unchanged, and a localized constitution checkpoint is
+  required after update (#3794).
+- Added the Hotbar route editor v1 with route-switch slot actions and support
+  for custom model routes, plus a configured-provider route manager for
+  `/provider` and `/model` with a missing-auth handoff into provider key
+  entry (#2066, #3830, #3831).
+- Added auto-discovery of `.codewhale/rules/` and `.claude/rules/`
+  directories as project context, with a total byte-budget cap on the
+  assembled rules block. Contributed by maple (@yekern).
+- Exposed `context_input_budget_for_route` from the engine so external
+  integrations can reuse route budget math. Contributed by hexin
+  (@h3c-hexin).
+- Added GUI config persistence to the runtime API. Contributed by @gaord.
+- Added a website localization matrix with a locale registry and drift
+  checks. Harvested from #3763 by @idling11 (#3090).
+- Added `doctor` detection of half-applied setup state, and startup milestone
+  tracing for boot-performance diagnosis.
+- Added a v0.8.67 computer-use dogfood prompt that covers the Cursor-terminal
+  QA flow, headless gates, setup, sub-agent completion, Fleet, Workflow, model
+  pricing, and release evidence collection.
+- Fleet: local worker memory usage is now reported, including retained memory
+  while a task is in Running status. Contributed by @cyq1017 (#3901).
+- Website: community hub, constitution thesis page and constitution-centered
+  homepage, models page generated from the provider registry, docs dark mode
+  and full SEO metadata/sitemap coverage, terminal player for real
+  constitution traces, and a live star badge and version.
+- Added Meituan LongCat as a first-class OpenAI-compatible provider
+  (`longcat`, with `long-cat`, `meituan-longcat`, and `meituan` aliases),
+  `LONGCAT_API_KEY` discovery, the `LongCat-2.0` default model, provider
+  picker wiring, model completions, provider docs, and web provider facts.
+- Fleet: added per-provider setup cards (Persistence, Constitution, Hotbar,
+  Tools/MCP, Remote Runtime) with a unified setup catalog and provider-specific
+  credential links. Provider setup progress is persisted transactionally with
+  rollback guards, Codex OAuth is kept out of provider key storage, and a
+  headless QA contract verifies setup readiness across providers.
+- Fleet: added Fleet starter profiles with role-aware loadouts (scout→Fast,
+  manager→Inherit, etc.), `/fleet setup` profile-authoring wizard, Fleet
+  effective-permission recording, and route intent-source tracking.
+- Fleet: added 'operator' as a built-in Fleet roster member — the preferred
+  helm Fleet slot for workflow coordination. Operator plans, routes, reviews
+  outputs, and calls other Fleet slots as needed. This is a roster role, not a
+  separate app mode. The full Operation/Operate-mode architecture is deferred
+  to 0.9.0.
+- Workflow: declarative workflows now run through the production driver, the
+  workflow tool is wired to sub-agent dispatch, public Workflow surfaces are
+  renamed, and typed workflow-run and status receipts are emitted for
+  debugging and verification.
+- Added provider-agnostic Fleet rosters and loadouts: provider-specific
+  subagent limits, launch concurrency, and admission caps are derived from
+  config without hardcoding any single provider.
+- Added Workflow runtime foundations: the internal JS authoring/runtime crates
+  compile and replay example workflows. 0.8.67 ships the `/workflow` opt-in,
+  production-driver dispatch path, sub-agent task handoff, and typed run/status
+  receipts; richer authoring UX and the full TUI run view remain tracked for
+  v0.8.68 (#2974, #4038).
+
+### Changed
+
+- Clarified the Fleet coordination hierarchy and made roles carry real
+  doctrine: the **operator** (the session's `/model` selection) runs the
+  operation and assigns managers to workflows; a **manager** is the middle
+  manager of exactly one workflow. The built-in **reviewer** is now explicitly
+  adversarial (assume the change is broken, try to refute it), and the review
+  sub-agent intro adopts the same framing. Built-in `manager`/`operator`/
+  `reviewer` roster members now ship role `instructions` that flow into worker
+  prompts on both the Fleet task-spec and agent/workflow `profile:` spawn
+  paths; custom profiles override them via the same `instructions` field.
+- Removed the decorative Fleet vocabulary that never routed differently:
+  the `tool-heavy` slot and the `strong`/`balanced`/`deep-reasoning`/`code`/
+  `review`/`tool-heavy` loadout tiers. `inherit` (the operator's route) and
+  `fast` (the provider's faster class) remain; retired names in existing
+  configs keep parsing (as custom labels) with identical auto routing, and
+  the `/fleet setup` model-class step now offers only the real choices.
+- Raised the default subagent concurrency for high-throughput fanout:
+  `max_subagents` default 20 → 64 (config ceiling 128) and the queued+running
+  admission cap 200 → 1024. Users on metered plans who want the old behavior
+  can set `max_subagents = 20` in config.toml.
+- Renamed the internal `whaleflow` subsystem to `workflow` across the
+  workspace: the `codewhale-whaleflow`/`codewhale-whaleflow-js` crates become
+  `codewhale-workflow`/`codewhale-workflow-js`, Rust identifiers and JS bridge
+  symbols are renamed, the `CODEWHALE_WHALEFLOW_JS_*` environment variables
+  become `CODEWHALE_WORKFLOW_JS_*`, and the authoring/RFC docs move to
+  `WORKFLOW_AUTHORING.md` and `WORKFLOW_EXTERNAL_MEMORY.md`. Historical
+  changelog and retro-ledger entries keep the old name as a record.
+- Documented the Homebrew rollout strategy and added a distribution-channel
+  check to the release checklist. Harvested from #3760 by @idling11 (#3489).
+- Paused Linux RISC-V prebuilt release and nightly artifacts because
+  `rquickjs-sys` 0.12.0 does not ship `riscv64gc-unknown-linux-gnu` bindings;
+  installers, docs, and update paths now treat RISC-V as unsupported until
+  upstream bindings or a bindgen-enabled build lands.
+- Made the approval prompt calm, compact, and honest, and centered the
+  first-run follow-up on the constitution; first-run onboarding now hands off
+  into the setup wizard, and the language picker offers every shipped locale
+  (#3929).
+- Startup performance: boot janitors and store scans no longer block the
+  first frame, `@mention` completion no longer re-walks the workspace per
+  keystroke, and idle offline-queue clones and duplicate tool-output hashing
+  were eliminated.
+- Clarified the misleading "Ctrl+B backgrounds this command" shell wording
+  (#3859) and the hotbar help shortcuts. Docs contribution by Chanhyo Jung
+  (@roian6).
+- Documented the enforced repo-law invariants, the constitution flow, and the
+  `/fleet setup` profile-authoring wizard; aligned `permissions.toml` action
+  docs. Docs contribution by @greyfreedom.
+- Bumped web dependencies: wrangler 4.103.0 → 4.107.0, mermaid 11.15.0 →
+  11.16.0, vitest 4.1.8 → 4.1.9 (@dependabot).
+- Backfilled v0.8.67 regression coverage across sub-agent completion, budget
+  exhaustion, delegate ordering, provider onboarding, setup scroll, model
+  catalog pricing, Fleet routing, and Workflow gates (#4076).
+- Split the large TUI debug command group and palette/theme internals into
+  smaller modules without changing user-visible behavior (#4078, #4081).
+
+### Fixed
+
+- Fixed the goal sidebar elapsed timer so completed and blocked goals freeze
+  their "completed in {elapsed}" readout instead of ticking forever. Goal state
+  now records a `finished_at` instant that both sidebar render paths and the
+  engine snapshot clamp elapsed against; `/goal resume` clears the freeze and
+  the timer ticks again.
+- Fixed paused goals silently un-freezing their sidebar timer: usage keeps
+  accruing while paused, and the next goal snapshot used to clear the frozen
+  instant. Paused goals now stay frozen until an explicit resume.
+- Fixed durable `/goal` progress accounting so usage and continuation updates
+  release the shared SQLite connection before re-reading the updated goal,
+  unblocking resumed goal loops and full workspace release tests.
+- Fixed a scheduled-automation race where deleting an automation while its
+  run was being enqueued left the already-created task running untracked;
+  the run record is now persisted unconditionally.
+- Removed `panic = "abort"` from the release profile: it disabled unwinding
+  and broke the panic supervision that keeps one failing tool call from
+  taking down the whole session. The `lto`/`strip`/`codegen-units` size and
+  speed tuning is unchanged.
+- Fixed session save/load to persist and restore the active model provider
+  across restarts. Previously sessions created under one provider (e.g.
+  DeepSeek) would silently load under a different active provider. Provider,
+  subagent limits, fallback chain, context window, and reasoning effort are now
+  restored from saved session metadata, with `"deepseek"` as the default for
+  legacy sessions.
+- Raised the streamed model-response idle timeout and matched the TUI stall
+  watchdog to the configured stream budget so long reasoning pauses are not
+  recovered as stalled turns (#2487, #3998).
+- Fixed Codex OAuth/sub-agent release diagnostics so `auth list` reports an
+  active Codex OAuth file, Responses API child requests encode inherited tool
+  names safely, rate-limited child requests checkpoint as resumable provider
+  interruptions, and failure records surface the real Responses API error
+  (#3884).
+- Fixed fresh launch/setup testing with an explicit `CODEWHALE_HOME` so
+  config, settings, theme prefs, and doctor legacy-state diagnostics do not
+  inherit unrelated ambient `~/.deepseek` files (#4001, #4002).
+- Sub-agent state now persists to `.codewhale/` instead of the lingering
+  pre-rebrand `.deepseek/` path (#3864). Contributed by Stime (@yekern).
+- `/plugin enable|disable` now persists across restarts (#3918), and the
+  plugin command is hidden from the root slash menu and kept canonical after
+  the scanner merge. Contributed by Nightt (@nightt5879).
+- `/config ask-rules` now shows ask rule actions with improved diagnostics,
+  with file-rule action precedence under test. Contributed by @greyfreedom.
+- Fleet/sub-agents: enforced an absolute recursion-depth ceiling and widened
+  task-id entropy, gave each atomic state write a unique temp path, kept
+  sub-agent tool catalogs in parent parity (#3836), and made the Agents
+  sidebar reconcile sub-agent completion and cancellation live (#3837).
+- Fixed apply_patch mangling newlines, defaulted fuzz to 3, and made writes
+  atomic; fixed compaction to preserve pins on emergency compaction, harden
+  the summary fallback, and count image tokens; corrected backtrack boundary,
+  checkpoint clear ordering, prune guard, and durable rename.
+- Fixed the SSE client to flush the final frame, join multi-line data fields,
+  and stop corrupting multibyte UTF-8 split across network reads.
+- Kept review-only turns read-only, aliased `auto` mode to the agent policy,
+  showed the mode-derived safety policy in status (contributed by @cyq1017),
+  and stopped the durable-review floor from holding routine YOLO work
+  (#3883).
+- Fixed self-update to prefer exact binary release assets. Contributed by
+  @LI-Jialu.
+- UI polish: stopped constitution and fleet-profile model drafts from
+  freezing the event loop, scoped the context-menu backdrop to the popup
+  rect, stacked model-picker panes on narrow modals, unified display-width
+  helpers on one contract (#3924), removed misleading success toasts,
+  issue-number leaks, and dead-end empty states, and repaired the onboarding
+  trust and api-key keys.
+- Fixed the onboarding Trust step so plain Enter no longer silently grants
+  workspace trust; users must choose the explicit trust or exit keys.
+- Fixed same-root skill-name collisions being silently shadowed; duplicate
+  normalized skill names now warn while keeping discovery deterministic
+  (#3919).
+- Normalized discovered skill names, removed unenforced trust copy, and
+  surfaced the gated constitution override in prompts.
+- Fixed a parallel `subagent::` suite flake where one test's process-wide
+  `Retry-After` pause could strand unrelated budget-capped workers for the
+  full stale window; requests now re-poll the global pause in bounded slices
+  and the rate-limit test clears the window on drop.
+- Sub-agent and Fleet reliability now fail empty, step-limited, and
+  budget-exhausted children with explicit diagnostics instead of silent
+  `Completed (no output)` success; budget exhaustion preserves partial output,
+  `worktree: true` discovers one-level nested repos from harness directories,
+  and completion-before-start delegate events recover into named rows instead
+  of ellipsis-only identities (#4050, #4051, #4052, #4053).
+- Goal-mode writing and research tasks can complete with
+  `verification.status = "not_applicable"` without triggering continuation
+  loops (#4054).
+- First-run onboarding routes API keys through the selected provider, setup
+  wizard bodies scroll with PageUp/PageDown, shipped locale packs are back to
+  `en.json` parity with zh-Hant explicitly partial, stable feature flags stay
+  out of Experimental, and model/provider rows include current LongCat and
+  sourced-pricing hints (#4056, #4057, #4058, #4062, #4063).
+- Running tool rows animate while a lone foreground tool is active, and
+  workflow receipts render run/status/failure cards instead of one-line or
+  null-success output (#4059).
+- Model-facing turn metadata now includes a compact git workspace snapshot and
+  escalates context pressure at the same thresholds as the TUI, helping agents
+  narrow scope or compact before truncation (#4071, #4073).
+- Successful child sub-agent completions inline the child's `EVIDENCE` block
+  before the completion sentinel, so parents can cite child findings without
+  re-running tools (#4072).
+- Deferred tools hydrate and execute in the same batch when the original
+  arguments are valid, and `[tools].always_load` now keeps configured MCP tools
+  active instead of forcing the first-call retry. Thanks @SparkofSpike for the
+  hot-path MCP report (#4074, #4027).
+- New commit-range co-author checks reject bot/tool trailers on newly pushed
+  commits; historical release-range cleanup remains a separate maintenance
+  concern (#4075).
+- Fixed fuzzy `edit_file` matching so matches that begin with multibyte UTF-8
+  characters, including CJK text, advance on character boundaries instead of
+  panicking. Contributed by Nightt (@nightt5879), reported by Taixin Guo
+  (@taixinguo) (#3971, #4045).
+- Fixed Unix dispatcher/TUI output under early-closing pipes such as
+  `codewhale doctor | head` by restoring the default `SIGPIPE` handler before
+  printing and propagating signal exits quietly. Contributed by @aznikline,
+  reported by @BrathonBai (#4030, #4043).
+- Suppressed dead_code warnings in the unused plugin registry module and
+  fixed formatting across the command-group files. Contributed by Paulo Aboim
+  Pinto (@aboimpinto).
+- Pointed the website Community nav link at the community hub.
+
+### Security
+
+- MCP client hardening: closed an SSE-endpoint SSRF, bounded the HTTP
+  response body via Content-Length instead of a streaming read, bounded stdio
+  line reads to prevent OOM denial of service, fixed a dead timeout, and
+  removed an unbounded buffer.
+- Made execpolicy deny/trust rules segment-aware, closing a command-chaining
+  bypass.
+- Closed repo-law and safety-floor bypasses found by adversarial review:
+  protected invariants are now enforced as mechanism, the destroyer gap in
+  the safety floor is closed, a catalog-present tool with no execution path
+  now fails closed, `web_run` open/click is classified as destructive, and
+  the allow-list gained wildcard and case handling.
+- Refused symlinked rules directories to prevent workspace escape via
+  discovered rules. Contributed by maple (@yekern).
+- Bounded Fleet sub-agent worker output so fanout cannot exhaust TUI memory
+  (#3882), and preserved event headroom for progress. Contributed in part by
+  @cyq1017.
+- Added an untrusted constitution-draft gate with authoring provenance so
+  model-drafted constitutions require explicit human ratification.
+
+### Removed
+
+- Removed unused model-registry helpers. Harvested from #3872 by @cyq1017.
+- Removed unused request-tuning metadata. Harvested from #3871 by @cyq1017.
+- Removed dead fleet task helpers (#3894 by @cyq1017), the unused
+  approval-cache container (#3845) and localization QA metadata (both by
+  @nightt5879), the dormant tab collaboration subsystem (#3838), the legacy
+  flash auto-router (#3839), the stale project_doc loader (#3840), ignored
+  mock LLM placeholders (#3841), dead model-catalog helpers (#3842), the
+  unused execpolicy amend module, and dead MCP/client retry helpers.
+- Retired the deprecated `WHALE.md` context fallback (#3798).
+
+## [0.8.66] - 2026-06-29
+
 ### Added
 
 - Added `codewhale doctor` / `codewhale doctor --json` legacy-state
@@ -46,6 +486,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a typed `[verifier]` config table for the verifier-preview lane, with
   `enabled` and the shipped `verdict_policy = "hunt"` mapping documented and
   validated (#2093).
+- Added Hotbar `Alt+1`–`Alt+8` quick-slot switching with decision-card key
+  disambiguation, plus an introductory card that explains and can dismiss the
+  Hotbar (#3796, #3788).
+- Release/docs hygiene: guarded public install/version snippets and the npm
+  `codewhaleBinaryVersion` pointer against drift, made `check-docs`/`check-facts`
+  fail on stale snippets or unmapped providers, and stopped `sync-changelog`
+  from dropping a release when only `[Unreleased]` exists (#3767, #3768, #3769,
+  #3770, #3771, #3772).
 
 ### Changed
 
@@ -60,6 +508,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Slimmed the default Constitution prompt while keeping its required structural
   anchors under regression coverage, reducing the static prompt footprint for
   cache-sensitive turns (#2953).
+- Made the approval prompt inline and bottom-anchored instead of a full-screen
+  takeover, so context and controls stay visible while a tool awaits a decision
+  (#3799).
+- The Hotbar is now hidden by default until explicit setup opt-in (#3807); the
+  interactive Agent shell also defaults to approval-gated on with a shared
+  baseline (#3756).
+- Mode authority now resolves approval prompts through a single authority
+  source instead of per-surface checks (#3795).
 
 ### Fixed
 
@@ -99,6 +555,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell-only surface hides native tools from the model-visible catalog, and
   unknown `CODEWHALE_TOOL_SURFACE` values now warn instead of silently falling
   back to the full tool surface (#2954).
+- Sub-agent fanout and lock hot paths: preserved event-channel headroom for
+  progress events (#3783, thanks @cyq1017), let independent sub-agent starts
+  join a single parallel dispatch batch instead of serializing (#3801), rendered
+  the sub-agent sidebar/ListSubAgents from a read-only snapshot with bounded
+  cleanup (#3803), used nonblocking best-effort sends for ListSubAgents refresh
+  while still awaiting critical events (#3802), moved sub-agent state
+  persistence disk I/O off the manager write lock (#3805), and used `try_lock`
+  for shell-manager refresh in async UI paths (#3804).
+- Provenance: runtime continuations and `SubAgentHandoff` now inherit standing
+  YOLO authority, while `MemoryRecall`, `ImportedTranscript`, and
+  `AssistantGenerated` inputs remain guarded (#3817).
+- Approval honesty: labeled session-scoped approvals accurately instead of
+  "always", and surfaced approval decisions in tool results (#3766).
 
 ## [0.8.65] - 2026-06-24
 
@@ -2567,7 +3036,9 @@ overflow report and `/theme` picker edge-wrapping patch in #1814.
 
 Older releases (v0.8.39 and earlier) are archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.64...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.67...HEAD
+[0.8.67]: https://github.com/Hmbown/CodeWhale/compare/v0.8.66...v0.8.67
+[0.8.66]: https://github.com/Hmbown/CodeWhale/compare/v0.8.65...v0.8.66
 [0.8.65]: https://github.com/Hmbown/CodeWhale/compare/v0.8.64...v0.8.65
 [0.8.64]: https://github.com/Hmbown/CodeWhale/compare/v0.8.63...v0.8.64
 [0.8.63]: https://github.com/Hmbown/CodeWhale/compare/v0.8.62...v0.8.63

@@ -69,6 +69,7 @@ pub fn probe_executable_with_flag(spec: &str, version_flag: &str) -> bool {
         return false;
     };
     let mut cmd = Command::new(program);
+    crate::utils::suppress_console_window(&mut cmd);
     for arg in parts {
         cmd.arg(arg);
     }
@@ -314,6 +315,7 @@ pub trait ExternalTool {
         let spec = Self::resolve()?;
         let (program, fixed_args) = split_interpreter_spec(&spec);
         let mut cmd = Command::new(&program);
+        crate::utils::suppress_console_window(&mut cmd);
         for arg in &fixed_args {
             cmd.arg(arg);
         }
@@ -355,6 +357,7 @@ pub trait ExternalTool {
         let spec = Self::resolve()?;
         let (program, fixed_args) = split_interpreter_spec(&spec);
         let mut cmd = tokio::process::Command::new(&program);
+        crate::utils::suppress_tokio_console_window(&mut cmd);
         for arg in &fixed_args {
             cmd.arg(arg);
         }

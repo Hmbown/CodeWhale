@@ -197,6 +197,15 @@ impl GoalState {
 
     #[must_use]
     pub fn snapshot(&self) -> GoalSnapshot {
+        // Once the goal is terminal, freeze elapsed at the finish time so the
+        // sidebar timer (and any tool snapshot) stops growing after completion.
+        let elapsed_seconds = match (self.started_at, self.finished_at) {
+            (Some(started), Some(finished)) => {
+                Some(finished.saturating_duration_since(started).as_secs())
+            }
+            (Some(started), None) => Some(started.elapsed().as_secs()),
+            (None, _) => None,
+        };
         GoalSnapshot {
             objective: self.objective.clone(),
             status: self
@@ -208,7 +217,7 @@ impl GoalState {
             tokens_used: self.tokens_used,
             time_used_seconds: self.time_used_seconds,
             continuation_count: self.continuation_count,
-            elapsed_seconds: self.started_at.map(|started| started.elapsed().as_secs()),
+            elapsed_seconds,
             evidence: self.evidence.clone(),
             blocker: self.blocker.clone(),
             completion_verification: self.completion_verification.clone(),
@@ -286,7 +295,7 @@ pub fn thread_goal_status_as_goal_status(
 pub fn render_continuation_prompt(snapshot: &GoalSnapshot, continuation_index: u32) -> String {
     let goal_json = serde_json::to_string_pretty(snapshot).unwrap_or_else(|_| "{}".to_string());
     format!(
-        "{}\n\n## Active Goal State\n\n```json\n{}\n```\n\nContinuation pass #{}.\nIf the goal is complete, first run or cite a concrete verifier/check, then call `update_goal` with `status: \"complete\"`, concrete evidence, and `verification: {{\"status\":\"passed\",\"check\":\"...\",\"summary\":\"...\"}}`. If it is blocked, call `update_goal` with `status: \"blocked\"` and the blocker. Otherwise continue making progress toward the objective.",
+        "{}\n\n## Active Goal State\n\n```json\n{}\n```\n\nContinuation pass #{}.\nIf the goal is complete, first run or cite a concrete verifier/check when one applies, then call `update_goal` with `status: \"complete\"`, concrete evidence, and `verification: {{\"status\":\"passed\",\"check\":\"...\",\"summary\":\"...\"}}`. For non-verifiable work (docs, research, writing), use `verification: {{\"status\":\"not_applicable\",\"check\":\"...\",\"summary\":\"...\"}}` with a clear rationale instead of fabricating a verifier receipt. If it is blocked, call `update_goal` with `status: \"blocked\"` and the blocker. Otherwise continue making progress toward the objective.",
         crate::prompts::GOAL_CONTINUATION_PROMPT.trim(),
         goal_json,
         continuation_index,
@@ -326,11 +335,15 @@ fn parse_completion_verification(input: &Value) -> Result<GoalCompletionVerifica
     };
     let verification: GoalCompletionVerification = serde_json::from_value(raw.clone())
         .map_err(|err| ToolError::invalid_input(format!("invalid verification: {err}")))?;
-    if verification.status.trim() != "passed" {
-        return Err(ToolError::invalid_input(
-            "verification.status must be 'passed' before update_goal can mark a goal complete",
-        ));
-    }
+    let status = verification.status.trim();
+    let normalized_status = match status {
+        "passed" | "not_applicable" => status,
+        other => {
+            return Err(ToolError::invalid_input(format!(
+                "verification.status must be 'passed' or 'not_applicable' before update_goal can mark a goal complete; got '{other}'"
+            )));
+        }
+    };
     if verification.check.trim().is_empty() {
         return Err(ToolError::invalid_input("verification.check is required"));
     }
@@ -338,7 +351,7 @@ fn parse_completion_verification(input: &Value) -> Result<GoalCompletionVerifica
         return Err(ToolError::invalid_input("verification.summary is required"));
     }
     Ok(GoalCompletionVerification {
-        status: "passed".to_string(),
+        status: normalized_status.to_string(),
         check: verification.check.trim().to_string(),
         summary: verification.summary.trim().to_string(),
     })
@@ -505,8 +518,8 @@ impl ToolSpec for UpdateGoalTool {
                     "properties": {
                         "status": {
                             "type": "string",
-                            "enum": ["passed"],
-                            "description": "Must be passed before the goal can be marked complete."
+                            "enum": ["passed", "not_applicable"],
+                            "description": "Use passed when a concrete verifier/check succeeded; not_applicable when no automated verifier applies."
                         },
                         "check": {
                             "type": "string",
@@ -594,7 +607,7 @@ impl ToolSpec for UpdateGoalTool {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -615,12 +628,20 @@ mod tests {
             .await
             .expect("create goal");
         assert!(created.success);
-        assert!(created.content.contains("\"status\": \"active\""));
+        let created_json: Value = serde_json::from_str(&created.content).expect("created json");
+        assert_eq!(
+            created_json.get("status").and_then(Value::as_str),
+            Some("active")
+        );
 
         let get = GetGoalTool::new(state.clone());
         let current = get.execute(json!({}), &ctx).await.expect("get goal");
         assert!(current.content.contains("ship the runtime slice"));
-        assert!(current.content.contains("\"token_budget\": 1200"));
+        let current_json: Value = serde_json::from_str(&current.content).expect("current json");
+        assert_eq!(
+            current_json.get("token_budget").and_then(Value::as_u64),
+            Some(1200)
+        );
 
         let update = UpdateGoalTool::new(state.clone());
         let completed = update
@@ -638,7 +659,12 @@ mod tests {
             )
             .await
             .expect("complete goal");
-        assert!(completed.content.contains("\"status\": \"complete\""));
+        let completed_json: Value =
+            serde_json::from_str(&completed.content).expect("completed json");
+        assert_eq!(
+            completed_json.get("status").and_then(Value::as_str),
+            Some("complete")
+        );
         assert!(completed.content.contains("focused tests passed"));
         assert!(!state.lock().expect("goal lock").is_active());
     }
@@ -657,6 +683,46 @@ mod tests {
             .expect_err("missing evidence should fail");
 
         assert!(err.to_string().contains("evidence is required"));
+    }
+
+    #[tokio::test]
+    async fn update_goal_accepts_not_applicable_verification_for_non_verifiable_goals() {
+        let state = new_shared_goal_state_from_host_status(
+            Some("write the release notes".to_string()),
+            None,
+            GoalStatus::Active,
+        );
+        let update = UpdateGoalTool::new(state.clone());
+        let completed = update
+            .execute(
+                json!({
+                    "status": "complete",
+                    "evidence": "release notes drafted and reviewed in thread",
+                    "verification": {
+                        "status": "not_applicable",
+                        "check": "no automated verifier applies",
+                        "summary": "writing task completed with evidence in thread"
+                    }
+                }),
+                &ToolContext::new("."),
+            )
+            .await
+            .expect("non-verifiable goal should complete");
+
+        let completed_json: Value =
+            serde_json::from_str(&completed.content).expect("completed json");
+        assert_eq!(
+            completed_json.get("status").and_then(Value::as_str),
+            Some("complete")
+        );
+        assert_eq!(
+            completed_json
+                .get("completion_verification")
+                .and_then(|verification| verification.get("status"))
+                .and_then(Value::as_str),
+            Some("not_applicable")
+        );
+        assert!(!state.lock().expect("goal lock").is_active());
     }
 
     #[tokio::test]
@@ -729,6 +795,45 @@ mod tests {
         assert_eq!(snapshot.tokens_used, 300);
         assert_eq!(snapshot.time_used_seconds, 12);
         assert_eq!(snapshot.continuation_count, 1);
+    }
+
+    #[test]
+    fn completed_goal_snapshot_freezes_elapsed() {
+        // Regression: a completed goal's snapshot elapsed_seconds must not keep
+        // growing. Before the fix, snapshot() always used started_at.elapsed(),
+        // so a finished goal's elapsed kept ticking in the sidebar/tool output.
+        let state = new_shared_goal_state_from_host_status(
+            Some("freeze on completion".to_string()),
+            None,
+            GoalStatus::Active,
+        );
+        let first = {
+            let mut goal = state.lock().expect("goal lock");
+            goal.mark_complete(
+                "evidence".to_string(),
+                GoalCompletionVerification {
+                    status: "passed".to_string(),
+                    check: "cargo test".to_string(),
+                    summary: "ok".to_string(),
+                },
+            )
+            .expect("mark complete");
+            goal.snapshot()
+        };
+        let elapsed_at_completion = first.elapsed_seconds.expect("elapsed present");
+
+        // Sleep past a whole-second boundary. Under the old (buggy) code,
+        // snapshot() returned started_at.elapsed().as_secs(), so this would
+        // tick up by at least one second and the assertion below would fail.
+        // With the freeze, the completed snapshot stays at the captured value.
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let second = state.lock().expect("goal lock").snapshot();
+        assert_eq!(second.status, "complete");
+        assert_eq!(
+            second.elapsed_seconds,
+            Some(elapsed_at_completion),
+            "completed goal elapsed must be frozen, not keep ticking"
+        );
     }
 
     #[test]

@@ -21,13 +21,13 @@ struct PlanOption {
 
 const PLAN_OPTIONS: [PlanOption; 4] = [
     PlanOption {
-        label: "Accept plan (Agent)",
-        description: "Start implementation in Agent mode with approvals",
+        label: "Accept plan (Act)",
+        description: "Start implementation in Act mode with approvals",
         shortcut: 'a',
     },
     PlanOption {
-        label: "Accept plan (YOLO)",
-        description: "Start implementation in YOLO mode (auto-approve)",
+        label: "Accept plan (Full Access)",
+        description: "Start implementation in Act with Full Access (bypass approvals)",
         shortcut: 'y',
     },
     PlanOption {
@@ -37,7 +37,7 @@ const PLAN_OPTIONS: [PlanOption; 4] = [
     },
     PlanOption {
         label: "Exit Plan mode",
-        description: "Return to Agent mode without implementation",
+        description: "Return to Act mode without implementation",
         shortcut: 'q',
     },
 ];
@@ -50,7 +50,7 @@ fn modal_block() -> Block<'static> {
         )]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::DEEPSEEK_INK))
+        .style(Style::default().bg(palette::WHALE_BG))
         .padding(Padding::uniform(1))
 }
 
@@ -313,7 +313,7 @@ impl ModalView for PlanPromptView {
             let confirm_lines = vec![
                 Line::from(Span::styled(
                     "Exit without implementing?",
-                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                    Style::default().fg(palette::WHALE_INFO).bold(),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -323,7 +323,7 @@ impl ModalView for PlanPromptView {
                 Line::from(""),
                 Line::from(Span::styled(
                     "  y — Yes, exit Plan mode",
-                    Style::default().fg(palette::DEEPSEEK_SKY),
+                    Style::default().fg(palette::WHALE_INFO),
                 )),
                 Line::from(Span::styled(
                     "  n / Esc — Cancel, go back to plan",
@@ -331,10 +331,10 @@ impl ModalView for PlanPromptView {
                 )),
             ];
             let confirm_footer = Line::from(vec![
-                Span::styled(" y ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled(" y ", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::styled("confirm exit", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("  "),
-                Span::styled("n / Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("n / Esc", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
             ]);
             let popup_area = centered_rect(66, 34, area);
@@ -352,7 +352,7 @@ impl ModalView for PlanPromptView {
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(vec![Span::styled(
             "Action required",
-            Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+            Style::default().fg(palette::WHALE_INFO).bold(),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "Choose what should happen after this plan.",
@@ -413,24 +413,24 @@ impl ModalView for PlanPromptView {
             };
             footer_spans.push(Span::styled(
                 scroll_text,
-                Style::default().fg(palette::DEEPSEEK_SKY),
+                Style::default().fg(palette::WHALE_INFO),
             ));
         }
         if compact_footer {
             footer_spans.extend([
-                Span::styled("↑↓", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("↑↓", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::raw(" "),
-                Span::styled("Enter", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("Enter", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::raw(" "),
-                Span::styled("Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("Esc", Style::default().fg(palette::WHALE_INFO).bold()),
             ]);
         } else {
             footer_spans.extend([
-                Span::styled("↑/↓", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("↑/↓", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::styled(" move  ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled("Enter", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("Enter", Style::default().fg(palette::WHALE_INFO).bold()),
                 Span::styled(" choose  ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled("Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled("Esc", Style::default().fg(palette::WHALE_INFO).bold()),
             ]);
         }
 
@@ -536,7 +536,7 @@ fn push_plan_snapshot_lines(
     if !plan.items.is_empty() {
         lines.push(Line::from(Span::styled(
             "Plan steps:",
-            Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+            Style::default().fg(palette::WHALE_INFO).bold(),
         )));
         for (i, item) in plan.items.iter().enumerate() {
             let status_mark = match item.status {
@@ -556,7 +556,7 @@ fn push_plan_snapshot_lines(
     } else if show_empty {
         lines.push(Line::from(Span::styled(
             "Plan steps:",
-            Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+            Style::default().fg(palette::WHALE_INFO).bold(),
         )));
         lines.push(Line::from(Span::styled(
             "  Not provided",
@@ -581,7 +581,7 @@ fn push_todo_snapshot_lines(
     }
     lines.push(Line::from(Span::styled(
         format!("Checklist ({}% complete):", todos.completion_pct),
-        Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+        Style::default().fg(palette::WHALE_INFO).bold(),
     )));
     for (i, item) in todos.items.iter().enumerate() {
         let status_mark = match item.status {
@@ -628,7 +628,7 @@ fn push_plan_text(
     };
     lines.push(Line::from(Span::styled(
         format!("{label}:"),
-        Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+        Style::default().fg(palette::WHALE_INFO).bold(),
     )));
     let (value, style) = value.map_or_else(
         || {
@@ -662,7 +662,7 @@ fn push_plan_list(
     }
     lines.push(Line::from(Span::styled(
         format!("{label}:"),
-        Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+        Style::default().fg(palette::WHALE_INFO).bold(),
     )));
     if values.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -821,8 +821,10 @@ mod tests {
 
         let rendered = render_view(&view, 110, 36);
 
-        assert!(rendered.contains("> [2/y] Accept plan (YOLO)"));
-        assert!(rendered.contains("Start implementation in YOLO mode (auto-approve)"));
+        assert!(rendered.contains("> [2/y] Accept plan (Full Access)"));
+        assert!(
+            rendered.contains("Start implementation in Act with Full Access (bypass approvals)")
+        );
     }
 
     #[test]
@@ -844,7 +846,7 @@ mod tests {
         let blank_interior_y = popup_area.y + 2;
         let blank = &buf[(blank_interior_x, blank_interior_y)];
         assert_eq!(blank.symbol(), " ");
-        assert_eq!(blank.bg, palette::DEEPSEEK_INK);
+        assert_eq!(blank.bg, palette::WHALE_BG);
 
         let mut rendered_popup = String::new();
         for y in popup_area.y..popup_area.y.saturating_add(popup_area.height) {
@@ -885,7 +887,7 @@ mod tests {
             critical_files: vec!["crates/tui/src/tools/plan.rs".to_string()],
             constraints: vec!["Preserve legacy update_plan payloads".to_string()],
             recommended_approach: Some(
-                "Keep checklist primary and enrich update_plan.".to_string(),
+                "Keep To-do primary and enrich update_plan Strategy metadata.".to_string(),
             ),
             verification_plan: Some("Run focused plan prompt tests.".to_string()),
             risks_and_unknowns: Some("Avoid dropping metadata-only plans.".to_string()),

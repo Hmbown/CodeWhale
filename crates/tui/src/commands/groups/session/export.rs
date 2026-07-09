@@ -9,7 +9,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "export",
     aliases: &["daochu"],
-    usage: "/export [path]",
+    usage: "/export [turn|path]",
     description_id: MessageId::CmdExportDescription,
 };
 

@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   activeTurnBlock,
   commandAction,
+  createRuntimeClient,
   envFirst,
   parseBool,
   parseCommand,
@@ -14,6 +15,8 @@ import {
   parseList,
   parseTextContent,
   preservedChatStateFields,
+  readJsonSafe,
+  readSse,
   splitMessage,
   stripGroupPrefix,
   ThreadStore
@@ -126,6 +129,94 @@ test("ThreadStore supports chat state, message dedupe, and action tokens", async
     const saved = await ThreadStore.open(statePath, { messageLimit: 2, actions: true });
     assert.equal((await saved.getChat("chat-a")).threadId, "thread-a");
     assert.deepEqual(saved.data.messages, ["m2", "m3"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("readJsonSafe tolerates empty and non-JSON bodies", async () => {
+  assert.deepEqual(await readJsonSafe({ text: async () => "" }), {});
+  assert.deepEqual(await readJsonSafe({ text: async () => '{"ok":true}' }), { ok: true });
+  assert.equal(await readJsonSafe({ text: async () => "plain text" }), "plain text");
+});
+
+test("readSse reassembles events split across chunks and strips CR", async () => {
+  const response = {
+    body: (async function* () {
+      yield Buffer.from('event: item.delta\ndata: {"seq":1}\n\nevent:');
+      yield Buffer.from(' turn.completed\r\ndata: {"seq":2}\n\n');
+    })()
+  };
+  const events = [];
+  for await (const event of readSse(response)) events.push(event);
+  assert.deepEqual(events, [
+    { event: "item.delta", data: '{"seq":1}' },
+    { event: "turn.completed", data: '{"seq":2}' }
+  ]);
+});
+
+test("createRuntimeClient sends bearer auth and surfaces runtime errors", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith("/fail")) {
+      return {
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ error: { message: "down" } })
+      };
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+  };
+  try {
+    const { runtimeJson, authHeaders } = createRuntimeClient({
+      runtimeUrl: "http://127.0.0.1:7878",
+      runtimeToken: "token-1"
+    });
+    assert.deepEqual(authHeaders(), { authorization: "Bearer token-1" });
+
+    assert.deepEqual(await runtimeJson("/v1/threads", { method: "POST", body: { a: 1 } }), {
+      ok: true
+    });
+    assert.equal(calls[0].url, "http://127.0.0.1:7878/v1/threads");
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.headers.authorization, "Bearer token-1");
+    assert.equal(calls[0].options.headers["content-type"], "application/json");
+    assert.equal(calls[0].options.body, JSON.stringify({ a: 1 }));
+
+    await runtimeJson("/health", { auth: false });
+    assert.equal(calls[1].options.method, "GET");
+    assert.deepEqual(calls[1].options.headers, {});
+
+    await assert.rejects(() => runtimeJson("/fail"), /Runtime API request failed \(503\): down/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ThreadStore batches rapid saves into coalesced durable writes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codewhale-bridge-core-"));
+  try {
+    const statePath = path.join(dir, "thread-map.json");
+    const store = await ThreadStore.open(statePath);
+    let writes = 0;
+    const originalWrite = store.writeSnapshot.bind(store);
+    store.writeSnapshot = async () => {
+      writes += 1;
+      return originalWrite();
+    };
+
+    await Promise.all(
+      Array.from({ length: 25 }, (_, index) =>
+        store.setChat(`chat-${index}`, { threadId: `thread-${index}` })
+      )
+    );
+    assert.ok(writes <= 2, `expected coalesced writes, saw ${writes}`);
+
+    const saved = await ThreadStore.open(statePath);
+    assert.equal((await saved.getChat("chat-0")).threadId, "thread-0");
+    assert.equal((await saved.getChat("chat-24")).threadId, "thread-24");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

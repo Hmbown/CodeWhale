@@ -15,8 +15,8 @@ use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCo
 pub struct SkillsCommands;
 
 impl CommandGroup for SkillsCommands {
-    fn commands(&self) -> Vec<Box<dyn Command>> {
-        vec![
+    fn commands(&self) -> &'static [Box<dyn Command>] {
+        cached_command_list!(vec![
             Box::new(FunctionCommand::new(
                 skills::SkillsCmd::info(),
                 skills::SkillsCmd::execute,
@@ -33,6 +33,6 @@ impl CommandGroup for SkillsCommands {
                 restore::RestoreCmd::info(),
                 restore::RestoreCmd::execute,
             )),
-        ]
+        ])
     }
 }

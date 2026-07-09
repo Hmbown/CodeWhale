@@ -21,7 +21,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildFacts } from "./facts-lib.mjs";
+import { buildFacts, unmappedProviderVariants } from "./facts-lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GENERATED_PATH = resolve(__dirname, "..", "lib", "facts.generated.ts");
@@ -86,6 +86,22 @@ function diffFacts(committed, fresh) {
 const committed = parseCommittedFacts();
 if (committed.error) {
   console.error(`[check-facts] ERROR: ${committed.error}`);
+  process.exit(1);
+}
+
+// Provider-inventory drift is a hard failure: a new Rust ApiProvider variant
+// that is neither mapped to a website label nor intentionally excluded would
+// otherwise be silently dropped from the public provider list while committed
+// facts still "match" the (also-incomplete) fresh derivation (#3772).
+const unmappedProviders = unmappedProviderVariants();
+if (unmappedProviders.length > 0) {
+  console.error(
+    `[check-facts] FAIL — unmapped ApiProvider variant(s): ${unmappedProviders.join(", ")}.`,
+  );
+  console.error(
+    "Add each to PROVIDER_LABEL_MAP in web/scripts/facts-lib.mjs AND labelMap in " +
+      "web/lib/facts-drift.ts, or to EXCLUDED_PROVIDERS / EXCLUDED if intentionally hidden.",
+  );
   process.exit(1);
 }
 

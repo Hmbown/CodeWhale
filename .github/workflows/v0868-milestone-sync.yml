@@ -1,0 +1,97 @@
+name: v0.8.68 milestone hygiene
+
+on:
+  issues:
+    types: [opened, labeled, milestoned]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync v0.8.68 label with milestone
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue) return;
+
+            const milestoneTitle = issue.milestone?.title || '';
+            const labels = (issue.labels || []).map(l => l.name);
+            const hasMilestone = milestoneTitle === 'v0.8.68';
+            const hasLabel = labels.includes('v0.8.68');
+
+            if (hasMilestone && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['v0.8.68'],
+              });
+              core.info(`Added v0.8.68 label to #${issue.number}`);
+            }
+
+            if (hasLabel && !hasMilestone && issue.state === 'open') {
+              const milestones = await github.paginate(
+                github.rest.issues.listMilestones,
+                { owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 }
+              );
+              const target = milestones.find(m => m.title === 'v0.8.68');
+              if (target) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  milestone: target.number,
+                });
+                core.info(`Added #${issue.number} to v0.8.68 milestone`);
+              }
+            }
+
+      - name: Auto-label agent-task issues
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue) return;
+            // Only auto-label freshly opened issues. Running on `labeled`
+            // events re-adds labels (e.g. agent-ready) that a maintainer or
+            // triage agent deliberately removed, breaking the
+            // "agent-ready = startable now" contract on the v0.8.68 board.
+            if (context.payload.action !== 'opened') return;
+
+            const title = (issue.title || '').toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+            const labels = new Set((issue.labels || []).map(l => l.name));
+
+            // Agent-ready tasks: title starts with v0.8.68 and has structured sections
+            if (title.startsWith('v0.8.68:') && body.includes('acceptance criteria')) {
+              labels.add('agent-ready');
+            }
+
+            // Area hints for v0.8.68 work
+            const text = `${title}\n${body}`;
+            if (/\bworkflow\b|whaleflow|workflow-runtime/.test(text)) labels.add('workflow-runtime');
+            if (/crates\/tui|\btui\b|ratatui/.test(text)) labels.add('tui');
+            if (/fleet|subagent|sub-agent/.test(text)) labels.add('subagents');
+            if (/catalog|openrouter|model.?picker|provider.?lake/.test(text)) labels.add('reliability');
+
+            const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const existingNames = new Set(existing.map(l => l.name));
+            const toAdd = [...labels].filter(name => existingNames.has(name) && !(issue.labels || []).some(l => l.name === name));
+            if (toAdd.length === 0) return;
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: toAdd,
+            });

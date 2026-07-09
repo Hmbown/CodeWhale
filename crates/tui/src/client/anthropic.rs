@@ -180,7 +180,11 @@ impl DeepSeekClient {
         let stream = async_stream::stream! {
             use futures_util::StreamExt;
 
-            let mut buffer = String::new();
+            // Raw byte buffer: decode only COMPLETE lines so a multi-byte
+            // UTF-8 char (CJK/emoji) split across two network reads is never
+            // corrupted to U+FFFD. Line boundaries ('\n') are ASCII and can
+            // never fall inside a multi-byte sequence. (Mirrors chat.rs.)
+            let mut buffer: Vec<u8> = Vec::new();
             tokio::pin!(byte_stream);
 
             loop {
@@ -197,11 +201,9 @@ impl DeepSeekClient {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                buffer.extend_from_slice(&chunk);
 
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
+                while let Some(line) = super::take_sse_line(&mut buffer) {
 
                     // `event:` lines are redundant (the data payload carries
                     // `type`) and comment/heartbeat lines are ignorable.

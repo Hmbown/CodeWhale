@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                         CodeWhale Configuration                               ║
 # ║                                                                              ║
-# ║  Terminal coding agent for DeepSeek.                                          ║
+# ║  Terminal coding agent for any model — open models first.                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # See `docs/CONFIGURATION.md` for how config is loaded (profiles, env overrides, etc.).
@@ -16,11 +16,11 @@
 # `--provider volcengine`, `--provider openrouter`, `--provider xiaomi-mimo`,
 # `--provider fireworks`, `--provider siliconflow`, `--provider siliconflow-CN`,
 # `/provider arcee`, `/provider moonshot`, `/provider qianfan`, `/provider sglang`, `/provider vllm`,
-# `/provider ollama`, `/provider huggingface`, `/provider stepfun`, `/provider openmodel`) toggle without having to re-enter keys. Top-level
+# `/provider ollama`, `/provider huggingface`, `/provider stepfun`, `/provider openmodel`, `/provider xai`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | xai
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -53,6 +53,7 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
+#   mimo-v2.5-pro-ultraspeed        — Xiaomi MiMo V2.5 Pro UltraSpeed chat model ID
 #   mimo-v2.5                       — Xiaomi MiMo V2.5 Omni model ID
 #   mimo-v2.5-tts                   — Xiaomi MiMo speech/TTS model ID
 #   mimo-v2.5-tts-voicedesign       — Xiaomi MiMo voice-design TTS model ID
@@ -101,7 +102,7 @@ check_for_updates = true
 # Optional 1-8 sidebar hotbar bindings. When no [[hotbar]] tables are present,
 # the TUI uses built-in defaults:
 #   1 voice.toggle      2 session.compact   3 mode.plan        4 mode.agent
-#   5 mode.yolo         6 palette.open      7 sidebar.toggle   8 trust.toggle
+#   5 mode.operate      6 palette.open      7 sidebar.toggle   8 trust.toggle
 #
 # Invalid slots are skipped with a warning, duplicate slots use the last entry,
 # and unknown actions are preserved so the UI can show a disabled entry.
@@ -157,9 +158,6 @@ memory_path = "~/.codewhale/memory.md"
 [memory]
 # enabled = true            # turn the feature on (default: false)
 # Override the env-var equivalent: `DEEPSEEK_MEMORY=on`
-
-# Parsed but currently unused (reserved for future versions):
-# tools_file = "./tools.json"
 
 # Xiaomi MiMo speech/TTS defaults. Also configurable with
 # XIAOMI_MIMO_SPEECH_OUTPUT_DIR / MIMO_SPEECH_OUTPUT_DIR.
@@ -437,9 +435,10 @@ max_subagents = 10 # optional (1-20)
 [providers.xiaomi_mimo]
 # api_key = "YOUR_XIAOMI_KEY"
 # base_url = "https://token-plan-sgp.xiaomimimo.com/v1"  # Token Plan / tp- keys
+# # base_url = "https://token-plan-ams.xiaomimimo.com/v1"  # Token Plan Europe / Amsterdam
 # # base_url = "https://api.xiaomimimo.com/v1"           # Pay-as-you-go / sk- keys
 # model = "mimo-v2.5-pro"              # chat/reasoning
-# Chat model IDs: mimo-v2.5-pro, mimo-v2.5
+# Chat model IDs: mimo-v2.5-pro, mimo-v2.5-pro-ultraspeed, mimo-v2.5
 # Token Plan subscriptions use separate tp-* API keys plus api-key auth.
 # mode = "token-plan-sgp"              # default Token Plan endpoint
 # mode = "token-plan-cn"               # China cluster
@@ -501,6 +500,8 @@ max_subagents = 10 # optional (1-20)
 [providers.stepfun]
 # api_key = "YOUR_STEPFUN_API_KEY"               # or STEP_API_KEY
 # base_url = "https://api.stepfun.ai/v1"          # or STEP_BASE_URL
+# # Coding Plan endpoint:
+# # base_url = "https://api.stepfun.com/step_plan/v1"
 # model = "step-3.7-flash"                       # or STEPFUN_MODEL / STEP_MODEL
 
 # MiniMax direct OpenAI-compatible endpoint (https://platform.minimax.io)
@@ -527,7 +528,7 @@ max_subagents = 10 # optional (1-20)
 [providers.ollama]
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
-# model = "deepseek-coder:1.3b"             # or any local Ollama tag
+# model = "deepseek-v4-flash"                # or any local Ollama tag
 
 # Hugging Face Inference Providers (https://huggingface.co/docs/api-inference)
 # Provider aliases: huggingface, hugging-face, hugging_face, hf
@@ -552,6 +553,24 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_FUGU_API_KEY"
 # base_url = "https://api.sakana.ai/v1"
 # model = "fugu"                            # or fugu-ultra-20260615
+
+# Meituan LongCat Provider (https://longcat.chat/platform)
+# OpenAI-compatible curated gateway for Meituan's LongCat models.
+# Provider aliases: longcat, long-cat, meituan-longcat, meituan
+# Env var aliases: LONGCAT_API_KEY
+[providers.longcat]
+# api_key = "YOUR_LONGCAT_API_KEY"
+# base_url = "https://api.longcat.chat/openai/v1"
+# model = "LongCat-2.0"
+
+# xAI / Grok Provider (https://console.x.ai/)
+# OpenAI-compatible Chat Completions API-key route.
+# Provider aliases: xai, x-ai, x_ai, grok
+# Env var aliases: XAI_API_KEY, XAI_BASE_URL, XAI_MODEL
+[providers.xai]
+# api_key = "YOUR_XAI_API_KEY"
+# base_url = "https://api.x.ai/v1"
+# model = "grok-4.5"                       # or grok-4.3, grok-build
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Together AI Provider (https://www.together.ai/)
@@ -705,7 +724,7 @@ max_subagents = 10 # optional (1-20)
 alternate_screen = "auto"   # auto/always use the TUI screen; never uses terminal scrollback
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
-stream_chunk_timeout_secs = 300 # optional SSE idle timeout per chunk (0 = default, 1-3600)
+stream_chunk_timeout_secs = 900 # optional SSE idle timeout per chunk (0 = default, 1-3600)
 osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTerm2/Ghostty/Kitty/WezTerm/Terminal.app 13+); set false for terminals that misrender
 # Ordered footer chips shown in the TUI status line. Omit the key to use the
 # built-in default; set [] to hide all configurable chips. You can also edit
@@ -775,8 +794,8 @@ exponential_base = 2.0
 [compaction]
 # enabled = true
 
-# Append-only Flash seams are experimental and opt-in while the v0.7.5
-# context/cache audit validates prefix-cache behavior.
+# Append-only Flash seams (layered context). Opt-in; defaults to off.
+# See `crates/tui/src/seam_manager.rs` for the implementation.
 [context]
 enabled = false
 verbatim_window_turns = 16
@@ -786,11 +805,6 @@ l1_threshold = 192000
 l2_threshold = 384000
 l3_threshold = 576000
 seam_model = "deepseek-v4-flash"
-
-# Optional explicit alias for the context seam manager master switch. When set,
-# this overrides `[context].enabled`; thresholds and model stay under [context].
-# [seam_manager]
-# enabled = false
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workshop / Large-Output Routing (#548)
@@ -837,7 +851,7 @@ fallback_default_prior = 3.8
 # ─────────────────────────────────────────────────────────────────────────────────
 # Harness profiles let future CodeWhale runtime slices select model-specific
 # prompt, context, tool, and subagent posture. v0.9 parses, validates, and can
-# resolve profiles for tests/status plumbing, but normal Agent and WhaleFlow
+# resolve profiles for tests/status plumbing, but normal Agent and Workflow
 # runs do not silently promote or mutate behavior from these profiles yet.
 #
 # [[harness_profiles]]
@@ -887,12 +901,17 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #                 off:  disable entirely
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
+# subagent_completion = "final-only" # always | final-only | off — per-subagent
+#                          notifications during fleet/workflow runs. final-only
+#                          (default) stays quiet mid-run and fires once when the
+#                          batch drains; off silences them entirely.
 # completion_sound = "beep" # off | beep | bell | file — sound on turn completion (✅ marker)
 # sound_file = "E:\\google\\downloads\\notify.wav" # WAV used when completion_sound = "file" (Windows)
 [notifications]
 # method = "auto"
 # threshold_secs = 30
 # include_summary = false
+# subagent_completion = "final-only"
 # completion_sound = "beep"
 # sound_file = "E:\\google\\downloads\\notify.wav"
 
@@ -1101,6 +1120,38 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # ```
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Workflow automatic launch, approval, isolation, and activity (#4128)
+# ─────────────────────────────────────────────────────────────────────────────────
+# First-class knobs for automatic Workflow orchestration. When the table is
+# omitted entirely, the runtime uses these product defaults. Later launch,
+# approval, and activity-persistence paths all read through this one model.
+# [workflow]
+# # Allow the parent agent to auto-launch Workflow for multi-agent work.
+# # Set false to require an explicit `/workflow` opt-in.
+# automatic = true
+# # Auto-start read-only plans without an approval card when automatic is on.
+# auto_start_read_only = true
+# # Require an approval card before write/shell/network/high-budget launches.
+# require_approval_for_writes = true
+# # Soft cap on children admitted by automatic launch (larger plans ask first).
+# auto_start_child_limit = 16
+# # Hard ceiling on agents in one Workflow run (matches VM lifetime cap).
+# max_children = 1000
+# # Maximum concurrently live agents inside one run (others wait for a slot).
+# max_concurrent = 16
+# # Maximum nested Workflow / child-orchestration depth.
+# max_depth = 2
+# # Default shared token budget for a Workflow run and its children.
+# default_token_budget = 120000
+# # Parallel write children that may share the parent worktree without
+# # isolation. 0 forces worktree isolation for parallel writes.
+# max_parallel_writes_without_worktree = 0
+# # Keep completed Workflow activity visible until the next run / clear.
+# persist_completed_activity = true
+# # Persist completed activity across process restarts via the run journal.
+# persist_completed_across_restarts = true
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Agent Fleet trust, security, and role registry (#3165, #3167)
 # ─────────────────────────────────────────────────────────────────────────────────
 # [fleet]
@@ -1129,27 +1180,34 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # # Output format: "text" (default) or "stream-json" for ndjson events
 # output_format = "text"
 #
-# # Built-in role presets are always available: smoke-runner, reviewer, builder, read-only.
-# # User-defined roles here override or extend the built-in set. Any key under
-# # [fleet.roles] becomes a valid role name that task specs can reference.
-# [fleet.roles.ci-linter]
-# description = "Runs linters and formatters"
-# tool_profile = "read-only"
-# tools = ["cargo", "cargo-clippy", "cargo-fmt"]
-# capabilities = ["rust"]
-# max_tokens = 12000
-# max_tool_calls = 20
-# timeout_seconds = 600
+# # Fleet profiles define named agent configurations the roster can dispatch.
+# # Built-in profiles are always available: manager, operator, scout, builder,
+# # reviewer, verifier, synthesizer, general. User-defined profiles under
+# # [fleet.profiles] override or extend the built-in set by id. Precedence
+# # is Workspace (.codewhale/agents/*.toml) > Config ([fleet.profiles]) > BuiltIn.
+# # See /fleet setup for an in-app profile-authoring wizard.
+# [fleet.profiles.ci-linter]
+# slot = "verifier"
+# loadout = "fast"
+# model = "deepseek-v4-pro"
 #
-# [fleet.roles.pr-reviewer]
+# [fleet.profiles.ci-linter.role]
+# name = "CI Linter"
+# description = "Runs linters and formatters"
+# instructions = "Run cargo fmt --check and cargo clippy; never apply fixes."
+#
+# [fleet.profiles.ci-linter.permissions]
+# allow_tools = ["exec_shell"]
+# deny_tools = []
+#
+# [fleet.profiles.pr-reviewer]
+# slot = "reviewer"
+# loadout = "inherit"
+#
+# [fleet.profiles.pr-reviewer.role]
+# name = "PR Reviewer"
 # description = "Reviews PRs with GitHub access"
-# tool_profile = "read-only"
-# tools = ["git", "gh", "rg"]
-# capabilities = ["git", "github"]
-# max_tokens = 16000
-# max_tool_calls = 30
-# timeout_seconds = 900
-# trust_level = "local"
+# instructions = "Review diffs for correctness, regressions, and missing tests."
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Requirements (admin constraints) example file

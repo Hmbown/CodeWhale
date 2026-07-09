@@ -108,8 +108,10 @@ pub struct RuntimeApiState {
     mobile_enabled: bool,
     /// Shared McpPool reused for explicit live MCP discovery. Passive API
     /// calls do not initialize this pool so dashboards cannot accidentally
-    /// become a second stdio-process owner.
-    mcp_pool: Arc<Mutex<Option<McpPool>>>,
+    /// become a second stdio-process owner. The outer mutex guards only the
+    /// lazily-initialized slot; slow per-pool work (connect_all) runs under
+    /// the inner handle so it cannot block slot reads.
+    mcp_pool: Arc<Mutex<Option<Arc<Mutex<McpPool>>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1033,18 +1035,23 @@ async fn stop_fleet_run(
 }
 
 fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError> {
-    let exec_config = state
-        .config
-        .read()
-        .fleet
-        .as_ref()
-        .map(|fleet| fleet.exec.clone())
-        .unwrap_or_default();
+    let (exec_config, session_model) = {
+        let config = state.config.read();
+        let exec_config = config
+            .fleet
+            .as_ref()
+            .map(|fleet| fleet.exec.clone())
+            .unwrap_or_default();
+        // The active session route is the operator: workers without a
+        // task/profile model pin inherit the model the user picked in /model.
+        (exec_config, config.default_model())
+    };
     FleetManager::open(&state.workspace)
         .map(|manager| {
             manager
                 .with_exec_config(exec_config)
                 .with_sub_agent_manager(state.sub_agent_manager.clone())
+                .with_session_model(session_model)
         })
         .map_err(|err| ApiError::internal(format!("Failed to open fleet manager: {err}")))
 }
@@ -1435,23 +1442,36 @@ async fn list_mcp_tools(
     State(state): State<RuntimeApiState>,
     Query(query): Query<McpToolsQuery>,
 ) -> Result<Json<McpToolsResponse>, ApiError> {
-    let mut pool_guard = state.mcp_pool.lock().await;
-    if query.connect && pool_guard.is_none() {
-        let mcp_config_path = state.config.read().mcp_config_path();
-        let new_pool = McpPool::from_config_path_with_workspace(&mcp_config_path, &state.workspace)
-            .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
-        pool_guard.replace(new_pool);
-    }
-
-    if query.connect {
-        if let Some(pool) = pool_guard.as_mut() {
-            let _errors = pool.connect_all().await;
+    // Double-checked init: hold the state-level slot mutex only long enough
+    // to grab (or lazily create) the pool handle. connect_all can stall on a
+    // slow MCP server and must not run under the slot lock.
+    let pool_handle = {
+        let mut pool_slot = state.mcp_pool.lock().await;
+        match pool_slot.as_ref() {
+            Some(pool) => Some(Arc::clone(pool)),
+            None if query.connect => {
+                let mcp_config_path = state.config.read().mcp_config_path();
+                let new_pool =
+                    McpPool::from_config_path_with_workspace(&mcp_config_path, &state.workspace)
+                        .map_err(|e| {
+                            ApiError::internal(format!("Failed to load MCP config: {e}"))
+                        })?;
+                let handle = Arc::new(Mutex::new(new_pool));
+                pool_slot.replace(Arc::clone(&handle));
+                Some(handle)
+            }
+            None => None,
         }
-    }
+    };
 
-    let Some(pool) = pool_guard.as_ref() else {
+    let Some(pool_handle) = pool_handle else {
         return Ok(Json(McpToolsResponse { tools: Vec::new() }));
     };
+
+    let mut pool = pool_handle.lock().await;
+    if query.connect {
+        let _errors = pool.connect_all().await;
+    }
 
     let mut tools = Vec::new();
     for (prefixed_name, tool) in pool.all_tools() {
@@ -1534,11 +1554,12 @@ async fn run_automation(
     State(state): State<RuntimeApiState>,
     Path(id): Path<String>,
 ) -> Result<Json<AutomationRunRecord>, ApiError> {
-    let manager = state.automations.lock().await;
-    let run = manager
-        .run_now(&id, &state.task_manager)
-        .await
-        .map_err(map_automation_err)?;
+    // run_now_shared drops the manager mutex across the task-manager await so
+    // other automation endpoints stay responsive behind a slow enqueue.
+    let run =
+        crate::automation_manager::run_now_shared(&state.automations, &id, &state.task_manager)
+            .await
+            .map_err(map_automation_err)?;
     Ok(Json(run))
 }
 
@@ -2513,6 +2534,11 @@ struct GuiConfigResponse {
     prefer_external_pdftotext: bool,
     workspace_follow_symlinks: bool,
     calm_mode: bool,
+    sandbox_mode: String,
+    strict_tool_mode: bool,
+    memory_enabled: bool,
+    search_provider: String,
+    prompt_suggestion: bool,
 }
 
 /// Request body for `POST /v1/config` (set a single config key).
@@ -2588,6 +2614,14 @@ async fn get_config(
         prefer_external_pdftotext: settings.prefer_external_pdftotext,
         workspace_follow_symlinks: settings.workspace_follow_symlinks,
         calm_mode: settings.calm_mode,
+        sandbox_mode: config
+            .sandbox_mode
+            .clone()
+            .unwrap_or_else(|| "workspace-write".to_string()),
+        strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
+        memory_enabled: config.memory_enabled(),
+        search_provider: config.search_provider().as_str().to_string(),
+        prompt_suggestion: config.prompt_suggestion_enabled(),
     }))
 }
 
@@ -2683,7 +2717,12 @@ async fn set_config(
                 }));
             }
             "allow_shell" => {
-                config_persistence::persist_root_string_key(config_path, "allow_shell", &value)
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for allow_shell: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "allow_shell", enabled)
             }
             "mcp_config_path" => {
                 config_persistence::persist_root_string_key(config_path, "mcp_config_path", &value)
@@ -2766,9 +2805,71 @@ async fn set_config(
                 let clamped = raw.min(u64::from(codewhale_config::MAX_SPAWN_DEPTH_CEILING));
                 config_persistence::persist_subagents_integer_key(config_path, "max_depth", clamped)
             }
+            "sandbox_mode" => {
+                let normalized = match value.to_lowercase().as_str() {
+                    "none" | "off" | "disabled" => "none".to_string(),
+                    "opensandbox" | "external-sandbox" | "external" => "opensandbox".to_string(),
+                    "workspace-write" | "workspace_write" => "workspace-write".to_string(),
+                    "read-only" | "read_only" => "read-only".to_string(),
+                    "danger-full-access" | "danger_full_access" | "full" => {
+                        "danger-full-access".to_string()
+                    }
+                    "workspace" | "workspace-read-write" | "workspace_read_write" => {
+                        "workspace-write".to_string()
+                    }
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "Invalid sandbox_mode '{value}'. Supported: none, read-only, workspace-write, danger-full-access, opensandbox"
+                        )));
+                    }
+                };
+                config_persistence::persist_root_string_key(
+                    config_path,
+                    "sandbox_mode",
+                    &normalized,
+                )
+            }
+            "strict_tool_mode" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for strict_tool_mode: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "strict_tool_mode", enabled)
+            }
+            "memory_enabled" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for memory_enabled: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_table_bool_key(
+                    config_path,
+                    "memory",
+                    "enabled",
+                    enabled,
+                )
+            }
+            "search_provider" => {
+                let normalized = value.to_lowercase();
+                config_persistence::persist_table_string_key(
+                    config_path,
+                    "search",
+                    "provider",
+                    &normalized,
+                )
+            }
+            "prompt_suggestion" => {
+                let enabled = value.parse::<bool>().map_err(|_| {
+                    ApiError::bad_request(format!(
+                        "Invalid value '{value}' for prompt_suggestion: expected 'true' or 'false'"
+                    ))
+                })?;
+                config_persistence::persist_root_bool_key(config_path, "prompt_suggestion", enabled)
+            }
             _ => {
                 return Err(ApiError::bad_request(format!(
-                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth"
+                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
                 )));
             }
         };

@@ -3,8 +3,10 @@
 use std::time::{Duration, Instant};
 
 use crate::task_manager::{TaskRecord, TaskStatus, TaskSummary};
-use crate::tools::subagent::{MailboxMessage, SubAgentResult, SubAgentStatus};
-use crate::tui::app::{AgentProgressMeta, App, AppMode, TaskPanelEntry, TaskPanelEntryKind};
+use crate::tools::subagent::{AgentWorkerStatus, MailboxMessage, SubAgentResult, SubAgentStatus};
+use crate::tui::app::{
+    AgentProgressMeta, App, AppMode, SidebarFocus, TaskPanelEntry, TaskPanelEntryKind,
+};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::pager::PagerView;
 use crate::tui::tool_routing::refreshes_workspace_context_on_completion;
@@ -15,6 +17,39 @@ use crate::tui::workspace_context;
 
 const SUBAGENT_TERMINAL_CARD_TTL: Duration = Duration::from_secs(5 * 60);
 const SUBAGENT_TERMINAL_CARD_MAX_RETAINED: usize = 24;
+
+fn agents_panel_has_content(app: &App) -> bool {
+    !app.subagent_cache.is_empty()
+        || !app.agent_progress.is_empty()
+        || active_fanout_counts(app).is_some()
+        || foreground_rlm_running(app)
+}
+
+fn foreground_rlm_running(app: &App) -> bool {
+    use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
+    app.active_cell.as_ref().is_some_and(|active| {
+        active.entries().iter().any(|entry| {
+            matches!(
+                entry,
+                HistoryCell::Tool(ToolCell::Generic(generic))
+                    if matches!(
+                        generic.name.as_str(),
+                        "rlm_open" | "rlm_eval" | "rlm_configure" | "rlm_close" | "rlm"
+                    ) && generic.status == ToolStatus::Running
+            )
+        })
+    })
+}
+
+/// True when the Agents sidebar panel is on-screen and already owns fanout summary.
+pub(super) fn agents_sidebar_surface_visible(app: &App) -> bool {
+    match app.sidebar_focus {
+        SidebarFocus::Hidden => false,
+        SidebarFocus::Agents => true,
+        SidebarFocus::Auto => agents_panel_has_content(app),
+        _ => false,
+    }
+}
 
 pub(super) fn running_agent_count(app: &App) -> usize {
     let mut ids: std::collections::HashSet<&str> =
@@ -50,6 +85,43 @@ pub(super) fn reconcile_subagent_activity_state(app: &mut App) {
     reconcile_subagent_activity_state_at(app, Instant::now());
 }
 
+pub(super) fn apply_subagent_terminal_projection(
+    app: &mut App,
+    agent_id: &str,
+    status: SubAgentStatus,
+    result: Option<String>,
+) -> bool {
+    app.agent_progress.remove(agent_id);
+    app.agent_progress_meta.remove(agent_id);
+
+    let Some(agent) = app
+        .subagent_cache
+        .iter_mut()
+        .find(|agent| agent.agent_id == agent_id)
+    else {
+        reconcile_subagent_activity_state(app);
+        return false;
+    };
+
+    agent.worker_status = Some(worker_status_for_terminal_projection(&status));
+    agent.status = status;
+    if let Some(result) = result {
+        agent.result = Some(result);
+    }
+    reconcile_subagent_activity_state(app);
+    true
+}
+
+fn worker_status_for_terminal_projection(status: &SubAgentStatus) -> AgentWorkerStatus {
+    match status {
+        SubAgentStatus::Running => AgentWorkerStatus::Running,
+        SubAgentStatus::Completed => AgentWorkerStatus::Completed,
+        SubAgentStatus::Interrupted(_) => AgentWorkerStatus::Interrupted,
+        SubAgentStatus::Failed(_) | SubAgentStatus::BudgetExhausted => AgentWorkerStatus::Failed,
+        SubAgentStatus::Cancelled => AgentWorkerStatus::Cancelled,
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn reconcile_subagent_activity_state_at(app: &mut App, now: Instant) {
     reconcile_terminal_subagent_card_retention(app, now);
@@ -68,10 +140,20 @@ pub(super) fn reconcile_subagent_activity_state_at(app: &mut App, now: Instant) 
 
     let running_ids: std::collections::HashSet<String> =
         running_agents.iter().map(|(id, _)| id.clone()).collect();
+    // Evict a progress row only when the authoritative cache actually knows
+    // the agent and reports it non-running. A progress-only entry — an agent
+    // whose AgentSpawned/AgentList delivery was dropped under channel
+    // pressure so the cache has never seen it — must survive until the cache
+    // supersedes it, or spawned agents flicker in and out of the sidebar.
+    let cached_ids: std::collections::HashSet<&str> = app
+        .subagent_cache
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
     app.agent_progress
-        .retain(|id, _| running_ids.contains(id.as_str()));
+        .retain(|id, _| running_ids.contains(id.as_str()) || !cached_ids.contains(id.as_str()));
     app.agent_progress_meta
-        .retain(|id, _| running_ids.contains(id.as_str()));
+        .retain(|id, _| running_ids.contains(id.as_str()) || !cached_ids.contains(id.as_str()));
     for (id, objective) in running_agents {
         app.agent_progress.entry(id.clone()).or_insert(objective);
         if let Some(agent) = app.subagent_cache.iter().find(|agent| agent.agent_id == id) {
@@ -245,8 +327,11 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     // Accumulate sub-agent token costs for the real-time footer counter (#166).
     if let MailboxMessage::TokenUsage { model, usage, .. } = message {
         if app.session.subagent_cost_event_seqs.insert(seq)
-            && let Some(cost) =
-                crate::pricing::calculate_turn_cost_estimate_from_usage(model, usage)
+            && let Some(cost) = crate::pricing::calculate_turn_cost_estimate_for_provider(
+                app.api_provider,
+                model,
+                usage,
+            )
         {
             app.accrue_subagent_cost_estimate(cost);
         }
@@ -295,8 +380,13 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     // No existing card — only `Started` reasonably opens one. Anything else
     // for an unknown agent_id is dropped (likely arrived after the cell was
     // cleared, e.g. session-resume edge cases).
-    let MailboxMessage::Started { agent_type, .. } = message else {
-        return false;
+    let agent_type = match message {
+        MailboxMessage::Started { agent_type, .. } => agent_type.clone(),
+        MailboxMessage::Completed { .. }
+        | MailboxMessage::Failed { .. }
+        | MailboxMessage::Interrupted { .. }
+        | MailboxMessage::Cancelled { .. } => "unknown".to_string(),
+        _ => return false,
     };
 
     let dispatch_kind = app.pending_subagent_dispatch.as_deref();
@@ -316,10 +406,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             }
             updated
         } else {
-            let mut card = FanoutCard::new(
-                dispatch_kind.unwrap_or("rlm_eval").to_string(),
-                app.ui_locale,
-            );
+            let mut card = FanoutCard::new(dispatch_kind.unwrap_or("rlm_eval").to_string());
             card.upsert_worker(&agent_id, AgentLifecycle::Running);
             app.add_message(HistoryCell::SubAgent(SubAgentCell::Fanout(card)));
             let idx = app.history.len().saturating_sub(1);
@@ -389,10 +476,18 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
 
     let show_verdict = tasks.iter().any(|task| task.hunt_verdict.is_some());
     let mut lines = vec![format!("Tasks ({})", tasks.len())];
+    // Build headers with the same format strings as the rows so the ID
+    // column (21-char `task_` ids) can never drift out of alignment again.
     if show_verdict {
-        lines.push("ID             Status     Verdict     Time  Title".to_string());
+        lines.push(format!(
+            "{:<21}  {:<9}  {:<7}  {:>8}  {}",
+            "ID", "Status", "Verdict", "Time", "Title"
+        ));
     } else {
-        lines.push("ID             Status        Time  Title".to_string());
+        lines.push(format!(
+            "{:<21}  {:<9}  {:>8}  {}",
+            "ID", "Status", "Time", "Title"
+        ));
     }
     lines.push("------------------------------------------------------------".to_string());
     for task in tasks {
@@ -402,7 +497,7 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
             .unwrap_or_else(|| "-".to_string());
         if show_verdict {
             lines.push(format!(
-                "{:<13}  {:<9}  {:<7}  {:>8}  {}",
+                "{:<21}  {:<9}  {:<7}  {:>8}  {}",
                 task.id,
                 task_status_label(task.status),
                 hunt_verdict_glyph(task.hunt_verdict.as_deref()),
@@ -411,7 +506,7 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
             ));
         } else {
             lines.push(format!(
-                "{:<13}  {:<9}  {:>8}  {}",
+                "{:<21}  {:<9}  {:>8}  {}",
                 task.id,
                 task_status_label(task.status),
                 duration,
@@ -538,8 +633,9 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::task_manager::{TaskStatus, TaskSummary};
-    use crate::tools::subagent::SubAgentType;
+    use crate::tools::subagent::{SubAgentAssignment, SubAgentType};
     use crate::tui::app::{InitialInput, TuiOptions};
+    use crate::tui::widgets::agent_card::AgentLifecycle;
     use chrono::Utc;
     use std::path::PathBuf;
 
@@ -585,6 +681,34 @@ mod tests {
         }
     }
 
+    fn subagent_result(id: &str, status: SubAgentStatus) -> SubAgentResult {
+        SubAgentResult {
+            name: id.to_string(),
+            agent_id: id.to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
+            workspace: None,
+            git_branch: None,
+            agent_type: SubAgentType::General,
+            assignment: SubAgentAssignment {
+                objective: format!("objective-{id}"),
+                role: Some("worker".to_string()),
+            },
+            model: "deepseek-v4-flash".to_string(),
+            nickname: None,
+            status,
+            worker_status: None,
+            parent_run_id: None,
+            spawn_depth: 0,
+            result: None,
+            steps_taken: 0,
+            checkpoint: None,
+            needs_input: None,
+            duration_ms: 0,
+            from_prior_session: false,
+        }
+    }
+
     #[test]
     fn task_list_includes_title_header_and_time_column() {
         let output = format_task_list(&[
@@ -592,9 +716,18 @@ mod tests {
             task_summary("task_abcdef12", TaskStatus::Completed, Some(1234)),
         ]);
 
-        assert!(output.contains("ID             Status        Time  Title"));
-        assert!(output.contains("task_12345678  running           -  Fix task list output"));
-        assert!(output.contains("task_abcdef12  completed     1.23s  Fix task list output"));
+        assert!(output.contains(&format!(
+            "{:<21}  {:<9}  {:>8}  {}",
+            "ID", "Status", "Time", "Title"
+        )));
+        assert!(output.contains(&format!(
+            "{:<21}  {:<9}  {:>8}  {}",
+            "task_12345678", "running", "-", "Fix task list output"
+        )));
+        assert!(output.contains(&format!(
+            "{:<21}  {:<9}  {:>8}  {}",
+            "task_abcdef12", "completed", "1.23s", "Fix task list output"
+        )));
     }
 
     #[test]
@@ -608,10 +741,10 @@ mod tests {
 
         let output = format_task_list(&[hunted, wounded, escaped]);
 
-        assert!(output.contains("ID             Status     Verdict"));
-        assert!(output.contains("task_hunted    completed  ✓"));
-        assert!(output.contains("task_wounded   completed  !"));
-        assert!(output.contains("task_escaped   failed     ×"));
+        assert!(output.contains(&format!("{:<21}  {:<9}  {:<7}", "ID", "Status", "Verdict")));
+        assert!(output.contains(&format!("{:<21}  {:<9}  ✓", "task_hunted", "completed")));
+        assert!(output.contains(&format!("{:<21}  {:<9}  !", "task_wounded", "completed")));
+        assert!(output.contains(&format!("{:<21}  {:<9}  ×", "task_escaped", "failed")));
     }
 
     #[test]
@@ -639,5 +772,167 @@ mod tests {
             handle_subagent_mailbox(&mut app, 3, &tool),
             "tool progress still updates the visible transcript card"
         );
+    }
+
+    #[test]
+    fn reconcile_keeps_progress_only_rows_until_cache_knows_the_agent() {
+        let mut app = App::new(test_options(), &Config::default());
+
+        // A progress-first agent: its AgentSpawned/AgentList delivery was
+        // dropped under channel pressure, so the authoritative cache has
+        // never seen it. Its sidebar row must survive reconciliation.
+        app.agent_progress
+            .insert("agent_orphan".to_string(), "step 2/10".to_string());
+        app.agent_progress_meta.insert(
+            "agent_orphan".to_string(),
+            AgentProgressMeta {
+                parent_run_id: None,
+                spawn_depth: 0,
+            },
+        );
+
+        // A terminal agent the cache DOES know about: its stale progress row
+        // must still be evicted.
+        app.subagent_cache
+            .push(subagent_result("agent_done", SubAgentStatus::Completed));
+        app.agent_progress
+            .insert("agent_done".to_string(), "step 9/10".to_string());
+        app.agent_progress_meta.insert(
+            "agent_done".to_string(),
+            AgentProgressMeta {
+                parent_run_id: None,
+                spawn_depth: 0,
+            },
+        );
+
+        reconcile_subagent_activity_state_at(&mut app, Instant::now());
+
+        assert!(
+            app.agent_progress.contains_key("agent_orphan"),
+            "progress-only agent unknown to the cache must survive reconcile"
+        );
+        assert!(
+            app.agent_progress_meta.contains_key("agent_orphan"),
+            "progress-only meta unknown to the cache must survive reconcile"
+        );
+        assert!(
+            !app.agent_progress.contains_key("agent_done"),
+            "cache-known terminal agent progress must still be evicted"
+        );
+        assert!(
+            !app.agent_progress_meta.contains_key("agent_done"),
+            "cache-known terminal agent meta must still be evicted"
+        );
+
+        // Once the authoritative cache reports the orphan as terminal, the
+        // normal eviction applies and the row is released.
+        app.subagent_cache
+            .push(subagent_result("agent_orphan", SubAgentStatus::Completed));
+        reconcile_subagent_activity_state_at(&mut app, Instant::now());
+        assert!(
+            !app.agent_progress.contains_key("agent_orphan"),
+            "cache supersedes the progress-only row once it knows the agent"
+        );
+    }
+
+    #[test]
+    fn apply_subagent_terminal_projection_clears_live_progress_and_card_state() {
+        let mut app = App::new(test_options(), &Config::default());
+        let started = MailboxMessage::started("agent_done", SubAgentType::General);
+        assert!(handle_subagent_mailbox(&mut app, 1, &started));
+        let card_idx = app.subagent_card_index["agent_done"];
+        let initial_revision = app.history_revisions[card_idx];
+
+        app.subagent_cache
+            .push(subagent_result("agent_done", SubAgentStatus::Running));
+        app.agent_progress
+            .insert("agent_done".to_string(), "step 4/10".to_string());
+        app.agent_progress_meta.insert(
+            "agent_done".to_string(),
+            AgentProgressMeta {
+                parent_run_id: None,
+                spawn_depth: 0,
+            },
+        );
+
+        assert!(apply_subagent_terminal_projection(
+            &mut app,
+            "agent_done",
+            SubAgentStatus::Cancelled,
+            Some("cancelled by user".to_string())
+        ));
+
+        assert!(!app.agent_progress.contains_key("agent_done"));
+        assert!(!app.agent_progress_meta.contains_key("agent_done"));
+        let agent = app
+            .subagent_cache
+            .iter()
+            .find(|agent| agent.agent_id == "agent_done")
+            .expect("projected agent remains cached");
+        assert_eq!(agent.status, SubAgentStatus::Cancelled);
+        assert_eq!(agent.worker_status, Some(AgentWorkerStatus::Cancelled));
+        assert_eq!(agent.result.as_deref(), Some("cancelled by user"));
+        assert_eq!(running_agent_count(&app), 0);
+        assert_ne!(
+            app.history_revisions[card_idx], initial_revision,
+            "terminal projection should invalidate the stale running card"
+        );
+        match &app.history[card_idx] {
+            HistoryCell::SubAgent(SubAgentCell::Delegate(card)) => {
+                assert_eq!(card.status, AgentLifecycle::Cancelled);
+            }
+            cell => panic!("expected delegate card, got {cell:?}"),
+        }
+    }
+
+    #[test]
+    fn completion_before_started_allocates_recovery_delegate_card() {
+        let mut app = App::new(test_options(), &Config::default());
+        let completed = MailboxMessage::Completed {
+            agent_id: "agent_early".to_string(),
+            summary: "recovered after early completion".to_string(),
+        };
+        assert!(
+            handle_subagent_mailbox(&mut app, 1, &completed),
+            "completion-first delivery must still open a card"
+        );
+        assert!(app.subagent_card_index.contains_key("agent_early"));
+
+        let started = MailboxMessage::started("agent_early", SubAgentType::General);
+        assert!(handle_subagent_mailbox(&mut app, 2, &started));
+        match app.history.last() {
+            Some(HistoryCell::SubAgent(SubAgentCell::Delegate(card))) => {
+                assert_eq!(card.agent_id, "agent_early");
+                assert_ne!(card.agent_type, "…");
+            }
+            other => panic!("expected delegate card, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fanout_completion_burst_preserves_started_to_done_ordering() {
+        let mut app = App::new(test_options(), &Config::default());
+        app.pending_subagent_dispatch = Some("rlm_eval".to_string());
+        for (seq, id) in ["agent_a", "agent_b"].into_iter().enumerate() {
+            assert!(handle_subagent_mailbox(
+                &mut app,
+                seq as u64 + 1,
+                &MailboxMessage::started(id, SubAgentType::Explore),
+            ));
+        }
+        assert!(handle_subagent_mailbox(
+            &mut app,
+            3,
+            &MailboxMessage::Completed {
+                agent_id: "agent_a".to_string(),
+                summary: "a done".to_string(),
+            },
+        ));
+        let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) = app.history.last() else {
+            panic!("expected fanout card");
+        };
+        assert_eq!(card.workers.len(), 2);
+        assert_eq!(card.workers[0].status, AgentLifecycle::Completed);
+        assert_eq!(card.workers[1].status, AgentLifecycle::Running);
     }
 }

@@ -87,6 +87,22 @@ function requiredEnvFirst(...names) {
   return value;
 }
 
+// WEIXIN_* is the canonical spelling; the historical WEXIN_* typo names are
+// still honored as deprecated aliases (each warns once per process).
+const warnedEnvAliases = new Set();
+
+function weixinEnv(name) {
+  const legacy = `WEXIN_${name.slice("WEIXIN_".length)}`;
+  const primary = envFirst(process.env, name);
+  if (primary) return primary;
+  const fallback = envFirst(process.env, legacy);
+  if (fallback && !warnedEnvAliases.has(legacy)) {
+    warnedEnvAliases.add(legacy);
+    console.warn(`${legacy} is deprecated; rename it to ${name}.`);
+  }
+  return fallback;
+}
+
 const config = {
   runtimeUrl: (
     envFirst(process.env, "CODEWHALE_RUNTIME_URL", "DEEPSEEK_RUNTIME_URL") ||
@@ -128,31 +144,31 @@ const config = {
     false
   ),
   allowlist: parseList(
-    envFirst(
-      process.env,
-      "WEXIN_CHAT_ALLOWLIST",
-      "CODEWHALE_CHAT_ALLOWLIST",
-      "DEEPSEEK_CHAT_ALLOWLIST"
-    )
+    weixinEnv("WEIXIN_CHAT_ALLOWLIST") ||
+      envFirst(
+        process.env,
+        "CODEWHALE_CHAT_ALLOWLIST",
+        "DEEPSEEK_CHAT_ALLOWLIST"
+      )
   ),
   allowUnlisted: parseBool(
-    envFirst(
-      process.env,
-      "WEXIN_ALLOW_UNLISTED",
-      "CODEWHALE_ALLOW_UNLISTED",
-      "DEEPSEEK_ALLOW_UNLISTED"
-    ),
+    weixinEnv("WEIXIN_ALLOW_UNLISTED") ||
+      envFirst(
+        process.env,
+        "CODEWHALE_ALLOW_UNLISTED",
+        "DEEPSEEK_ALLOW_UNLISTED"
+      ),
     false
   ),
   stateDir:
-    process.env.WEXIN_STATE_DIR ||
+    weixinEnv("WEIXIN_STATE_DIR") ||
     "/var/lib/codewhale-weixin-bot-bridge",
   threadMapPath:
-    process.env.WEXIN_THREAD_MAP_PATH ||
+    weixinEnv("WEIXIN_THREAD_MAP_PATH") ||
     "/var/lib/codewhale-weixin-bot-bridge/thread-map.json",
-  maxReplyChars: Number(process.env.WEXIN_MAX_REPLY_CHARS || 3500),
+  maxReplyChars: Number(weixinEnv("WEIXIN_MAX_REPLY_CHARS") || 3500),
   longPollTimeoutMs: Number(
-    process.env.WEXIN_LONGPOLL_TIMEOUT_MS || 35000
+    weixinEnv("WEIXIN_LONGPOLL_TIMEOUT_MS") || 35000
   ),
   turnTimeoutMs: Number(
     envFirst(
@@ -794,10 +810,10 @@ async function monitorLoop() {
           await sendText(
             fromUser,
             [
-              "This WeChat user is not in WEXIN_CHAT_ALLOWLIST.",
+              "This WeChat user is not in WEIXIN_CHAT_ALLOWLIST.",
               `user_id=${fromUser}`,
               "",
-              "For first pairing, add this user_id to WEXIN_CHAT_ALLOWLIST, or temporarily set WEXIN_ALLOW_UNLISTED=true.",
+              "For first pairing, add this user_id to WEIXIN_CHAT_ALLOWLIST, or temporarily set WEIXIN_ALLOW_UNLISTED=true.",
             ].join("\n")
           );
           continue;

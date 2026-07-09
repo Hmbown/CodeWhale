@@ -1,9 +1,9 @@
 //! End-to-end harness composing [`PtySession`] + [`Frame`].
 //!
 //! Tests build a [`Harness`] via [`Harness::builder`], drive the TUI with
-//! [`Harness::send`] / [`Harness::paste`] / [`Harness::resize`], poll the
-//! parsed terminal state with [`Harness::wait_for`], and assert on
-//! [`Harness::frame`] / filesystem state.
+//! [`Harness::send`] / [`Harness::paste`], poll the parsed terminal state
+//! with [`Harness::wait_for`], and assert on [`Harness::frame`] /
+//! filesystem state.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,11 +42,6 @@ impl HarnessBuilder {
             clear_env: false,
             seal_home: None,
         }
-    }
-
-    pub fn arg(mut self, a: impl Into<String>) -> Self {
-        self.args.push(a.into());
-        self
     }
 
     pub fn args<I, S>(mut self, args: I) -> Self
@@ -138,12 +133,6 @@ impl Harness {
 
     pub fn paste_unbracketed(&mut self, text: &str) -> Result<()> {
         self.pty.write_bytes(&super::paste::unbracketed(text))
-    }
-
-    pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        self.pty.resize(rows, cols)?;
-        self.frame.resize(rows, cols);
-        Ok(())
     }
 
     /// Pull whatever the child has written since last call into the frame

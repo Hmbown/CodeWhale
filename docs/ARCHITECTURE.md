@@ -2,7 +2,7 @@
 
 This document provides an overview of the codewhale architecture for developers and contributors.
 
-Current boundary note (v0.8.6):
+Current boundary note (v0.8.67):
 - `crates/tui` is still the live end-user runtime for the TUI, runtime API, task manager, and tool execution loop.
 - Other workspace crates are being split out incrementally, but they are not yet the sole runtime source of truth.
 - The LSP subsystem (`crates/tui/src/lsp/`) is fully wired into the engine's post-tool-execution path
@@ -127,7 +127,7 @@ drives turns through Chat Completions.
   - `github.rs` - Read-only GitHub context and guarded comment/closure tools backed by `gh`
   - `automation.rs` - Model-visible scheduling tools over `AutomationManager`
   - `plan.rs` - Planning tools
-  - `subagent.rs` - Persistent sub-agent sessions (replaces the removed `agent_swarm` surface)
+  - `subagent.rs` - Persistent sub-agent sessions
   - `spec.rs` - Tool specifications
   - `rlm.rs` - Persistent Recursive Language Model (RLM) sessions — sandboxed Python REPLs with semantic helper calls and `var_handle` output support
 
@@ -212,8 +212,8 @@ drives turns through Chat Completions.
 5. Tool executed (possibly sandboxed on macOS)
 6. Post-execution hooks run
 7. Result metadata is retained on runtime item records
-8. **LSP post-edit hook** (v0.8.6): if the tool was `edit_file`/`apply_patch`/`write_file` and LSP is enabled, the engine runs `run_post_edit_lsp_hook()` to collect diagnostics
-9. **Diagnostics flush** (v0.8.6): before the next API request, `flush_pending_lsp_diagnostics()` injects any collected errors as a synthetic user message
+8. **LSP post-edit hook**: if the tool was `edit_file`/`apply_patch`/`write_file` and LSP is enabled, the engine runs `run_post_edit_lsp_hook()` to collect diagnostics
+9. **Diagnostics flush**: before the next API request, `flush_pending_lsp_diagnostics()` injects any collected errors as a synthetic user message
 10. Result returned to agent loop
 
 ### Background Tasks

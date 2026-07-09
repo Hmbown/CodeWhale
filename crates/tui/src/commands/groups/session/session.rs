@@ -38,6 +38,7 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         app.system_prompt.as_ref(),
         Some(app.mode.label()),
     );
+    session.metadata.model_provider = app.api_provider.as_str().to_string();
     app.sync_cost_to_metadata(&mut session.metadata);
     session.artifacts = app.session_artifacts.clone();
 
@@ -94,6 +95,7 @@ pub fn fork(app: &mut App) -> CommandResult {
         app.system_prompt.as_ref(),
         Some(app.mode.label()),
     );
+    parent.metadata.model_provider = app.api_provider.as_str().to_string();
     app.sync_cost_to_metadata(&mut parent.metadata);
     parent.artifacts = app.session_artifacts.clone();
 
@@ -109,6 +111,7 @@ pub fn fork(app: &mut App) -> CommandResult {
         app.system_prompt.as_ref(),
         Some(app.mode.label()),
     );
+    forked.metadata.model_provider = app.api_provider.as_str().to_string();
     forked.metadata.copy_cost_from(&parent.metadata);
     forked.metadata.mark_forked_from(&parent.metadata);
 
@@ -238,6 +241,10 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     app.extend_history(cells_to_add);
     app.mark_history_updated();
     app.viewport.transcript_selection.clear();
+    if let Some(provider) = crate::config::ApiProvider::parse(&session.metadata.model_provider) {
+        app.api_provider = provider;
+        app.reasoning_effort = app.reasoning_effort.normalize_for_provider(provider);
+    }
     app.set_model_selection(session.metadata.model.clone());
     app.update_model_compaction_budget();
     app.workspace.clone_from(&session.metadata.workspace);
@@ -304,8 +311,23 @@ pub fn purge(_app: &mut App) -> CommandResult {
     )
 }
 
-/// Export conversation to markdown
+/// Export conversation to markdown.
+///
+/// `/export turn [path]` is a distinct sub-mode (issue #4108): it produces a
+/// compact, pasteable Markdown *handoff* of the current/latest turn — reusing
+/// the Turn Inspector's (#4104) turn scope + section data — and copies it to the
+/// clipboard by default (writing to `path` instead when one is given). Every
+/// other invocation is the existing full-transcript Markdown export.
 pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
+    if let Some(arg) = path {
+        let mut parts = arg.splitn(2, char::is_whitespace);
+        let first = parts.next().unwrap_or("");
+        if first.eq_ignore_ascii_case("turn") {
+            let dest = parts.next().map(str::trim).filter(|s| !s.is_empty());
+            return export_turn_handoff(app, dest);
+        }
+    }
+
     let export_path = path.map_or_else(
         || {
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
@@ -357,6 +379,49 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
     }
 }
 
+/// Produce the compact turn handoff (issue #4108) and surface it the way the
+/// app already surfaces exports.
+///
+/// Without a `dest`, the Markdown is copied to the system clipboard so it is
+/// immediately pasteable into a PR/issue/Slack/next session (the primary intent
+/// of the issue); if the clipboard is unavailable it falls back to a timestamped
+/// file so the artifact is never lost. With a `dest`, the Markdown is written
+/// there — matching `/export`'s file-write convention. The Markdown itself is
+/// assembled by [`crate::tui::ui::turn_handoff_markdown`], which reuses the Turn
+/// Inspector's turn scope and per-section data.
+fn export_turn_handoff(app: &mut App, dest: Option<&str>) -> CommandResult {
+    let markdown = crate::tui::ui::turn_handoff_markdown(app);
+
+    if let Some(dest) = dest {
+        let path = PathBuf::from(dest);
+        return match std::fs::write(&path, &markdown) {
+            Ok(()) => CommandResult::message(format!("Turn handoff written to {}", path.display())),
+            Err(e) => CommandResult::error(format!("Failed to write turn handoff: {e}")),
+        };
+    }
+
+    if app.clipboard.write_text(&markdown).is_ok() {
+        let lines = markdown.lines().count();
+        return CommandResult::message(format!(
+            "Turn handoff copied to clipboard ({lines} lines) — paste into a PR, issue, or Slack"
+        ));
+    }
+
+    // Clipboard unavailable (e.g. headless host): persist the artifact so the
+    // handoff is still recoverable rather than silently lost.
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let path = PathBuf::from(format!("turn_handoff_{timestamp}.md"));
+    match std::fs::write(&path, &markdown) {
+        Ok(()) => CommandResult::message(format!(
+            "Clipboard unavailable — turn handoff written to {}",
+            path.display()
+        )),
+        Err(e) => {
+            CommandResult::error(format!("Turn handoff clipboard and file write failed: {e}"))
+        }
+    }
+}
+
 /// Open the session picker UI, or run a sub-action like
 /// `prune <days>` for housekeeping (#406 phase-1.5).
 pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -385,7 +450,7 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
 /// [`crate::session_manager::SessionManager::prune_sessions_older_than`]
 /// so users can run a safe cleanup without leaving the TUI. Skips
 /// the checkpoint subdirectory (the helper guarantees that already).
-fn prune(_app: &mut App, days_arg: Option<&str>) -> CommandResult {
+fn prune(app: &mut App, days_arg: Option<&str>) -> CommandResult {
     let days_str = match days_arg {
         Some(s) => s,
         None => {
@@ -411,7 +476,10 @@ fn prune(_app: &mut App, days_arg: Option<&str>) -> CommandResult {
     };
 
     let max_age = std::time::Duration::from_secs(days.saturating_mul(24 * 60 * 60));
-    match manager.prune_sessions_older_than(max_age) {
+    // Never prune the active session, even if its timestamp is stale (a
+    // just-resumed session isn't re-saved until its first post-resume write).
+    let keep = app.current_session_id.as_deref();
+    match manager.prune_sessions_older_than_keeping(max_age, keep) {
         Ok(0) => CommandResult::message(format!("no sessions older than {days}d to prune")),
         Ok(n) => CommandResult::message(format!(
             "pruned {n} session{} older than {days}d",
@@ -939,6 +1007,56 @@ mod tests {
         assert!(content.contains("**Model:**"));
         assert!(content.contains("**You:**"));
         assert!(content.contains("**Assistant:**"));
+    }
+
+    #[test]
+    fn export_turn_writes_compact_handoff_to_path() {
+        // `/export turn <path>` (issue #4108) writes the compact turn handoff
+        // to a file rather than copying to the clipboard, so this stays
+        // deterministic without touching the system clipboard.
+        let tmpdir = TempDir::new().unwrap();
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        app.history.push(HistoryCell::User {
+            content: "Fix the flaky login test".to_string(),
+        });
+        app.history.push(HistoryCell::Tool(
+            crate::tui::history::ToolCell::PatchSummary(crate::tui::history::PatchSummaryCell {
+                path: "src/login.rs".to_string(),
+                summary: "guard against empty token".to_string(),
+                status: crate::tui::history::ToolStatus::Success,
+                error: None,
+            }),
+        ));
+        app.history.push(HistoryCell::Assistant {
+            content: "Fixed the race in the login test.".to_string(),
+            streaming: false,
+        });
+        app.runtime_turn_status = Some("completed".to_string());
+
+        let out_path = tmpdir.path().join("handoff.md");
+        let result = export(&mut app, Some(&format!("turn {}", out_path.display())));
+
+        assert!(!result.is_error, "{:?}", result.message);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Turn handoff written to"),
+            "{:?}",
+            result.message
+        );
+        let md = std::fs::read_to_string(&out_path).unwrap();
+        assert!(md.contains("# Turn handoff"), "{md}");
+        assert!(md.contains("## Intent"), "{md}");
+        assert!(md.contains("Fix the flaky login test"), "{md}");
+        assert!(md.contains("## Files changed"), "{md}");
+        assert!(md.contains("src/login.rs"), "{md}");
+        assert!(md.contains("## Result / status"), "{md}");
+        assert!(
+            md.contains("Result: Fixed the race in the login test."),
+            "{md}"
+        );
     }
 
     #[test]

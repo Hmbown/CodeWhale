@@ -156,6 +156,34 @@ fn allow_shell_defaults_to_false_when_unset() {
     );
 }
 
+// The interactive default is shell-on (approval-gated). Both interactive
+// startup and the durable Agent permission baseline (app.rs) read this single
+// method so the default cannot drift between launch modes; an explicit opt-out
+// is still honored.
+#[test]
+fn interactive_allow_shell_defaults_to_true_but_honors_explicit_opt_out() {
+    let default_config = Config::default();
+    assert!(
+        default_config.interactive_allow_shell(),
+        "interactive Agent sessions expose shell by default so approvals can gate commands"
+    );
+
+    let opted_out = Config {
+        allow_shell: Some(false),
+        ..Config::default()
+    };
+    assert!(
+        !opted_out.interactive_allow_shell(),
+        "explicit allow_shell = false still hides shell in interactive sessions"
+    );
+
+    let opted_in = Config {
+        allow_shell: Some(true),
+        ..Config::default()
+    };
+    assert!(opted_in.interactive_allow_shell());
+}
+
 #[test]
 fn prompt_suggestion_defaults_to_false() {
     let config = Config::default();
@@ -654,6 +682,66 @@ fn verifier_config_parses_hunt_policy_and_merges_overrides() {
     );
 
     assert!(merged.verifier.expect("merged verifier").enabled);
+}
+
+#[test]
+fn workflow_config_defaults_when_omitted_and_overrides_round_trip() {
+    // #4128: omitted `[workflow]` resolves through the accessor to product
+    // defaults; explicit overrides load and survive serialize → parse.
+    let omitted: Config = toml::from_str("").expect("empty config");
+    assert!(omitted.workflow.is_none());
+    assert_eq!(
+        omitted.workflow_config(),
+        codewhale_config::WorkflowConfigToml::default()
+    );
+
+    let config: Config = toml::from_str(
+        r#"
+        [workflow]
+        automatic = false
+        auto_start_read_only = false
+        require_approval_for_writes = true
+        auto_start_child_limit = 4
+        max_children = 32
+        max_depth = 1
+        default_token_budget = 90000
+        max_parallel_writes_without_worktree = 1
+        persist_completed_activity = false
+        persist_completed_across_restarts = false
+        "#,
+    )
+    .expect("parse workflow config");
+
+    let workflow = config.workflow.clone().expect("workflow table");
+    assert!(!workflow.automatic);
+    assert!(!workflow.auto_start_read_only);
+    assert!(workflow.require_approval_for_writes);
+    assert_eq!(workflow.auto_start_child_limit, 4);
+    assert_eq!(workflow.max_children, 32);
+    assert_eq!(workflow.max_depth, 1);
+    assert_eq!(workflow.default_token_budget, 90_000);
+    assert_eq!(workflow.max_parallel_writes_without_worktree, 1);
+    assert!(!workflow.persist_completed_activity);
+    assert!(!workflow.persist_completed_across_restarts);
+    assert_eq!(config.workflow_config(), workflow);
+
+    let serialized = toml::to_string_pretty(&workflow).expect("serialize workflow");
+    let round_tripped: codewhale_config::WorkflowConfigToml =
+        toml::from_str(&serialized).expect("round-trip parse");
+    assert_eq!(round_tripped, workflow);
+
+    // Profile/project overlays replace the whole table when present.
+    let merged = merge_config(
+        Config {
+            workflow: Some(codewhale_config::WorkflowConfigToml::default()),
+            ..Config::default()
+        },
+        Config {
+            workflow: Some(workflow.clone()),
+            ..Config::default()
+        },
+    );
+    assert_eq!(merged.workflow_config(), workflow);
 }
 
 #[test]
@@ -1536,9 +1624,9 @@ impl EnvGuard {
 }
 
 #[test]
-fn max_subagents_defaults_to_twenty() {
+fn max_subagents_defaults_to_default_limit() {
     assert_eq!(Config::default().max_subagents(), DEFAULT_MAX_SUBAGENTS);
-    assert_eq!(DEFAULT_MAX_SUBAGENTS, 20);
+    assert_eq!(DEFAULT_MAX_SUBAGENTS, 64);
 }
 
 #[test]
@@ -1556,6 +1644,12 @@ fn launch_concurrency_defaults_and_clamps_to_max_subagents() {
         }),
         ..Config::default()
     };
+    assert_eq!(config.launch_concurrency(), 50);
+
+    config.subagents = Some(SubagentsConfig {
+        launch_concurrency: Some(DEFAULT_MAX_SUBAGENTS + 10),
+        ..SubagentsConfig::default()
+    });
     assert_eq!(config.launch_concurrency(), config.max_subagents());
 
     config.subagents = Some(SubagentsConfig {
@@ -1798,17 +1892,14 @@ enabled = false
     )
     .expect("parse inherited provider subagent profile");
 
-    assert_eq!(
-        config.max_subagents_for_provider(ApiProvider::Deepseek),
-        MAX_SUBAGENTS
-    );
+    assert_eq!(config.max_subagents_for_provider(ApiProvider::Deepseek), 30);
     assert_eq!(
         config.launch_concurrency_for_provider(ApiProvider::Deepseek),
-        MAX_SUBAGENTS
+        30
     );
     assert_eq!(
         config.max_admitted_subagents_for_provider(ApiProvider::Deepseek),
-        MAX_SUBAGENTS
+        30
     );
     assert_eq!(
         config.subagent_max_spawn_depth_for_provider(ApiProvider::Deepseek),
@@ -2149,6 +2240,31 @@ fn save_api_key_writes_config_file_under_cfg_test() -> Result<()> {
         save_api_key("second-test-key")?;
         assert_eq!(fs::metadata(&expected)?.permissions().mode() & 0o777, 0o600);
     }
+    Ok(())
+}
+
+#[test]
+fn save_api_key_onboarding_routes_openrouter_key_to_provider_table() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-onboarding-provider-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let path = save_api_key_for(ApiProvider::Openrouter, "onboarding-openrouter-key")?;
+    let contents = fs::read_to_string(&path)?;
+    assert!(
+        contents.contains("openrouter"),
+        "expected OpenRouter provider table, got: {contents}"
+    );
+    assert!(contents.contains("onboarding-openrouter-key"));
     Ok(())
 }
 
@@ -2511,6 +2627,308 @@ api_key = "old-openrouter-key"
     // Non-credential lines must survive.
     assert!(after.contains("default_text_model"));
     assert!(after.contains("base_url"));
+    Ok(())
+}
+
+/// Finding #20 golden: a comment that merely mentions `api_key` used to
+/// defeat the insert (the old `existing.contains("api_key")` scan treated it
+/// as an existing assignment and never wrote the key). The TOML-aware path
+/// must insert the real key and keep the comment.
+#[test]
+fn save_api_key_inserts_key_when_only_a_comment_mentions_it() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-api-key-comment-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        "# api_key = \"sk-placeholder\" (uncomment to set manually)\n\
+         default_text_model = \"deepseek-v4-flash\"\n",
+    )?;
+
+    save_api_key("fresh-key")?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(
+        after.contains("# api_key = \"sk-placeholder\""),
+        "comment must survive: {after}"
+    );
+    assert!(
+        after.contains("default_text_model = \"deepseek-v4-flash\""),
+        "unrelated key must survive: {after}"
+    );
+    let parsed: toml::Value = toml::from_str(&after)?;
+    assert_eq!(
+        parsed.get("api_key").and_then(toml::Value::as_str),
+        Some("fresh-key"),
+        "real key must be inserted despite the comment: {after}"
+    );
+    Ok(())
+}
+
+/// Replacing an existing root api_key must keep surrounding comments,
+/// including the trailing comment on the api_key line itself.
+#[test]
+fn save_api_key_replaces_existing_key_preserving_comments() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-api-key-replace-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        r#"# top note
+api_key = "old-key" # keep secret
+model = "deepseek-v4-pro"
+
+# provider note
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+"#,
+    )?;
+
+    save_api_key("new-key")?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(
+        after.contains("api_key = \"new-key\" # keep secret"),
+        "value must be replaced in place with its comment: {after}"
+    );
+    assert!(!after.contains("old-key"), "{after}");
+    assert!(after.contains("# top note"), "{after}");
+    assert!(after.contains("# provider note"), "{after}");
+    Ok(())
+}
+
+/// Provider-scoped key saves used to round-trip through `toml::Value`
+/// pretty-printing, which dropped every comment in the file.
+#[test]
+fn save_api_key_for_preserves_comments_in_provider_tables() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-provider-key-comments-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        r#"# root note
+model = "deepseek-v4-pro"
+
+# openrouter note
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1" # pinned
+"#,
+    )?;
+
+    save_api_key_for(ApiProvider::Openrouter, "or-key")?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(after.contains("# root note"), "{after}");
+    assert!(after.contains("# openrouter note"), "{after}");
+    assert!(
+        after.contains("base_url = \"https://openrouter.ai/api/v1\" # pinned"),
+        "inline comment must survive: {after}"
+    );
+    let parsed: toml::Value = toml::from_str(&after)?;
+    assert_eq!(
+        parsed
+            .get("providers")
+            .and_then(|providers| providers.get("openrouter"))
+            .and_then(|entry| entry.get("api_key"))
+            .and_then(toml::Value::as_str),
+        Some("or-key"),
+        "{after}"
+    );
+    Ok(())
+}
+
+#[test]
+fn save_api_key_for_openai_codex_refuses_config_storage() {
+    let err = save_api_key_for(ApiProvider::OpenaiCodex, "codex-token")
+        .expect_err("Codex OAuth tokens must not be persisted as provider API keys");
+
+    let message = err.to_string();
+    assert!(message.contains("OpenAI Codex uses OAuth"), "{message}");
+    assert!(message.contains("codex login"), "{message}");
+}
+
+/// Clearing credentials must not disturb comments, `api_key_env`, or
+/// provider tables with quoted names.
+#[test]
+fn clear_api_key_preserves_comments_and_unrelated_keys() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-clear-comments-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        r#"# root note
+api_key = "old-root-key"
+api_key_env = "MY_KEY_ENV"
+model = "deepseek-v4-pro"
+
+# provider note
+[providers."quoted.provider"]
+api_key = "old-quoted-key"
+base_url = "https://quoted.example/v1"
+"#,
+    )?;
+
+    clear_api_key()?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(!after.contains("old-root-key"), "{after}");
+    assert!(
+        !after.contains("old-quoted-key"),
+        "quoted provider table key must be stripped: {after}"
+    );
+    assert!(
+        after.contains("api_key_env = \"MY_KEY_ENV\""),
+        "api_key_env must not be stripped: {after}"
+    );
+    assert!(after.contains("# root note"), "{after}");
+    assert!(after.contains("# provider note"), "{after}");
+    assert!(after.contains("model = \"deepseek-v4-pro\""), "{after}");
+    assert!(
+        after.contains("base_url = \"https://quoted.example/v1\""),
+        "{after}"
+    );
+    Ok(())
+}
+
+/// The old line matcher compared against the literal `[providers.<name>]`
+/// header, so a quoted header (`[providers."openrouter"]`) was never
+/// matched and the key survived a targeted clear.
+#[test]
+fn clear_active_provider_api_key_handles_quoted_table_headers() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-clear-quoted-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        r#"api_key = "root-key"
+
+[providers."openrouter"]
+api_key = "old-openrouter-key"
+base_url = "https://openrouter.ai/api/v1"
+"#,
+    )?;
+
+    clear_active_provider_api_key("openrouter")?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(
+        !after.contains("old-openrouter-key"),
+        "quoted provider header must be matched: {after}"
+    );
+    assert!(
+        after.contains("api_key = \"root-key\""),
+        "root key belongs to deepseek and must survive: {after}"
+    );
+    assert!(
+        after.contains("base_url = \"https://openrouter.ai/api/v1\""),
+        "{after}"
+    );
+    Ok(())
+}
+
+/// Finding #19: workspace-trust saves used to round-trip through
+/// `toml::to_string_pretty`, destroying comments in the whole file.
+#[test]
+fn save_workspace_trust_preserves_comments() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-trust-comments-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+    let workspace = temp_root.join("project");
+    fs::create_dir_all(&workspace)?;
+
+    let config_path = temp_root.join(".deepseek").join("config.toml");
+    fs::create_dir_all(config_path.parent().unwrap())?;
+    fs::write(
+        &config_path,
+        r#"# top note
+model = "deepseek-v4-pro"
+
+# projects note
+[projects."/existing/workspace"]
+trust_level = "trusted" # granted earlier
+"#,
+    )?;
+
+    save_workspace_trust(&workspace)?;
+
+    let after = fs::read_to_string(&config_path)?;
+    assert!(after.contains("# top note"), "{after}");
+    assert!(after.contains("# projects note"), "{after}");
+    assert!(after.contains("# granted earlier"), "{after}");
+    assert!(
+        after.contains("[projects.\"/existing/workspace\"]"),
+        "existing project entry must survive: {after}"
+    );
+    assert!(is_workspace_trusted(&workspace));
     Ok(())
 }
 
@@ -3127,6 +3545,13 @@ fn validate_route_rejects_mismatched_provider_model_tuple() {
     assert!(validate_route(ApiProvider::Together, DEFAULT_TOGETHER_MODEL).is_ok());
     assert!(validate_route(ApiProvider::Together, DEFAULT_TOGETHER_FLASH_MODEL).is_ok());
     assert!(validate_route(ApiProvider::Together, "deepseek-v4-pro").is_ok());
+
+    // Sakana AI (Fugu) is a native provider — DeepSeek ids must not cross-wire.
+    let err = validate_route(ApiProvider::Sakana, "deepseek-v4-flash")
+        .expect_err("sakana + deepseek flash must be rejected");
+    assert!(err.contains("deepseek-v4-flash"), "names the model: {err}");
+    assert!(err.contains("sakana"), "names the provider: {err}");
+    assert!(validate_route(ApiProvider::Sakana, DEFAULT_SAKANA_MODEL).is_ok());
 }
 
 #[test]
@@ -3509,7 +3934,6 @@ fn normalize_model_name_accepts_provider_prefixed_deepseek_ids() {
 fn default_context_seams_are_opt_in() {
     let config = Config::default();
     assert!(!config.context.enabled.unwrap_or(false));
-    assert!(!config.seam_manager_enabled());
     assert_eq!(config.context.l1_threshold.unwrap_or(192_000), 192_000);
     assert_eq!(
         config
@@ -3519,33 +3943,6 @@ fn default_context_seams_are_opt_in() {
             .unwrap_or("deepseek-v4-flash"),
         "deepseek-v4-flash"
     );
-}
-
-#[test]
-fn seam_manager_enabled_can_use_dedicated_table() -> Result<()> {
-    let config: Config = toml::from_str(
-        r#"
-        [context]
-        enabled = true
-
-        [seam_manager]
-        enabled = false
-        "#,
-    )?;
-
-    assert_eq!(config.context.enabled, Some(true));
-    assert_eq!(config.seam_manager.enabled, Some(false));
-    assert!(!config.seam_manager_enabled());
-
-    let config: Config = toml::from_str(
-        r#"
-        [seam_manager]
-        enabled = true
-        "#,
-    )?;
-
-    assert!(config.seam_manager_enabled());
-    Ok(())
 }
 
 #[test]
@@ -3592,14 +3989,11 @@ fn profile_without_context_does_not_disable_base_context() {
 }
 
 #[test]
-fn profile_without_context_gates_does_not_disable_base_gates() {
+fn profile_without_compaction_gate_does_not_disable_base_gate() {
     let mut profiles = HashMap::new();
     profiles.insert("work".to_string(), Config::default());
     let config = ConfigFile {
         base: Config {
-            seam_manager: SeamManagerConfig {
-                enabled: Some(true),
-            },
             compaction: CompactionRuntimeConfig {
                 enabled: Some(false),
             },
@@ -3609,7 +4003,6 @@ fn profile_without_context_gates_does_not_disable_base_gates() {
     };
 
     let merged = apply_profile(config, Some("work")).expect("profile");
-    assert_eq!(merged.seam_manager.enabled, Some(true));
     assert_eq!(merged.compaction.enabled, Some(false));
 }
 
@@ -4074,6 +4467,8 @@ fn openai_codex_default_model_falls_back_to_codex_model() {
 
 #[test]
 fn direct_provider_ignores_foreign_deepseek_root_default_model() {
+    let _lock = lock_test_env();
+
     let config = Config {
         provider: Some("zai".to_string()),
         default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
@@ -6604,7 +6999,7 @@ fn provider_capability_openrouter_recent_large_models_are_reasoning_aware() {
         (OPENROUTER_QWEN_3_6_PLUS_MODEL, 1_000_000, 65_536),
         (OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL, 1_000_000, 131_072),
         (OPENROUTER_MINIMAX_M3_MODEL, 1_000_000, 524_288),
-        (OPENROUTER_MINIMAX_M2_7_MODEL, 204_800, 4096),
+        (OPENROUTER_MINIMAX_M2_7_MODEL, 204_800, 131_072),
         (OPENROUTER_GLM_5_1_MODEL, 202_752, 131_072),
         (OPENROUTER_GLM_5_2_MODEL, 1_000_000, 131_072),
         (OPENROUTER_NEMOTRON_3_ULTRA_MODEL, 1_000_000, 16_384),
@@ -6662,8 +7057,13 @@ fn provider_capability_arcee_direct_models_use_api_docs_shape() {
         } else {
             128_000
         };
+        let expected_output = if model == ARCEE_TRINITY_LARGE_PREVIEW_MODEL {
+            4096
+        } else {
+            64_000
+        };
         assert_eq!(cap.context_window, expected_window);
-        assert_eq!(cap.max_output, 4096);
+        assert_eq!(cap.max_output, expected_output);
         assert!(!cap.thinking_supported);
         assert!(!cap.cache_telemetry_supported);
         assert_eq!(
@@ -7227,6 +7627,9 @@ fn api_provider_returns_custom_for_custom_name_and_deepseek_for_junk() {
         ..Config::default()
     };
     assert_eq!(config.api_provider(), ApiProvider::Custom);
+    config
+        .validate()
+        .expect("named custom providers should pass config validation");
 
     // Genuine junk that matches no built-in provider AND no custom table →
     // falls back to DeepSeek, exactly as before this slice.
@@ -7235,6 +7638,10 @@ fn api_provider_returns_custom_for_custom_name_and_deepseek_for_junk() {
         ..Config::default()
     };
     assert_eq!(junk.api_provider(), ApiProvider::Deepseek);
+    assert!(
+        junk.validate().is_err(),
+        "invalid provider names should still fail validation"
+    );
 }
 
 #[test]

@@ -168,6 +168,9 @@ impl HookSink for JsonlHookSink {
         file.write_all(b"\n")
             .await
             .context("failed to write hook event newline")?;
+        // Flush before drop so sequential emits (and tests that read the
+        // file immediately after) observe every completed line.
+        file.flush().await.context("failed to flush hook event")?;
         Ok(())
     }
 }
@@ -187,7 +190,10 @@ impl WebhookHookSink {
     pub fn new(url: String) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }

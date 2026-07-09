@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::automation_manager::{
-    AutomationStatus, CreateAutomationRequest, UpdateAutomationRequest,
+    AutomationStatus, CreateAutomationRequest, UpdateAutomationRequest, run_now_shared,
 };
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
@@ -347,11 +347,15 @@ impl ToolSpec for AutomationRunTool {
             .task_manager
             .as_ref()
             .ok_or_else(|| ToolError::not_available("TaskManager is not attached"))?;
-        let manager = manager.lock().await;
-        let run = manager
-            .run_now(required_str(&input, "automation_id")?, task_manager)
-            .await
-            .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        // run_now_shared handles its own lock phases so the manager mutex is
+        // never held across the task-manager await.
+        let run = run_now_shared(
+            manager,
+            required_str(&input, "automation_id")?,
+            task_manager,
+        )
+        .await
+        .map_err(|e| ToolError::execution_failed(e.to_string()))?;
         ToolResult::json(&run).map_err(|e| ToolError::execution_failed(e.to_string()))
     }
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { InstallCodeBlock } from "./install-code-block";
 
-type Arch = "macos-arm64" | "macos-x64" | "linux-x64" | "linux-arm64" | "linux-riscv64" | "windows-x64";
+type Arch = "macos-arm64" | "macos-x64" | "linux-x64" | "linux-arm64" | "windows-x64";
 
 const SNIPPETS: Record<Arch, string> = {
   "macos-arm64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
@@ -40,14 +40,6 @@ curl -fsSL -o codewhale-tui \\
 grep -E ' (codewhale|codewhale-tui)-linux-arm64$' codewhale-artifacts-sha256.txt | sha256sum -c -
 chmod +x codewhale codewhale-tui
 sudo mv codewhale codewhale-tui /usr/local/bin/`,
-  "linux-riscv64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
-curl -fsSL -o codewhale \\
-  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-linux-riscv64
-curl -fsSL -o codewhale-tui \\
-  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-linux-riscv64
-grep -E ' (codewhale|codewhale-tui)-linux-riscv64$' codewhale-artifacts-sha256.txt | sha256sum -c -
-chmod +x codewhale codewhale-tui
-sudo mv codewhale codewhale-tui /usr/local/bin/`,
   "windows-x64": `# PowerShell
 $ErrorActionPreference = "Stop"
 $dest = "$Env:USERPROFILE\\bin"
@@ -77,7 +69,6 @@ const VERIFY: Record<Arch, string> = {
   "macos-x64": `grep -E ' (codewhale|codewhale-tui)-macos-x64$' codewhale-artifacts-sha256.txt | shasum -a 256 -c -`,
   "linux-x64": `grep -E ' (codewhale|codewhale-tui)-linux-x64$' codewhale-artifacts-sha256.txt | sha256sum -c -`,
   "linux-arm64": `grep -E ' (codewhale|codewhale-tui)-linux-arm64$' codewhale-artifacts-sha256.txt | sha256sum -c -`,
-  "linux-riscv64": `grep -E ' (codewhale|codewhale-tui)-linux-riscv64$' codewhale-artifacts-sha256.txt | sha256sum -c -`,
   "windows-x64": `# PowerShell
 $manifest = Invoke-WebRequest https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
 $expected = @{}
@@ -94,7 +85,6 @@ const LABELS: Record<Arch, string> = {
   "macos-x64": "macOS · Intel",
   "linux-x64": "Linux · x64",
   "linux-arm64": "Linux · arm64",
-  "linux-riscv64": "Linux · riscv64",
   "windows-x64": "Windows · x64",
 };
 

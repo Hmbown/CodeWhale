@@ -138,7 +138,7 @@ CodeWhale should converge with Claude Code on **shape**, not on branding:
   (#2743); structured run receipts.
 - **Keep distinct**: CodeWhale branding and first-class DeepSeek/GLM/MiniMax/
   multi-provider support; the local-first **Agent Fleet** (durable, SSH-capable
-  orchestration) as CodeWhale's own layer above the shared runtime; WhaleFlow as
+  orchestration) as CodeWhale's own layer above the shared runtime; Workflow as
   the orchestration overlay.
 - **Do not** fork execution semantics per surface. The TUI, `agent`,
   `exec`, the Runtime API, and the fleet must all drive the *same* runtime and

@@ -18,11 +18,12 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-06-24T09:06:20.600Z",
-  "version": "0.8.65",
+  "generatedAt": "2026-07-07T02:32:11.808Z",
+  "version": "0.8.67",
   "crates": [
     "agent",
     "app-server",
+    "build-support",
     "cli",
     "config",
     "core",
@@ -35,7 +36,8 @@ export const FACTS: RepoFacts = {
     "state",
     "tools",
     "tui",
-    "whaleflow"
+    "workflow",
+    "workflow-js"
   ],
   "sandboxBackends": [
     "bwrap",
@@ -88,7 +90,7 @@ export const FACTS: RepoFacts = {
     {
       "id": "xiaomi-mimo",
       "label": "Xiaomi MiMo",
-      "env": "XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"
+      "env": "XIAOMI_MIMO_TOKEN_PLAN_API_KEY / MIMO_TOKEN_PLAN_API_KEY / XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"
     },
     {
       "id": "novita",
@@ -161,6 +163,11 @@ export const FACTS: RepoFacts = {
       "env": "ANTHROPIC_API_KEY"
     },
     {
+      "id": "openmodel",
+      "label": "OpenModel",
+      "env": "OPENMODEL_API_KEY"
+    },
+    {
       "id": "zai",
       "label": "Z.ai",
       "env": "ZAI_API_KEY / Z_AI_API_KEY"
@@ -179,11 +186,21 @@ export const FACTS: RepoFacts = {
       "id": "deepinfra",
       "label": "DeepInfra",
       "env": "DEEPINFRA_API_KEY / DEEPINFRA_TOKEN"
+    },
+    {
+      "id": "sakana",
+      "label": "Sakana AI",
+      "env": "FUGU_API_KEY / SAKANA_API_KEY"
+    },
+    {
+      "id": "longcat",
+      "label": "Meituan LongCat",
+      "env": "LONGCAT_API_KEY"
     }
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 78,
+  "toolCount": 79,
   "license": "MIT",
   "latestRelease": null
 };

@@ -159,7 +159,56 @@ impl TranscriptViewCache {
         original_index_map: Option<&[usize]>,
     ) {
         let total_cells: usize = cell_shards.iter().map(|s| s.len()).sum();
+        self.ensure_iter(
+            total_cells,
+            cell_shards.iter().flat_map(|shard| shard.iter()),
+            cell_revisions,
+            width,
+            options,
+            folded_cells,
+            original_index_map,
+        );
+    }
 
+    /// `ensure_split` over an already-filtered list of borrowed cells.
+    ///
+    /// The collapse path substitutes synthetic tool-run summary cells and
+    /// skips collapsed cells, so it cannot hand over contiguous shard
+    /// slices. Accepting `&[&HistoryCell]` lets it pass borrows instead of
+    /// deep-cloning every visible cell into a fresh `Vec<HistoryCell>` each
+    /// frame (#3896).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_filtered(
+        &mut self,
+        cells: &[&HistoryCell],
+        cell_revisions: &[u64],
+        width: u16,
+        options: TranscriptRenderOptions,
+        folded_cells: &HashSet<usize>,
+        original_index_map: Option<&[usize]>,
+    ) {
+        self.ensure_iter(
+            cells.len(),
+            cells.iter().copied(),
+            cell_revisions,
+            width,
+            options,
+            folded_cells,
+            original_index_map,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ensure_iter<'a>(
+        &mut self,
+        total_cells: usize,
+        cells: impl Iterator<Item = &'a HistoryCell>,
+        cell_revisions: &[u64],
+        width: u16,
+        options: TranscriptRenderOptions,
+        folded_cells: &HashSet<usize>,
+        original_index_map: Option<&[usize]>,
+    ) {
         let layout_changed = self.width != width || self.options != options;
         let folded_changed = self.folded_cells != *folded_cells;
         if layout_changed || folded_changed {
@@ -183,71 +232,69 @@ impl TranscriptViewCache {
         let revisions_match = cell_revisions.len() == total_cells;
 
         let mut idx: usize = 0;
-        for shard in cell_shards {
-            for cell in *shard {
-                let current_rev = if revisions_match {
-                    cell_revisions[idx]
-                } else {
-                    // No matching revisions — force a re-render this cycle.
-                    u64::MAX
-                };
+        for cell in cells {
+            let current_rev = if revisions_match {
+                cell_revisions[idx]
+            } else {
+                // No matching revisions — force a re-render this cycle.
+                u64::MAX
+            };
 
-                // Reuse cached entry if the revision matches AND it's at the
-                // same index (cells can shift on insert/remove, so we only
-                // reuse when the index is identical — a stricter invariant
-                // codex also uses for its active-cell tail).
-                if let Some(prev) = self.per_cell.get(idx)
-                    && !layout_changed
-                    && prev.revision == current_rev
-                    && revisions_match
-                {
-                    new_per_cell.push(prev.clone());
-                    idx += 1;
-                    continue;
-                }
-
-                any_dirty = true;
-                first_dirty = Some(first_dirty.map_or(idx, |current| current.min(idx)));
-                let is_tool_groupable = matches!(cell, HistoryCell::Tool(_));
-                let render_width = if is_tool_groupable {
-                    width.saturating_sub(2).max(1)
-                } else {
-                    width
-                };
-                let original_idx = original_index_map
-                    .map(|m| *m.get(idx).unwrap_or(&idx))
-                    .unwrap_or(idx);
-                let folded = folded_cells.contains(&original_idx);
-                let rendered = cell.lines_with_copy_metadata_folded(render_width, options, folded);
-                let mut lines = Vec::with_capacity(rendered.len());
-                let mut copy_separators = Vec::with_capacity(rendered.len());
-                let mut copy_prefix_widths = Vec::with_capacity(rendered.len());
-                for rendered_line in rendered {
-                    lines.push(rendered_line.line);
-                    copy_prefix_widths.push(rendered_line.copy_prefix_width);
-                    copy_separators.push(rendered_line.copy_separator_after);
-                }
-                let is_empty = lines.is_empty();
-                new_per_cell.push(CachedCell {
-                    revision: current_rev,
-                    lines: Arc::new(lines),
-                    copy_separators: Arc::new(copy_separators),
-                    copy_prefix_widths: Arc::new(copy_prefix_widths),
-                    is_empty,
-                    is_stream_continuation: cell.is_stream_continuation(),
-                    is_conversational: cell.is_conversational(),
-                    is_system_or_tool: matches!(
-                        cell,
-                        HistoryCell::System { .. }
-                            | HistoryCell::Error { .. }
-                            | HistoryCell::Tool(_)
-                            | HistoryCell::SubAgent(_)
-                            | HistoryCell::ArchivedContext { .. }
-                    ),
-                    is_tool_groupable,
-                });
+            // Reuse cached entry if the revision matches AND it's at the
+            // same index (cells can shift on insert/remove, so we only
+            // reuse when the index is identical — a stricter invariant
+            // codex also uses for its active-cell tail).
+            if let Some(prev) = self.per_cell.get(idx)
+                && !layout_changed
+                && prev.revision == current_rev
+                && revisions_match
+            {
+                new_per_cell.push(prev.clone());
                 idx += 1;
+                continue;
             }
+
+            any_dirty = true;
+            first_dirty = Some(first_dirty.map_or(idx, |current| current.min(idx)));
+            let is_tool_groupable = matches!(cell, HistoryCell::Tool(_));
+            let render_width = if is_tool_groupable {
+                width.saturating_sub(2).max(1)
+            } else {
+                width
+            };
+            let original_idx = original_index_map
+                .map(|m| *m.get(idx).unwrap_or(&idx))
+                .unwrap_or(idx);
+            let folded = folded_cells.contains(&original_idx);
+            let rendered = cell.lines_with_copy_metadata_folded(render_width, options, folded);
+            let mut lines = Vec::with_capacity(rendered.len());
+            let mut copy_separators = Vec::with_capacity(rendered.len());
+            let mut copy_prefix_widths = Vec::with_capacity(rendered.len());
+            for rendered_line in rendered {
+                lines.push(rendered_line.line);
+                copy_prefix_widths.push(rendered_line.copy_prefix_width);
+                copy_separators.push(rendered_line.copy_separator_after);
+            }
+            let is_empty = lines.is_empty();
+            new_per_cell.push(CachedCell {
+                revision: current_rev,
+                lines: Arc::new(lines),
+                copy_separators: Arc::new(copy_separators),
+                copy_prefix_widths: Arc::new(copy_prefix_widths),
+                is_empty,
+                is_stream_continuation: cell.is_stream_continuation(),
+                is_conversational: cell.is_conversational(),
+                is_system_or_tool: matches!(
+                    cell,
+                    HistoryCell::System { .. }
+                        | HistoryCell::Error { .. }
+                        | HistoryCell::Tool(_)
+                        | HistoryCell::SubAgent(_)
+                        | HistoryCell::ArchivedContext { .. }
+                ),
+                is_tool_groupable,
+            });
+            idx += 1;
         }
 
         self.per_cell = new_per_cell;
@@ -939,8 +986,14 @@ mod tests {
 
     #[test]
     fn adjacent_tool_cells_render_as_one_railed_group() {
-        let cells = vec![exec_tool_cell("cargo test"), exec_tool_cell("cargo clippy")];
-        let revisions = vec![1u64, 1];
+        // Live foreground exec cells collapse to a single header line (copy
+        // dedupe #17), so a third cell is needed for a rail-continuation row.
+        let cells = vec![
+            exec_tool_cell("cargo test"),
+            exec_tool_cell("cargo clippy"),
+            exec_tool_cell("cargo fmt"),
+        ];
+        let revisions = vec![1u64, 1, 1];
         let mut cache = TranscriptViewCache::new();
 
         cache.ensure(&cells, &revisions, 80, TranscriptRenderOptions::default());
@@ -1052,6 +1105,97 @@ mod tests {
             "rail_prefix_widths memory unexpectedly large: {memory_kb:.1} KB"
         );
         eprintln!("  ✓ well under 1 MB even for very long sessions");
+    }
+
+    #[test]
+    fn ensure_filtered_matches_ensure_split_output() {
+        let cells = vec![
+            user_cell("hello"),
+            assistant_cell("some **markdown** body", false),
+            exec_tool_cell("cargo test"),
+            user_cell("again"),
+        ];
+        let revisions = vec![1u64, 2, 3, 4];
+        let index_map: Vec<usize> = vec![0, 1, 2, 3];
+
+        let mut split_cache = TranscriptViewCache::new();
+        split_cache.ensure_split(
+            &[&cells],
+            &revisions,
+            40,
+            TranscriptRenderOptions::default(),
+            &HashSet::new(),
+            Some(&index_map),
+        );
+
+        let refs: Vec<&HistoryCell> = cells.iter().collect();
+        let mut filtered_cache = TranscriptViewCache::new();
+        filtered_cache.ensure_filtered(
+            &refs,
+            &revisions,
+            40,
+            TranscriptRenderOptions::default(),
+            &HashSet::new(),
+            Some(&index_map),
+        );
+
+        assert_eq!(plain_lines(&split_cache), plain_lines(&filtered_cache));
+        assert_eq!(
+            split_cache.line_meta().len(),
+            filtered_cache.line_meta().len()
+        );
+    }
+
+    #[test]
+    fn ensure_filtered_reuses_unchanged_cells() {
+        let cells = vec![
+            user_cell("hello"),
+            assistant_cell("streaming", true),
+            user_cell("again"),
+        ];
+        let mut revisions = vec![1u64, 1, 1];
+        let refs: Vec<&HistoryCell> = cells.iter().collect();
+
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure_filtered(
+            &refs,
+            &revisions,
+            80,
+            TranscriptRenderOptions::default(),
+            &HashSet::new(),
+            None,
+        );
+        let first = plain_lines(&cache);
+
+        cache.ensure_filtered(
+            &refs,
+            &revisions,
+            80,
+            TranscriptRenderOptions::default(),
+            &HashSet::new(),
+            None,
+        );
+        assert_eq!(first, plain_lines(&cache));
+        for (idx, cached) in cache.per_cell.iter().enumerate() {
+            assert_eq!(
+                cached.revision, 1,
+                "cell {idx} must be reused, not re-rendered"
+            );
+        }
+
+        // Bump one revision: only that entry re-renders.
+        revisions[1] = 2;
+        cache.ensure_filtered(
+            &refs,
+            &revisions,
+            80,
+            TranscriptRenderOptions::default(),
+            &HashSet::new(),
+            None,
+        );
+        assert_eq!(cache.per_cell[0].revision, 1);
+        assert_eq!(cache.per_cell[1].revision, 2);
+        assert_eq!(cache.per_cell[2].revision, 1);
     }
 
     #[test]

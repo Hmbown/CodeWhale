@@ -3,10 +3,16 @@
 # The /change command embeds this file into the binary via include_str!, so
 # it deliberately keeps only the most recent release sections.
 #
+# The `## [Unreleased]` section is always kept but does NOT count toward the
+# keep window: it is not a release, and counting it silently dropped the
+# oldest retained release whenever Unreleased had content (#3768). The window
+# therefore tracks a stable number of *released* versions regardless of
+# in-progress notes.
+#
 # Usage: scripts/sync-changelog.sh [--check] [sections-to-keep]
 #   --check  verify crates/tui/CHANGELOG.md is up to date without writing
 #            (exit 1 if regeneration would change it)
-#   sections-to-keep defaults to 15
+#   sections-to-keep defaults to 15 (released versions, excluding Unreleased)
 set -eu
 CHECK=0
 if [ "${1:-}" = "--check" ]; then
@@ -19,7 +25,9 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 awk -v keep="$KEEP" '
   /^\[/ && /\]: http/ { exit }
-  /^## \[/ { count++ }
+  # Count only released versions toward the keep window; the Unreleased
+  # section is always printed but never consumes a slot (#3768).
+  /^## \[/ && $0 !~ /\[Unreleased\]/ { count++ }
   count > keep { exit }
   { print }
 ' "$root/CHANGELOG.md" > "$tmp"

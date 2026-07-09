@@ -175,7 +175,6 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
              ---\n  \
              name: my-skill\n  \
              description: What this skill does\n  \
-             allowed-tools: read_file, list_dir\n  \
              ---\n\n  \
              <instructions here>{warnings}",
             skills_dir.display(),
@@ -467,7 +466,7 @@ fn trust_skill(app: &mut App, name: &str) -> CommandResult {
     }
     match install::trust(name, &app.skills_dir) {
         Ok(()) => CommandResult::message(format!(
-            "Marked skill '{name}' as trusted. Tools that consult the .trusted marker may now invoke its scripts/."
+            "Marked skill '{name}' as trusted. The .trusted marker is advisory; it records your intent but does not sandbox or auto-authorize scripts."
         )),
         Err(err) => CommandResult::error(format!("Trust failed: {err:#}")),
     }
@@ -909,6 +908,10 @@ mod tests {
         let msg = result.message.unwrap();
         assert!(msg.contains("No skills found"));
         assert!(msg.contains("Skills location:"));
+        assert!(
+            !msg.contains("allowed-tools"),
+            "empty-state template must not advertise unenforced tool restrictions: {msg}"
+        );
     }
 
     #[test]
@@ -1230,6 +1233,29 @@ mod tests {
         let result = run_skill(&mut app, Some("uninstall absent-skill"));
         let msg = result.message.unwrap();
         assert!(msg.contains("not installed"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_skill_trust_message_marks_marker_advisory() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        create_skill_dir(
+            &tmpdir,
+            "trusted-skill",
+            "---\nname: trusted-skill\ndescription: Trust copy\n---\nbody",
+        );
+        let marker = tmpdir
+            .path()
+            .join("skills")
+            .join("trusted-skill")
+            .join(install::INSTALLED_FROM_MARKER);
+        std::fs::write(marker, "github:owner/repo\n").expect("installed marker");
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let result = run_skill(&mut app, Some("trust trusted-skill"));
+        let msg = result.message.expect("trust result");
+        assert!(msg.contains("advisory"), "got: {msg}");
+        assert!(!msg.contains("may now invoke"), "got: {msg}");
     }
 
     #[test]

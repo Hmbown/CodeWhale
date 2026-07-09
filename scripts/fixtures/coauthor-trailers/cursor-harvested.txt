@@ -1,0 +1,3 @@
+Harvested from PR #123 by @contributor
+
+Co-authored-by: Cursor <cursoragent@cursor.com>

@@ -95,7 +95,7 @@ impl ChangeSummary {
 /// Build the human-readable workspace context string ("branch | status")
 /// from `git rev-parse` + `git status`. Returns `None` if the workspace
 /// is not a git repository or git itself is unavailable.
-fn collect(workspace: &Path) -> Option<String> {
+pub(crate) fn collect(workspace: &Path) -> Option<String> {
     let branch = branch(workspace)?;
     let summary = change_summary(workspace)?;
 

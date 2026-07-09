@@ -32,11 +32,11 @@
 //! Per the v0.7.0 mock-LLM issue (the parent of this file): "If the engine's
 //! API surfaces are too tangled to mock cleanly … document that as BLOCKED with
 //! what wiring needs to change. In that case still commit any partial work
-//! that lands cleanly." The full engine integration tests below are
-//! `#[ignore]`-marked with TODOs pointing at that refactor.
+//! that lands cleanly." Full engine integration coverage remains blocked on
+//! that seam; this file keeps the blocker documented instead of carrying
+//! ignored placeholder tests.
 //!
-//! Once `Arc<dyn LlmClient>` lands the ignored tests can flip on with no
-//! changes to the mock.
+//! Once `Arc<dyn LlmClient>` lands, add engine-level tests that reuse this mock.
 
 use futures_util::StreamExt;
 
@@ -553,65 +553,4 @@ fn compaction_config_defaults_are_enabled_for_session_survivability() {
     // Verify the threshold is reasonable (> 0 and < context window).
     assert!(config > 0, "compaction threshold must be positive");
     assert!(config < 1_000_000, "compaction threshold must be below 1M");
-}
-
-// === 9. BLOCKED: full engine integration ====================================
-//
-// These tests exercise the engine's turn loop end-to-end. They cannot run
-// today because `core::engine::Engine` holds a concrete `Option<DeepSeekClient>`
-// and there is no constructor seam to inject `Arc<dyn LlmClient>`. Once the
-// engine is refactored to take a trait object (or generic), drop the
-// `#[ignore]` and these tests light up.
-//
-// Blocked on #402 P0: refactor engine + tools::registry +
-// rlm::bridge + tools::review + tools::subagent + cycle_manager + compaction
-// to take `Arc<dyn LlmClient>` instead of `Option<DeepSeekClient>`. Then the
-// mock plugs in directly and these `#[ignore]`s come off.
-
-#[tokio::test]
-#[ignore = "blocked on #402: engine takes concrete DeepSeekClient; needs Arc<dyn LlmClient> refactor"]
-async fn engine_full_turn_loop_with_compaction_and_resume() {
-    // Once the refactor lands:
-    // 1. Build a session with N messages exceeding the compaction threshold.
-    // 2. Inject a MockLlmClient with one canned compaction-summary response
-    //    and one canned post-compaction assistant turn.
-    // 3. Drive a turn through the engine and assert the session resumes
-    //    cleanly with the summary message in place.
-    //
-    // The cycle_manager path replaces high-level compaction in v0.6.6+; this
-    // test should target whichever path is enabled by the test config.
-    unreachable!("ignored");
-}
-
-#[tokio::test]
-#[ignore = "blocked on #402: engine takes concrete DeepSeekClient; needs Arc<dyn LlmClient> refactor"]
-async fn engine_full_sub_agent_round_trip() {
-    // Once the refactor lands:
-    // 1. Inject MockLlmClient as the parent client AND wire the subagent
-    //    runtime to receive its own MockLlmClient.
-    // 2. Parent emits an agent tool_call; child runs through the mailbox and
-    //    replies with text.
-    // 3. Assert the final assistant text bubbles back to the parent session.
-    unreachable!("ignored");
-}
-
-#[tokio::test]
-#[ignore = "blocked on #402: engine takes concrete DeepSeekClient; needs Arc<dyn LlmClient> refactor"]
-async fn engine_full_parallel_tool_execution() {
-    // Once the refactor lands:
-    // 1. Mock turn 1 returns two tool_calls in a single round.
-    // 2. Engine executes them in parallel via FuturesUnordered.
-    // 3. Assert ordered ToolResult messages are appended to the next request.
-    unreachable!("ignored");
-}
-
-#[tokio::test]
-#[ignore = "blocked on #402: engine takes concrete DeepSeekClient; needs Arc<dyn LlmClient> refactor"]
-async fn engine_capacity_controller_forces_compaction_at_threshold() {
-    // Once the refactor lands:
-    // 1. Inject a long history near the V4 soft cap.
-    // 2. Assert the capacity controller emits a forced-compaction guardrail
-    //    BEFORE dispatching the LLM call.
-    // 3. Verify the mock's call_count() reflects the observed sequence.
-    unreachable!("ignored");
 }

@@ -1,7 +1,27 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::manifest::{PluginManifest, PluginMeta};
+use super::discovery::{load_overrides, save_overrides};
+use super::manifest::{LoadedPlugin, PluginManifest, PluginMeta};
 use super::registry::PluginRegistry;
+
+fn plugin_named(name: &str, enabled: bool) -> LoadedPlugin {
+    LoadedPlugin {
+        manifest: PluginManifest {
+            plugin: PluginMeta {
+                name: name.to_string(),
+                description: None,
+                version: None,
+                author: None,
+            },
+            skills: None,
+            mcp_servers: None,
+            when: None,
+        },
+        base_path: PathBuf::new(),
+        enabled,
+    }
+}
 
 #[test]
 fn test_manifest_parsing() {
@@ -143,4 +163,83 @@ fn test_registry_list() {
     assert_eq!(registry.list_enabled().len(), 1);
     assert!(registry.is_enabled("plugin-1"));
     assert!(!registry.is_enabled("plugin-2"));
+}
+
+#[test]
+fn overrides_save_load_roundtrip() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("plugins").join("overrides.json");
+
+    let mut overrides = HashMap::new();
+    overrides.insert("alpha".to_string(), false);
+    overrides.insert("beta".to_string(), true);
+
+    save_overrides(&path, &overrides).expect("save");
+    assert!(path.exists(), "save_overrides should create parent dirs");
+
+    let loaded = load_overrides(&path);
+    assert_eq!(loaded.get("alpha"), Some(&false));
+    assert_eq!(loaded.get("beta"), Some(&true));
+}
+
+#[test]
+fn load_overrides_missing_or_malformed_is_empty() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("nope.json");
+    assert!(load_overrides(&missing).is_empty());
+
+    let malformed = tmp.path().join("bad.json");
+    std::fs::write(&malformed, "{ not json").expect("write");
+    assert!(load_overrides(&malformed).is_empty());
+}
+
+/// The core #3918 regression: a `/plugin disable` must survive the next
+/// launch even though discovery recomputes `enabled` from `!builtin`.
+#[test]
+fn disable_persists_across_rediscovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("overrides.json");
+
+    // First session: a user plugin defaults to enabled, user disables it.
+    let mut first = PluginRegistry::new();
+    first.set_overrides_store(path.clone(), load_overrides(&path));
+    first.register("demo".to_string(), plugin_named("demo", true));
+    first.apply_overrides();
+    assert!(first.is_enabled("demo"));
+    assert!(first.disable("demo"));
+    assert!(path.exists(), "disable should persist the override file");
+
+    // Second session: fresh discovery re-registers it enabled, but the
+    // persisted override must win and keep it disabled.
+    let mut second = PluginRegistry::new();
+    second.set_overrides_store(path.clone(), load_overrides(&path));
+    second.register("demo".to_string(), plugin_named("demo", true));
+    second.apply_overrides();
+    assert!(
+        !second.is_enabled("demo"),
+        "a persisted disable must survive re-discovery"
+    );
+}
+
+/// Symmetric case: enabling a built-in (default-disabled) plugin sticks.
+#[test]
+fn enable_persists_across_rediscovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("overrides.json");
+
+    let mut first = PluginRegistry::new();
+    first.set_overrides_store(path.clone(), load_overrides(&path));
+    first.register("builtin".to_string(), plugin_named("builtin", false));
+    first.apply_overrides();
+    assert!(!first.is_enabled("builtin"));
+    assert!(first.enable("builtin"));
+
+    let mut second = PluginRegistry::new();
+    second.set_overrides_store(path.clone(), load_overrides(&path));
+    second.register("builtin".to_string(), plugin_named("builtin", false));
+    second.apply_overrides();
+    assert!(
+        second.is_enabled("builtin"),
+        "a persisted enable must survive re-discovery"
+    );
 }

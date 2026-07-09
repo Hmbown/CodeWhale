@@ -98,7 +98,7 @@ pub(crate) const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 pub(crate) const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub(crate) const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub(crate) const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
-pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
+pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
 pub(crate) const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
 // Z.ai (GLM Coding Plan) defaults
@@ -130,3 +130,9 @@ pub(crate) const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v
 // Sakana AI Fugu defaults
 pub(crate) const DEFAULT_SAKANA_MODEL: &str = "fugu";
 pub(crate) const DEFAULT_SAKANA_BASE_URL: &str = "https://api.sakana.ai/v1";
+// Meituan LongCat defaults
+pub(crate) const DEFAULT_LONGCAT_MODEL: &str = "LongCat-2.0";
+pub(crate) const DEFAULT_LONGCAT_BASE_URL: &str = "https://api.longcat.chat/openai/v1";
+// xAI / Grok API-key route defaults
+pub(crate) const DEFAULT_XAI_MODEL: &str = "grok-4.5";
+pub(crate) const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";

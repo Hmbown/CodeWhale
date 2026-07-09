@@ -334,9 +334,14 @@ fn base_source_entries(model: &str, workspace: &Path, skills_dir: Option<&Path>)
             .source_path
             .as_ref()
             .map_or_else(|| "project".to_string(), |p| p.display().to_string());
-        let block = format!(
+        let mut block = format!(
             "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
         );
+        // Include rules in the report when present
+        if let Some(rules) = &project_context.rules_block {
+            block.push('\n');
+            block.push_str(rules);
+        }
         builder.push(SourceEntry::text(
             SourceKind::ProjectContext,
             "Project instructions",
@@ -346,6 +351,17 @@ fn base_source_entries(model: &str, workspace: &Path, skills_dir: Option<&Path>)
                 .map(|path| path.display().to_string()),
             ActivationReason::FilePresent,
             &block,
+            CountingConfidence::High,
+            Some(5),
+        ));
+    } else if let Some(rules) = &project_context.rules_block {
+        // Rules exist without main instructions
+        builder.push(SourceEntry::text(
+            SourceKind::ProjectContext,
+            "Project rules",
+            None::<String>,
+            ActivationReason::FilePresent,
+            rules,
             CountingConfidence::High,
             Some(5),
         ));
@@ -694,6 +710,10 @@ pub fn format_context_report(report: &PromptSourceMap) -> String {
         "Source-entry total: {} tokens",
         report.total_estimated_tokens
     );
+    let _ = writeln!(
+        out,
+        "Manage standing law: /constitution (status/preview), /constitution repo (repo-local law), /setup report (readiness)."
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "Sources:");
     for entry in &report.entries {
@@ -853,9 +873,34 @@ mod tests {
         let formatted = format_context_report(&report);
         assert!(formatted.contains("Repository constitution"));
         assert!(formatted.contains("Project context warnings"));
+        assert!(formatted.contains("/constitution"));
+        assert!(formatted.contains("/setup report"));
         let json = context_report_json(&report);
         assert!(json.contains("\"repo_constitution\""));
         assert!(json.contains("branch_policy appears stale"));
+    }
+
+    #[test]
+    fn context_report_marks_whale_md_ignored_without_loading_body() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("WHALE.md"), "SECRET_LEGACY_WHALE_BODY").expect("write whale");
+
+        let report = build_headless_context_report(&Config::default(), tmp.path());
+        assert!(
+            report.entries.iter().any(|entry| {
+                entry.source_kind == SourceKind::ProjectContextWarning
+                    && entry
+                        .truncation_reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("WHALE.md is ignored"))
+            }),
+            "ignored WHALE.md should be visible as a migration warning: {:?}",
+            report.entries
+        );
+        assert!(
+            !context_report_json(&report).contains("SECRET_LEGACY_WHALE_BODY"),
+            "ignored WHALE.md body must not enter context report"
+        );
     }
 
     #[test]

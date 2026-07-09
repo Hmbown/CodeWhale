@@ -32,6 +32,7 @@ pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>) -> Re
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let legacy_binary = is_legacy_binary(&current_exe);
+    ensure_supported_release_target(std::env::consts::OS, std::env::consts::ARCH)?;
 
     let targets = update_targets_for_exe(&current_exe);
     let channel = ReleaseChannel::from_beta_flag(beta);
@@ -186,6 +187,17 @@ struct FetchedRelease {
 enum UpdateReleaseSource {
     GitHub,
     Mirror { base_url: String },
+}
+
+fn ensure_supported_release_target(os: &str, arch: &str) -> Result<()> {
+    if os == "linux" && arch == "riscv64" {
+        bail!(
+            "Linux riscv64 release assets are temporarily unavailable because \
+             rquickjs-sys 0.12.0 does not ship riscv64gc-unknown-linux-gnu bindings. \
+             See docs/INSTALL.md for the current platform matrix."
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn release_arch_for_rust_arch(arch: &str) -> &str {
@@ -362,11 +374,21 @@ pub(crate) fn asset_matches_platform(asset_name: &str, binary_name: &str) -> boo
         || asset_name.starts_with(&format!("{binary_name}."))
 }
 
+fn asset_is_exact_platform_binary(asset_name: &str, binary_name: &str) -> bool {
+    asset_name == binary_name || asset_name == format!("{binary_name}.exe")
+}
+
 fn select_platform_asset<'a>(release: &'a Release, binary_name: &str) -> Option<&'a Asset> {
     release
         .assets
         .iter()
-        .find(|asset| asset_matches_platform(&asset.name, binary_name))
+        .find(|asset| asset_is_exact_platform_binary(&asset.name, binary_name))
+        .or_else(|| {
+            release
+                .assets
+                .iter()
+                .find(|asset| asset_matches_platform(&asset.name, binary_name))
+        })
 }
 
 fn select_checksum_manifest_asset(release: &Release) -> Option<&Asset> {
@@ -847,6 +869,9 @@ fn glibc_check_disabled() -> bool {
 }
 
 fn preflight_downloaded_binary(asset_name: &str, bytes: &[u8]) -> Result<()> {
+    // GNU libc preflight is Linux-only (#4241). Rust treats `target_os = "android"`
+    // as distinct from `"linux"`, so Termux/Android builds skip this check entirely
+    // — Android uses Bionic libc, not glibc.
     if !cfg!(target_os = "linux") || glibc_check_disabled() {
         return Ok(());
     }
@@ -1034,6 +1059,17 @@ mod tests {
             !asset_arch.contains("aarch64") && !asset_arch.contains("x86_64"),
             "asset arch '{asset_arch}' still uses raw Rust constant name"
         );
+    }
+
+    #[test]
+    fn linux_riscv64_update_is_explicitly_unsupported() {
+        let err = ensure_supported_release_target("linux", "riscv64")
+            .expect_err("linux riscv64 should not claim a release asset");
+        let message = err.to_string();
+        assert!(message.contains("Linux riscv64 release assets are temporarily unavailable"));
+        assert!(message.contains("rquickjs-sys 0.12.0"));
+        ensure_supported_release_target("linux", "aarch64").unwrap();
+        ensure_supported_release_target("macos", "aarch64").unwrap();
     }
 
     /// Verify binary prefix detection for dispatcher vs TUI binary.
@@ -1272,6 +1308,49 @@ mod tests {
     }
 
     #[test]
+    fn select_platform_asset_prefers_bare_binary_over_archive() {
+        let release = Release {
+            tag_name: "v0.8.8".to_string(),
+            prerelease: false,
+            assets: vec![
+                Asset {
+                    name: "codewhale-macos-arm64.tar.gz".to_string(),
+                    browser_download_url: "https://example.invalid/codewhale-macos-arm64.tar.gz"
+                        .to_string(),
+                },
+                Asset {
+                    name: "codewhale-macos-arm64".to_string(),
+                    browser_download_url: "https://example.invalid/codewhale-macos-arm64"
+                        .to_string(),
+                },
+            ],
+        };
+
+        let asset =
+            select_platform_asset(&release, "codewhale-macos-arm64").expect("platform asset");
+
+        assert_eq!(asset.name, "codewhale-macos-arm64");
+    }
+
+    #[test]
+    fn select_platform_asset_falls_back_to_archive_when_bare_binary_is_missing() {
+        let release = Release {
+            tag_name: "v0.8.8".to_string(),
+            prerelease: false,
+            assets: vec![Asset {
+                name: "codewhale-macos-arm64.tar.gz".to_string(),
+                browser_download_url: "https://example.invalid/codewhale-macos-arm64.tar.gz"
+                    .to_string(),
+            }],
+        };
+
+        let asset =
+            select_platform_asset(&release, "codewhale-macos-arm64").expect("platform asset");
+
+        assert_eq!(asset.name, "codewhale-macos-arm64.tar.gz");
+    }
+
+    #[test]
     fn test_sha256_hex_known_value() {
         let data = b"hello";
         let hash = sha256_hex(data);
@@ -1443,6 +1522,42 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
         );
         let asset = select_platform_asset(&release, &stem).expect("TUI platform asset");
         assert_eq!(asset.name, "codewhale-tui-macos-arm64");
+    }
+
+    #[test]
+    fn android_arm64_maps_to_android_release_assets() {
+        // The generic format!("{prefix}-{os}-{arch}") path naturally produces
+        // Android asset stems. Verify the full stem for both dispatcher and TUI
+        // binaries so `codewhale update` on Termux requests Android assets, not
+        // linux-arm64 (#4241).
+        assert_eq!(
+            release_asset_stem_for_prefix("codewhale", "android", "aarch64"),
+            "codewhale-android-arm64"
+        );
+        assert_eq!(
+            release_asset_stem_for_prefix("codewhale-tui", "android", "aarch64"),
+            "codewhale-tui-android-arm64"
+        );
+        assert_eq!(
+            release_asset_stem_for_prefix("codew", "android", "aarch64"),
+            "codew-android-arm64"
+        );
+    }
+
+    #[test]
+    fn ensure_supported_release_target_accepts_android() {
+        // Android/Termux is a supported release target (#4241).
+        assert!(ensure_supported_release_target("android", "aarch64").is_ok());
+    }
+
+    #[test]
+    fn android_release_assets_never_select_linux_arm64() {
+        // Sanity: the stem formatter must never produce a linux-* stem for android.
+        let stem = release_asset_stem_for_prefix("codewhale", "android", "aarch64");
+        assert!(
+            !stem.contains("linux"),
+            "android stem must not contain linux: {stem}"
+        );
     }
 
     #[test]

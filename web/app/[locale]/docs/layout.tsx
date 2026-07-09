@@ -89,6 +89,7 @@ export default async function DocsLayout({
   const isZh = locale === "zh";
 
   return (
+    <div className="docs-theme min-h-screen">
     <section className="mx-auto max-w-[1400px] px-6 pt-12 pb-8">
       <div className="flex items-baseline gap-4 mb-3">
         <Seal char="文" />
@@ -123,5 +124,6 @@ export default async function DocsLayout({
         <article className="lg:col-span-9 min-w-0">{children}</article>
       </div>
     </section>
+    </div>
   );
 }

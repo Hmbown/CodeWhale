@@ -31,7 +31,7 @@ use crate::config::{ApiProvider, Config, DEFAULT_MAX_SUBAGENTS, DEFAULT_TEXT_MOD
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
 use crate::features::{Feature, Features};
 use crate::llm_client::LlmClient;
-use crate::mcp::McpPool;
+use crate::mcp::{McpConfig, McpPool};
 #[cfg(test)]
 use crate::models::ToolCaller;
 use crate::models::{
@@ -51,16 +51,20 @@ use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
     Mailbox, MailboxMessage, SharedSubAgentManager, SubAgentCompletion, SubAgentForkContext,
     SubAgentResult, SubAgentRuntime, SubAgentStatus, SubAgentThinking, SubAgentType,
-    new_shared_subagent_manager_with_timeout, resolve_subagent_assignment_route,
+    ensure_subagent_model_for_provider, new_shared_subagent_manager_with_timeout,
+    resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, TodoListSnapshot, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::app::AppMode;
 use crate::utils::spawn_supervised;
-use crate::worker_profile::ModelRoute;
+use crate::worker_profile::{ModelRoute, WorkerRuntimeProfile};
 use crate::working_set::WorkingSet;
 
+#[cfg(test)]
+use super::authority::agent_approval_mode_for_turn;
+use super::authority::{TurnAuthority, effective_input_policy, shell_policy_for_mode};
 use super::events::{Event, TurnOutcomeStatus};
 use super::ops::{
     Op, ProviderRuntimeStatus, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance,
@@ -330,6 +334,11 @@ pub struct EngineConfig {
     pub runtime_services: RuntimeToolServices,
     /// Per-role/type sub-agent model overrides already resolved from config.
     pub subagent_model_overrides: HashMap<String, String>,
+    /// Merged fleet roster (built-ins + `[fleet.profiles]` + workspace agent
+    /// files) shared by model-spawned sub-agents and fleet dispatch
+    /// (#fleet-roster cutover (v0.8.67)). Defaults to built-ins only; the
+    /// engine-config construction sites load the full roster once per session.
+    pub fleet_roster: std::sync::Arc<crate::fleet::roster::FleetRoster>,
     /// Whether the user-memory feature is enabled (#489). When `true` the
     /// engine reads `memory_path` on each prompt assembly and prepends a
     /// `<user_memory>` block to the system prompt.
@@ -450,6 +459,7 @@ impl Default for EngineConfig {
             lsp_config: None,
             runtime_services: RuntimeToolServices::default(),
             subagent_model_overrides: HashMap::new(),
+            fleet_roster: std::sync::Arc::new(crate::fleet::roster::FleetRoster::built_ins_only()),
             memory_enabled: false,
             moraine_fallback: false,
             memory_path: PathBuf::from("./memory.md"),
@@ -664,9 +674,9 @@ fn subagent_mailbox_best_effort_send_permitted(
 impl Engine {
     fn mode_runtime_instructions(mode: AppMode) -> &'static str {
         match mode {
-            AppMode::Agent | AppMode::Auto => prompts::AGENT_MODE,
+            AppMode::Agent | AppMode::Auto | AppMode::Yolo => prompts::AGENT_MODE,
             AppMode::Plan => prompts::PLAN_MODE,
-            AppMode::Yolo => prompts::YOLO_MODE,
+            AppMode::Operate => prompts::OPERATE_MODE,
         }
         .trim()
     }
@@ -691,6 +701,7 @@ impl Engine {
         messages_before: Option<usize>,
         messages_after: Option<usize>,
     ) {
+        let summary_prompt = self.rendered_compaction_summary();
         let _ = self
             .tx_event
             .send(Event::CompactionCompleted {
@@ -699,8 +710,28 @@ impl Engine {
                 message,
                 messages_before,
                 messages_after,
+                summary_prompt,
             })
             .await;
+    }
+
+    /// Render the accumulated compaction summary prompt to plain text so it
+    /// can travel in events and be persisted by host layers. All emit sites
+    /// run after `merge_compaction_summary`, so this reflects the summary
+    /// state the engine will use for subsequent requests.
+    fn rendered_compaction_summary(&self) -> Option<String> {
+        self.session
+            .compaction_summary_prompt
+            .as_ref()
+            .map(|prompt| match prompt {
+                SystemPrompt::Text(text) => text.clone(),
+                SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|block| block.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            })
+            .filter(|text| !text.trim().is_empty())
     }
 
     pub(super) async fn emit_compaction_failed(&mut self, id: String, auto: bool, message: String) {
@@ -916,7 +947,7 @@ impl Engine {
         // is worth the extra request and transcript mutation.
         let seam_manager = deepseek_client.as_ref().map(|main_client| {
             let seam_config = SeamConfig {
-                enabled: api_config.seam_manager_enabled(),
+                enabled: api_config.context.enabled.unwrap_or(false),
                 verbatim_window_turns: api_config
                     .context
                     .verbatim_window_turns
@@ -1048,7 +1079,14 @@ impl Engine {
             .unwrap_or_default()
             .to_string();
 
-        self.apply_runtime_mode_policy(mode, allow_shell, trust_mode, auto_approve, approval_mode);
+        let authority = TurnAuthority::from_effective_fields(
+            mode,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        );
+        self.apply_runtime_mode_policy(&authority);
 
         let _ = self
             .tx_event
@@ -1153,7 +1191,7 @@ impl Engine {
                             "decision": "approved",
                             "source": "composer_bang",
                         }));
-                        Self::execute_tool_with_lock(
+                        let mut result = Self::execute_tool_with_lock(
                             self.tool_exec_lock.clone(),
                             spec.supports_parallel(),
                             false,
@@ -1165,7 +1203,14 @@ impl Engine {
                             None,
                             None,
                         )
-                        .await
+                        .await;
+                        if let Ok(tool_result) = result.as_mut() {
+                            stamp_tool_result_approval(
+                                tool_result,
+                                ToolApprovalStamp::ApprovedByUser,
+                            );
+                        }
+                        result
                     }
                     Ok(ApprovalResult::Denied) => {
                         emit_tool_audit(json!({
@@ -1192,7 +1237,7 @@ impl Engine {
                             .context()
                             .clone()
                             .with_elevated_sandbox_policy(policy);
-                        Self::execute_tool_with_lock(
+                        let mut result = Self::execute_tool_with_lock(
                             self.tool_exec_lock.clone(),
                             spec.supports_parallel(),
                             false,
@@ -1204,7 +1249,14 @@ impl Engine {
                             None,
                             Some(elevated_context),
                         )
-                        .await
+                        .await;
+                        if let Ok(tool_result) = result.as_mut() {
+                            stamp_tool_result_approval(
+                                tool_result,
+                                ToolApprovalStamp::ApprovedWithPolicy,
+                            );
+                        }
+                        result
                     }
                     Err(err) => Err(err),
                 }
@@ -1284,21 +1336,14 @@ impl Engine {
         }
     }
 
-    fn apply_runtime_mode_policy(
-        &mut self,
-        mode: AppMode,
-        allow_shell: bool,
-        trust_mode: bool,
-        auto_approve: bool,
-        approval_mode: crate::tui::approval::ApprovalMode,
-    ) {
-        self.current_mode = mode;
-        self.session.allow_shell = allow_shell;
-        self.config.allow_shell = allow_shell;
-        self.session.trust_mode = trust_mode;
-        self.config.trust_mode = trust_mode;
-        self.session.auto_approve = auto_approve;
-        self.session.approval_mode = agent_approval_mode_for_turn(auto_approve, approval_mode);
+    fn apply_runtime_mode_policy(&mut self, authority: &TurnAuthority) {
+        self.current_mode = authority.mode;
+        self.session.allow_shell = authority.allow_shell;
+        self.config.allow_shell = authority.allow_shell;
+        self.session.trust_mode = authority.trust_mode;
+        self.config.trust_mode = authority.trust_mode;
+        self.session.auto_approve = authority.auto_approve;
+        self.session.approval_mode = authority.approval_mode_for_session();
     }
 
     /// Run the engine event loop
@@ -1443,18 +1488,28 @@ impl Engine {
                             Some(self.tx_event.clone()),
                             Arc::clone(&self.subagent_manager),
                         )
-                        .with_role_models(self.config.subagent_model_overrides.clone())
+                        .with_role_models(self.subagent_role_models())
+                        .with_api_config(self.api_config.clone())
+                        .with_fleet_roster(self.config.fleet_roster.clone())
                         .with_auto_model(self.session.auto_model)
                         .with_reasoning_effort(
                             self.session.reasoning_effort.clone(),
                             self.session.reasoning_effort_auto,
                         )
+                        .with_agent_tool_surface_options(self.agent_tool_surface_options(
+                            shell_policy_for_mode(AppMode::Agent, self.session.allow_shell),
+                        ))
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_step_api_timeout(self.config.subagent_api_timeout)
                         .with_speech_output_dir(self.config.speech_output_dir.clone())
                         .with_mcp_pool(mcp_pool)
                         .with_todos(self.config.todos.clone())
+                        .with_parent_mode(self.current_mode)
                         .background_runtime();
+                        // #4042: thread the session's --disallowed-tools into
+                        // the child so tool restrictions flow down to sub-agents.
+                        runtime.worker_profile.denied_tools =
+                            self.config.disallowed_tools.clone().unwrap_or_default();
                         let route = resolve_subagent_assignment_route(
                             &runtime,
                             None,
@@ -1464,7 +1519,23 @@ impl Engine {
                             SubAgentThinking::Inherit,
                         )
                         .await;
-                        runtime.model = route.model;
+                        let effective_model = match ensure_subagent_model_for_provider(
+                            &runtime,
+                            &route.model_route,
+                            route.model,
+                        ) {
+                            Ok(model) => model,
+                            Err(err) => {
+                                let _ = self
+                                    .tx_event
+                                    .send(Event::error(ErrorEnvelope::fatal(format!(
+                                        "Failed to spawn sub-agent: {err}"
+                                    ))))
+                                    .await;
+                                continue;
+                            }
+                        };
+                        runtime.model = effective_model;
                         runtime.reasoning_effort = route.reasoning_effort;
                         runtime.reasoning_effort_auto = false;
 
@@ -1500,12 +1571,59 @@ impl Engine {
                         }
                     }
                     Op::ListSubAgents => {
-                        let agents = {
+                        // #3803: the sidebar refresh is a read-only snapshot.
+                        // Render from a read lock; only take the write lock to
+                        // run cleanup on a bounded cadence, so a UI refresh storm
+                        // during a sub-agent fanout no longer contends for the
+                        // write lock (against completions/persistence) on every
+                        // request. Cleanup still auto-cancels stale agents.
+                        let due = {
+                            let manager = self.subagent_manager.read().await;
+                            manager.cleanup_due(
+                                crate::tools::subagent::SUBAGENT_LIST_CLEANUP_MIN_INTERVAL,
+                            )
+                        };
+                        let agents = if due {
                             let mut manager = self.subagent_manager.write().await;
                             manager.cleanup(Duration::from_secs(60 * 60));
                             manager.list()
+                        } else {
+                            self.subagent_manager.read().await.list()
                         };
-                        let _ = self.tx_event.send(Event::AgentList { agents }).await;
+                        // #3802: use non-blocking send — this is a refresh event
+                        // that can safely be dropped when the channel is full.
+                        // The next drain cycle will re-request the list.
+                        if let Err(_e) = self.tx_event.try_send(Event::AgentList { agents }) {
+                            tracing::debug!(
+                                "Event channel full; dropping ListSubAgents refresh (will retry next drain)"
+                            );
+                        }
+                    }
+                    Op::CancelSubAgent { agent_id } => {
+                        let result = {
+                            let mut manager = self.subagent_manager.write().await;
+                            match manager.cancel_agent(&agent_id) {
+                                Ok(_) => Ok(manager.list()),
+                                Err(err) => Err(err),
+                            }
+                        };
+                        match result {
+                            Ok(agents) => {
+                                if let Err(_e) = self.tx_event.try_send(Event::AgentList { agents })
+                                {
+                                    tracing::debug!(
+                                        "Event channel full; dropping CancelSubAgent refresh"
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                let _ =
+                                    self.tx_event
+                                        .try_send(Event::error(ErrorEnvelope::transient(format!(
+                                            "Failed to cancel sub-agent {agent_id}: {err}"
+                                        ))));
+                            }
+                        }
                     }
                     Op::ChangeMode {
                         mode,
@@ -1514,13 +1632,14 @@ impl Engine {
                         auto_approve,
                         approval_mode,
                     } => {
-                        self.apply_runtime_mode_policy(
+                        let authority = TurnAuthority::from_effective_fields(
                             mode,
                             allow_shell,
                             trust_mode,
                             auto_approve,
                             approval_mode,
                         );
+                        self.apply_runtime_mode_policy(&authority);
                         self.emit_session_updated().await;
                         let _ = self
                             .tx_event
@@ -1667,6 +1786,7 @@ impl Engine {
                             messages: self.session.messages.to_vec(),
                             total_tokens,
                             model: self.session.model.clone(),
+                            model_provider: self.api_provider.as_str().to_string(),
                             workspace: self.session.workspace.clone(),
                             system_prompt: self.session.system_prompt.clone(),
                             mode: self.current_mode.as_setting().to_string(),
@@ -1842,10 +1962,21 @@ impl Engine {
             self.active_route_limits,
             input_tokens,
         ) {
+            let usage_percent = budget.usage_percent();
+            let escalation = if usage_percent
+                >= crate::tui::context_inspector::CONTEXT_CRITICAL_THRESHOLD_PERCENT
+            {
+                " — CRITICAL: stop expanding scope; run /compact immediately or finish the current task"
+            } else if usage_percent
+                >= crate::tui::context_inspector::CONTEXT_WARNING_THRESHOLD_PERCENT
+            {
+                " — ESCALATED: prefer /compact, narrow scope, or finish the current task"
+            } else {
+                ""
+            };
             lines.push(format!(
-                "Context pressure: {} ({:.1}% used, {} / {} tokens; {} input tokens available)",
+                "Context pressure: {} ({usage_percent:.1}% used, {} / {} tokens; {} input tokens available){escalation}",
                 budget.pressure.label(),
-                budget.usage_percent(),
                 budget.input_tokens,
                 budget.window_tokens,
                 budget.available_input_tokens,
@@ -1955,6 +2086,9 @@ impl Engine {
         self.append_resource_metadata_lines(&mut lines, routed_model, current_text);
         if let Some(working_set_summary) = working_set_summary {
             lines.push(working_set_summary);
+        }
+        if let Some(git_snapshot) = crate::tui::workspace_context::collect(&self.config.workspace) {
+            lines.push(format!("Git workspace: {git_snapshot}"));
         }
         let summary = lines.join("\n");
 
@@ -2226,13 +2360,7 @@ impl Engine {
         // Track the complete effective mode policy so mid-turn metadata, `/edit`,
         // idle worker resumptions, and approval gates cannot read a stale policy
         // after the UI changed modes (#3568).
-        self.apply_runtime_mode_policy(
-            input_policy.mode,
-            input_policy.allow_shell,
-            input_policy.trust_mode,
-            input_policy.auto_approve,
-            input_policy.approval_mode,
-        );
+        self.apply_runtime_mode_policy(&input_policy);
 
         // Drain stale steer messages from previous turns.
         while self.rx_steer.try_recv().is_ok() {}
@@ -2380,6 +2508,11 @@ impl Engine {
         let plan_state = self.config.plan_state.clone();
 
         let tool_context = self.build_tool_context(input_policy.mode, input_policy.auto_approve);
+        // Ensure MCP pool is initialized before building the tool registry,
+        // so start_mcp_server can be registered when Feature::Mcp is enabled.
+        if self.config.features.enabled(Feature::Mcp) {
+            let _ = self.ensure_mcp_pool().await;
+        }
         let builder = self
             .build_turn_tool_registry_builder(input_policy.mode, todo_list, plan_state)
             .with_dynamic_tools(&dynamic_tools);
@@ -2459,62 +2592,72 @@ impl Engine {
             None
         };
 
-        let mut tool_registry = match input_policy.mode {
-            AppMode::Agent | AppMode::Auto | AppMode::Yolo => {
-                if subagents_available {
-                    let runtime = if let Some(client) = self.deepseek_client.clone() {
-                        let mut rt = SubAgentRuntime::new(
-                            client,
-                            self.session.model.clone(),
-                            tool_context.clone(),
-                            self.session.allow_shell,
-                            Some(self.tx_event.clone()),
-                            Arc::clone(&self.subagent_manager),
-                        )
-                        .with_role_models(self.config.subagent_model_overrides.clone())
-                        .with_auto_model(self.session.auto_model)
-                        .with_reasoning_effort(
-                            self.session.reasoning_effort.clone(),
-                            self.session.reasoning_effort_auto,
-                        )
-                        .with_max_spawn_depth(self.config.max_spawn_depth)
-                        .with_step_api_timeout(self.config.subagent_api_timeout)
-                        .with_speech_output_dir(self.config.speech_output_dir.clone())
-                        .with_mcp_pool(mcp_pool.clone())
-                        .with_todos(self.config.todos.clone())
-                        .with_parent_completion_tx(self.tx_subagent_completion.clone());
-                        if let Some(context) = fork_context_for_runtime.clone() {
-                            rt = rt.with_fork_context(context);
-                        }
-                        if let Some((mailbox, cancel_token)) = mailbox_for_runtime.as_ref() {
-                            rt = rt
-                                .with_mailbox(mailbox.clone())
-                                .with_cancel_token(cancel_token.clone());
-                        }
-                        Some(rt)
-                    } else {
-                        None
-                    };
-                    if let Some(subagent_runtime) = runtime {
-                        Some(
-                            builder
-                                .with_subagent_tools(
-                                    self.subagent_manager.clone(),
-                                    subagent_runtime,
-                                )
-                                .build(tool_context),
-                        )
-                    } else {
-                        tracing::warn!(
-                            "Sub-agents enabled but no API client available, falling back to basic tool set"
-                        );
-                        Some(builder.build(tool_context))
-                    }
-                } else {
-                    Some(builder.build(tool_context))
+        let mut tool_registry = if subagents_available {
+            let runtime = if let Some(client) = self.deepseek_client.clone() {
+                let runtime_allow_shell =
+                    self.session.allow_shell && !matches!(input_policy.mode, AppMode::Plan);
+                let runtime_shell_policy =
+                    shell_policy_for_mode(input_policy.mode, runtime_allow_shell);
+                let mut rt = SubAgentRuntime::new(
+                    client,
+                    self.session.model.clone(),
+                    tool_context.clone(),
+                    runtime_allow_shell,
+                    Some(self.tx_event.clone()),
+                    Arc::clone(&self.subagent_manager),
+                )
+                .with_role_models(self.subagent_role_models())
+                .with_api_config(self.api_config.clone())
+                .with_fleet_roster(self.config.fleet_roster.clone())
+                .with_auto_model(self.session.auto_model)
+                .with_reasoning_effort(
+                    self.session.reasoning_effort.clone(),
+                    self.session.reasoning_effort_auto,
+                )
+                .with_agent_tool_surface_options(
+                    self.agent_tool_surface_options(runtime_shell_policy),
+                )
+                .with_max_spawn_depth(self.config.max_spawn_depth)
+                .with_step_api_timeout(self.config.subagent_api_timeout)
+                .with_speech_output_dir(self.config.speech_output_dir.clone())
+                .with_mcp_pool(mcp_pool.clone())
+                .with_todos(self.config.todos.clone())
+                .with_parent_completion_tx(self.tx_subagent_completion.clone())
+                .with_parent_mode(input_policy.mode);
+                if matches!(input_policy.mode, AppMode::Plan) {
+                    rt.worker_profile = WorkerRuntimeProfile::for_role(SubAgentType::Plan);
                 }
+                // #4042: stamp the session's --disallowed-tools onto the parent
+                // runtime so every model-spawned sub-agent inherits the deny-list
+                // (plan-mode role override above is intentionally before this).
+                rt.worker_profile.denied_tools =
+                    self.config.disallowed_tools.clone().unwrap_or_default();
+                if let Some(context) = fork_context_for_runtime.clone() {
+                    rt = rt.with_fork_context(context);
+                }
+                if let Some((mailbox, cancel_token)) = mailbox_for_runtime.as_ref() {
+                    rt = rt
+                        .with_mailbox(mailbox.clone())
+                        .with_cancel_token(cancel_token.clone());
+                }
+                Some(rt)
+            } else {
+                None
+            };
+            if let Some(subagent_runtime) = runtime {
+                Some(
+                    builder
+                        .with_subagent_tools(self.subagent_manager.clone(), subagent_runtime)
+                        .build(tool_context),
+                )
+            } else {
+                tracing::warn!(
+                    "Sub-agents enabled but no API client available, falling back to basic tool set"
+                );
+                Some(builder.build(tool_context))
             }
-            _ => Some(builder.build(tool_context)),
+        } else {
+            Some(builder.build(tool_context))
         };
 
         // Load plugin tools from the user's tools directory and apply any
@@ -2536,11 +2679,15 @@ impl Engine {
                 self.api_config.api_provider(),
                 &self.config.model,
             );
+            let mut always_load = self.config.tools_always_load.clone();
+            if self.config.features.enabled(Feature::Mcp) {
+                always_load.insert("start_mcp_server".to_string());
+            }
             let mut catalog = build_model_tool_catalog_with_surface(
                 registry.to_api_tools_with_cache(true),
                 mcp_tools,
                 input_policy.mode,
-                &self.config.tools_always_load,
+                &always_load,
                 capability.tool_surface_budget,
             );
             for tool in &mut catalog {
@@ -2638,39 +2785,39 @@ impl Engine {
         // blocked, the user pauses/clears, or an optional budget is exhausted.
         // There is no continuation cap. A Failed or Interrupted turn does NOT
         // continue — Esc cancels the loop by interrupting the turn.
-        if status == TurnOutcomeStatus::Completed {
-            if let Some(continuation) = self.goal_continuation_if_active() {
-                // Re-dispatch with the same route/mode/approval settings as
-                // the prior turn. The non-Copy values were moved into
-                // `self.config` / `self.session` earlier in this function, so
-                // we clone them back out here.
-                let _ = self
-                    .tx_op
-                    .send(Op::SendMessage {
-                        content: continuation,
-                        mode,
-                        provider,
-                        model: self.session.model.clone(),
-                        goal_objective: None,
-                        goal_token_budget: None,
-                        goal_status: GoalStatus::Active,
-                        reasoning_effort: self.session.reasoning_effort.clone(),
-                        reasoning_effort_auto,
-                        auto_model,
-                        allow_shell,
-                        trust_mode,
-                        auto_approve,
-                        approval_mode,
-                        translation_enabled,
-                        show_thinking,
-                        allowed_tools: self.config.allowed_tools.clone(),
-                        dynamic_tools: dynamic_tools.clone(),
-                        hook_executor: self.config.hook_executor.clone(),
-                        verbosity: self.config.verbosity.clone(),
-                        provenance: UserInputProvenance::Runtime,
-                    })
-                    .await;
-            }
+        if status == TurnOutcomeStatus::Completed
+            && let Some(continuation) = self.goal_continuation_if_active()
+        {
+            // Re-dispatch with the same route/mode/approval settings as
+            // the prior turn. The non-Copy values were moved into
+            // `self.config` / `self.session` earlier in this function, so
+            // we clone them back out here.
+            let _ = self
+                .tx_op
+                .send(Op::SendMessage {
+                    content: continuation,
+                    mode,
+                    provider,
+                    model: self.session.model.clone(),
+                    goal_objective: None,
+                    goal_token_budget: None,
+                    goal_status: GoalStatus::Active,
+                    reasoning_effort: self.session.reasoning_effort.clone(),
+                    reasoning_effort_auto,
+                    auto_model,
+                    allow_shell,
+                    trust_mode,
+                    auto_approve,
+                    approval_mode,
+                    translation_enabled,
+                    show_thinking,
+                    allowed_tools: self.config.allowed_tools.clone(),
+                    dynamic_tools: dynamic_tools.clone(),
+                    hook_executor: self.config.hook_executor.clone(),
+                    verbosity: self.config.verbosity.clone(),
+                    provenance: UserInputProvenance::Runtime,
+                })
+                .await;
         }
     }
 
@@ -2728,7 +2875,7 @@ impl Engine {
             Ok(result) => {
                 if !result.messages.is_empty() || self.session.messages.is_empty() {
                     let messages_after = result.messages.len();
-                    self.session.messages = result.messages.into();
+                    self.session.replace_messages(result.messages);
                     self.merge_compaction_summary(result.summary_prompt);
                     self.emit_session_updated().await;
                     let removed = messages_before.saturating_sub(messages_after);
@@ -2824,7 +2971,7 @@ impl Engine {
         {
             Ok(result) => {
                 let messages_after = result.messages.len();
-                self.session.messages = result.messages.into();
+                self.session.replace_messages(result.messages);
                 self.emit_session_updated().await;
 
                 let summary = format!(
@@ -2914,13 +3061,23 @@ impl Engine {
             .min(target_budget.saturating_sub(1))
             .max(1);
 
+        // Preserve the working-set pins on the emergency/preflight path too.
+        // Previously this passed None/None, so a compaction routed here (which,
+        // on large windows, is the path that actually fires) could summarize
+        // away pinned errors, patches, and the files the user is editing.
+        let compaction_pins = self
+            .session
+            .working_set
+            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+        let compaction_paths = self.session.working_set.top_paths(24);
+
         match compact_messages_safe(
             client,
             &self.session.messages,
             &forced_config,
             Some(&self.session.workspace),
-            None,
-            None,
+            Some(&compaction_pins),
+            Some(&compaction_paths),
         )
         .await
         {
@@ -2940,7 +3097,7 @@ impl Engine {
         }
 
         if !compacted_messages.is_empty() || self.session.messages.is_empty() {
-            self.session.messages = compacted_messages.into();
+            self.session.replace_messages(compacted_messages);
         }
         self.merge_compaction_summary(summary_prompt);
 
@@ -2983,7 +3140,28 @@ impl Engine {
         false
     }
 
+    /// Role/type model map for sub-agent runtimes: roster member pins first,
+    /// then explicit `[subagents]` overrides on top so explicit config wins
+    /// (#fleet-roster cutover (v0.8.67)).
+    fn subagent_role_models(&self) -> HashMap<String, String> {
+        let mut models = self.config.fleet_roster.model_overrides();
+        models.extend(
+            self.config
+                .subagent_model_overrides
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        models
+    }
+
     fn build_tool_context(&self, mode: AppMode, auto_approve: bool) -> ToolContext {
+        let authority = TurnAuthority::from_effective_fields(
+            mode,
+            self.session.allow_shell,
+            self.session.trust_mode,
+            mode == AppMode::Yolo || auto_approve,
+            self.session.approval_mode,
+        );
         // Load the per-workspace trusted-paths list (#29) on every tool-context
         // build. Cheap (a small JSON file) and always reflects the latest
         // `/trust add` / `/trust remove` mutations without an explicit cache
@@ -3000,10 +3178,10 @@ impl Engine {
         }
         let mut ctx = ToolContext::with_auto_approve(
             self.session.workspace.clone(),
-            self.session.trust_mode,
+            authority.trust_mode,
             self.session.notes_path.clone(),
             self.session.mcp_config_path.clone(),
-            mode == AppMode::Yolo || auto_approve,
+            authority.auto_approve,
         )
         .with_state_namespace(self.session.id.clone())
         .with_features(self.config.features.clone())
@@ -3021,7 +3199,7 @@ impl Engine {
             self.session.messages.clone().into(),
         ))
         .with_cancel_token(self.cancel_token.clone())
-        .with_shell_policy(shell_policy_for_mode(mode, self.session.allow_shell))
+        .with_shell_policy(authority.shell_policy())
         .with_trusted_external_paths(trusted_external_paths)
         .with_follow_symlinks(self.config.workspace_follow_symlinks);
 
@@ -3060,11 +3238,11 @@ impl Engine {
         ctx.search_api_key = self.config.search_api_key.clone();
         ctx.search_base_url = self.config.search_base_url.clone();
 
-        let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
+        let policy = authority.sandbox_policy(&self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
         if matches!(mode, AppMode::Plan) {
             ctx = ctx.with_shell_network_denied_hint(
-                "Shell command blocked: Plan mode runs shell commands in a read-only sandbox — no writes, no network. Use Agent mode (`/mode agent`) for any command that creates or modifies files, or that needs network access.",
+                "Shell command blocked: Plan mode runs shell commands in a read-only sandbox — no writes, no network. Use Act mode (`/mode act`) for any command that creates or modifies files, or that needs network access.",
             );
         }
         ctx
@@ -3078,7 +3256,10 @@ impl Engine {
             &self.session.mcp_config_path,
             &self.session.workspace,
         )
-        .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
+        .unwrap_or_else(|e| {
+            tracing::debug!("No MCP config: {e}");
+            McpPool::new(McpConfig::default())
+        });
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }
@@ -3433,130 +3614,6 @@ fn goal_objective_for_prompt(
 // byte-stable, and strict chat-template providers never see a system message
 // outside messages[0].
 
-#[derive(Debug, Clone)]
-struct EffectiveInputPolicy {
-    mode: AppMode,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-    dynamic_active_tools: Vec<&'static str>,
-    status: Option<String>,
-}
-
-fn effective_input_policy(
-    provenance: UserInputProvenance,
-    requested_mode: AppMode,
-    content: &str,
-    allow_shell: bool,
-    trust_mode: bool,
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-) -> EffectiveInputPolicy {
-    let mut mode = requested_mode;
-    let mut trust_mode = trust_mode;
-    let mut auto_approve = auto_approve;
-    let mut approval_mode = approval_mode;
-    let mut dynamic_active_tools = Vec::new();
-    let mut status = None;
-
-    if !provenance.can_authorize_work() {
-        let had_auto_authority = matches!(mode, AppMode::Yolo)
-            || trust_mode
-            || auto_approve
-            || matches!(approval_mode, crate::tui::approval::ApprovalMode::Bypass);
-        if matches!(mode, AppMode::Yolo) {
-            mode = AppMode::Agent;
-        }
-        trust_mode = false;
-        auto_approve = false;
-        if matches!(
-            approval_mode,
-            crate::tui::approval::ApprovalMode::Auto | crate::tui::approval::ApprovalMode::Bypass
-        ) {
-            approval_mode = crate::tui::approval::ApprovalMode::Suggest;
-        }
-        if had_auto_authority {
-            status = Some(format!(
-                "Input provenance '{}' is not external user input; continuing with approvals required.",
-                provenance.as_str()
-            ));
-        }
-    } else if is_review_only_user_intent(content) {
-        // Advisory only: never silently override an explicitly chosen mode
-        // or strip its tools. Surface the question modal dynamically so the
-        // model can ask focused follow-ups without inflating every tool prompt.
-        dynamic_active_tools.push(REQUEST_USER_INPUT_NAME);
-        status = Some(
-            "Review/inspection request detected; keeping the current mode and exposing request_user_input for focused follow-up questions.".to_string(),
-        );
-    }
-
-    EffectiveInputPolicy {
-        mode,
-        allow_shell,
-        trust_mode,
-        auto_approve,
-        approval_mode,
-        dynamic_active_tools,
-        status,
-    }
-}
-
-fn is_review_only_user_intent(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    let asks_to_inspect = [
-        "look",
-        "check",
-        "review",
-        "inspect",
-        "scan",
-        "audit",
-        "看看",
-        "看一下",
-        "检查",
-        "审查",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-    if !asks_to_inspect {
-        return false;
-    }
-
-    let explicit_write = [
-        "fix",
-        "change",
-        "update",
-        "implement",
-        "apply",
-        "patch",
-        "modify",
-        "edit",
-        "write",
-        "commit",
-        "修",
-        "改",
-        "补",
-        "提交",
-        "写",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-
-    !explicit_write
-}
-
-fn agent_approval_mode_for_turn(
-    auto_approve: bool,
-    approval_mode: crate::tui::approval::ApprovalMode,
-) -> crate::tui::approval::ApprovalMode {
-    if auto_approve {
-        crate::tui::approval::ApprovalMode::Bypass
-    } else {
-        approval_mode
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolAskRuleDecision {
     Prompt(String),
@@ -3609,7 +3666,14 @@ pub(super) fn auto_review_plan_decision(
         crate::tui::auto_review::AutoReviewAction::Allow
         | crate::tui::auto_review::AutoReviewAction::AskUser => AutoReviewPlanDecision::NoChange,
         crate::tui::auto_review::AutoReviewAction::HoldForReview => {
-            let reason = format!("Auto-review policy requires approval: {}", decision.reason);
+            // HoldForReview only originates from the built-in safety floor
+            // (configured rules produce Allow/Block), so name the gate
+            // honestly instead of blaming an "auto-review policy" the user
+            // may never have configured (#3883).
+            let reason = format!(
+                "Built-in safety gate requires approval: {}",
+                decision.reason
+            );
             if matches!(approval_mode, crate::tui::approval::ApprovalMode::Never) {
                 AutoReviewPlanDecision::Block(reason)
             } else {
@@ -3831,10 +3895,13 @@ mod approval;
 mod context;
 mod handle;
 pub(crate) use context::compact_tool_result_for_context;
+/// Public so external hosts/wrappers can reuse the engine's input-budget math
+/// (see `context_input_budget_for_route`'s doc) instead of re-deriving it.
+pub use context::context_input_budget_for_route;
 #[cfg(test)]
 use context::route_context_budget_for_provider;
 use context::{
-    MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP, context_input_budget_for_route,
+    MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
     effective_max_output_tokens_for_route, estimate_input_tokens_conservative,
     extract_compaction_summary_prompt, is_context_length_error_message,
     route_context_budget_for_route, summarize_text,
@@ -3874,21 +3941,25 @@ use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
 #[cfg(test)]
 use self::dispatch::should_parallelize_tool_batch;
 use self::dispatch::{
-    ParallelToolResult, ParallelToolResultEntry, ToolExecGuard, ToolExecOutcome,
+    ParallelToolResult, ParallelToolResultEntry, ToolApprovalStamp, ToolExecGuard, ToolExecOutcome,
     ToolExecutionBatch, ToolExecutionPlan, caller_allowed_for_tool, caller_type_for_tool_use,
     final_tool_input, format_tool_error, malformed_tool_arguments_error,
     malformed_tool_arguments_input, mcp_tool_approval_description, mcp_tool_is_parallel_safe,
     mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
     plan_tool_execution_batches, should_force_update_plan_first, should_stop_after_plan_tool,
+    stamp_tool_result_approval,
 };
 #[cfg(test)]
 use self::lsp_hooks::edited_paths_for_tool;
 #[cfg(test)]
 use self::streaming::TOOL_CALL_START_MARKERS;
+#[cfg(test)]
+use self::streaming::filter_tool_call_delta;
 use self::streaming::{
     ContentBlockKind, FAKE_WRAPPER_NOTICE, MAX_STREAM_ERRORS_BEFORE_FAIL, MAX_STREAM_RETRIES,
     MAX_TRANSPARENT_STREAM_RETRIES, STREAM_MAX_CONTENT_BYTES, STREAM_MAX_DURATION_SECS,
-    ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta, should_resume_after_sleep,
+    ToolCallDeltaFilterState, ToolUseState, contains_fake_tool_wrapper,
+    filter_tool_call_delta_with_state, flush_tool_call_delta_state, should_resume_after_sleep,
     should_transparently_retry_stream, sleep_gap_detected, stream_read_error_user_message,
 };
 use self::tool_catalog::{
@@ -3904,7 +3975,6 @@ use self::tool_catalog::{
     preflight_requested_deferred_tool, should_default_defer_tool,
 };
 use self::tool_execution::emit_tool_audit;
-use self::tool_setup::{sandbox_policy_for_mode, shell_policy_for_mode};
 use crate::tools::js_execution::execute_js_execution_tool;
 
 #[cfg(test)]

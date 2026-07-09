@@ -259,6 +259,42 @@ async fn read_only_shell_policy_allows_readonly_inspection() {
     );
 }
 
+#[tokio::test]
+async fn exec_shell_multiline_block_explains_allow_shell_boundary() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+
+    let result = ExecShellTool
+        .execute(
+            json!({"command": "python3 -c \"print(1)\nprint(2)\""}),
+            &ctx,
+        )
+        .await
+        .expect("execute");
+
+    assert!(!result.success);
+    assert!(result.content.contains("Command contains multiple lines"));
+    assert!(
+        result
+            .content
+            .contains("allow_shell=true exposes shell tools"),
+        "{}",
+        result.content
+    );
+    assert!(
+        result
+            .content
+            .contains("Write multiline scripts to a file first"),
+        "{}",
+        result.content
+    );
+    assert!(
+        result.content.contains("task_shell_start"),
+        "{}",
+        result.content
+    );
+}
+
 #[test]
 fn exec_shell_wait_schema_defaults_to_nonblocking_snapshot() {
     let schema = ShellWaitTool::new("exec_shell_wait").input_schema();
@@ -1148,7 +1184,11 @@ async fn test_exec_shell_foreground_can_move_to_background() {
         .expect("task should not panic");
 
     assert!(result.success);
-    assert!(result.content.contains("Command moved to background"));
+    assert!(
+        result
+            .content
+            .contains("Foreground shell wait moved to /jobs")
+    );
     // The detach message points the model at the wait tool for early output
     // (the cancel-tool reference was reworded to `exec_shell_wait`).
     assert!(result.content.contains("exec_shell_wait"));

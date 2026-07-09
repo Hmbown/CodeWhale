@@ -22,6 +22,7 @@ pub struct SessionSnapshot {
     pub messages: Vec<Message>,
     pub total_tokens: u64,
     pub model: String,
+    pub model_provider: String,
     pub workspace: PathBuf,
     pub system_prompt: Option<SystemPrompt>,
     pub mode: String,
@@ -157,6 +158,9 @@ pub enum Op {
 
     /// List current sub-agents and their status
     ListSubAgents,
+
+    /// Cancel a running sub-agent by id or session name.
+    CancelSubAgent { agent_id: String },
 
     /// Change the operating mode
     #[allow(dead_code)]

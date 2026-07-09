@@ -33,7 +33,7 @@ open an issue — that's how the project grows.
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.65
+codewhale --version   # 0.8.67
 ```
 
 The npm wrapper (Node 18+) downloads SHA-256-verified binaries from GitHub
@@ -62,18 +62,20 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # or the NSIS installer from GitHub Releases
 
 # CNB mirror for users who cannot reliably reach GitHub
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-tui --locked --force
 
 # Legacy Homebrew compatibility while the formula is renamed
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 ```
 
-Prebuilt archives for every platform — including Linux riscv64 — are attached
-to [GitHub Releases](https://github.com/Hmbown/CodeWhale/releases). Checksums,
-China mirrors, Windows specifics, and troubleshooting live in
-[docs/INSTALL.md](docs/INSTALL.md).
+Prebuilt archives for Linux x64/arm64, macOS x64/arm64, and Windows x64 are
+attached to [GitHub Releases](https://github.com/Hmbown/CodeWhale/releases).
+Android / Termux is a separate Android arm64 target, not the Linux arm64 asset.
+Linux riscv64 prebuilts are temporarily paused while upstream QuickJS bindings
+catch up. Checksums, Termux notes, China mirrors, Windows specifics, and
+troubleshooting live in [docs/INSTALL.md](docs/INSTALL.md).
 
 **Upgrading from the legacy `deepseek-tui` package?** Your config, sessions,
 skills, and MCP settings are preserved. See [docs/REBRAND.md](docs/REBRAND.md),
@@ -222,6 +224,21 @@ product, not an afterthought.
 - **Embedded everywhere.** HTTP/SSE and ACP runtime APIs, a VS Code extension,
   and Telegram/Feishu bridges (Weixin experimental).
 
+## CodeWhale for VS Code — GUI frontend
+
+Prefer a graphical IDE experience over the terminal? [**CodeWhale for VS Code**](https://github.com/HengQuWorld/CodeWhale-VSCode) is a community-maintained GUI frontend that wraps the same CodeWhale engine into a native VS Code sidebar — chat, slash commands, threaded conversations, live diffs, task management, and a settings UI, all without leaving the editor.
+
+The GUI talks to the same local `codewhale` runtime over the [Runtime API](docs/RUNTIME_API.md), so sessions, providers, modes, and skills stay in sync between terminal and IDE. If you live in VS Code, give it a try:
+
+```bash
+npm install -g codewhale        # install the engine first
+# then search "CodeWhale" in the VS Code extensions panel
+```
+
+> The minimal scaffold under [`extensions/vscode/`](extensions/vscode/) in this
+> repo is a separate, read-only Phase 0 viewer. For the full chat experience,
+> use the linked GUI project above.
+
 ## How instructions are ranked
 
 As a project evolves, the instructions pile up and they inevitably conflict: the
@@ -234,18 +251,35 @@ of vibes.
 The system prompt is layered, most-static first, and the order is enforced in
 code (there are tests asserting it can't drift):
 
-1. **Global constitution** — the base law, compiled into every binary. Its
-   priority article fixes the authority order for any conflict.
-2. **Your project's law** — drop a `.codewhale/constitution.json` in a repo to
+1. **Bundled global Constitution** — the base law, compiled into every binary.
+   Its priority article fixes the authority order for any conflict.
+2. **Your user-global constitution** — managed through `/constitution` and
+   `/setup`, saved as structured data under `$CODEWHALE_HOME/constitution.json`,
+   and rendered into a separate model-facing prose block. It is normal guided
+   setup output, not a raw prompt editor.
+3. **Your project's law** — drop a `.codewhale/constitution.json` in a repo to
    declare `protected_invariants`, `branch_policy`, `verification_policy`, and
-   `escalate_when`. It's loaded as its own authority block, above memory and
-   handoffs.
-3. **Your current request** — the operative instruction this turn.
-4. **Live evidence** — what the tools actually returned. Ground truth; the model
-   may be ordered past it, but it may never report a fact that isn't there.
+   `escalate_when`. It's loaded as its own repo-local authority block, above
+   project instructions, memory, and handoffs. A `protected_invariants` entry
+   that carries path globs is not just prose: it compiles into a mechanical,
+   tighten-only write hold in the tool gate (`ask` force-prompts even in YOLO,
+   `block` denies) with a receipt naming the invariant. See
+   [Configuration](docs/CONFIGURATION.md#enforced-repo-law-invariants).
+4. **Project instructions** — `AGENTS.md` and compatibility fallbacks explain
+   how agents should work in this repo.
+5. **Memory and handoffs** — useful recalled state, lower authority than
+   constitution layers and project instructions.
 
-When two instructions conflict, each yields to the one above. Because the law
-lives in the harness, not the model, swapping models keeps the structure intact.
+Your current request and live tool evidence still control the active turn: the
+model may be given many layers, but it may never report a fact that the tools did
+not return. Runtime approval, sandbox, network, and trust controls are enforced
+in code and are not changed by constitution text.
+
+There is also an expert-only full base-prompt override at
+`$CODEWHALE_HOME/prompts/constitution.md` behind an explicit opt-in flag. It is
+not the normal guided setup path. When two instructions conflict, each yields to
+the higher authority layer. Because the law lives in the harness, not the model,
+swapping models keeps the structure intact.
 
 ## Where details live
 
@@ -259,7 +293,7 @@ The README is the short version. The rest is in docs and on
   output contract, and recovery behavior.
 - [Architecture](docs/ARCHITECTURE.md) — crate layout, runtime flow, tool system,
   extension points, and security model.
-- [WhaleFlow authoring](docs/WHALEFLOW_AUTHORING.md) · [MCP](docs/MCP.md) ·
+- [Automatic Workflows](docs/AUTOMATIC_WORKFLOWS.md) · [Workflow authoring](docs/WORKFLOW_AUTHORING.md) · [MCP](docs/MCP.md) ·
   [Runtime API](docs/RUNTIME_API.md) · [Model Lab](docs/MODEL_LAB.md)
 - [Keybindings](docs/KEYBINDINGS.md) · [Sandbox & approvals](docs/SANDBOX.md)
   · [Accessibility](docs/ACCESSIBILITY.md) · [Docker](docs/DOCKER.md)

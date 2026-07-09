@@ -7,7 +7,9 @@ const ASSET_MATRIX = {
   linux: {
     x64: ["codewhale-linux-x64", "codewhale-tui-linux-x64", "codew-linux-x64"],
     arm64: ["codewhale-linux-arm64", "codewhale-tui-linux-arm64", "codew-linux-arm64"],
-    riscv64: ["codewhale-linux-riscv64", "codewhale-tui-linux-riscv64", "codew-linux-riscv64"],
+  },
+  android: {
+    arm64: ["codewhale-android-arm64", "codewhale-tui-android-arm64", "codew-android-arm64"],
   },
   darwin: {
     x64: ["codewhale-macos-x64", "codewhale-tui-macos-x64", "codew-macos-x64"],
@@ -39,10 +41,11 @@ function detectBinaryNames() {
   const pair = defaults[arch];
   if (!pair) {
     const supported = Object.keys(defaults).map(a => `'${a}'`).join(', ');
+    const hint = platform === "linux" && arch === "riscv64" ? unsupportedRiscvHint() : unsupportedBuildHint();
     throw new Error(
       `Unsupported architecture: ${arch} on platform ${platform}. ` +
       `Supported architectures: ${supported}.\n\n` +
-      unsupportedBuildHint(),
+      hint,
     );
   }
   return {
@@ -72,6 +75,16 @@ function unsupportedBuildHint() {
     "",
     "See https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md",
     "for cross-compilation, mirror, and Linux ARM64 specifics.",
+  ].join("\n");
+}
+
+function unsupportedRiscvHint() {
+  return [
+    "Linux riscv64 prebuilt binaries are temporarily unavailable.",
+    "CodeWhale currently depends on rquickjs-sys, which does not ship",
+    "riscv64gc-unknown-linux-gnu bindings in the locked dependency set.",
+    "",
+    "Track the release notes and docs/INSTALL.md for the next RISC-V support update.",
   ].join("\n");
 }
 

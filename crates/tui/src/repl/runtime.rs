@@ -205,7 +205,7 @@ impl PythonRuntime {
 
         let mut cmd = crate::dependencies::Python::tokio_command().ok_or_else(|| {
             "no Python interpreter found on PATH (tried python3, python, py -3). \
-             Install Python 3 and restart deepseek-tui."
+             Install Python 3 and restart codewhale."
                 .to_string()
         })?;
         cmd.arg("-u")

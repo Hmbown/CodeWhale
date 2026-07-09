@@ -62,7 +62,7 @@ pub fn is_verbose() -> bool {
 /// Emit a verbose info message (no-op when verbosity is disabled).
 pub fn info(message: impl AsRef<str>) {
     if is_verbose() {
-        let (r, g, b) = palette::DEEPSEEK_SKY_RGB;
+        let (r, g, b) = palette::WHALE_INFO_RGB;
         eprintln!("{} {}", "info".truecolor(r, g, b).bold(), message.as_ref());
     }
 }
@@ -70,7 +70,7 @@ pub fn info(message: impl AsRef<str>) {
 /// Emit a verbose warning message (no-op when verbosity is disabled).
 pub fn warn(message: impl AsRef<str>) {
     if is_verbose() {
-        let (r, g, b) = palette::DEEPSEEK_SKY_RGB;
+        let (r, g, b) = palette::WHALE_INFO_RGB;
         eprintln!("{} {}", "warn".truecolor(r, g, b).bold(), message.as_ref());
     }
 }

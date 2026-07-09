@@ -1,12 +1,12 @@
 //! Goal loop orchestrator — the persistent-objective control layer (#3215, and
 //! its lineage #891 / #1976 / #2058 / #2029).
 //!
-//! This is the **WhaleFlow goal layer**: the decision core that turns a one-shot
+//! This is the **Workflow goal layer**: the decision core that turns a one-shot
 //! `/goal` into a persistent work loop. Given the durable goal status, the
 //! accumulated usage (from the per-goal accounting wired in `crates/state`
 //! `record_thread_goal_usage`), and a budget, it decides whether to **continue**
 //! (re-dispatch another worker turn toward the objective) or **stop** with a
-//! terminal status. It is the orchestrator in the WhaleFlow≈ultracode mapping —
+//! terminal status. It is the orchestrator in the Workflow≈ultracode mapping —
 //! the loop that fans work out to workers (`worker_profile`) and verifies before
 //! committing.
 //!

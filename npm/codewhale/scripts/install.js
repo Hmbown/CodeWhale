@@ -78,12 +78,18 @@ class DownloadTimeoutError extends Error {
   }
 }
 
-function resolvePackageVersion() {
+// Binary-version precedence must match run.js and verify-release-assets.js so
+// install-time asset resolution agrees with runtime and release verification.
+// `codewhaleBinaryVersion` lets a packaging-only npm release target a specific
+// CodeWhale binary; legacy env vars and `deepseekBinaryVersion` stay supported
+// for backward compatibility (#3769). `pkgObj`/`env` are injectable for tests.
+function resolvePackageVersion(pkgObj = pkg, env = process.env) {
   const configuredVersion =
-    process.env.DEEPSEEK_TUI_VERSION ||
-    process.env.DEEPSEEK_VERSION ||
-    pkg.deepseekBinaryVersion ||
-    pkg.version;
+    env.DEEPSEEK_TUI_VERSION ||
+    env.DEEPSEEK_VERSION ||
+    pkgObj.codewhaleBinaryVersion ||
+    pkgObj.deepseekBinaryVersion ||
+    pkgObj.version;
   return String(configuredVersion).trim();
 }
 
@@ -1148,6 +1154,7 @@ module.exports = {
   installFailureHint,
   run,
   _internal: {
+    resolvePackageVersion,
     isOptionalInstall,
     adoptExistingBinaryIfValid,
     shouldIgnoreInstallFailure,

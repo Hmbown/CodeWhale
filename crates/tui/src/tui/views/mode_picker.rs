@@ -1,4 +1,4 @@
-//! `/mode` picker for Agent / Plan / YOLO.
+//! `/mode` picker for Act / Plan / Operate.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -6,14 +6,17 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::localization::{Locale, MessageId, tr};
+use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::AppMode;
-use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
+    render_modal_footer, render_modal_surface,
+};
 
 pub struct ModePickerView {
     cursor: usize,
@@ -90,45 +93,37 @@ impl ModalView for ModePickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_width = 68.min(area.width.saturating_sub(4)).max(44);
-        let popup_height = 9.min(area.height.saturating_sub(4)).max(7);
-        let popup_area = Rect {
-            x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-            y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_height = u16::try_from(AppMode::CHOICES.len()).unwrap_or(3) + 7;
+        let popup_area = centered_modal_area(area, 68, popup_height, 44, 8);
 
-        Clear.render(popup_area, buf);
+        render_modal_surface(area, popup_area, buf);
 
         let block = Block::default()
             .title(Line::from(Span::styled(
                 " Mode ",
                 Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
+                    .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
             )))
-            .title_bottom(Line::from(vec![
-                Span::styled(" Up/Down ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("move "),
-                Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("select "),
-                Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("cancel "),
-            ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .style(Style::default().bg(palette::WHALE_BG))
             .padding(Padding::uniform(1));
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        let mut lines = Vec::with_capacity(AppMode::CHOICES.len() + 1);
-        lines.push(Line::from(Span::styled(
-            tr(self.locale, MessageId::ModePickerPrompt),
-            Style::default().fg(palette::TEXT_MUTED),
-        )));
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑/↓", "move"),
+                ActionHint::new("Enter", "select"),
+                ActionHint::new("Esc", "cancel"),
+            ],
+        );
+
+        let mut lines = Vec::with_capacity(AppMode::CHOICES.len());
 
         for (idx, mode) in AppMode::CHOICES.iter().copied().enumerate() {
             let is_cursor = idx == self.cursor;
@@ -162,7 +157,7 @@ impl ModalView for ModePickerView {
             ]));
         }
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).render(content, buf);
     }
 }
 
@@ -190,19 +185,93 @@ mod tests {
         }
     }
 
+    /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires
+    /// every overlay to remain readable and fully operable at.
+    const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+
+    fn render_at(width: u16, height: u16) -> (Buffer, Rect) {
+        use crate::tui::views::ViewStack;
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        // Pre-fill with a sentinel so any cell the composited modal fails to
+        // paint (bleed-through) is detectable as a surviving 'X'.
+        for y in 0..height {
+            for x in 0..width {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+        // Render through the ViewStack so the shared opaque backdrop is painted
+        // exactly as it is in production.
+        let mut stack = ViewStack::new();
+        stack.push(ModePickerView::new(AppMode::Agent, Locale::En));
+        stack.render(area, &mut buf);
+        (buf, area)
+    }
+
+    fn rows(buf: &Buffer, area: Rect) -> Vec<String> {
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mode_picker_is_usable_and_opaque_at_blocker_sizes() {
+        for (w, h) in BLOCKER_SIZES {
+            let (buf, area) = render_at(w, h);
+            let text = rows(&buf, area).join("\n");
+
+            // Action labels are present (footer never drops an action).
+            assert!(text.contains("move"), "{w}x{h}: missing 'move' hint");
+            assert!(text.contains("select"), "{w}x{h}: missing 'select' hint");
+            assert!(text.contains("cancel"), "{w}x{h}: missing 'cancel' hint");
+
+            // Composited frame is fully opaque: no sentinel survives and every
+            // cell carries the modal/backdrop ink background.
+            assert!(
+                !text.contains('X'),
+                "{w}x{h}: background bleed-through into modal surface"
+            );
+            let center = &buf[(w / 2, h / 2)];
+            assert_eq!(
+                center.bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+
+            // No row exceeds the frame width (no horizontal overflow).
+            for (y, row) in rows(&buf, area).iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn number_keys_select_modes() {
+        // Visible roster: 1 Act, 2 Plan, 3 Operate. No Multitask / YOLO / gap.
         let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-        assert!(matches!(action, ViewAction::None));
-
-        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
-        let action = view.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
         match action {
             ViewAction::EmitAndClose(ViewEvent::ModeSelected { mode }) => {
-                assert_eq!(mode, AppMode::Yolo);
+                assert_eq!(mode, AppMode::Operate);
             }
             other => panic!("expected ModeSelected, got {other:?}"),
         }
+
+        // Legacy YOLO shorthand (4) is not offered by the picker.
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
+
+        // Old Operate number (5) is gone — no numeric gaps.
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+        assert!(matches!(action, ViewAction::None));
     }
 }

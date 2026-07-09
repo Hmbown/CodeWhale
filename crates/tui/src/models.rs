@@ -323,6 +323,11 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         | "mimo-v2.5-tts-voicedesign"
         | "mimo-v2.5-tts-voiceclone"
         | "mimo-v2-tts" => Some(8_000),
+        "grok-4.5" => Some(500_000),
+        "grok-4.3" => Some(1_000_000),
+        "grok-build" => Some(512_000),
+        "grok-composer-2.5-fast" => Some(200_000),
+        "grok-4.20-0309-reasoning" | "grok-4.20-0309-non-reasoning" => Some(2_000_000),
         _ => None,
     }
 }
@@ -437,6 +442,10 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "glm-5.1"
             | "glm-5.2"
             | "glm-5-turbo"
+            | "grok-4.5"
+            | "grok-4.3"
+            | "grok-build"
+            | "grok-4.20-0309-reasoning"
     ) || is_openai_gpt_55_api_model(&lower)
         || is_openai_codex_model(&lower)
 }
@@ -789,6 +798,22 @@ mod tests {
         assert!(model_supports_reasoning("kimi-k2.6"));
         assert!(model_supports_reasoning("kimi-for-coding"));
         assert!(model_supports_reasoning("kimi-k2.5"));
+    }
+
+    #[test]
+    fn xai_grok_models_have_static_context_metadata() {
+        for (model, expected_window, supports_reasoning) in [
+            ("grok-4.5", 500_000, true),
+            ("grok-4.3", 1_000_000, true),
+            ("grok-build", 512_000, true),
+            ("grok-composer-2.5-fast", 200_000, false),
+            ("grok-4.20-0309-reasoning", 2_000_000, true),
+            ("grok-4.20-0309-non-reasoning", 2_000_000, false),
+        ] {
+            assert_eq!(context_window_for_model(model), Some(expected_window));
+            assert_eq!(max_output_tokens_for_model(model), None);
+            assert_eq!(model_supports_reasoning(model), supports_reasoning);
+        }
     }
 
     #[test]

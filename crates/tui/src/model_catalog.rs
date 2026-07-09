@@ -5,13 +5,11 @@
 //! bundled snapshot, never performs a network refresh, and only overrides a
 //! legacy fact when the active catalog entry actually carries that field.
 
-#![allow(dead_code)]
-
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -26,18 +24,6 @@ pub enum MetadataProvenance {
     UserOverride,
     #[default]
     Unknown,
-}
-
-impl MetadataProvenance {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ProviderApi => "provider_api",
-            Self::Bundled => "bundled",
-            Self::UserOverride => "user_override",
-            Self::Unknown => "unknown",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -170,14 +156,10 @@ pub fn resolved_supports_reasoning(model: &str) -> Option<bool> {
 }
 
 #[must_use]
+#[cfg_attr(test, allow(dead_code))]
 pub fn resolved_usd_pricing(model: &str) -> Option<(f64, f64)> {
     let entry = resolved_entry(model)?;
     Some((entry.input_usd_per_million?, entry.output_usd_per_million?))
-}
-
-#[must_use]
-pub fn provenance_for_model(model: &str) -> Option<MetadataProvenance> {
-    resolved_entry(model).map(|entry| entry.provenance)
 }
 
 pub fn bundled_catalog() -> CatalogCache {
@@ -188,125 +170,10 @@ fn catalog_cache_read_path() -> Result<PathBuf> {
     Ok(codewhale_config::resolve_state_dir("catalog")?.join(OPENROUTER_CACHE_FILE))
 }
 
-fn catalog_cache_write_path() -> Result<PathBuf> {
-    Ok(codewhale_config::ensure_state_dir("catalog")?.join(OPENROUTER_CACHE_FILE))
-}
-
 pub fn load_cached() -> Option<CatalogCache> {
     let path = catalog_cache_read_path().ok()?;
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
-}
-
-pub fn store_cache(cache: &CatalogCache) -> Result<()> {
-    let path = catalog_cache_write_path()?;
-    let json = serde_json::to_vec_pretty(cache)?;
-    write_cache_file(&path, &json)
-        .with_context(|| format!("write model catalog cache {}", path.display()))
-}
-
-#[cfg(not(test))]
-fn write_cache_file(path: &std::path::Path, json: &[u8]) -> std::io::Result<()> {
-    crate::utils::write_atomic(path, json)
-}
-
-#[cfg(test)]
-fn write_cache_file(path: &std::path::Path, json: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, json)
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterModelsResponse {
-    #[serde(default)]
-    data: Vec<OpenRouterModel>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterModel {
-    id: String,
-    context_length: Option<u32>,
-    top_provider: Option<OpenRouterTopProvider>,
-    pricing: Option<OpenRouterPricing>,
-    architecture: Option<OpenRouterArchitecture>,
-    #[serde(default)]
-    supported_parameters: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterTopProvider {
-    max_completion_tokens: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterPricing {
-    prompt: Option<String>,
-    completion: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterArchitecture {
-    #[serde(default)]
-    input_modalities: Vec<String>,
-    #[serde(default)]
-    output_modalities: Vec<String>,
-}
-
-fn normalize_openrouter_response_for_ids(
-    raw: &str,
-    curated_ids: &[&str],
-) -> Result<Vec<CatalogEntry>> {
-    let response: OpenRouterModelsResponse = serde_json::from_str(raw)?;
-    let curated: BTreeSet<String> = curated_ids.iter().map(|id| id.to_lowercase()).collect();
-    Ok(response
-        .data
-        .into_iter()
-        .filter(|model| curated.contains(&model.id.to_lowercase()))
-        .map(|model| {
-            let (input_usd_per_million, output_usd_per_million) =
-                model.pricing.as_ref().map_or((None, None), |pricing| {
-                    (
-                        pricing.prompt.as_deref().and_then(per_token_usd_to_million),
-                        pricing
-                            .completion
-                            .as_deref()
-                            .and_then(per_token_usd_to_million),
-                    )
-                });
-            let modalities = model.architecture.as_ref().map_or_else(Vec::new, |arch| {
-                let mut values = arch.input_modalities.clone();
-                values.extend(arch.output_modalities.iter().cloned());
-                values.sort();
-                values.dedup();
-                values
-            });
-            let supports_reasoning = model
-                .supported_parameters
-                .iter()
-                .any(|param| param.eq_ignore_ascii_case("reasoning"));
-            CatalogEntry {
-                id: model.id.clone(),
-                context_window: model.context_length,
-                max_output: model
-                    .top_provider
-                    .as_ref()
-                    .and_then(|provider| provider.max_completion_tokens),
-                supports_reasoning: Some(supports_reasoning),
-                input_usd_per_million,
-                output_usd_per_million,
-                modalities,
-                supported_parameters: model.supported_parameters,
-                provider_model_id: Some(model.id),
-                provenance: MetadataProvenance::ProviderApi,
-            }
-        })
-        .collect())
-}
-
-fn per_token_usd_to_million(value: &str) -> Option<f64> {
-    value
-        .parse::<f64>()
-        .ok()
-        .map(|per_token| per_token * 1_000_000.0)
 }
 
 #[cfg(test)]
@@ -381,39 +248,6 @@ mod tests {
             bundled.entries["deepseek-v4-pro"].provenance,
             MetadataProvenance::Bundled
         );
-    }
-
-    #[test]
-    fn openrouter_response_normalizes_context_and_pricing() {
-        let raw = r#"{
-          "data": [{
-            "id": "qwen/qwen3.6-flash",
-            "context_length": 1000000,
-            "top_provider": {"max_completion_tokens": 65536},
-            "pricing": {"prompt": "0.0000001875", "completion": "0.000001125"},
-            "architecture": {
-              "input_modalities": ["text"],
-              "output_modalities": ["text"]
-            },
-            "supported_parameters": ["reasoning", "tools"]
-          }, {
-            "id": "uncurated/model",
-            "context_length": 42
-          }]
-        }"#;
-
-        let entries =
-            normalize_openrouter_response_for_ids(raw, &["qwen/qwen3.6-flash"]).expect("normalize");
-        assert_eq!(entries.len(), 1);
-        let entry = &entries[0];
-        assert_eq!(entry.id, "qwen/qwen3.6-flash");
-        assert_eq!(entry.context_window, Some(1_000_000));
-        assert_eq!(entry.max_output, Some(65_536));
-        assert_eq!(entry.input_usd_per_million, Some(0.1875));
-        assert_eq!(entry.output_usd_per_million, Some(1.125));
-        assert_eq!(entry.provenance, MetadataProvenance::ProviderApi);
-        assert_eq!(entry.supports_reasoning, Some(true));
-        assert!(!entries.iter().any(|entry| entry.id == "uncurated/model"));
     }
 
     #[test]

@@ -212,10 +212,11 @@ impl ModelReferenceDatabase {
         Self::from_offerings(&snapshot.offerings)
     }
 
-    /// Build from CodeWhale's bundled, network-free catalog snapshot.
+    /// Build from CodeWhale's offline/stale bundled catalog snapshot (#4188).
     ///
-    /// This is the curated reference set every install carries; it needs no
-    /// credentials or network and is always available.
+    /// Prefer a live/compiled [`CatalogSnapshot`] when available. The bundled
+    /// set needs no credentials or network and remains the offline fallback
+    /// every install carries.
     #[must_use]
     pub fn bundled() -> Self {
         Self::from_offerings(&bundled_catalog_offerings())
@@ -492,7 +493,7 @@ mod tests {
         assert!(!db.is_empty());
         assert!(
             db.len() >= 20,
-            "bundled snapshot should carry the curated offerings, got {}",
+            "bundled offline snapshot should carry seed offerings, got {}",
             db.len()
         );
 

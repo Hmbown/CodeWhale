@@ -1,6 +1,7 @@
 //! Full-screen live transcript overlay with sticky-bottom auto-scroll (#94).
 //!
-//! Toggled with `Ctrl+T` while the engine is streaming. Behaviour:
+//! Toggled with `Ctrl+Shift+T` while the engine is streaming (`Ctrl+T` now
+//! cycles reasoning effort). Behaviour:
 //!
 //! - At-bottom (`sticky_to_bottom = true`) — every refresh re-pins scroll to
 //!   the new tail, so streaming output appears to flow off the bottom edge.
@@ -36,9 +37,11 @@ use crate::tui::app::App;
 use crate::tui::backtrack::Direction;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::transcript_cache::{CellId, TranscriptCache};
-use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
+};
 
-/// Render mode for the overlay. `Tail` is the original Ctrl+T sticky-tail
+/// Render mode for the overlay. `Tail` is the original sticky-tail
 /// behaviour (#94). `BacktrackPreview` (#133) highlights the Nth-from-tail
 /// `HistoryCell::User` so the user can see which turn Esc-Esc-Enter will
 /// roll back to. The mode also disables sticky-tail (we want the user to
@@ -52,10 +55,6 @@ pub enum Mode {
         selected_idx: usize,
     },
 }
-
-/// Single-line footer hint. Kept short so it fits on narrow terminals.
-const FOOTER_HINT: &str =
-    " j/k scroll  Space/C-b page  g/G top/bottom  End=resume tail  q/Esc close ";
 
 /// Snapshot of one cell, refreshed every frame from `App`. Owns the cell so
 /// the overlay's `render(&self)` can wrap without re-borrowing `App`.
@@ -425,8 +424,13 @@ impl ModalView for LiveTranscriptOverlay {
                     self.pending_g = false;
                     return ViewAction::None;
                 }
-                // Ctrl+T toggles the overlay closed when already open.
-                KeyCode::Char('t') | KeyCode::Char('T') => return ViewAction::Close,
+                // Ctrl+Shift+T toggles the overlay closed when already open.
+                KeyCode::Char('t') | KeyCode::Char('T')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    return ViewAction::Close;
+                }
                 _ => {}
             }
         }
@@ -503,14 +507,49 @@ impl ModalView for LiveTranscriptOverlay {
 
         Clear.render(popup_area, buf);
 
-        // Compute inner content height once: borders eat 1 row top + 1 bottom,
-        // padding eats 1 more on each side.
-        let visible_height = popup_area.height.saturating_sub(4) as usize;
+        let title: String = match self.mode {
+            Mode::BacktrackPreview { selected_idx } => format!(
+                " Backtrack preview — turn {} (\u{2190}/\u{2192} step, Enter rewind, Esc cancel) ",
+                selected_idx + 1
+            ),
+            Mode::Tail => {
+                if self.sticky_to_bottom.get() {
+                    " Live transcript (tailing) ".to_string()
+                } else {
+                    " Live transcript (paused) ".to_string()
+                }
+            }
+        };
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::BORDER_COLOR))
+            .style(Style::default().bg(palette::WHALE_BG))
+            .padding(Padding::uniform(1));
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        // Wrapping action footer along the bottom of the inner area; the body
+        // fills the rows above it.
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("j/k", "scroll"),
+                ActionHint::new("Space/C-b", "page"),
+                ActionHint::new("g/G", "top/bottom"),
+                ActionHint::new("End", "resume tail"),
+                ActionHint::new("q/Esc", "close"),
+            ],
+        );
+
+        // `content` already excludes the border, padding, and footer rows.
+        let visible_height = content.height as usize;
         self.last_visible_height.set(visible_height);
 
-        // Wrap content using the per-cell cache; subtract padding from width
-        // so wrapped lines fit between the inner edges.
-        let content_width = popup_width.saturating_sub(4);
+        // Wrap content using the per-cell cache at the body width.
+        let content_width = content.width;
         let flattened = self.flatten(content_width);
         let lines = flattened.lines;
         self.last_total_lines.set(lines.len());
@@ -547,36 +586,8 @@ impl ModalView for LiveTranscriptOverlay {
             lines[scroll..end].to_vec()
         };
 
-        let title: String = match self.mode {
-            Mode::BacktrackPreview { selected_idx } => format!(
-                " Backtrack preview — turn {} (\u{2190}/\u{2192} step, Enter rewind, Esc cancel) ",
-                selected_idx + 1
-            ),
-            Mode::Tail => {
-                if self.sticky_to_bottom.get() {
-                    " Live transcript (tailing) ".to_string()
-                } else {
-                    " Live transcript (paused) ".to_string()
-                }
-            }
-        };
-
-        let footer = Line::from(Span::styled(
-            FOOTER_HINT,
-            Style::default().fg(palette::TEXT_HINT),
-        ));
-        let block = Block::default()
-            .title(title)
-            .title_bottom(footer)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
-            .padding(Padding::uniform(1));
-
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(Wrap { trim: false });
-        paragraph.render(popup_area, buf);
+        let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+        paragraph.render(content, buf);
 
         // #3029: same in-band OSC 8 recovery as the main transcript — extract
         // link regions from the rendered buffer and blank the payload cells.
@@ -703,9 +714,14 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_t_closes_when_already_open() {
+    fn ctrl_shift_t_closes_when_already_open() {
+        // The overlay toggle moved to Ctrl+Shift+T (Wave 7 M3: plain Ctrl+T
+        // now cycles reasoning effort).
         let mut v = LiveTranscriptOverlay::new();
-        let action = v.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let action = v.handle_key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
         assert!(matches!(action, ViewAction::Close));
     }
 
@@ -888,6 +904,57 @@ mod tests {
             !rendered.contains("user 0"),
             "preview must not open at the oldest transcript line: {rendered}"
         );
+    }
+
+    #[test]
+    fn live_transcript_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+        use unicode_width::UnicodeWidthStr;
+
+        const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+        for (w, h) in BLOCKER_SIZES {
+            // Construct an empty overlay: transcript cells paint their own
+            // backgrounds, so an empty body keeps the interior as the modal ink
+            // and lets us assert opacity at the center cell directly.
+            let overlay = LiveTranscriptOverlay::new();
+
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(overlay);
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+                .collect();
+            let text = rows.join("\n");
+
+            // Footer keeps every action.
+            for label in ["scroll", "page", "top/bottom", "resume tail", "close"] {
+                assert!(text.contains(label), "{w}x{h}: footer missing '{label}'");
+            }
+
+            // Composited frame is fully opaque.
+            assert!(!text.contains('X'), "{w}x{h}: background bleed-through");
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+
+            // No horizontal overflow.
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 
     #[test]

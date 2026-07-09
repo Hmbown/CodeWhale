@@ -76,6 +76,52 @@ fn extract_explicit_reasoning_summary(text: &str) -> Option<String> {
     None
 }
 
+/// Redact internal code identifiers from a collapsed reasoning preview so
+/// implementation details don't leak into the default transcript
+/// (#4146/#4148). Each `snake_case` token (e.g. `refresh_catalog_cache`,
+/// `agent_id`, `DEEPSEEK_API_KEY`) collapses to a single `…` so the
+/// surrounding prose still reads; the full, un-redacted body remains
+/// available on expand (Space / Ctrl+O) and in the pager/clipboard transcript.
+fn redact_internal_identifiers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+        push_identifier_token(&mut out, &mut token);
+        out.push(ch);
+    }
+    push_identifier_token(&mut out, &mut token);
+    out
+}
+
+/// Flush a scanned word token into `out`, replacing it with `…` when it reads
+/// as an internal code identifier. No-op on an empty token.
+fn push_identifier_token(out: &mut String, token: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    if looks_like_internal_identifier(token) {
+        out.push('\u{2026}');
+    } else {
+        out.push_str(token);
+    }
+    token.clear();
+}
+
+/// A token reads as an internal code identifier when it is a `snake_case`
+/// run: it contains an underscore, has at least one letter, and is otherwise
+/// only ASCII alphanumerics/underscores. Ordinary prose words never match.
+fn looks_like_internal_identifier(token: &str) -> bool {
+    token.contains('_')
+        && token.chars().any(|ch| ch.is_ascii_alphabetic())
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 pub(super) fn render_thinking(
     content: &str,
     width: u16,
@@ -139,6 +185,19 @@ pub(super) fn render_thinking(
         }
     } else {
         content.to_string()
+    };
+    // #4146/#4148: completed reasoning collapses to a quiet receipt in the
+    // default transcript — scrub internal code identifiers (function names
+    // like `refresh_catalog_cache`, raw agent ids) so implementation details
+    // don't leak. Streaming reasoning stays verbatim (the user is watching it
+    // think) and the expanded / pager / clipboard transcript keeps the full,
+    // un-redacted body. The redaction changes `body_text`, which trips the
+    // affordance below so the user still sees the "expand for full reasoning"
+    // hint.
+    let body_text = if collapsed && !streaming {
+        redact_internal_identifiers(&body_text)
+    } else {
+        body_text
     };
     let mut rendered = if body_text.trim().is_empty() {
         Vec::new()

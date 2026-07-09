@@ -26,13 +26,9 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette;
-use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
-
-/// Footer hint shown along the bottom border of the pager. Kept short so it
-/// fits on narrow terminals; full reference lives in the module docs.
-const FOOTER_HINT_NAV: &str =
-    " j/k scroll  Space page  Ctrl+D/U half  g/G top/bottom  / search  c copy";
-const FOOTER_HINT_EXIT: &str = " q/Esc close ";
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
+};
 
 pub struct PagerView {
     title: String,
@@ -48,6 +44,10 @@ pub struct PagerView {
     /// keys (Ctrl+D/U, Ctrl+F/B, Space, etc.) to compute scroll deltas
     /// without access to the render area.
     last_visible_height: Cell<usize>,
+    /// Optional compact Markdown artifact surfaced by the `e` key. Set for the
+    /// Turn Inspector pager (#4108) so `e` copies a pasteable turn handoff;
+    /// `None` for every other pager, where `e` stays inert.
+    export_markdown: Option<String>,
 }
 
 impl PagerView {
@@ -64,7 +64,16 @@ impl PagerView {
             search_mode: false,
             pending_g: false,
             last_visible_height: Cell::new(0),
+            export_markdown: None,
         }
+    }
+
+    /// Attach a compact Markdown export (e.g. the #4108 turn handoff) that the
+    /// `e` key copies to the clipboard. Only the Turn Inspector pager sets this;
+    /// other pagers leave `e` inert.
+    pub fn with_export_markdown(mut self, markdown: impl Into<String>) -> Self {
+        self.export_markdown = Some(markdown.into());
+        self
     }
 
     pub fn from_text(title: impl Into<String>, text: &str, width: u16) -> Self {
@@ -104,6 +113,13 @@ impl PagerView {
     /// the modal (#1354).
     pub fn body_text(&self) -> String {
         self.plain_lines.join("\n")
+    }
+
+    /// The pager's title bar text. Used by tests to assert the raw-detail
+    /// pager is framed at leaf scope (#4105).
+    #[cfg(test)]
+    pub(crate) fn title(&self) -> &str {
+        &self.title
     }
 
     /// Return the page height (in lines) used for paging keys.
@@ -356,6 +372,17 @@ impl ModalView for PagerView {
                     label: "Pager content".to_string(),
                 })
             }
+            // `e` exports the compact turn handoff (#4108) when this pager
+            // carries one — the Turn Inspector. Elsewhere the guard fails and
+            // `e` falls through to the inert arm below.
+            KeyCode::Char('e') | KeyCode::Char('E') if self.export_markdown.is_some() => {
+                self.pending_g = false;
+                let text = self.export_markdown.clone().unwrap_or_default();
+                ViewAction::Emit(ViewEvent::CopyToClipboard {
+                    text,
+                    label: "Turn handoff".to_string(),
+                })
+            }
             _ => ViewAction::None,
         }
     }
@@ -388,10 +415,33 @@ impl ModalView for PagerView {
 
         Clear.render(popup_area, buf);
 
-        // Borders eat 1 row top + 1 row bottom; the block's `Padding::uniform(1)`
-        // eats 1 more on each side. Net: 4 rows of overhead to subtract from
-        // `popup_area.height` before we know how many lines fit.
-        let mut visible_height = popup_area.height.saturating_sub(4) as usize;
+        let block = Block::default()
+            .title(self.title.clone())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::BORDER_COLOR))
+            .style(Style::default().bg(palette::WHALE_BG))
+            .padding(Padding::uniform(1));
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        // The wrapping action footer is anchored to the bottom of the inner
+        // area; the body fills the rows above it.
+        let mut hints = vec![
+            ActionHint::new("q/Esc", "close"),
+            ActionHint::new("j/k", "scroll"),
+            ActionHint::new("Space", "page"),
+            ActionHint::new("Ctrl+D/U", "half"),
+            ActionHint::new("g/G", "top/bottom"),
+            ActionHint::new("/", "search"),
+            ActionHint::new("c", "copy"),
+        ];
+        if self.export_markdown.is_some() {
+            hints.push(ActionHint::new("e", "copy handoff"));
+        }
+        let content = render_modal_footer(inner, buf, &hints);
+
+        // `content` already excludes the border, padding, and footer rows.
+        let mut visible_height = content.height as usize;
         if self.search_mode {
             // Reserve a row for the search prompt that gets pushed below.
             visible_height = visible_height.saturating_sub(1);
@@ -452,7 +502,7 @@ impl ModalView for PagerView {
             visible_lines.push(Line::from(Span::styled(
                 prompt,
                 Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
+                    .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
             )));
         } else if !self.search_matches.is_empty() {
@@ -467,26 +517,8 @@ impl ModalView for PagerView {
             )));
         }
 
-        let footer = Line::from(vec![
-            Span::styled(
-                FOOTER_HINT_EXIT,
-                Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(FOOTER_HINT_NAV, Style::default().fg(palette::TEXT_HINT)),
-        ]);
-        let block = Block::default()
-            .title(self.title.clone())
-            .title_bottom(footer)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .padding(Padding::uniform(1));
-
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(Wrap { trim: false });
-        paragraph.render(popup_area, buf);
+        let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+        paragraph.render(content, buf);
     }
 }
 
@@ -764,22 +796,35 @@ mod tests {
 
     #[test]
     fn footer_hint_includes_new_bindings() {
-        // The rendered pager must surface the new vim-style bindings to
-        // the user; check the footer hint covers the headline keys.
+        // The rendered pager must surface the new vim-style bindings to the
+        // user. The footer is now a wrapping ActionHint row inside the modal
+        // body (not the bottom border), so assert against the rendered buffer.
+        let p = make_pager(5);
+        let area = Rect::new(0, 0, 100, 16);
+        let mut buf = Buffer::empty(area);
+        p.render(area, &mut buf);
+        let mut text = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
         for needle in &[
             "j/k",
+            "scroll",
             "g/G",
+            "top/bottom",
             "Space",
-            "Ctrl+D",
-            "/ search",
-            "c copy",
-            "q/Esc close",
+            "page",
+            "Ctrl+D/U",
+            "half",
+            "search",
+            "copy",
+            "q/Esc",
+            "close",
         ] {
-            let full_hint = format!("{FOOTER_HINT_EXIT}{FOOTER_HINT_NAV}");
-            assert!(
-                full_hint.contains(needle),
-                "footer hint missing {needle:?}: {full_hint}"
-            );
+            assert!(text.contains(needle), "footer hint missing {needle:?}");
         }
     }
 
@@ -812,6 +857,32 @@ mod tests {
     }
 
     #[test]
+    fn e_exports_turn_handoff_when_attached() {
+        // #4108: the Turn Inspector pager carries a compact Markdown handoff;
+        // `e` copies that artifact (not the visible inspector body) to the
+        // clipboard via the host dispatcher.
+        let mut p = make_pager(3).with_export_markdown("# Turn handoff\n\n## Intent\ndo the thing");
+        let action = p.handle_key(key(KeyCode::Char('e')));
+        match action {
+            ViewAction::Emit(ViewEvent::CopyToClipboard { text, label }) => {
+                assert!(text.contains("# Turn handoff"), "handoff text: {text}");
+                assert_eq!(label, "Turn handoff");
+            }
+            other => panic!("expected CopyToClipboard emit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn e_is_inert_without_an_attached_handoff() {
+        // Every other pager leaves `e` unbound so it never surprises the user.
+        let mut p = make_pager(3);
+        assert!(matches!(
+            p.handle_key(key(KeyCode::Char('e'))),
+            ViewAction::None
+        ));
+    }
+
+    #[test]
     fn copy_keys_inert_in_search_mode() {
         // Within `/`-search mode `c` and `y` must be treated as search
         // characters, not as a copy trigger — otherwise users typing a
@@ -830,17 +901,19 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let mut buf = Buffer::empty(area);
         p.render(area, &mut buf);
-        // The pager renders into an inset popup_area = (1, 1, w-2, h-2),
-        // so the bottom border lives at y = popup_area.bottom() - 1, not
-        // at the outer area's last row.
-        let popup_bottom_y = (area.height as usize).saturating_sub(2);
-        let mut bottom = String::new();
-        for x in 1..area.right().saturating_sub(1) {
-            bottom.push_str(buf[(x, popup_bottom_y as u16)].symbol());
+        // The footer is now anchored to the bottom of the modal body (above the
+        // padding/border) rather than painted on the border, so scan the whole
+        // frame for the action labels.
+        let mut text = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
         }
         assert!(
-            bottom.contains("close") || bottom.contains("scroll"),
-            "expected footer hint on bottom border row {popup_bottom_y}, got: {bottom:?}"
+            text.contains("close") || text.contains("scroll"),
+            "expected footer hint in rendered pager, got:\n{text}"
         );
     }
 
@@ -1011,6 +1084,59 @@ mod tests {
         }
 
         assert_eq!(p.scroll, bottom);
+    }
+
+    #[test]
+    fn pager_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+
+        const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+        for (w, h) in BLOCKER_SIZES {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(make_pager(60));
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+                .collect();
+            let text = rows.join("\n");
+
+            // Footer keeps every action.
+            for label in [
+                "close",
+                "scroll",
+                "page",
+                "half",
+                "top/bottom",
+                "search",
+                "copy",
+            ] {
+                assert!(text.contains(label), "{w}x{h}: footer missing '{label}'");
+            }
+
+            // Composited frame is fully opaque.
+            assert!(!text.contains('X'), "{w}x{h}: background bleed-through");
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+
+            // No horizontal overflow.
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 
     #[test]

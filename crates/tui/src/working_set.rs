@@ -318,6 +318,54 @@ impl Workspace {
         prefix_hits
     }
 
+    /// One full completion walk with no needle: every discoverable display
+    /// string from the workspace walk plus the divergent-cwd walk (and the
+    /// always-discoverable AI dot-directories), deduped, in walk order.
+    /// Pair with [`rank_completion_candidates`] so the composer can filter
+    /// per keystroke without re-walking the filesystem (#3757).
+    ///
+    /// Needle-gated local path-reference completions are NOT included;
+    /// callers must fall back to [`Workspace::completions`] for path-like
+    /// needles (starting with `.` or containing a separator).
+    #[must_use]
+    pub fn completion_candidates(&self) -> Vec<String> {
+        let mut prefix_hits: Vec<String> = Vec::new();
+        let mut substring_hits: Vec<String> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        {
+            let mut ctx = SearchContext {
+                needle: "",
+                limit: usize::MAX,
+                prefix_hits: &mut prefix_hits,
+                substring_hits: &mut substring_hits,
+                seen: &mut seen,
+            };
+            let cwd_diverges = self
+                .cwd
+                .as_deref()
+                .map(|c| c != self.root.as_path())
+                .unwrap_or(false);
+            if cwd_diverges && let Some(cwd) = self.cwd.as_deref() {
+                walk_for_completions(
+                    cwd,
+                    cwd,
+                    &mut ctx,
+                    self.completion_walk_depth,
+                    self.follow_links,
+                );
+            }
+            walk_for_completions(
+                &self.root,
+                &self.root,
+                &mut ctx,
+                self.completion_walk_depth,
+                self.follow_links,
+            );
+        }
+        // Empty needle routes everything into prefix_hits.
+        prefix_hits
+    }
+
     /// Deterministic directory-browser completions for `@` mentions.
     ///
     /// Unlike [`Workspace::completions`], this mode does not fuzzy-rank across
@@ -569,6 +617,37 @@ fn add_local_reference_completions(
         }
         ctx.push_match(rel_str);
     }
+}
+
+/// Rank pre-collected completion candidates for `partial` the same way
+/// [`Workspace::completions`] ranks live walk hits: case-insensitive prefix
+/// matches first, then substring matches, each bucket alphabetical, truncated
+/// to `limit` (#3757).
+#[must_use]
+pub fn rank_completion_candidates(
+    candidates: &[String],
+    partial: &str,
+    limit: usize,
+) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let needle = partial.to_lowercase();
+    let mut prefix_hits: Vec<String> = Vec::new();
+    let mut substring_hits: Vec<String> = Vec::new();
+    for candidate in candidates {
+        let lower = candidate.to_lowercase();
+        if needle.is_empty() || lower.starts_with(&needle) {
+            prefix_hits.push(candidate.clone());
+        } else if lower.contains(&needle) {
+            substring_hits.push(candidate.clone());
+        }
+    }
+    prefix_hits.sort();
+    substring_hits.sort();
+    prefix_hits.extend(substring_hits);
+    prefix_hits.truncate(limit);
+    prefix_hits
 }
 
 fn should_try_local_reference_completion(needle: &str) -> bool {
@@ -1679,8 +1758,8 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).expect("mkdir");
-        fs::write(src.join("a.rs"), &"a".repeat(200)).expect("write");
-        fs::write(src.join("b.rs"), &"b".repeat(200)).expect("write");
+        fs::write(src.join("a.rs"), "a".repeat(200)).expect("write");
+        fs::write(src.join("b.rs"), "b".repeat(200)).expect("write");
 
         let mut ws = cache_maximal_ws();
         ws.config.max_resident_file_bytes = 200;
@@ -2247,6 +2326,38 @@ mod tests {
         assert!(should_try_local_reference_completion("path/"));
         assert!(should_try_local_reference_completion("path/to/file"));
         assert!(should_try_local_reference_completion("/usr"));
+    }
+
+    #[test]
+    fn cached_candidates_rank_like_live_completions() {
+        // #3757: the composer caches one full candidate walk and ranks per
+        // keystroke in memory; the ranked result must match what the live
+        // walk would return for non-path-like needles.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("src/mention.rs"), "// m").unwrap();
+        std::fs::write(root.join("README.md"), "# readme").unwrap();
+        std::fs::write(root.join("Makefile"), "all:").unwrap();
+
+        let ws = Workspace::with_cwd(root.to_path_buf(), None);
+        let candidates = ws.completion_candidates();
+        assert!(
+            candidates.iter().any(|c| c == "src/main.rs"),
+            "{candidates:?}"
+        );
+
+        for needle in ["ma", "readme", "men", ""] {
+            let live = ws.completions(needle, 16);
+            let ranked = rank_completion_candidates(&candidates, needle, 16);
+            assert_eq!(ranked, live, "needle {needle:?}");
+        }
+
+        // Limit truncation applies after prefix/substring bucketing.
+        let ranked = rank_completion_candidates(&candidates, "ma", 1);
+        assert_eq!(ranked.len(), 1);
+        assert!(ranked[0].to_lowercase().starts_with("ma"), "{ranked:?}");
     }
 
     /// Regression for #1921 — `completions("/", N)` must return without

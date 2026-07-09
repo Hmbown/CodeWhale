@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use super::headers::{apply_safe_custom_headers, with_default_mcp_http_headers};
 use super::{
     ERROR_BODY_PREVIEW_BYTES, McpHttpAuth, McpTransport, bounded_body_excerpt,
-    find_sse_event_separator, is_mcp_stale_session_body, mask_url_secrets, sse_field_value,
+    find_sse_event_separator_bytes, is_mcp_stale_session_body, mask_url_secrets, sse_field_value,
 };
 
 pub(super) struct SseTransport {
@@ -119,7 +119,9 @@ impl SseTransport {
 
         let mut stream = response.bytes_stream();
         use futures_util::StreamExt;
-        let mut buffer = String::new();
+        // Raw byte buffer so a multi-byte UTF-8 char split across reads is not
+        // corrupted, and bounded so a separator-less server cannot OOM us.
+        let mut buffer: Vec<u8> = Vec::new();
 
         loop {
             if cancel_token.is_cancelled() {
@@ -139,12 +141,18 @@ impl SseTransport {
                 }
             };
             let chunk = item?;
-            let s = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&s);
+            buffer.extend_from_slice(&chunk);
+            if buffer.len() > super::MAX_SSE_FRAME_BYTES {
+                anyhow::bail!(
+                    "MCP SSE frame exceeded {} bytes without a separator — aborting",
+                    super::MAX_SSE_FRAME_BYTES
+                );
+            }
 
-            while let Some((pos, separator_len)) = find_sse_event_separator(&buffer) {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + separator_len..].to_string();
+            while let Some((pos, separator_len)) = find_sse_event_separator_bytes(&buffer) {
+                // Complete block: decoding cannot split a multi-byte char.
+                let event_block = String::from_utf8_lossy(&buffer[..pos]).into_owned();
+                buffer.drain(..pos + separator_len);
 
                 let mut event_type = "message";
                 let mut data = String::new();
@@ -214,12 +222,32 @@ impl SseTransport {
     }
 
     fn resolve_endpoint_url(base_url: &str, endpoint_url: &str) -> Result<String> {
-        if endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://") {
-            return Ok(endpoint_url.to_string());
-        }
         let base = reqwest::Url::parse(base_url)?;
-        let joined = base.join(endpoint_url)?;
-        Ok(joined.to_string())
+        let resolved =
+            if endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://") {
+                reqwest::Url::parse(endpoint_url)?
+            } else {
+                base.join(endpoint_url)?
+            };
+        // Security: the server-supplied `endpoint` event must stay same-origin
+        // as the connect URL. The connect host is vetted by network policy
+        // once, but the endpoint host is never re-checked — so an absolute
+        // cross-origin endpoint would let a malicious MCP server redirect the
+        // client's *authenticated* POSTs (Bearer/OAuth headers attached) to an
+        // internal host (169.254.169.254, localhost admin ports, …): an SSRF /
+        // policy bypass. Relative endpoints are same-origin by construction.
+        if resolved.scheme() != base.scheme()
+            || resolved.host_str() != base.host_str()
+            || resolved.port_or_known_default() != base.port_or_known_default()
+        {
+            anyhow::bail!(
+                "MCP SSE endpoint {} is not same-origin as {} — refusing to send \
+                 authenticated requests cross-origin",
+                mask_url_secrets(resolved.as_str()),
+                mask_url_secrets(base.as_str()),
+            );
+        }
+        Ok(resolved.to_string())
     }
 }
 
@@ -279,5 +307,40 @@ impl McpTransport for SseTransport {
                 SseInbound::Message(msg) => return Ok(msg),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::SseTransport;
+
+    #[test]
+    fn resolve_endpoint_accepts_relative_and_same_origin() {
+        let base = "https://mcp.example.com/v1/sse";
+        // Relative path -> same origin.
+        assert_eq!(
+            SseTransport::resolve_endpoint_url(base, "/messages?sid=1").unwrap(),
+            "https://mcp.example.com/messages?sid=1"
+        );
+        // Absolute but same origin -> allowed.
+        assert_eq!(
+            SseTransport::resolve_endpoint_url(base, "https://mcp.example.com/messages").unwrap(),
+            "https://mcp.example.com/messages"
+        );
+    }
+
+    #[test]
+    fn resolve_endpoint_rejects_cross_origin_ssrf() {
+        let base = "https://mcp.example.com/v1/sse";
+        // Different host (metadata endpoint) -> rejected.
+        assert!(SseTransport::resolve_endpoint_url(base, "http://169.254.169.254/latest").is_err());
+        // Different scheme -> rejected.
+        assert!(
+            SseTransport::resolve_endpoint_url(base, "http://mcp.example.com/messages").is_err()
+        );
+        // Different port -> rejected.
+        assert!(
+            SseTransport::resolve_endpoint_url(base, "https://mcp.example.com:8443/x").is_err()
+        );
     }
 }

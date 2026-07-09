@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
+use super::Status;
+
 pub const FLEET_PROTOCOL_VERSION: &str = "0.1.0";
 
 /// Globally unique identifier for a fleet run.
@@ -65,6 +67,18 @@ pub enum FleetRunStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+impl Status for FleetRunStatus {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Pending | Self::Queued | Self::Running)
+    }
+    fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused)
+    }
 }
 
 /// Specification of a single unit of work within a run.
@@ -599,6 +613,18 @@ pub enum FleetWorkerStatus {
     Retired,
 }
 
+impl Status for FleetWorkerStatus {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Retired)
+    }
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Online | Self::Busy)
+    }
+    fn is_paused(&self) -> bool {
+        false
+    }
+}
+
 /// Durable inbox entry: a task waiting to be leased to a worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FleetInboxEntry {
@@ -845,10 +871,11 @@ impl FleetAlertEndpoint {
 /// type so the protocol crate stays free of the route model.
 ///
 /// CRITICAL no-secrets invariant: this struct carries ONLY non-sensitive route
-/// shape — provider id/kind, model ids, wire protocol, role/loadout intent, and
-/// the resolution source. It must NEVER hold a credential, API key, bearer
-/// token, or a base URL that embeds credentials. There is intentionally no
-/// field that could carry a secret.
+/// shape — provider id/kind, model ids, wire protocol, role/loadout/model-class
+/// intent, reasoning tier when known, and deterministic intent sources. It
+/// must NEVER hold a credential, API key, bearer token, or a base URL that
+/// embeds credentials. There is intentionally no field that could carry a
+/// secret.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FleetResolvedRoute {
     /// Resolved provider canonical id (e.g. `"deepseek"`).
@@ -868,7 +895,62 @@ pub struct FleetResolvedRoute {
     /// Effective Fleet loadout intent, when one applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loadout: Option<String>,
+    /// Original task-level model-class intent, when authored separately from
+    /// `loadout`. Profile `model_class_hint` is normalized into `loadout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_class: Option<String>,
+    /// Runtime model-route seam used by sub-agent routing (`inherit`, `faster`,
+    /// `auto`, or `fixed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_route: Option<String>,
+    /// Concrete reasoning tier, when it is known by the route resolver path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Deterministic source for the effective role intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_source: Option<String>,
+    /// Deterministic source for the effective loadout intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadout_source: Option<String>,
+    /// Deterministic source for the model-class hint, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_class_source: Option<String>,
+    /// Deterministic source for the model selector used by the resolver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_source: Option<String>,
     /// How the route was produced (e.g. `"resolver"`).
+    pub source: String,
+}
+
+/// Effective worker authority persisted on a [`FleetReceipt`] (#3211).
+///
+/// This is a non-secret snapshot of the already-computed runtime profile. It
+/// records what the worker was allowed to do; it does not grant permissions and
+/// does not carry credentials, sandbox paths, or provider endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FleetEffectivePermissions {
+    /// Whether the worker profile may modify workspace files.
+    pub write: bool,
+    /// Whether the worker profile may use network-capable tools.
+    pub network: bool,
+    /// Shell posture (`none`, `read_only`, or `full`).
+    pub shell: String,
+    /// Tool-surface posture (`inherit` or `explicit`).
+    pub tool_scope: String,
+    /// Explicit tool names when `tool_scope` is `explicit`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    /// Whether the worker is intended to run detached/background.
+    pub background: bool,
+    /// Remaining nested-delegation budget after parent intersection/hardening.
+    pub max_spawn_depth: u32,
+    /// Roster profile id that contributed to this worker, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// Roster layer for `profile_id` (`built_in`, `config`, or `workspace`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_origin: Option<String>,
+    /// How this snapshot was produced (e.g. `"worker_runtime_profile"`).
     pub source: String,
 }
 
@@ -892,6 +974,9 @@ pub struct FleetReceipt {
     /// existed) deserializable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_route: Option<FleetResolvedRoute>,
+    /// Effective worker authority for this task (#3211).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_permissions: Option<FleetEffectivePermissions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1208,6 +1293,7 @@ mod tests {
                 notes: None,
             }),
             resolved_route: None,
+            effective_permissions: None,
         };
         let json = serde_json::to_string(&receipt).unwrap();
         let back: FleetReceipt = serde_json::from_str(&json).unwrap();
@@ -1231,6 +1317,7 @@ mod tests {
                 notes: Some("manual verification required".to_string()),
             }),
             resolved_route: None,
+            effective_permissions: None,
         };
 
         let json = serde_json::to_string(&receipt).unwrap();
@@ -1386,7 +1473,26 @@ mod tests {
                 protocol: "chat_completions".to_string(),
                 role: Some("builder".to_string()),
                 loadout: Some("auto".to_string()),
+                model_class: Some("balanced".to_string()),
+                model_route: Some("auto".to_string()),
+                reasoning_effort: Some("high".to_string()),
+                role_source: Some("task.role".to_string()),
+                loadout_source: Some("task.loadout".to_string()),
+                model_class_source: Some("task.model_class".to_string()),
+                model_source: Some("task.model".to_string()),
                 source: "resolver".to_string(),
+            }),
+            effective_permissions: Some(FleetEffectivePermissions {
+                write: true,
+                network: true,
+                shell: "full".to_string(),
+                tool_scope: "explicit".to_string(),
+                tools: vec!["read_file".to_string(), "apply_patch".to_string()],
+                background: true,
+                max_spawn_depth: 2,
+                profile_id: Some("builder".to_string()),
+                profile_origin: Some("built_in".to_string()),
+                source: "worker_runtime_profile".to_string(),
             }),
         }
     }
@@ -1397,12 +1503,41 @@ mod tests {
         let json = serde_json::to_string(&receipt).unwrap();
         let back: FleetReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(back.resolved_route, receipt.resolved_route);
+        assert_eq!(back.effective_permissions, receipt.effective_permissions);
         let route = back.resolved_route.unwrap();
         assert_eq!(route.provider_id, "deepseek");
         assert_eq!(route.wire_model_id, "deepseek-v4-pro");
         assert_eq!(route.protocol, "chat_completions");
         assert_eq!(route.role.as_deref(), Some("builder"));
+        assert_eq!(route.loadout.as_deref(), Some("auto"));
+        assert_eq!(route.model_class.as_deref(), Some("balanced"));
+        assert_eq!(route.model_route.as_deref(), Some("auto"));
+        assert_eq!(route.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(route.role_source.as_deref(), Some("task.role"));
+        assert_eq!(route.loadout_source.as_deref(), Some("task.loadout"));
+        assert_eq!(
+            route.model_class_source.as_deref(),
+            Some("task.model_class")
+        );
+        assert_eq!(route.model_source.as_deref(), Some("task.model"));
         assert_eq!(route.source, "resolver");
+
+        let permissions = back
+            .effective_permissions
+            .expect("effective permissions should round-trip");
+        assert!(permissions.write);
+        assert!(permissions.network);
+        assert_eq!(permissions.shell, "full");
+        assert_eq!(permissions.tool_scope, "explicit");
+        assert_eq!(
+            permissions.tools,
+            vec!["read_file".to_string(), "apply_patch".to_string()]
+        );
+        assert!(permissions.background);
+        assert_eq!(permissions.max_spawn_depth, 2);
+        assert_eq!(permissions.profile_id.as_deref(), Some("builder"));
+        assert_eq!(permissions.profile_origin.as_deref(), Some("built_in"));
+        assert_eq!(permissions.source, "worker_runtime_profile");
     }
 
     #[test]
@@ -1421,6 +1556,42 @@ mod tests {
         let receipt: FleetReceipt = serde_json::from_str(legacy).unwrap();
         assert_eq!(receipt.task_id, "task-legacy");
         assert!(receipt.resolved_route.is_none());
+    }
+
+    #[test]
+    fn fleet_resolved_route_legacy_shape_still_deserializes() {
+        let legacy = r#"{
+            "run_id": "run-route",
+            "task_id": "task-route",
+            "worker_id": "worker-route",
+            "completed_at": "2026-06-23T00:00:00Z",
+            "result": "pass",
+            "artifacts": [],
+            "score": null,
+            "resolved_route": {
+                "provider_id": "deepseek",
+                "provider_kind": "deepseek",
+                "canonical_model": "deepseek-v4-pro",
+                "wire_model_id": "deepseek-v4-pro",
+                "protocol": "chat_completions",
+                "role": "builder",
+                "loadout": "fast",
+                "source": "resolver"
+            }
+        }"#;
+
+        let receipt: FleetReceipt = serde_json::from_str(legacy).unwrap();
+        let route = receipt.resolved_route.expect("legacy route should parse");
+        assert_eq!(route.source, "resolver");
+        assert_eq!(route.role.as_deref(), Some("builder"));
+        assert_eq!(route.loadout.as_deref(), Some("fast"));
+        assert_eq!(route.model_class, None);
+        assert_eq!(route.model_route, None);
+        assert_eq!(route.reasoning_effort, None);
+        assert_eq!(route.role_source, None);
+        assert_eq!(route.loadout_source, None);
+        assert_eq!(route.model_class_source, None);
+        assert_eq!(route.model_source, None);
     }
 
     #[test]

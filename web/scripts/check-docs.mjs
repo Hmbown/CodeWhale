@@ -143,9 +143,11 @@ function main() {
     for (const s of install.stale) {
       console.error(`  found "${s.found}", expected "${s.expected}" in: ${s.context}`);
     }
-  } else {
-    console.log(`[check-docs] OK — install snippets${install.note ? ` (${install.note})` : ""}`);
+    // #3770: a stale install snippet must fail the gate, not fall through to
+    // the final PASS. Mirror the exit(1) used by checks 1 and 2 above.
+    process.exit(1);
   }
+  console.log(`[check-docs] OK — install snippets${install.note ? ` (${install.note})` : ""}`);
 
   console.log("[check-docs] PASS");
 }

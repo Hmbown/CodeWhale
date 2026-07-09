@@ -476,13 +476,20 @@ fn count_projection(record: &HandleRecord) -> Value {
             "lines": text.lines().count(),
             "bytes": text.len(),
         }),
-        HandleValue::Json(value) => json!({
-            "handle": record.handle,
-            "projection": "count",
-            "json_type": json_type(value),
-            "length": record.handle.length,
-            "bytes": value.to_string().len(),
-        }),
+        HandleValue::Json(value) => {
+            let bytes = {
+                let mut cw = crate::utils::CountingWriter::new();
+                let _ = serde_json::to_writer(&mut cw, value);
+                cw.count()
+            };
+            json!({
+                "handle": record.handle,
+                "projection": "count",
+                "json_type": json_type(value),
+                "length": record.handle.length,
+                "bytes": bytes,
+            })
+        }
     }
 }
 
@@ -645,10 +652,12 @@ fn bounded_text_projection(
     })
 }
 
-fn record_text(record: &HandleRecord) -> String {
+fn record_text(record: &HandleRecord) -> std::borrow::Cow<'_, str> {
     match &record.value {
-        HandleValue::Text(text) => text.clone(),
-        HandleValue::Json(value) => serde_json::to_string_pretty(value).unwrap_or_default(),
+        HandleValue::Text(text) => std::borrow::Cow::Borrowed(text),
+        HandleValue::Json(value) => {
+            std::borrow::Cow::Owned(serde_json::to_string_pretty(value).unwrap_or_default())
+        }
     }
 }
 

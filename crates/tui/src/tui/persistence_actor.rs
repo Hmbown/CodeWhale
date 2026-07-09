@@ -130,7 +130,12 @@ pub fn spawn_persistence_actor(manager: SessionManager) -> PersistActorHandle {
                 while let Ok(req) = rx.try_recv() {
                     match req {
                         PersistRequest::Checkpoint(session) => {
+                            // Last-writer-wins: a fresh checkpoint supersedes a
+                            // pending clear so the two never both apply in one
+                            // drain (which previously cleared then re-wrote the
+                            // stale checkpoint, undoing the clear).
                             latest_checkpoint = Some(session);
+                            should_clear = false;
                         }
                         PersistRequest::SessionSnapshot(session) => {
                             latest_session = Some(session);
@@ -143,7 +148,9 @@ pub fn spawn_persistence_actor(manager: SessionManager) -> PersistActorHandle {
                             latest_offline_queue = Some(PendingOfflineQueue::Clear);
                         }
                         PersistRequest::ClearCheckpoint => {
+                            // A clear supersedes a pending checkpoint write.
                             should_clear = true;
+                            latest_checkpoint = None;
                         }
                         PersistRequest::Shutdown => {
                             flush_inner(
@@ -177,6 +184,7 @@ pub fn spawn_persistence_actor(manager: SessionManager) -> PersistActorHandle {
                 match rx.recv().await {
                     Some(PersistRequest::Checkpoint(session)) => {
                         latest_checkpoint = Some(session);
+                        should_clear = false;
                     }
                     Some(PersistRequest::SessionSnapshot(session)) => {
                         latest_session = Some(session);
@@ -190,6 +198,7 @@ pub fn spawn_persistence_actor(manager: SessionManager) -> PersistActorHandle {
                     }
                     Some(PersistRequest::ClearCheckpoint) => {
                         should_clear = true;
+                        latest_checkpoint = None;
                     }
                     Some(PersistRequest::Shutdown) => {
                         flush_inner(

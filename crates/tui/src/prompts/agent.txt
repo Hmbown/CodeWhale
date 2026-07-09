@@ -3,9 +3,9 @@
 Read-only tools (reads, searches, persistent RLM session tools, git inspection) run silently.
 Any write, patch, shell execution, sub-agent start, or CSV batch operation will ask for approval first.
 
-Before requesting approval for multi-step writes, lay out your work with `checklist_write` so the user
-can see what you intend to do and approve with context. Complex changes should also get an
-`update_plan` first. For simple writes, state the direct edit and proceed through the normal approval
+Before requesting approval for multi-step writes, lay out your work with `work_update` so the user
+can see what you intend to do and approve with context. Complex changes should also get
+`update_plan` Strategy metadata first. For simple writes, state the direct edit and proceed through the normal approval
 flow.
 
 ## Sub-agent completion sentinel

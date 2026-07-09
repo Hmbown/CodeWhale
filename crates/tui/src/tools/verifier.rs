@@ -435,6 +435,87 @@ impl ToolSpec for RunVerifiersTool {
     }
 }
 
+/// Run quick auto verifier gates after a successful workflow completion (#4013).
+pub(crate) async fn run_workflow_completion_gates(
+    context: &ToolContext,
+) -> Result<Value, ToolError> {
+    let gates = build_gate_plan(
+        context,
+        VerifierProfile::Auto,
+        VerifierLevel::Quick,
+        DEFAULT_MAX_PYTHON_FILES,
+        &[],
+    )?;
+    if gates.is_empty() {
+        return Ok(json!({
+            "success": false,
+            "profile": "auto",
+            "level": "quick",
+            "gate_count": 0,
+            "summary": "No verifier gates detected for this workspace.",
+            "gates": [],
+        }));
+    }
+
+    let workspace = context.workspace.display().to_string();
+    let mut handles = Vec::with_capacity(gates.len());
+    for gate in gates {
+        handles.push(tokio::task::spawn_blocking(move || run_gate(gate)));
+    }
+
+    let mut results = Vec::with_capacity(handles.len());
+    for handle in handles {
+        match handle.await {
+            Ok(result) => results.push(result),
+            Err(err) => results.push(GateResult {
+                name: "internal-join".to_string(),
+                ecosystem: "internal".to_string(),
+                status: GateStatus::Failed,
+                command: "tokio::task::spawn_blocking".to_string(),
+                cwd: workspace.clone(),
+                exit_code: None,
+                duration_ms: 0,
+                stdout: String::new(),
+                stderr: format!("Verifier task join failed: {err}"),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                skipped_reason: None,
+            }),
+        }
+    }
+    results.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let passed = results
+        .iter()
+        .filter(|result| result.status == GateStatus::Passed)
+        .count();
+    let failed = results
+        .iter()
+        .filter(|result| result.status == GateStatus::Failed)
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|result| result.status == GateStatus::Skipped)
+        .count();
+    let success = failed == 0 && skipped == 0;
+    if !success {
+        return Err(ToolError::execution_failed(format!(
+            "{passed} passed, {failed} failed, {skipped} skipped"
+        )));
+    }
+    Ok(json!({
+        "success": true,
+        "profile": "auto",
+        "level": "quick",
+        "gate_count": results.len(),
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "summary": format!("All {passed} verifier gates passed."),
+        "gates": results,
+    }))
+}
+
 fn verifier_tool_result(output: &RunVerifiersOutput) -> Result<ToolResult, ToolError> {
     ToolResult::json(output)
         .map_err(|err| ToolError::execution_failed(err.to_string()))
@@ -1403,10 +1484,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn run_verifiers_background_starts_shell_jobs_and_returns_task_ids() {
         if !crate::dependencies::RustC::available() {
             return;
         }
+        // The spawned `rustc` is usually the rustup shim, which resolves its
+        // toolchain through $HOME. Hold the process-wide env mutex so tests
+        // that temporarily swap HOME cannot break the child process.
+        let _env_lock = crate::test_support::lock_test_env();
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path());
         let tool = RunVerifiersTool;
@@ -1472,7 +1558,13 @@ mod tests {
             &mut ctx.shell_manager.lock().expect("shell manager"),
             task_id,
         );
-        assert_eq!(output.status, ShellStatus::Completed);
+        assert_eq!(
+            output.status,
+            ShellStatus::Completed,
+            "stdout: {:?} stderr: {:?}",
+            output.stdout,
+            output.stderr
+        );
         assert!(
             output.stdout.contains("rustc"),
             "stdout should include rustc version: {:?}",

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -46,6 +46,54 @@ use codewhale_protocol::runtime::{
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 const MAX_ACTIVE_THREADS_DEFAULT: usize = 8;
 const SUMMARY_LIMIT: usize = 280;
+
+/// Sentinel delimiters wrapping the compaction summary section persisted in a
+/// thread record's `system_prompt`. The section carries the engine-rendered
+/// summary (which contains the `Conversation Summary (Auto-Generated)` marker,
+/// so `SyncSession` → `extract_compaction_summary_prompt` restores it on
+/// engine reload). Delimiters make replacement idempotent: each completed
+/// compaction swaps the section in place instead of stacking duplicates.
+/// External `PATCH /v1/threads/{id}` callers that rewrite `system_prompt`
+/// should preserve this section verbatim or the summary is lost on reload.
+const COMPACTION_SUMMARY_BEGIN: &str = "<!-- compaction-summary:begin -->";
+const COMPACTION_SUMMARY_END: &str = "<!-- compaction-summary:end -->";
+
+/// Merge a rendered compaction summary into a thread record's system prompt,
+/// replacing any previously persisted summary section.
+fn merge_summary_into_prompt(base: Option<&str>, summary_text: &str) -> String {
+    let stripped = base.map(strip_summary_section).unwrap_or_default();
+    let mut out = stripped.trim_end().to_string();
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(COMPACTION_SUMMARY_BEGIN);
+    out.push('\n');
+    out.push_str(summary_text.trim());
+    out.push('\n');
+    out.push_str(COMPACTION_SUMMARY_END);
+    out
+}
+
+/// Remove a previously persisted compaction summary section, if present.
+fn strip_summary_section(base: &str) -> String {
+    let Some(start) = base.find(COMPACTION_SUMMARY_BEGIN) else {
+        return base.to_string();
+    };
+    let end = base[start..]
+        .find(COMPACTION_SUMMARY_END)
+        .map(|rel| start + rel + COMPACTION_SUMMARY_END.len());
+    let mut out = base[..start].trim_end().to_string();
+    if let Some(end) = end {
+        let tail = base[end..].trim_start();
+        if !tail.is_empty() {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(tail);
+        }
+    }
+    out
+}
 
 fn validated_record_id<'a>(id: &'a str, label: &str) -> Result<&'a str> {
     let trimmed = id.trim();
@@ -80,6 +128,26 @@ const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
 const RUNTIME_RESTART_REASON: &str = "Interrupted by process restart";
 const EMPTY_TURN_REASON: &str = "Turn completed without engine output";
 const APPROVAL_DECISION_TIMEOUT: Duration = Duration::from_secs(300);
+
+#[cfg(test)]
+static TEST_APPROVAL_DECISION_TIMEOUT_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn approval_decision_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        let ms = TEST_APPROVAL_DECISION_TIMEOUT_MS.load(std::sync::atomic::Ordering::SeqCst);
+        if ms > 0 {
+            return Duration::from_millis(ms);
+        }
+    }
+    APPROVAL_DECISION_TIMEOUT
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_approval_decision_timeout_ms(ms: u64) -> u64 {
+    TEST_APPROVAL_DECISION_TIMEOUT_MS.swap(ms, std::sync::atomic::Ordering::SeqCst)
+}
 
 const fn default_runtime_schema_version() -> u32 {
     CURRENT_RUNTIME_SCHEMA_VERSION
@@ -392,6 +460,15 @@ impl RuntimeThreadStore {
 
     pub fn list_turns_for_thread(&self, thread_id: &str) -> Result<Vec<TurnRecord>> {
         validated_record_id(thread_id, "thread id")?;
+        let mut out = self.list_all_turns()?;
+        out.retain(|turn| turn.thread_id == thread_id);
+        Ok(out)
+    }
+
+    /// Every turn in the store, sorted by creation time. One directory scan;
+    /// callers that need multiple threads' turns (boot recovery) use this
+    /// instead of paying a full scan per thread (#3757).
+    pub fn list_all_turns(&self) -> Result<Vec<TurnRecord>> {
         let mut out = Vec::new();
         let turns_dir = checked_existing_runtime_store_dir(&self.turns_dir)?;
         for entry in fs::read_dir(&turns_dir)
@@ -413,9 +490,7 @@ impl RuntimeThreadStore {
                     CURRENT_RUNTIME_SCHEMA_VERSION
                 );
             }
-            if turn.thread_id == thread_id {
-                out.push(turn);
-            }
+            out.push(turn);
         }
         out.sort_by_key(|a| a.created_at);
         Ok(out)
@@ -798,10 +873,13 @@ pub struct RuntimeThreadManager {
     event_tx: broadcast::Sender<RuntimeEventRecord>,
     manager_cfg: RuntimeThreadManagerConfig,
     cancel_token: CancellationToken,
-    task_manager: Arc<StdMutex<Option<crate::task_manager::SharedTaskManager>>>,
-    automations: Arc<StdMutex<Option<crate::automation_manager::SharedAutomationManager>>>,
-    pending_approvals: Arc<StdMutex<HashMap<String, oneshot::Sender<ExternalApprovalDecision>>>>,
-    pending_dynamic_tools: Arc<StdMutex<HashMap<String, oneshot::Sender<DynamicToolCallResult>>>>,
+    task_manager: Arc<parking_lot::Mutex<Option<crate::task_manager::SharedTaskManager>>>,
+    automations:
+        Arc<parking_lot::Mutex<Option<crate::automation_manager::SharedAutomationManager>>>,
+    pending_approvals:
+        Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<ExternalApprovalDecision>>>>,
+    pending_dynamic_tools:
+        Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<DynamicToolCallResult>>>>,
 }
 
 /// Helper types for `seed_thread_from_messages` — intermediate representation
@@ -969,10 +1047,10 @@ impl RuntimeThreadManager {
             event_tx,
             manager_cfg,
             cancel_token: CancellationToken::new(),
-            task_manager: Arc::new(StdMutex::new(None)),
-            automations: Arc::new(StdMutex::new(None)),
-            pending_approvals: Arc::new(StdMutex::new(HashMap::new())),
-            pending_dynamic_tools: Arc::new(StdMutex::new(HashMap::new())),
+            task_manager: Arc::new(parking_lot::Mutex::new(None)),
+            automations: Arc::new(parking_lot::Mutex::new(None)),
+            pending_approvals: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            pending_dynamic_tools: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         manager.recover_interrupted_state()?;
         Ok(manager)
@@ -981,9 +1059,7 @@ impl RuntimeThreadManager {
     /// Attach the durable task manager so model-visible task tools work inside
     /// runtime thread turns as well as interactive TUI turns.
     pub fn attach_task_manager(&self, task_manager: crate::task_manager::SharedTaskManager) {
-        if let Ok(mut slot) = self.task_manager.lock() {
-            *slot = Some(task_manager);
-        }
+        *self.task_manager.lock() = Some(task_manager);
     }
 
     /// Attach the automation manager for model-visible scheduling tools.
@@ -991,20 +1067,14 @@ impl RuntimeThreadManager {
         &self,
         automations: crate::automation_manager::SharedAutomationManager,
     ) {
-        if let Ok(mut slot) = self.automations.lock() {
-            *slot = Some(automations);
-        }
+        *self.automations.lock() = Some(automations);
     }
 
     #[allow(dead_code)] // Public API for external callers (runtime API, task manager)
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
-        if let Ok(mut map) = self.pending_approvals.lock() {
-            map.clear();
-        }
-        if let Ok(mut map) = self.pending_dynamic_tools.lock() {
-            map.clear();
-        }
+        self.pending_approvals.lock().clear();
+        self.pending_dynamic_tools.lock().clear();
     }
 
     #[allow(dead_code)] // Public API for external callers
@@ -1017,16 +1087,14 @@ impl RuntimeThreadManager {
         approval_id: &str,
     ) -> oneshot::Receiver<ExternalApprovalDecision> {
         let (tx, rx) = oneshot::channel();
-        if let Ok(mut map) = self.pending_approvals.lock() {
-            map.insert(approval_id.to_string(), tx);
-        }
+        self.pending_approvals
+            .lock()
+            .insert(approval_id.to_string(), tx);
         rx
     }
 
     fn cancel_pending_approval(&self, approval_id: &str) {
-        if let Ok(mut map) = self.pending_approvals.lock() {
-            map.remove(approval_id);
-        }
+        self.pending_approvals.lock().remove(approval_id);
     }
 
     fn register_pending_dynamic_tool(
@@ -1034,16 +1102,14 @@ impl RuntimeThreadManager {
         call_id: &str,
     ) -> oneshot::Receiver<DynamicToolCallResult> {
         let (tx, rx) = oneshot::channel();
-        if let Ok(mut map) = self.pending_dynamic_tools.lock() {
-            map.insert(call_id.to_string(), tx);
-        }
+        self.pending_dynamic_tools
+            .lock()
+            .insert(call_id.to_string(), tx);
         rx
     }
 
     fn cancel_pending_dynamic_tool(&self, call_id: &str) {
-        if let Ok(mut map) = self.pending_dynamic_tools.lock() {
-            map.remove(call_id);
-        }
+        self.pending_dynamic_tools.lock().remove(call_id);
     }
 
     pub fn deliver_external_approval(
@@ -1051,13 +1117,7 @@ impl RuntimeThreadManager {
         approval_id: &str,
         decision: ExternalApprovalDecision,
     ) -> bool {
-        let sender = match self.pending_approvals.lock() {
-            Ok(mut map) => map.remove(approval_id),
-            Err(e) => {
-                tracing::error!("pending_approvals mutex poisoned: {e}");
-                return false;
-            }
-        };
+        let sender = self.pending_approvals.lock().remove(approval_id);
         match sender {
             Some(tx) => tx.send(decision).is_ok(),
             None => false,
@@ -1069,13 +1129,7 @@ impl RuntimeThreadManager {
         call_id: &str,
         result: DynamicToolCallResult,
     ) -> bool {
-        let sender = match self.pending_dynamic_tools.lock() {
-            Ok(mut map) => map.remove(call_id),
-            Err(e) => {
-                tracing::error!("pending_dynamic_tools mutex poisoned: {e}");
-                return false;
-            }
-        };
+        let sender = self.pending_dynamic_tools.lock().remove(call_id);
         match sender {
             Some(tx) => tx.send(result).is_ok(),
             None => false,
@@ -1108,18 +1162,12 @@ impl RuntimeThreadManager {
 
     #[allow(dead_code)]
     pub fn pending_approvals_count(&self) -> usize {
-        self.pending_approvals
-            .lock()
-            .map(|map| map.len())
-            .unwrap_or(0)
+        self.pending_approvals.lock().len()
     }
 
     #[allow(dead_code)]
     pub fn pending_dynamic_tools_count(&self) -> usize {
-        self.pending_dynamic_tools
-            .lock()
-            .map(|map| map.len())
-            .unwrap_or(0)
+        self.pending_dynamic_tools.lock().len()
     }
 
     #[cfg(test)]
@@ -2566,8 +2614,8 @@ impl RuntimeThreadManager {
                 .saturating_mul(1024 * 1024 * 1024),
             lsp_config,
             runtime_services: crate::tools::spec::RuntimeToolServices {
-                task_manager: self.task_manager.lock().ok().and_then(|slot| slot.clone()),
-                automations: self.automations.lock().ok().and_then(|slot| slot.clone()),
+                task_manager: self.task_manager.lock().clone(),
+                automations: self.automations.lock().clone(),
                 task_data_dir: Some(self.manager_cfg.task_data_dir.clone()),
                 active_task_id: thread.task_id.clone(),
                 active_thread_id: Some(thread.id.clone()),
@@ -2578,6 +2626,10 @@ impl RuntimeThreadManager {
                 rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
             },
             subagent_model_overrides: cfg.subagent_model_overrides(),
+            fleet_roster: Arc::new(crate::fleet::roster::FleetRoster::load(
+                &cfg.fleet_config(),
+                &thread.workspace,
+            )),
             subagent_api_timeout: std::time::Duration::from_secs(
                 cfg.subagent_api_timeout_secs_for_provider(provider),
             ),
@@ -3098,7 +3150,42 @@ impl RuntimeThreadManager {
                     message,
                     messages_before,
                     messages_after,
+                    summary_prompt,
                 } => {
+                    // Persist the summary into the thread record so engine
+                    // reloads (LRU eviction / restart) restore it: reload
+                    // passes the record prompt through SyncSession, where
+                    // `extract_compaction_summary_prompt` picks the summary
+                    // back up. Without this the summary lives only in engine
+                    // memory and silently dies with the engine.
+                    if let Some(summary) =
+                        summary_prompt.as_deref().filter(|s| !s.trim().is_empty())
+                    {
+                        match self.get_thread(&thread_id).await {
+                            Ok(mut thread) => {
+                                let merged = merge_summary_into_prompt(
+                                    thread.system_prompt.as_deref(),
+                                    summary,
+                                );
+                                if thread.system_prompt.as_deref() != Some(merged.as_str()) {
+                                    thread.system_prompt = Some(merged);
+                                    thread.updated_at = Utc::now();
+                                    if let Err(e) = self.store.save_thread(&thread) {
+                                        tracing::warn!(
+                                            thread_id = %thread_id,
+                                            "Failed to persist compaction summary to thread record: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    thread_id = %thread_id,
+                                    "Failed to load thread for compaction summary persistence: {e}"
+                                );
+                            }
+                        }
+                    }
                     if let Some(item_id) = compaction_items.remove(&id) {
                         let mut item = self.store.load_item(&item_id)?;
                         item.status = TurnItemLifecycleStatus::Completed;
@@ -3329,7 +3416,8 @@ impl RuntimeThreadManager {
                     }
 
                     let rx = self.register_pending_approval(&id);
-                    match tokio::time::timeout(APPROVAL_DECISION_TIMEOUT, rx).await {
+                    let approval_timeout = approval_decision_timeout();
+                    match tokio::time::timeout(approval_timeout, rx).await {
                         Ok(Ok(ExternalApprovalDecision::Allow { remember })) => {
                             if remember {
                                 self.remember_thread_auto_approve(&thread_id).await;
@@ -3378,7 +3466,21 @@ impl RuntimeThreadManager {
                                 "approval.timeout",
                                 json!({
                                     "approval_id": id,
-                                    "timeout_secs": APPROVAL_DECISION_TIMEOUT.as_secs(),
+                                    "timeout_secs": approval_timeout.as_secs(),
+                                }),
+                            )
+                            .await
+                            .ok();
+                            self.emit_event(
+                                &thread_id,
+                                Some(&turn_id),
+                                None,
+                                "approval.decided",
+                                json!({
+                                    "approval_id": id,
+                                    "decision": "deny",
+                                    "remember": false,
+                                    "timeout": true,
                                 }),
                             )
                             .await
@@ -3697,16 +3799,31 @@ impl RuntimeThreadManager {
 
     fn recover_interrupted_state(&self) -> Result<()> {
         let now = Utc::now();
+        // One scan of the turns store, filtered to the interrupted-candidate
+        // statuses, grouped by thread. The previous shape re-read and
+        // re-parsed every turn file once per thread — O(threads x turns) on
+        // the boot path (#3757).
+        let mut turns_by_thread: HashMap<String, Vec<TurnRecord>> = HashMap::new();
+        for turn in self.store.list_all_turns()? {
+            if matches!(
+                turn.status,
+                RuntimeTurnStatus::Queued | RuntimeTurnStatus::InProgress
+            ) {
+                turns_by_thread
+                    .entry(turn.thread_id.clone())
+                    .or_default()
+                    .push(turn);
+            }
+        }
+        if turns_by_thread.is_empty() {
+            return Ok(());
+        }
         for mut thread in self.store.list_threads()? {
+            let Some(turns) = turns_by_thread.remove(&thread.id) else {
+                continue;
+            };
             let mut thread_changed = false;
-            for mut turn in self.store.list_turns_for_thread(&thread.id)? {
-                if !matches!(
-                    turn.status,
-                    RuntimeTurnStatus::Queued | RuntimeTurnStatus::InProgress
-                ) {
-                    continue;
-                }
-
+            for mut turn in turns {
                 turn.status = RuntimeTurnStatus::Interrupted;
                 turn.error = Some(RUNTIME_RESTART_REASON.to_string());
                 turn.ended_at = Some(now);
@@ -3817,7 +3934,8 @@ impl crate::tools::spec::DynamicToolExecutor for RuntimeThreadManager {
             )));
         }
 
-        match tokio::time::timeout(APPROVAL_DECISION_TIMEOUT, rx).await {
+        let approval_timeout = approval_decision_timeout();
+        match tokio::time::timeout(approval_timeout, rx).await {
             Ok(Ok(result)) => {
                 let text = dynamic_tool_result_text(&result.content);
                 if result.success {
@@ -3836,7 +3954,7 @@ impl crate::tools::spec::DynamicToolExecutor for RuntimeThreadManager {
             Err(_timeout) => {
                 self.cancel_pending_dynamic_tool(&call_id);
                 Err(crate::tools::spec::ToolError::Timeout {
-                    seconds: APPROVAL_DECISION_TIMEOUT.as_secs(),
+                    seconds: approval_timeout.as_secs(),
                 })
             }
         }

@@ -6,11 +6,14 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
 use crate::palette;
-use crate::tui::views::{CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
+    centered_modal_area, render_modal_footer, render_modal_surface,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct FeedbackOption {
@@ -120,41 +123,34 @@ impl ModalView for FeedbackPickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_width = 78.min(area.width.saturating_sub(4)).max(44);
-        let needed_height = (OPTIONS.len() as u16).saturating_add(7);
-        let popup_height = needed_height.min(area.height.saturating_sub(4)).max(8);
+        let popup_area = centered_modal_area(area, 78, (OPTIONS.len() as u16) + 7, 44, 8);
 
-        let popup_area = Rect {
-            x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-            y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
-
-        Clear.render(popup_area, buf);
+        render_modal_surface(area, popup_area, buf);
 
         let block = Block::default()
             .title(Line::from(Span::styled(
                 " Feedback ",
                 Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
+                    .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
             )))
-            .title_bottom(Line::from(vec![
-                Span::styled(" Up/Down ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("move "),
-                Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("open "),
-                Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("cancel "),
-            ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .style(Style::default().bg(palette::WHALE_BG))
             .padding(Padding::uniform(1));
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
+
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("Up/Down", "move"),
+                ActionHint::new("Enter", "open"),
+                ActionHint::new("Esc", "cancel"),
+            ],
+        );
 
         let mut lines = Vec::with_capacity(OPTIONS.len() + 2);
         lines.push(Line::from(Span::styled(
@@ -190,7 +186,7 @@ impl ModalView for FeedbackPickerView {
             ]));
         }
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).render(content, buf);
     }
 }
 
@@ -239,5 +235,57 @@ mod tests {
             view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             ViewAction::Close
         ));
+    }
+
+    /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires
+    /// every overlay to remain readable and fully operable at.
+    const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+
+    #[test]
+    fn feedback_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+        use ratatui::{buffer::Buffer, layout::Rect};
+        use unicode_width::UnicodeWidthStr;
+
+        for (w, h) in BLOCKER_SIZES {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(FeedbackPickerView::new());
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| {
+                    (0..w)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect();
+            let text = rows.join("\n");
+
+            for label in ["move", "open", "cancel"] {
+                assert!(text.contains(label), "{w}x{h}: missing footer '{label}'");
+            }
+            assert!(
+                !text.contains('X'),
+                "{w}x{h}: background bleed-through into modal surface"
+            );
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 }

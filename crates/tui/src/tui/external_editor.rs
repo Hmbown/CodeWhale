@@ -387,7 +387,7 @@ mod tests {
     fn resume_tui_child_modes_reenables_shared_terminal_modes() {
         let mut out = Vec::new();
 
-        crate::tui::ui::recover_terminal_modes(&mut out, false, true);
+        crate::tui::ui::recover_terminal_modes(&mut out, true, true);
 
         let seq = String::from_utf8_lossy(&out);
         assert!(
@@ -401,6 +401,31 @@ mod tests {
         assert!(
             seq.contains("\x1b[?2004h"),
             "external editor resume must restore bracketed paste: {seq:?}"
+        );
+    }
+
+    #[test]
+    fn resume_tui_child_modes_leaves_alternate_scroll_off_when_mouse_capture_inactive() {
+        let mut out = Vec::new();
+
+        crate::tui::ui::recover_terminal_modes(&mut out, false, true);
+
+        let seq = String::from_utf8_lossy(&out);
+        assert!(
+            !seq.contains("\x1b[?1007h"),
+            "external editor resume must not enable alternate-scroll without mouse capture: {seq:?}"
+        );
+        assert!(
+            seq.contains("\x1b[?1007l"),
+            "external editor resume must reset alternate-scroll without mouse capture: {seq:?}"
+        );
+        assert!(
+            seq.contains("\x1b[?1004h"),
+            "external editor resume must still restore focus events: {seq:?}"
+        );
+        assert!(
+            seq.contains("\x1b[?2004h"),
+            "external editor resume must still restore bracketed paste: {seq:?}"
         );
     }
 }

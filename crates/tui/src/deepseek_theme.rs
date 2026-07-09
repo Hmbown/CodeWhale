@@ -65,7 +65,7 @@ impl Theme {
             section_borders: Borders::ALL,
             section_border_type: BorderType::Plain,
             section_border_color: palette::BORDER_COLOR,
-            section_bg: palette::DEEPSEEK_INK,
+            section_bg: palette::WHALE_BG,
             section_title_color: palette::WHALE_ACCENT_PRIMARY,
             // Horizontal padding only. `Padding::uniform(1)` ate two rows of
             // each sidebar panel — for compact terminals where Work/Tasks/Agents
@@ -104,7 +104,7 @@ impl Theme {
             tool_label_color: palette::LIGHT_TEXT_HINT,
             tool_running_accent: palette::WHALE_ACCENT_PRIMARY,
             tool_success_accent: palette::LIGHT_TEXT_HINT,
-            tool_failed_accent: palette::DEEPSEEK_RED,
+            tool_failed_accent: palette::WHALE_ERROR,
             plan_progress_color: palette::WHALE_ACCENT_PRIMARY,
             plan_summary_color: palette::LIGHT_TEXT_MUTED,
             plan_explanation_color: palette::LIGHT_TEXT_HINT,
@@ -236,7 +236,7 @@ mod tests {
         let theme = Theme::dark();
         assert_eq!(theme.variant, Variant::Dark);
         assert_eq!(theme.section_border_color, palette::BORDER_COLOR);
-        assert_eq!(theme.section_bg, palette::DEEPSEEK_INK);
+        assert_eq!(theme.section_bg, palette::WHALE_BG);
         assert_eq!(theme.section_title_color, palette::WHALE_ACCENT_PRIMARY);
         assert_eq!(theme.tool_title_color, palette::TEXT_SOFT);
         assert_eq!(theme.tool_value_color, palette::TEXT_MUTED);

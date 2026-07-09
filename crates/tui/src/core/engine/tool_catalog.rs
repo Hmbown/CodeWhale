@@ -18,6 +18,7 @@ use crate::tools::spec::{ToolError, ToolResult, optional_str, optional_u64, requ
 use crate::tui::app::AppMode;
 
 use crate::dependencies::ExternalTool;
+use crate::regex_cache::compile_user_regex;
 
 pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
 pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
@@ -41,7 +42,6 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
 pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "agent",
     "apply_patch",
-    "checklist_write",
     "edit_file",
     "exec_interact",
     "exec_shell",
@@ -65,6 +65,7 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "update_plan",
     "wait_for_dev_server",
     "web_search",
+    "work_update",
     "write_file",
 ];
 
@@ -72,7 +73,7 @@ const CORE_ACTION_TOOL_FALLBACKS: &[CoreActionToolFallback] = &[
     CoreActionToolFallback {
         name: "exec_shell",
         description: "Run shell commands in the workspace.",
-        unavailable_reason: "Not present in the current model-visible catalog. Shell requires Agent or Yolo mode with allow_shell = true and no command tool allow/deny gate blocking it.",
+        unavailable_reason: "Not present in the current model-visible catalog. Interactive Agent sessions expose shell by default unless allow_shell = false; noninteractive and durable profiles require allow_shell = true. Plan mode hides shell, and command tool allow/deny gates can also block it.",
     },
     CoreActionToolFallback {
         name: "write_file",
@@ -98,6 +99,48 @@ struct CoreActionToolFallback {
     unavailable_reason: &'static str,
 }
 
+/// Pre-computed lowercased haystack + name for each fallback; built once.
+struct CachedFallback {
+    fallback: CoreActionToolFallback,
+    haystack: String,
+    name_lower: String,
+}
+
+static CACHED_FALLBACKS: std::sync::OnceLock<Vec<CachedFallback>> = std::sync::OnceLock::new();
+
+fn cached_fallbacks() -> &'static [CachedFallback] {
+    CACHED_FALLBACKS.get_or_init(|| {
+        CORE_ACTION_TOOL_FALLBACKS
+            .iter()
+            .map(|f| CachedFallback {
+                fallback: *f,
+                haystack: format!(
+                    "{}\n{}\n{}",
+                    f.name.to_lowercase(),
+                    f.description.to_lowercase(),
+                    f.unavailable_reason.to_lowercase(),
+                ),
+                name_lower: f.name.to_lowercase(),
+            })
+            .collect()
+    })
+}
+
+/// Membership index over [`DEFAULT_ACTIVE_NATIVE_TOOLS`], built once for the
+/// process lifetime. The array stays the source of truth for *ordered*
+/// iteration (see [`tool_catalog_consistency_issues`] and
+/// `engine::default_active_native_tool_names`); this set only accelerates the
+/// hot membership check in [`should_default_defer_tool`], which runs once per
+/// catalog tool on every catalog rebuild (i.e. per turn) — an O(n·m) linear
+/// scan over the array collapses to O(1) hashed lookups.
+static DEFAULT_ACTIVE_NATIVE_TOOLS_SET: std::sync::OnceLock<HashSet<&'static str>> =
+    std::sync::OnceLock::new();
+
+fn default_active_native_tools_set() -> &'static HashSet<&'static str> {
+    DEFAULT_ACTIVE_NATIVE_TOOLS_SET
+        .get_or_init(|| DEFAULT_ACTIVE_NATIVE_TOOLS.iter().copied().collect())
+}
+
 pub(super) fn should_default_defer_tool(name: &str, always_load: &HashSet<String>) -> bool {
     if always_load.contains(name) {
         return false;
@@ -107,9 +150,10 @@ pub(super) fn should_default_defer_tool(name: &str, always_load: &HashSet<String
         return false;
     }
 
-    !DEFAULT_ACTIVE_NATIVE_TOOLS
-        .iter()
-        .any(|core_tool| core_tool == &name)
+    // Membership-only test (no ordering dependency): the side set built from
+    // DEFAULT_ACTIVE_NATIVE_TOOLS returns identical hit/miss results as the
+    // former `.iter().any(...)` linear scan.
+    !default_active_native_tools_set().contains(name)
 }
 
 pub(super) fn apply_native_tool_deferral(catalog: &mut [Tool], always_load: &HashSet<String>) {
@@ -129,8 +173,16 @@ fn should_keep_mcp_tool_loaded(name: &str) -> bool {
     )
 }
 
-pub(super) fn apply_mcp_tool_deferral(catalog: &mut [Tool], mode: AppMode) {
+pub(super) fn apply_mcp_tool_deferral(
+    catalog: &mut [Tool],
+    mode: AppMode,
+    always_load: &HashSet<String>,
+) {
     for tool in catalog {
+        if always_load.contains(&tool.name) {
+            tool.defer_loading = Some(false);
+            continue;
+        }
         tool.defer_loading =
             Some(mode != AppMode::Yolo && !should_keep_mcp_tool_loaded(&tool.name));
     }
@@ -169,7 +221,7 @@ pub(super) fn build_model_tool_catalog_with_surface(
     surface_budget: ToolSurfaceBudget,
 ) -> Vec<Tool> {
     apply_native_tool_deferral(&mut native_tools, always_load);
-    apply_mcp_tool_deferral(&mut mcp_tools, mode);
+    apply_mcp_tool_deferral(&mut mcp_tools, mode, always_load);
     apply_tool_surface_budget(&mut native_tools, surface_budget, always_load);
     apply_tool_surface_budget(&mut mcp_tools, surface_budget, always_load);
     // Sort each partition by name for prefix-cache stability (#263). The
@@ -313,8 +365,9 @@ fn active_tool_list_from_catalog(catalog: &[Tool], active: &HashSet<String>) -> 
     // and were activated mid-conversation by ToolSearch get appended at the
     // tail. Otherwise activating a deferred tool shifts every later tool's
     // byte offset and busts the cached prefix from that point onwards.
-    let mut head: Vec<Tool> = Vec::new();
-    let mut tail: Vec<Tool> = Vec::new();
+    let catalog_len = catalog.len();
+    let mut head: Vec<Tool> = Vec::with_capacity(catalog_len);
+    let mut tail: Vec<Tool> = Vec::with_capacity(catalog_len);
     for tool in catalog {
         if !active.contains(&tool.name) {
             continue;
@@ -360,15 +413,6 @@ fn tool_search_haystack(tool: &Tool) -> String {
     )
 }
 
-fn tool_search_fallback_haystack(fallback: CoreActionToolFallback) -> String {
-    format!(
-        "{}\n{}\n{}",
-        fallback.name.to_lowercase(),
-        fallback.description.to_lowercase(),
-        fallback.unavailable_reason.to_lowercase()
-    )
-}
-
 fn catalog_contains_tool(catalog: &[Tool], name: &str) -> bool {
     catalog.iter().any(|tool| tool.name == name)
 }
@@ -381,14 +425,14 @@ fn unavailable_core_action_tools_with_regex(
     if max_results == 0 {
         return Ok(Vec::new());
     }
-    let regex = regex::Regex::new(query)
+    let regex = compile_user_regex(query)
         .map_err(|err| ToolError::invalid_input(format!("Invalid regex query: {err}")))?;
-    Ok(CORE_ACTION_TOOL_FALLBACKS
+    Ok(cached_fallbacks()
         .iter()
-        .copied()
-        .filter(|fallback| !catalog_contains_tool(catalog, fallback.name))
-        .filter(|fallback| regex.is_match(&tool_search_fallback_haystack(*fallback)))
+        .filter(|cf| !catalog_contains_tool(catalog, cf.fallback.name))
+        .filter(|cf| regex.is_match(&cf.haystack))
         .take(max_results)
+        .map(|cf| cf.fallback)
         .collect())
 }
 
@@ -410,12 +454,12 @@ fn unavailable_core_action_tools_with_bm25_like(
     }
 
     let mut scored: Vec<(i64, CoreActionToolFallback)> = Vec::new();
-    for fallback in CORE_ACTION_TOOL_FALLBACKS {
-        if catalog_contains_tool(catalog, fallback.name) {
+    for cf in cached_fallbacks() {
+        if catalog_contains_tool(catalog, cf.fallback.name) {
             continue;
         }
-        let hay = tool_search_fallback_haystack(*fallback);
-        let name = fallback.name.to_lowercase();
+        let hay = &cf.haystack;
+        let name = &cf.name_lower;
         let mut score = 0i64;
         for term in &terms {
             if hay.contains(term) {
@@ -426,7 +470,7 @@ fn unavailable_core_action_tools_with_bm25_like(
             }
         }
         if score > 0 {
-            scored.push((score, *fallback));
+            scored.push((score, cf.fallback));
         }
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(b.1.name)));
@@ -442,7 +486,7 @@ fn discover_tools_with_regex(
     query: &str,
     max_results: usize,
 ) -> Result<Vec<String>, ToolError> {
-    let regex = regex::Regex::new(query)
+    let regex = compile_user_regex(query)
         .map_err(|err| ToolError::invalid_input(format!("Invalid regex query: {err}")))?;
 
     let mut matches = Vec::new();
@@ -615,6 +659,21 @@ pub(super) fn tool_catalog_consistency_issues(
 }
 
 pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> String {
+    // Dogfood A5 (#4092): models mid-checklist sometimes emit each list entry
+    // as its own tool call named `item`/`todo`/... . Fuzzy suggestions are
+    // actively misleading there ("Did you mean: note, tts?"); name the actual
+    // fix instead.
+    if matches!(
+        tool_name,
+        "item" | "items" | "todo" | "todos" | "checklist" | "checklist_item" | "plan_item"
+    ) {
+        return format!(
+            "Tool '{tool_name}' is not available in the current tool catalog. \
+             Checklist entries are not separate tool calls — write the whole list \
+             in one `work_update` call with a `todos` array of \
+             {{content, status}} objects."
+        );
+    }
     let suggestions = suggest_tool_names(catalog, tool_name, 3);
     let shell_hint = if is_shell_tool_name(tool_name) {
         Some(shell_tool_allow_shell_hint())
@@ -650,10 +709,11 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
 }
 
 fn shell_tool_allow_shell_hint() -> &'static str {
-    "Shell tools are disabled because top-level `allow_shell = false`; \
-     they require `allow_shell = true`. \
-     In Agent mode, run `/config allow_shell true` for this session or add `--save` \
-     for future sessions; the next turn will expose shell with approval gating"
+    "Shell tools are absent because this session or profile disabled shell access, \
+     commonly via top-level `allow_shell = false` or Plan mode. \
+     Interactive Act mode exposes shell by default with approval gating unless disabled. \
+     Run `/config allow_shell true` for this session or add `--save` for future sessions; \
+     the next turn will expose shell again"
 }
 
 fn is_shell_tool_name(tool_name: &str) -> bool {
@@ -876,9 +936,9 @@ fn likely_field_corrections(
     } else if has_received("replacement") && has_expected("replace") {
         corrections.push("replacement -> replace".to_string());
     }
-    if tool_name == "checklist_update" && has_received("todos") {
+    if matches!(tool_name, "checklist_update" | "todo_update") && has_received("todos") {
         corrections.push(
-            "Use checklist_write to replace the full list, or retry checklist_update with id and status."
+            "Use work_update to replace the full list, or retry checklist_update/todo_update with id and status."
                 .to_string(),
         );
     }

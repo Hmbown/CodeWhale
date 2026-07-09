@@ -18,7 +18,7 @@ Environment:
   CODEWHALE_RELEASE_BASE_URL
                            Custom release asset base URL ending in /download
   CODEWHALE_SKIP_GLIBC_CHECK=1
-                           Skip Linux arm64/riscv64 glibc compatibility preflight
+                           Skip Linux arm64 glibc compatibility preflight
 
 Examples:
   curl -fsSL https://codewhale.net/install.sh | CODEWHALE_INSTALL_DIR=/usr/local/bin sh
@@ -135,7 +135,7 @@ version_at_least() {
 
 check_glibc() {
   case "$target" in
-    linux-arm64|linux-riscv64) ;;
+    linux-arm64) ;;
     *) return ;;
   esac
 
@@ -150,8 +150,8 @@ check_glibc() {
 codewhale install: prebuilt CodeWhale $target assets require glibc $required or newer.
 This system reports glibc ${host:-unavailable}.
 
-Linux x64 uses a static musl build. Linux arm64 and riscv64 release assets are
-GNU libc builds from Ubuntu 24.04. Build from source with Cargo or set
+Linux x64 uses a static musl build. Linux arm64 release assets are GNU libc
+builds from Ubuntu 24.04. Build from source with Cargo or set
 CODEWHALE_SKIP_GLIBC_CHECK=1 to bypass this check at your own risk.
 EOF
     exit 1
@@ -171,13 +171,9 @@ detect_platform() {
   case "$arch" in
     x86_64|amd64) cpu="x64" ;;
     arm64|aarch64) cpu="arm64" ;;
-    riscv64) cpu="riscv64" ;;
+    riscv64) fail "Linux riscv64 prebuilt assets are temporarily unavailable because the locked rquickjs-sys dependency does not ship riscv64gc bindings." ;;
     *) fail "unsupported CPU architecture: $arch. Use Cargo or build from source." ;;
   esac
-
-  if [ "$platform" = "macos" ] && [ "$cpu" = "riscv64" ]; then
-    fail "macOS riscv64 is not a supported release target"
-  fi
 
   printf '%s-%s' "$platform" "$cpu"
 }

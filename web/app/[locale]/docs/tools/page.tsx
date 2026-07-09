@@ -1,14 +1,17 @@
 import Link from "next/link";
+import { buildPageMetadata } from "@/lib/page-meta";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   const isZh = locale === "zh";
-  return {
+  return buildPageMetadata({
+    path: "/docs/tools",
+    locale,
     title: isZh ? "工具 · CodeWhale 文档" : "Tools · CodeWhale Docs",
     description: isZh
       ? "类型化工具集、工具生命周期和精选工具目录。"
       : "Typed tool surface, tool lifecycle, and the curated tool catalog.",
-  };
+  });
 }
 
 export default async function ToolsPage({ params }: { params: Promise<{ locale: string }> }) {

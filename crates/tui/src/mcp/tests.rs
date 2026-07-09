@@ -232,6 +232,40 @@ fn mcp_server_config_omits_headers_when_empty() {
     );
 }
 
+#[test]
+fn expand_env_placeholders_expands_value_from_environment() {
+    let _lock = crate::test_support::lock_test_env();
+    let _secret =
+        crate::test_support::EnvVarGuard::set("MCP_TEST_SECRET_TOKEN", "test-secret-123456");
+    let mut env = HashMap::new();
+    env.insert(
+        "API_TOKEN".to_string(),
+        "${MCP_TEST_SECRET_TOKEN}".to_string(),
+    );
+
+    let expanded = expand_env_placeholders_map(&env, "env").unwrap();
+
+    assert_eq!(
+        expanded.get("API_TOKEN").map(String::as_str),
+        Some("test-secret-123456")
+    );
+}
+
+#[test]
+fn expand_env_placeholders_reports_missing_variable_without_secret_value() {
+    let _lock = crate::test_support::lock_test_env();
+    let _missing = crate::test_support::EnvVarGuard::remove("MCP_TEST_MISSING_SECRET");
+
+    let err = expand_env_placeholders("Bearer ${MCP_TEST_MISSING_SECRET}")
+        .expect_err("missing env should fail")
+        .to_string();
+
+    // The error must name the variable but must not leak the surrounding
+    // value (which in practice carries the secret).
+    assert!(err.contains("MCP_TEST_MISSING_SECRET"));
+    assert!(!err.contains("Bearer "));
+}
+
 #[tokio::test]
 async fn mcp_http_auth_prefers_static_authorization_over_bearer_env() {
     let mut headers = HashMap::new();
@@ -354,6 +388,19 @@ fn streamable_http_transport_stores_headers() {
         },
     );
     assert_eq!(transport.auth.headers, headers);
+}
+
+#[test]
+fn mcp_auth_required_error_item_is_model_visible() {
+    let item = McpPool::mcp_auth_required_error_item("nordic-mcp");
+    assert_eq!(item["error"], "authentication_required");
+    assert_eq!(item["server"], "nordic-mcp");
+    assert!(
+        item["message"]
+            .as_str()
+            .expect("message")
+            .contains("codewhale mcp login nordic-mcp")
+    );
 }
 
 #[test]
@@ -718,7 +765,7 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_creation() {
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 
     fs::create_dir_all(&project_dir).unwrap();
     fs::write(
@@ -728,8 +775,11 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_creation() {
     .unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 }
 
@@ -753,13 +803,16 @@ async fn workspace_mcp_pool_reload_picks_up_project_config_after_workspace_trust
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 
     write_workspace_trust_config(&trust_env.config_path, &workspace);
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 }
 
@@ -783,14 +836,17 @@ async fn workspace_mcp_pool_reload_drops_project_config_after_workspace_trust_re
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 
     fs::remove_file(&trust.config_path).unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 }
 
 #[tokio::test]
@@ -814,14 +870,17 @@ async fn workspace_mcp_pool_reload_drops_project_config_after_deletion() {
     .unwrap();
 
     let mut pool = McpPool::from_config_path_with_workspace(&global_path, &workspace).unwrap();
-    let names: std::collections::BTreeSet<_> = pool.server_names().into_iter().collect();
-    let expected: std::collections::BTreeSet<_> = ["global", "project"].into_iter().collect();
+    let names: std::collections::BTreeSet<String> = pool.server_names().into_iter().collect();
+    let expected: std::collections::BTreeSet<String> =
+        ["global".to_string(), "project".to_string()]
+            .into_iter()
+            .collect();
     assert_eq!(names, expected);
 
     fs::remove_file(project_path).unwrap();
 
     assert!(pool.reload_if_config_changed().await.unwrap());
-    assert_eq!(pool.server_names(), vec!["global"]);
+    assert_eq!(pool.server_names(), vec!["global".to_string()]);
 }
 
 #[test]
@@ -994,42 +1053,6 @@ fn test_mcp_pool_is_mcp_tool() {
     assert!(McpPool::is_mcp_tool("read_mcp_resource"));
     assert!(!McpPool::is_mcp_tool("read_file"));
     assert!(!McpPool::is_mcp_tool("exec_shell"));
-}
-
-#[test]
-fn test_format_tool_result_text() {
-    let result = serde_json::json!({
-        "content": [
-            {"type": "text", "text": "Hello, world!"}
-        ]
-    });
-    assert_eq!(format_tool_result(&result), "Hello, world!");
-}
-
-#[test]
-fn test_format_tool_result_error() {
-    let result = serde_json::json!({
-        "isError": true,
-        "content": [
-            {"type": "text", "text": "Something went wrong"}
-        ]
-    });
-    assert_eq!(format_tool_result(&result), "Error: Something went wrong");
-}
-
-#[test]
-fn test_format_tool_result_multiple_content() {
-    let result = serde_json::json!({
-        "content": [
-            {"type": "text", "text": "Line 1"},
-            {"type": "text", "text": "Line 2"},
-            {"type": "image", "data": "base64..."}
-        ]
-    });
-    let formatted = format_tool_result(&result);
-    assert!(formatted.contains("Line 1"));
-    assert!(formatted.contains("Line 2"));
-    assert!(formatted.contains("[image content]"));
 }
 
 struct ScriptedValueTransport {
@@ -1298,7 +1321,7 @@ async fn reload_if_config_changed_swaps_config_on_content_change() {
     assert!(reloaded, "content-changed config must trigger reload");
     let names = pool.server_names();
     assert!(
-        names.contains(&"new"),
+        names.contains(&"new".to_string()),
         "expected new server in pool after reload, got {names:?}"
     );
 }
@@ -1782,6 +1805,33 @@ fn find_sse_event_separator_accepts_lf_and_crlf() {
         find_sse_event_separator("event: endpoint\r\n\r\n"),
         Some((15, 4))
     );
+}
+
+#[test]
+fn find_sse_event_separator_bytes_matches_str_and_survives_multibyte() {
+    // Same offsets as the str version.
+    assert_eq!(
+        find_sse_event_separator_bytes(b"event: endpoint\n\n"),
+        Some((15, 2))
+    );
+    assert_eq!(
+        find_sse_event_separator_bytes(b"event: endpoint\r\n\r\n"),
+        Some((15, 4))
+    );
+    // A frame whose data holds a multi-byte char, accumulated byte-wise and
+    // split mid-char across two reads, decodes intact (no U+FFFD).
+    let frame = "data: 你好\n\n";
+    let bytes = frame.as_bytes();
+    let split = bytes.len() - 3; // inside "好" / before the separator
+    let mut buffer: Vec<u8> = Vec::new();
+    buffer.extend_from_slice(&bytes[..split]);
+    assert_eq!(find_sse_event_separator_bytes(&buffer), None);
+    buffer.extend_from_slice(&bytes[split..]);
+    let (pos, sep) = find_sse_event_separator_bytes(&buffer).expect("separator");
+    let block = String::from_utf8_lossy(&buffer[..pos]).into_owned();
+    assert_eq!(block, "data: 你好");
+    assert!(!block.contains('\u{FFFD}'), "multibyte corrupted");
+    assert_eq!(sep, 2);
 }
 
 #[tokio::test]
@@ -2504,6 +2554,97 @@ async fn sse_post_error_includes_response_body_excerpt() {
 }
 
 #[tokio::test]
+async fn streamable_http_caps_chunked_bodies_without_content_length() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let _lock = lock_mcp_loopback_tests().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    // Serve chunked responses (no Content-Length) of the requested size:
+    // GET /over streams past the cap, GET /under stays below it.
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0; 1024];
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                let total: usize = if request.starts_with("GET /over ") {
+                    256
+                } else {
+                    16
+                };
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+                let chunk = [b'x'; 32];
+                let mut sent = 0;
+                while sent < total {
+                    let n = chunk.len().min(total - sent);
+                    let frame = format!("{n:x}\r\n");
+                    socket.write_all(frame.as_bytes()).await.unwrap();
+                    socket.write_all(&chunk[..n]).await.unwrap();
+                    socket.write_all(b"\r\n").await.unwrap();
+                    sent += n;
+                }
+                socket.write_all(b"0\r\n\r\n").await.unwrap();
+                socket.flush().await.unwrap();
+            });
+        }
+    });
+
+    let client = test_http_client();
+    let cap = 64;
+
+    let over = client
+        .get(format!("http://{addr}/over"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        over.content_length(),
+        None,
+        "chunked response must not declare a length for this test to be meaningful"
+    );
+    let err = streamable_http::read_body_capped(over, cap)
+        .await
+        .expect_err("a chunked body past the cap must fail, not OOM");
+    assert!(
+        err.to_string().contains("exceeds"),
+        "unexpected error: {err}"
+    );
+
+    let under = client
+        .get(format!("http://{addr}/under"))
+        .send()
+        .await
+        .unwrap();
+    let body = streamable_http::read_body_capped(under, cap)
+        .await
+        .expect("a chunked body under the cap reads fine");
+    assert_eq!(body, "x".repeat(16));
+
+    server.abort();
+}
+
+#[tokio::test]
 async fn streamable_http_stale_session_reconnects_and_retries_tool_call() {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3106,4 +3247,57 @@ async fn custom_headers_applied_to_get_preflight() {
         header_seen.load(AtomicOrdering::SeqCst),
         "GET preflight must include user-configured custom headers"
     );
+}
+
+// === add_runtime_server_config conflict tests ===
+
+#[test]
+fn add_runtime_server_config_rejects_static_conflict() {
+    let config: McpConfig = serde_json::from_str(
+        r#"{
+        "servers": {
+            "existing": {"command": "node server.js"}
+        }
+    }"#,
+    )
+    .unwrap();
+    let pool = McpPool::new(config);
+
+    let err = pool
+        .add_runtime_server_config(
+            "existing".to_string(),
+            serde_json::from_str(r#"{"command": "npx other"}"#).unwrap(),
+        )
+        .unwrap_err();
+    assert!(err.contains("already exists in the config file"));
+}
+
+#[test]
+fn add_runtime_server_config_rejects_dynamic_duplicate() {
+    let pool = McpPool::new(McpConfig::default());
+
+    pool.add_runtime_server_config(
+        "my_server".to_string(),
+        serde_json::from_str(r#"{"command": "node a.js"}"#).unwrap(),
+    )
+    .unwrap();
+
+    let err = pool
+        .add_runtime_server_config(
+            "my_server".to_string(),
+            serde_json::from_str(r#"{"command": "node b.js"}"#).unwrap(),
+        )
+        .unwrap_err();
+    assert!(err.contains("already started earlier"));
+}
+
+#[test]
+fn add_runtime_server_config_accepts_new_name() {
+    let pool = McpPool::new(McpConfig::default());
+
+    pool.add_runtime_server_config(
+        "brand_new".to_string(),
+        serde_json::from_str(r#"{"command": "node x.js"}"#).unwrap(),
+    )
+    .unwrap();
 }

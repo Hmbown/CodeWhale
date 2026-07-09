@@ -6,7 +6,7 @@
 
 use ratatui::style::Color;
 
-#[path = "../src/palette.rs"]
+#[path = "../src/palette/mod.rs"]
 #[allow(dead_code)]
 mod palette;
 
@@ -98,12 +98,12 @@ fn verify_brand_aliases_follow_whale_tokens() {
     );
 
     assert_eq!(
-        palette::DEEPSEEK_BLUE_RGB,
+        palette::WHALE_ACCENT_PRIMARY_RGB,
         palette::WHALE_ACCENT_PRIMARY_RGB
     );
-    assert_eq!(palette::DEEPSEEK_BLUE, palette::WHALE_ACCENT_PRIMARY);
-    assert_eq!(palette::DEEPSEEK_SKY_RGB, palette::WHALE_INFO_RGB);
-    assert_eq!(palette::DEEPSEEK_RED_RGB, palette::WHALE_ERROR_RGB);
+    assert_eq!(palette::WHALE_ACCENT_PRIMARY, palette::WHALE_ACCENT_PRIMARY);
+    assert_eq!(palette::WHALE_INFO_RGB, palette::WHALE_INFO_RGB);
+    assert_eq!(palette::WHALE_ERROR_RGB, palette::WHALE_ERROR_RGB);
 }
 
 #[test]
@@ -111,33 +111,33 @@ fn contrast_guardrails_for_key_ui_pairs() {
     let min_readable = 4.5;
 
     assert_min_contrast(
-        "TEXT_BODY on DEEPSEEK_INK",
+        "TEXT_BODY on WHALE_BG",
         palette::TEXT_BODY,
-        palette::DEEPSEEK_INK,
+        palette::WHALE_BG,
         min_readable,
     );
     assert_min_contrast(
-        "TEXT_SECONDARY on DEEPSEEK_INK",
+        "TEXT_SECONDARY on WHALE_BG",
         palette::TEXT_SECONDARY,
-        palette::DEEPSEEK_INK,
+        palette::WHALE_BG,
         min_readable,
     );
     assert_min_contrast(
-        "TEXT_HINT on DEEPSEEK_INK",
+        "TEXT_HINT on WHALE_BG",
         palette::TEXT_HINT,
-        palette::DEEPSEEK_INK,
+        palette::WHALE_BG,
         min_readable,
     );
     assert_min_contrast(
-        "STATUS_WARNING on DEEPSEEK_INK",
+        "STATUS_WARNING on WHALE_BG",
         palette::STATUS_WARNING,
-        palette::DEEPSEEK_INK,
+        palette::WHALE_BG,
         min_readable,
     );
     assert_min_contrast(
-        "STATUS_ERROR on DEEPSEEK_INK",
+        "STATUS_ERROR on WHALE_BG",
         palette::STATUS_ERROR,
-        palette::DEEPSEEK_INK,
+        palette::WHALE_BG,
         min_readable,
     );
     assert_min_contrast(

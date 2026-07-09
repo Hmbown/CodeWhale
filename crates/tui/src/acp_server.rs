@@ -219,12 +219,11 @@ where
                     // Stream exhausted without an explicit stop: turn is done.
                     None => return Ok(PromptOutcome::Completed(accumulated)),
                     Some(Ok(event)) => {
-                        if let Some(text) = stream_text_chunk(&event) {
-                            if !text.is_empty() {
+                        if let Some(text) = stream_text_chunk(&event)
+                            && !text.is_empty() {
                                 accumulated.push_str(text);
                                 write_session_update(writer, session_id, text.to_string()).await?;
                             }
-                        }
                         match event {
                             StreamEvent::MessageStop => {
                                 return Ok(PromptOutcome::Completed(accumulated));

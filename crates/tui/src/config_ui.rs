@@ -952,7 +952,7 @@ impl From<&str> for TranscriptSpacingValue {
 impl From<&str> for DefaultModeValue {
     fn from(value: &str) -> Self {
         match AppMode::from_setting(value) {
-            AppMode::Agent => Self::Agent,
+            AppMode::Agent | AppMode::Operate => Self::Agent,
             AppMode::Plan => Self::Plan,
             AppMode::Auto => Self::Agent,
             AppMode::Yolo => Self::Yolo,

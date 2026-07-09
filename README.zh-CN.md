@@ -20,7 +20,7 @@ DeepInfra 以及本地 vLLM/SGLang/Ollama 都是一等路由；当你手里是 A
 
 ```bash
 npm install -g codewhale
-codewhale --version   # 0.8.65
+codewhale --version   # 0.8.67
 ```
 
 npm wrapper（Node 18+）会从 GitHub Releases 下载经 SHA-256 校验的二进制，并安装
@@ -49,17 +49,18 @@ nix run github:Hmbown/CodeWhale
 scoop install codewhale        # 或使用 GitHub Releases 中的 NSIS 安装包
 
 # CNB 镜像：适合无法稳定访问 GitHub 的用户
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.65 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.67 codewhale-tui --locked --force
 
 # 旧 Homebrew 兼容路径：formula 改名期间仍沿用 deepseek-tui
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 ```
 
-各平台的预编译归档——包括 Linux riscv64——都附在
-[GitHub Releases](https://github.com/Hmbown/CodeWhale/releases)。校验和、
-中国大陆镜像、Windows 细节与故障排查见 [docs/INSTALL.md](docs/INSTALL.md)。
+Linux x64/arm64、macOS x64/arm64 和 Windows x64 的预编译归档都附在
+[GitHub Releases](https://github.com/Hmbown/CodeWhale/releases)。Linux riscv64
+预编译归档暂时暂停，等待上游 QuickJS 绑定支持。校验和、中国大陆镜像、
+Windows 细节与故障排查见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 ## 第一次运行
 
@@ -146,12 +147,26 @@ codewhale exec --allowed-tools read_file,exec_shell --max-turns 10 "fix the fail
 
 完整细节见 [CHANGELOG.md](CHANGELOG.md)。
 
+## CodeWhale for VS Code —— 图形界面前端
+
+更喜欢图形化的 IDE 体验而不是终端？[**CodeWhale for VS Code**](https://github.com/HengQuWorld/CodeWhale-VSCode) 是社区维护的 GUI 前端，把同一个 CodeWhale 引擎封装成原生 VS Code 侧边栏——聊天、斜杠命令、线程管理、实时 diff、任务管理与设置 UI，全部在编辑器内完成。
+
+GUI 通过相同的 [Runtime API](docs/RUNTIME_API.md) 与本地 `codewhale` 运行时通信，会话、provider、模式与 skills 在终端与 IDE 之间保持同步。如果你日常就在 VS Code 里工作，欢迎试用：
+
+```bash
+npm install -g codewhale        # 先安装引擎
+# 然后在 VS Code 扩展面板搜索 "CodeWhale"
+```
+
+> 本仓库 [`extensions/vscode/`](extensions/vscode/) 下的最小脚手架是独立的
+> Phase 0 只读查看器。完整的聊天体验请使用上面链接的 GUI 项目。
+
 ## 核心想法 —— 这个版本放进来的 mission idea
 
 多数编程 Agent 从加码开始：更多工具、更长上下文、更多自主性。CodeWhale
 从落实责任开始。
 
-（这是本版本正在落地的设计使命；memory、cost、remote orchestration 等具体形态仍在迭代，详见下方的 v0.9.0 轨道。）
+（这是本版本正在落地的设计使命；memory、cost、remote orchestration 等具体形态仍在迭代，详见下方的后续轨道。）
 
 一个会改你仓库的 Agent 应该有一个地址——这个终端、这个用户、这个分支、
 这个会话。不是人格面具，而是一个回信地址。出了问题，“是模型干的”不是答案；
@@ -163,14 +178,18 @@ codewhale exec --allowed-tools read_file,exec_shell --max-turns 10 "fix the fail
 
 1. **用户意图至上。** 你当前的请求高于过期的仓库指引、记忆、先前的交接和
    人格叠加层。
-2. **仓库法律必须显式。** 添加 `.codewhale/constitution.json`，声明项目的
+2. **用户全局宪法由 `/constitution` 管理。** 正常设置会把结构化个人常驻法写到
+   `$CODEWHALE_HOME/constitution.json`，再渲染成模型可读的 prose block；这不是裸
+   prompt 编辑器。
+3. **仓库法律必须显式。** 添加 `.codewhale/constitution.json`，声明项目的
    持久权威：受保护的不变量、分支策略、验证规则。
-3. **证据高于叙述。** 工具输出胜过自信的猜测。`cargo test` 失败就如实报告
+4. **证据高于叙述。** 工具输出胜过自信的猜测。`cargo test` 失败就如实报告
    `cargo test` 失败，绝不被总结成乐观措辞。验证是任务的一部分，不是尾声。
-4. **记忆排在最后。** 有用，但永不具备权威。
+5. **记忆排在最后。** 有用，但永不具备权威。
 
 真正起作用的策略由代码强制执行，而非靠提示词：审批门、沙箱、快照、回滚和
-工具 schema 都是模型无法靠话术绕过的运行时机制。
+工具 schema 都是模型无法靠话术绕过的运行时机制。宪法可以表达偏好，但不会静默
+改变审批、沙箱、网络、信任或 MCP 权限。
 
 而这些法律没有一条住在模型里——这正是模型可以随时更换的原因。运行框架承载
 宪法；模型提供推理。DeepSeek 和开放权重世界是一等公民，你局域网里那台跑着
@@ -186,7 +205,7 @@ README 承载理念和最快路径，细节放在文档和 [codewhale.net](https
 
 - [用户指南](docs/GUIDE.md) —— 上手 CodeWhale 的第一个小时。
 - [安装指南](docs/INSTALL.md) —— 所有安装路径与故障排查。
-- [配置](docs/CONFIGURATION.md) —— 配置文件、仓库 constitution 和 provider 设置。
+- [配置](docs/CONFIGURATION.md) —— `/constitution`、用户全局宪法、仓库 constitution 和 provider 设置。
 - [Provider 注册表](docs/PROVIDERS.md) —— 模型路由、凭据、base URL 与能力边界。
 - [子 Agent](docs/SUBAGENTS.md) —— 角色、生命周期、输出契约与恢复行为。
 - [MCP](docs/MCP.md) —— 接入外部工具服务器，或让 CodeWhale 自己作为 MCP 服务器运行。
@@ -194,14 +213,14 @@ README 承载理念和最快路径，细节放在文档和 [codewhale.net](https
 - [Model Lab](docs/MODEL_LAB.md) —— 开放模型发现与评测路线图。
 - [架构](docs/ARCHITECTURE.md) —— crate 布局、运行时流程、工具系统、扩展点与安全模型。
 
-## v0.9.0 轨道
+## 后续轨道
 
-v0.9.0 是当前的集成轨道，正在那里汇聚的工作包括：
+当前发布为 0.8.67（Fleet/Workflow 易用性）。下列方向作为后续工作推进，而非当前发布内容：
 
 - 更强的跨会话、跨 Agent 的 relay 与交接界面；
 - 高密度工具运行时更安静的转录；
 - 面向 VS Code 与 GUI 客户端的运行时 API；
-- WhaleFlow 分支/叶子工作流编排。
+- Workflow 分支/叶子工作流编排。
 
 逐版本的细节见 [CHANGELOG.md](CHANGELOG.md)。
 

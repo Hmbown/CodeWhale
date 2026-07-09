@@ -116,6 +116,12 @@ pub enum Event {
         /// Number of messages after compaction.
         #[allow(dead_code)]
         messages_after: Option<usize>,
+        /// Rendered text of the accumulated compaction summary prompt, if any.
+        /// Host layers (e.g. the /v1 runtime) persist this into the thread
+        /// record so the summary survives engine reloads — without it the
+        /// summary lives only in engine memory and is lost on LRU eviction
+        /// or restart (SyncSession re-extracts it from the record prompt).
+        summary_prompt: Option<String>,
     },
 
     /// Context purge started.
@@ -177,6 +183,16 @@ pub enum Event {
     SubAgentMailbox {
         seq: u64,
         message: crate::tools::subagent::MailboxMessage,
+    },
+
+    /// Live workflow UI event (#4122). Mirrors a typed `WorkflowUiEvent` JSON
+    /// object so the TUI can advance the WorkflowPanel and the compact history
+    /// card while a run is still in flight (not only on tool complete).
+    WorkflowUi {
+        run_id: String,
+        /// Flattened event JSON: `{"type":"task_started", "at_ms":…, …}`.
+        /// Callers inject `run_id` on the object when available.
+        event: Value,
     },
 
     // === System Events ===
@@ -252,6 +268,14 @@ pub enum Event {
         denial_reason: String,
         blocked_network: bool,
         blocked_write: bool,
+    },
+
+    /// Observable LSP repair-loop update for the Turn Inspector (#4107).
+    /// Carries only summary counts/state — never raw prompt internals.
+    LspRepairUpdate {
+        diagnostics_found: usize,
+        files: usize,
+        injected: bool,
     },
 
     // === Prefix-Cache Stability Events ===

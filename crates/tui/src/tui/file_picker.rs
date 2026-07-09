@@ -20,11 +20,14 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
 use crate::palette;
-use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
+    render_modal_footer, render_modal_surface,
+};
 use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery};
 
 /// Maximum number of candidates collected from the initial walk. Keeps memory
@@ -323,58 +326,58 @@ impl ModalView for FilePickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_width = 80.min(area.width.saturating_sub(4));
-        let popup_height = ((VISIBLE_ROWS as u16) + 6).min(area.height.saturating_sub(4));
+        let popup_area = centered_modal_area(area, 80, (VISIBLE_ROWS as u16) + 7, 44, 8);
 
-        let popup_area = Rect {
-            x: area.x + (area.width.saturating_sub(popup_width)) / 2,
-            y: area.y + (area.height.saturating_sub(popup_height)) / 2,
-            width: popup_width,
-            height: popup_height,
-        };
+        render_modal_surface(area, popup_area, buf);
 
-        Clear.render(popup_area, buf);
-
+        let match_count = self.filtered.len();
+        // The match count moves into the title so the footer only carries the
+        // navigation hints, which now wrap inside the body via the shared
+        // helper instead of clipping off the border edge (#3732).
         let title = Line::from(vec![Span::styled(
-            " File Picker ",
+            format!(
+                " File Picker ({match_count} match{}) ",
+                if match_count == 1 { "" } else { "es" },
+            ),
             Style::default()
                 .fg(palette::WHALE_ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )]);
-        let footer_text = format!(
-            " {} match{}  ↑/↓ select  Enter insert @path  Esc close ",
-            self.filtered.len(),
-            if self.filtered.len() == 1 { "" } else { "es" },
-        );
         let block = Block::default()
             .title(title)
-            .title_bottom(Line::from(Span::styled(
-                footer_text,
-                Style::default().fg(palette::TEXT_MUTED),
-            )))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .style(Style::default().bg(palette::WHALE_BG))
             .padding(Padding::uniform(1));
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑/↓", "select"),
+                ActionHint::new("Enter", "insert @path"),
+                ActionHint::new("Esc", "close"),
+            ],
+        );
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Query line.
         lines.push(Line::from(vec![
-            Span::styled("> ", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+            Span::styled("> ", Style::default().fg(palette::WHALE_INFO).bold()),
             Span::raw(self.query.clone()),
             Span::styled(
                 " ",
                 Style::default()
-                    .fg(palette::DEEPSEEK_INK)
-                    .bg(palette::DEEPSEEK_SKY),
+                    .fg(palette::WHALE_BG)
+                    .bg(palette::WHALE_INFO),
             ),
         ]));
         lines.push(Line::from(""));
 
-        let visible = VISIBLE_ROWS.min(inner.height.saturating_sub(2) as usize);
+        let visible = VISIBLE_ROWS.min(content.height.saturating_sub(2) as usize);
         let end = (self.scroll + visible).min(self.filtered.len());
         if self.filtered.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -393,13 +396,14 @@ impl ModalView for FilePickerView {
                     Style::default().fg(palette::TEXT_PRIMARY)
                 };
                 let prefix = if selected { "▶ " } else { "  " };
-                let marker_field = if inner.width >= 18 {
+                let marker_field = if content.width >= 18 {
                     format!("{} ", self.relevance.markers_for(path))
                 } else {
                     String::new()
                 };
                 let reserved = prefix.chars().count() + marker_field.chars().count();
-                let display = truncate_path(path, (inner.width as usize).saturating_sub(reserved));
+                let display =
+                    truncate_path(path, (content.width as usize).saturating_sub(reserved));
                 let mut line = Line::from(format!("{prefix}{marker_field}{display}"));
                 line.style = style;
                 lines.push(line);
@@ -408,7 +412,7 @@ impl ModalView for FilePickerView {
 
         Paragraph::new(lines)
             .style(Style::default().fg(palette::TEXT_PRIMARY))
-            .render(inner, buf);
+            .render(content, buf);
     }
 }
 
@@ -852,5 +856,67 @@ mod tests {
                 .all(|path| !path.starts_with(".claude/worktrees/")),
             ".claude worktree files must not enter picker candidates: {candidates:?}",
         );
+    }
+
+    /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires
+    /// every overlay to remain readable and fully operable at.
+    const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
+
+    #[test]
+    fn file_picker_is_usable_and_opaque_at_blocker_sizes() {
+        use crate::tui::views::ViewStack;
+        use ratatui::{buffer::Buffer, layout::Rect};
+        use unicode_width::UnicodeWidthStr;
+
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        fs::write(root.join("src/lib.rs"), "").unwrap();
+        fs::write(root.join("README.md"), "").unwrap();
+
+        for (w, h) in BLOCKER_SIZES {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            for y in 0..h {
+                for x in 0..w {
+                    buf[(x, y)].set_symbol("X");
+                }
+            }
+            let mut stack = ViewStack::new();
+            stack.push(FilePickerView::new_with_relevance(
+                root,
+                FilePickerRelevance::default(),
+            ));
+            stack.render(area, &mut buf);
+
+            let rows: Vec<String> = (0..h)
+                .map(|y| {
+                    (0..w)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect();
+            let text = rows.join("\n");
+
+            for label in ["select", "insert @path", "close"] {
+                assert!(text.contains(label), "{w}x{h}: missing footer '{label}'");
+            }
+            assert!(
+                !text.contains('X'),
+                "{w}x{h}: background bleed-through into modal surface"
+            );
+            assert_eq!(
+                buf[(w / 2, h / 2)].bg,
+                palette::WHALE_BG,
+                "{w}x{h}: modal interior must be opaque"
+            );
+            for (y, row) in rows.iter().enumerate() {
+                assert!(
+                    UnicodeWidthStr::width(row.trim_end()) <= w as usize,
+                    "{w}x{h}: row {y} overflows width: {row:?}"
+                );
+            }
+        }
     }
 }

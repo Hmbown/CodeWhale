@@ -10,7 +10,9 @@ use crate::tui::app::{App, TaskPanelEntryKind};
 use crate::tui::format_helpers;
 use crate::tui::history::{HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use crate::tui::key_shortcuts;
-use crate::tui::subagent_routing::{active_fanout_counts, running_agent_count};
+use crate::tui::subagent_routing::{
+    active_fanout_counts, agents_sidebar_surface_visible, running_agent_count,
+};
 use crate::tui::ui::{
     active_foreground_shell_running, context_usage_snapshot, selected_detail_footer_label,
     status_color,
@@ -70,35 +72,51 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         let dot_frame = footer_working_label_frame(now_ms, app.fancy_animations);
-        // Surface one compact live status row in the footer whenever a turn
-        // is live. Tool turns get the current action plus active/done counts;
-        // non-tool work falls back to a descriptive label with elapsed time.
+        // Header ● Live owns coarse turn state; footer shows action detail only.
         let elapsed_secs = app
             .turn_started_at
             .map(|t| t.elapsed().as_secs())
             .unwrap_or(0);
         let active_subagent_label = active_subagent_status_label(app);
-        let mut label = active_subagent_label
-            .clone()
-            .or_else(|| active_tool_status_label(app))
-            .unwrap_or_else(|| {
-                // Show the working label during active turns (loading, compacting, etc.).
-                let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
-                if elapsed_secs > 0 {
-                    format!("{base} ({elapsed_secs}s)")
+        let mut label = if header_owns_live_pulse(app) {
+            active_subagent_label
+                .clone()
+                .or_else(|| active_tool_status_label(app, false))
+                .or_else(|| stall_reason(app))
+                .unwrap_or_default()
+        } else {
+            active_subagent_label
+                .clone()
+                .or_else(|| active_tool_status_label(app, true))
+                .unwrap_or_else(|| {
+                    let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
+                    if elapsed_secs > 0 {
+                        format!("{base} ({elapsed_secs}s)")
+                    } else {
+                        base.to_string()
+                    }
+                })
+        };
+        if header_owns_live_pulse(app) {
+            if let Some(reason) = stall_reason(app)
+                && !label.contains(&reason)
+            {
+                label = if label.is_empty() {
+                    reason
                 } else {
-                    base.to_string()
-                }
-            });
-        // Append stall reason when the turn has been running > 30 s.
-        if let Some(reason) = stall_reason(app) {
+                    format!("{label}  ({reason})")
+                };
+            }
+        } else if let Some(reason) = stall_reason(app) {
             label = format!("{label}  ({reason})");
         }
-        props.state_label = label;
+        if !label.is_empty() {
+            props.state_label = label;
+            props.state_color = palette::WHALE_INFO;
+        }
         if active_subagent_label.is_some() {
             props.agents.clear();
         }
-        props.state_color = palette::DEEPSEEK_SKY;
 
         // Water-spout frame source: wall-clock milliseconds. The sine-wave
         // math in `footer_working_strip_glyph_at` was tuned for this cadence
@@ -255,6 +273,11 @@ pub(crate) fn maybe_log_provider_wait_incident(app: &mut App) {
 /// itself still being in flight via `runtime_turn_status == "in_progress"`.
 /// Without that, the user sees the strip vanish for seconds at a time even
 /// though the agent is still working.
+/// Header `● Live` owns coarse turn liveness; footer defers to action detail.
+pub(crate) fn header_owns_live_pulse(app: &App) -> bool {
+    app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
+}
+
 pub(crate) fn footer_working_strip_active(app: &App) -> bool {
     let turn_in_progress = app.runtime_turn_status.as_deref() == Some("in_progress");
     app.is_loading
@@ -330,7 +353,11 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        // Pin sidebar so dogfood machines with Agents-visible settings.toml
+        // do not hide the footer agents chip this test asserts.
+        let mut app = App::new(options, &Config::default());
+        app.sidebar_focus = crate::tui::app::SidebarFocus::Hidden;
+        app
     }
 
     #[test]
@@ -362,17 +389,14 @@ mod tests {
     }
 
     #[test]
-    fn footer_state_label_prefers_busy_while_pausing_and_loading() {
-        // While the turn is still draining the pause request, the coarse
-        // footer stays "busy"; the finer Pausing/Paused split lives in the
-        // sidebar. This guards against reintroducing a redundant vocabulary.
+    fn footer_state_label_defers_coarse_busy_to_header_during_live_turns() {
         let mut app = create_test_app();
         app.is_loading = true;
         app.paused = true;
         app.paused_quarry = Some("Deploy to staging".to_string());
 
         let (label, _) = footer_state_label(&app);
-        assert_eq!(label, "busy");
+        assert_eq!(label, "ready");
     }
 
     #[test]
@@ -472,6 +496,9 @@ pub(crate) fn friendly_subagent_progress(app: &App, id: &str, status: &str) -> S
 }
 
 pub(crate) fn active_subagent_status_label(app: &App) -> Option<String> {
+    if agents_sidebar_surface_visible(app) {
+        return None;
+    }
     let running = running_agent_count(app);
     let fanout = active_fanout_counts(app);
     let (display_running, total) = if let Some((fanout_running, fanout_total)) = fanout {
@@ -539,7 +566,7 @@ impl ActiveToolStatusSnapshot {
     }
 }
 
-pub(crate) fn active_tool_status_label(app: &App) -> Option<String> {
+pub(crate) fn active_tool_status_label(app: &App, include_counts: bool) -> Option<String> {
     let active = app.active_cell.as_ref()?;
     if active.is_empty() {
         return None;
@@ -563,16 +590,16 @@ pub(crate) fn active_tool_status_label(app: &App) -> Option<String> {
         .or(app.turn_started_at)
         .map(|started| format!("{}s", started.elapsed().as_secs()));
 
-    let mut parts = vec![
-        primary,
-        format!("{} active", snapshot.running),
-        format!("{} done", snapshot.completed),
-    ];
+    let mut parts = vec![primary];
+    if include_counts {
+        parts.push(format!("{} active", snapshot.running));
+        parts.push(format!("{} done", snapshot.completed));
+    }
     if let Some(elapsed) = elapsed {
         parts.push(elapsed);
     }
     if active_foreground_shell_running(app) {
-        parts.push("Ctrl+B shell".to_string());
+        parts.push("Ctrl+B /jobs".to_string());
     }
     parts.push(key_shortcuts::tool_details_shortcut_action_hint("details"));
     Some(parts.join(" \u{00B7} "))
@@ -602,7 +629,7 @@ fn collect_active_tool_status(
             }
         }
         ToolCell::PlanUpdate(plan) => {
-            snapshot.record("update plan".to_string(), plan.status, None);
+            snapshot.record("update Strategy".to_string(), plan.status, None);
         }
         ToolCell::PatchSummary(patch) => {
             snapshot.record(format!("patch {}", patch.path), patch.status, None);
@@ -682,7 +709,7 @@ pub(crate) fn render_footer_from(
         ("ready", app.ui_theme.text_muted)
     };
 
-    let agents = if has(S::Agents) {
+    let agents = if has(S::Agents) && !agents_sidebar_surface_visible(app) {
         crate::tui::widgets::footer_agents_chip(running_agent_count(app), app.ui_locale)
     } else {
         Vec::new()
@@ -728,12 +755,11 @@ pub(crate) fn render_footer_from(
         cost,
         balance,
     );
-    if !has(S::Mode) {
-        props.mode_label = "";
-    }
     if !has(S::Model) {
         props.model.clear();
     }
+    // Header owns the mode chip — footer keeps model/cost/status only.
+    props.mode_label = "";
 
     // Shell-running chip: visible whenever foreground or background shell work
     // is active, regardless of user-configured status items.
@@ -1081,34 +1107,23 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
         return Vec::new();
     }
 
-    let (mode_label, mode_color) = footer_mode_style(app);
     let (status_label, status_color) = footer_state_label(app);
     let sep = " \u{00B7} ";
     let show_status = status_label != "ready";
 
-    let fixed_width = mode_label.width()
-        + sep.width()
-        + if show_status {
-            sep.width() + status_label.width()
-        } else {
-            0
-        };
-
-    if max_width <= mode_label.width() {
-        return vec![Span::styled(
-            truncate_line_to_width(mode_label, max_width),
-            Style::default().fg(mode_color),
-        )];
-    }
+    let fixed_width = if show_status {
+        sep.width() + status_label.width()
+    } else {
+        0
+    };
 
     let model_budget = max_width.saturating_sub(fixed_width).max(1);
     let model_label = truncate_line_to_width(&app.model, model_budget);
 
-    let mut spans = vec![
-        Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),
-        Span::styled(sep.to_string(), Style::default().fg(app.ui_theme.text_dim)),
-        Span::styled(model_label, Style::default().fg(app.ui_theme.text_hint)),
-    ];
+    let mut spans = vec![Span::styled(
+        model_label,
+        Style::default().fg(app.ui_theme.text_hint),
+    )];
 
     if show_status {
         spans.push(Span::styled(
@@ -1134,8 +1149,8 @@ pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Co
     if app.is_purging {
         return ("purging \u{238B}", app.ui_theme.status_warning);
     }
-    if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
-        return ("busy", app.ui_theme.status_working);
+    if header_owns_live_pulse(app) {
+        return ("ready", app.ui_theme.text_muted);
     }
     // Note: we deliberately do NOT show a "thinking" label for live turns.
     // Busy can mean model bytes, tool calls, approval waits, or sub-agents;
@@ -1171,18 +1186,6 @@ pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Co
     }
 
     ("idle", app.ui_theme.status_ready)
-}
-
-#[cfg(test)]
-pub(crate) fn footer_mode_style(app: &App) -> (&'static str, ratatui::style::Color) {
-    let label = app.mode.as_setting();
-    let color = match app.mode {
-        crate::tui::app::AppMode::Agent => app.ui_theme.mode_agent,
-        crate::tui::app::AppMode::Auto => app.ui_theme.mode_agent,
-        crate::tui::app::AppMode::Yolo => app.ui_theme.mode_yolo,
-        crate::tui::app::AppMode::Plan => app.ui_theme.mode_plan,
-    };
-    (label, color)
 }
 
 pub(crate) fn format_token_count_compact(tokens: u64) -> String {

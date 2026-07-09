@@ -7,14 +7,19 @@ export default {
       colors: {
         // DeepSeek-aligned palette: cool white + soft gray, indigo accents.
         // (Previous warm cream `#F4F1E8` read too "Anthropic-like".)
-        paper: "#FFFFFF",
-        "paper-deep": "#F4F6FB",
-        "paper-edge": "#E5E8F0",
+        //
+        // The surface/ink tokens resolve through CSS custom properties (RGB
+        // channel triples) so they can be re-themed per subtree. In :root the
+        // channels hold the exact light values below, so light-mode output is
+        // unchanged; the docs routes override them for dark mode (globals.css).
+        paper: "rgb(var(--c-paper) / <alpha-value>)",
+        "paper-deep": "rgb(var(--c-paper-deep) / <alpha-value>)",
+        "paper-edge": "rgb(var(--c-paper-edge) / <alpha-value>)",
         "paper-line": "#0E0E10",
         "paper-line-soft": "#D4D8E2",
-        ink: "#0E0E10",
-        "ink-soft": "#2E2E33",
-        "ink-mute": "#6B7280",
+        ink: "rgb(var(--c-ink) / <alpha-value>)",
+        "ink-soft": "rgb(var(--c-ink-soft) / <alpha-value>)",
+        "ink-mute": "rgb(var(--c-ink-mute) / <alpha-value>)",
         indigo: "#4D6BFE",
         "indigo-deep": "#3A52CC",
         "indigo-pale": "#E9EEFE",

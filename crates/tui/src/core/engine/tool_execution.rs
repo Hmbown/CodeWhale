@@ -4,7 +4,13 @@
 //! parallel-tool fanout out of `engine.rs`; the turn loop still owns planning,
 //! approval, and how tool results are written back into session state.
 
-use std::{fs::OpenOptions, io::Write, sync::Arc, time::Duration};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use super::*;
 
@@ -123,6 +129,10 @@ pub(super) fn emit_tool_audit(event: serde_json::Value) {
     let Some(path) = std::env::var_os("DEEPSEEK_TOOL_AUDIT_LOG") else {
         return;
     };
+    emit_tool_audit_to_path(&PathBuf::from(path), event);
+}
+
+fn emit_tool_audit_to_path(path: &Path, event: serde_json::Value) {
     let line = match serde_json::to_string(&event) {
         Ok(line) => line,
         Err(e) => {
@@ -130,7 +140,6 @@ pub(super) fn emit_tool_audit(event: serde_json::Value) {
             return;
         }
     };
-    let path = PathBuf::from(path);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -140,7 +149,7 @@ pub(super) fn emit_tool_audit(event: serde_json::Value) {
         );
         return;
     }
-    match OpenOptions::new().create(true).append(true).open(&path) {
+    match OpenOptions::new().create(true).append(true).open(path) {
         Ok(mut file) => {
             if let Err(e) = writeln!(file, "{line}") {
                 tracing::error!("Failed to write to audit log {}: {e}", path.display());
@@ -163,7 +172,7 @@ impl Engine {
             .call_tool(name, input)
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        let content = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+        let content = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
         Ok(ToolResult::success(content))
     }
 
@@ -404,53 +413,7 @@ impl Engine {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::{ffi::OsString, path::Path, sync::Mutex, time::Duration};
-
-    /// Tests in this module mutate `DEEPSEEK_TOOL_AUDIT_LOG` which is
-    /// process-global; serialise through this guard so the parallel
-    /// runner doesn't observe interleaved env mutations.
-    static AUDIT_TEST_GUARD: Mutex<()> = Mutex::new(());
-
-    fn audit_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        AUDIT_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    struct AuditEnvGuard {
-        previous: Option<OsString>,
-    }
-
-    impl AuditEnvGuard {
-        fn set(path: &Path) -> Self {
-            let previous = std::env::var_os("DEEPSEEK_TOOL_AUDIT_LOG");
-            // SAFETY: serialised by the guard above.
-            unsafe {
-                std::env::set_var("DEEPSEEK_TOOL_AUDIT_LOG", path);
-            }
-            Self { previous }
-        }
-
-        fn unset() -> Self {
-            let previous = std::env::var_os("DEEPSEEK_TOOL_AUDIT_LOG");
-            // SAFETY: serialised by the guard above.
-            unsafe {
-                std::env::remove_var("DEEPSEEK_TOOL_AUDIT_LOG");
-            }
-            Self { previous }
-        }
-    }
-
-    impl Drop for AuditEnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: callers hold AUDIT_TEST_GUARD for this guard's lifetime.
-            unsafe {
-                if let Some(previous) = self.previous.take() {
-                    std::env::set_var("DEEPSEEK_TOOL_AUDIT_LOG", previous);
-                } else {
-                    std::env::remove_var("DEEPSEEK_TOOL_AUDIT_LOG");
-                }
-            }
-        }
-    }
+    use std::time::Duration;
 
     #[tokio::test]
     async fn terminal_guard_queues_resume_when_event_channel_is_full() {
@@ -499,26 +462,30 @@ mod tests {
     }
 
     #[test]
-    fn emit_tool_audit_writes_jsonl_line_when_env_var_set() {
-        let _g = audit_test_guard();
+    fn emit_tool_audit_to_path_writes_jsonl_lines() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("audit.log");
-        let _env = AuditEnvGuard::set(&path);
         let marker = path.display().to_string();
 
-        emit_tool_audit(json!({
-            "event": "tool.spillover",
-            "test_marker": marker,
-            "tool_id": "call-abc",
-            "tool_name": "exec_shell",
-            "path": "/tmp/foo.txt",
-        }));
-        emit_tool_audit(json!({
-            "event": "tool.result",
-            "test_marker": marker,
-            "tool_id": "call-xyz",
-            "success": true,
-        }));
+        emit_tool_audit_to_path(
+            &path,
+            json!({
+                "event": "tool.spillover",
+                "test_marker": marker,
+                "tool_id": "call-abc",
+                "tool_name": "exec_shell",
+                "path": "/tmp/foo.txt",
+            }),
+        );
+        emit_tool_audit_to_path(
+            &path,
+            json!({
+                "event": "tool.result",
+                "test_marker": marker,
+                "tool_id": "call-xyz",
+                "success": true,
+            }),
+        );
 
         let body = std::fs::read_to_string(&path).expect("audit log written");
         let entries: Vec<serde_json::Value> = body
@@ -549,26 +516,12 @@ mod tests {
     }
 
     #[test]
-    fn emit_tool_audit_is_noop_when_env_var_unset() {
-        let _g = audit_test_guard();
-        let _env = AuditEnvGuard::unset();
-        // Should not panic and should not create any file. We can't
-        // assert "no file written" without knowing where one might be
-        // written, but the contract is "do nothing", which we verify
-        // by ensuring the call returns without error.
-        emit_tool_audit(json!({"event": "noop", "x": 1}));
-        // Successful return is the assertion.
-    }
-
-    #[test]
     fn emit_tool_audit_creates_parent_directory() {
-        let _g = audit_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         // Path with a parent that doesn't exist yet — the writer
         // should create it.
         let nested = tmp.path().join("nested").join("dir").join("audit.log");
-        let _env = AuditEnvGuard::set(&nested);
-        emit_tool_audit(json!({"event": "test"}));
+        emit_tool_audit_to_path(&nested, json!({"event": "test"}));
         assert!(nested.exists(), "writer should mkdir -p the parent chain");
     }
 }

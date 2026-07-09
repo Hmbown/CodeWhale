@@ -115,12 +115,17 @@ scripts/release/app-server-smoke.sh --matrix --real # + exec a cheap sentinel pe
 ```
 
 The stdio probe runs against a throwaway config, so it never reads real keys.
-The matrix discovers configured providers from `codewhale auth list`, maps each
-to a cheap model (override per provider with `SMOKE_MODEL_<SLUG>`), skips
-unconfigured providers, and fails loudly on unmapped ones. `auth list` reports
-presence flags only and exec output is passed through a redactor, so secrets are
-never printed. The parser is covered by
-`scripts/release/app-server-smoke.test.sh` against a fake `codewhale` binary.
+The matrix discovers configured providers from `codewhale auth list`, skips
+unconfigured providers, and maps a provider to a cheap sentinel model only when
+it has a built-in cheap default. That built-in set is deliberately conservative
+(currently `deepseek`, `zai`, `moonshot`, and `openai`); every other provider —
+including `arcee`, `openrouter`, `xiaomi-mimo`, and `openai-codex` — is left
+unmapped on purpose and must be given a model per run via `SMOKE_MODEL_<SLUG>`
+rather than a guessed default (#3205). Any configured-but-unmapped provider
+fails loudly in `--real` mode. `auth list` reports presence flags only and exec
+output is passed through a redactor, so secrets are never printed. The parser is
+covered by `scripts/release/app-server-smoke.test.sh` against a fake `codewhale`
+binary.
 
 ## ACP stdio adapter: `codewhale serve --acp`
 

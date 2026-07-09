@@ -7,6 +7,25 @@ pub mod fleet;
 pub mod runtime;
 pub mod workroom;
 
+/// Common trait for lifecycle status enums across the protocol layer.
+///
+/// Every status enum — thread, goal, fleet run, worker, and job status —
+/// implements this trait so generic code can ask three universal questions
+/// without matching on every variant.
+pub trait Status {
+    /// Returns `true` when this status represents a final, non-progressable state
+    /// (e.g. Completed, Failed, Cancelled, Archived, Retired).
+    fn is_terminal(&self) -> bool;
+
+    /// Returns `true` when work is currently in-flight
+    /// (e.g. Running, Active, Busy, Queued, Pending).
+    fn is_active(&self) -> bool;
+
+    /// Returns `true` when the item has been explicitly paused by the user
+    /// or system (e.g. Paused).
+    fn is_paused(&self) -> bool;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope<T> {
     pub request_id: String,
@@ -24,6 +43,18 @@ pub enum ThreadStatus {
     Failed,
     Paused,
     Archived,
+}
+
+impl Status for ThreadStatus {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Archived)
+    }
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Running)
+    }
+    fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,6 +94,18 @@ pub enum ThreadGoalStatus {
     UsageLimited,
     BudgetLimited,
     Complete,
+}
+
+impl Status for ThreadGoalStatus {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+    fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

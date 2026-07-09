@@ -269,11 +269,7 @@ pub fn get_credentials() -> Result<CodexCredentials> {
         });
     }
 
-    let creds = load_credentials()?.context(
-        "No Codex credentials found.\n\
-         \n\
-         Run `codex login` to authenticate, or set OPENAI_CODEX_ACCESS_TOKEN.",
-    )?;
+    let creds = load_credentials()?.with_context(missing_auth_message)?;
 
     // Check if the access token is still valid.
     if !token_is_expired(&creds.access_token) {
@@ -291,6 +287,17 @@ pub fn get_credentials() -> Result<CodexCredentials> {
              Run `codex login` to re-authenticate."
         ),
     }
+}
+
+#[must_use]
+pub fn missing_auth_message() -> String {
+    format!(
+        "OpenAI Codex OAuth credentials not found.\n\
+         \n\
+         CodeWhale checked OPENAI_CODEX_ACCESS_TOKEN, CODEX_ACCESS_TOKEN, and {}.\n\
+         Run `codex login` to authenticate with ChatGPT/Codex OAuth, or set OPENAI_CODEX_ACCESS_TOKEN for this process.",
+        auth_file_path().display()
+    )
 }
 
 /// Best-effort ChatGPT account id for the `chatgpt-account-id` request header.
@@ -362,5 +369,16 @@ mod tests {
         // Just verify it returns a path without panicking.
         let path = auth_file_path();
         assert!(path.to_string_lossy().contains("auth.json"));
+    }
+
+    #[test]
+    fn missing_auth_message_mentions_oauth_checked_locations() {
+        let message = missing_auth_message();
+
+        assert!(message.contains("OpenAI Codex OAuth credentials not found"));
+        assert!(message.contains("OPENAI_CODEX_ACCESS_TOKEN"));
+        assert!(message.contains("CODEX_ACCESS_TOKEN"));
+        assert!(message.contains(&auth_file_path().display().to_string()));
+        assert!(message.contains("codex login"));
     }
 }

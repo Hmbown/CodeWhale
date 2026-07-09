@@ -470,7 +470,7 @@ impl ToolSpec for UpdatePlanTool {
     }
 
     fn description(&self) -> &'static str {
-        "Update optional high-level strategy metadata for complex initiatives. Use checklist_write for primary Work progress; update_plan should capture phase-level approach changes, not duplicate checklist items. Include sources, critical files, constraints, verification, risks, and handoff context when they help the user review or continue the plan. Each strategy step has a description and status (pending, in_progress, completed)."
+        "Update optional high-level Strategy metadata for complex initiatives. Use work_update for primary To-do / Work progress; update_plan should capture approach, context, and route — not a second checklist. Include sources, critical files, constraints, verification, risks, and handoff context when they help the user review or continue the plan. Each strategy step has a description and status (pending, in_progress, completed). Reserve Phase for Workflow stages."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -646,13 +646,19 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn update_plan_description_keeps_checklist_as_primary_work_progress() {
+    fn update_plan_description_keeps_work_update_as_primary_progress() {
         let tool = UpdatePlanTool::new(new_shared_plan_state());
         let description = tool.description();
 
-        assert!(description.contains("Use checklist_write for primary Work progress"));
-        assert!(description.contains("not duplicate checklist items"));
-        assert!(description.contains("high-level strategy metadata"));
+        assert!(description.contains("Use work_update for primary To-do / Work progress"));
+        assert!(description.contains("not a second checklist"));
+        assert!(description.contains("Strategy metadata"));
+        assert!(description.contains("approach, context, and route"));
+        assert!(description.contains("Reserve Phase for Workflow stages"));
+        assert!(
+            !description.contains("phase-level"),
+            "Strategy must not reuse Workflow Phase vocabulary: {description}"
+        );
     }
 
     #[test]

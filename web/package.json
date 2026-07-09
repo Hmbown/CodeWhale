@@ -19,7 +19,7 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "mermaid": "^11.15.0",
+    "mermaid": "^11.16.0",
     "next": "^15.5.18",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -35,8 +35,8 @@
     "postcss": "^8.5.14",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vitest": "^4.1.8",
-    "wrangler": "^4.103.0"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.107.0"
   },
   "overrides": {
     "esbuild": "0.28.1",

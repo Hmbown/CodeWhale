@@ -14,7 +14,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "provider",
     aliases: &[],
-    usage: "/provider [name] [model]",
+    usage: "/provider [setup [name]|name [model]]",
     description_id: MessageId::CmdProviderDescription,
 };
 
@@ -48,6 +48,21 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     if name.eq_ignore_ascii_case("fallback") {
         return provider_fallback(app, model_arg);
+    }
+    if name.eq_ignore_ascii_case("setup") {
+        let provider = match model_arg {
+            None => None,
+            Some(raw) => match ApiProvider::parse(raw) {
+                Some(provider) => Some(provider),
+                None => {
+                    return CommandResult::error(format!(
+                        "Unknown provider '{raw}'. Expected: {}.",
+                        ApiProvider::names_hint()
+                    ));
+                }
+            },
+        };
+        return CommandResult::action(AppAction::OpenProviderSetup { provider });
     }
 
     let Some(target) = ApiProvider::parse(name) else {
@@ -217,6 +232,39 @@ mod tests {
         let result = provider(&mut app, None);
         assert!(result.message.is_none());
         assert_eq!(result.action, Some(AppAction::OpenProviderPicker));
+    }
+
+    #[test]
+    fn setup_subcommand_opens_provider_setup_catalog() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("setup"));
+        assert!(result.message.is_none());
+        assert_eq!(
+            result.action,
+            Some(AppAction::OpenProviderSetup { provider: None })
+        );
+    }
+
+    #[test]
+    fn setup_subcommand_can_focus_provider() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("setup anthropic"));
+        assert_eq!(
+            result.action,
+            Some(AppAction::OpenProviderSetup {
+                provider: Some(ApiProvider::Anthropic),
+            })
+        );
+    }
+
+    #[test]
+    fn setup_subcommand_rejects_unknown_provider() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("setup not-a-provider"));
+        let msg = result.message.expect("expected error message");
+        assert!(msg.contains("Unknown provider"));
+        assert!(msg.contains("openrouter"));
+        assert!(result.is_error);
     }
 
     #[test]

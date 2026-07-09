@@ -99,7 +99,7 @@ function glibcCompatibilityMessage(required, host) {
     `Prebuilt CodeWhale Linux binaries require GLIBC_${formatVersion(required)}, but ${hostLine}`,
     "",
     "The Linux x64 release asset is a static (musl) build that runs on any glibc,",
-    "but the Linux arm64 and riscv64 assets are GNU libc builds linked against",
+    "but the Linux arm64 asset is a GNU libc build linked against",
     "Ubuntu 24.04/glibc 2.39, which Ubuntu 22.04 (glibc 2.35) cannot run.",
     "",
     buildFromSourceHint(),

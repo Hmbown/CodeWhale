@@ -155,10 +155,13 @@ impl ToolSpec for CommandPluginTool {
         // we let tokio::process::Command resolve via PATH.
         let mut cmd = if cfg!(windows) && !self.command.contains('.') {
             let mut c = tokio::process::Command::new("cmd");
+            crate::utils::suppress_tokio_console_window(&mut c);
             c.arg("/c").arg(&self.command);
             c
         } else {
-            tokio::process::Command::new(&self.command)
+            let mut c = tokio::process::Command::new(&self.command);
+            crate::utils::suppress_tokio_console_window(&mut c);
+            c
         };
         cmd.args(&self.args);
         let label = format!("command '{}'", self.command);
@@ -260,6 +263,7 @@ async fn run_plugin_child(
     input: Value,
 ) -> Result<ToolResult, ToolError> {
     let mut cmd = tokio::process::Command::new(command);
+    crate::utils::suppress_tokio_console_window(&mut cmd);
     cmd.args(args);
     run_plugin_child_raw(&mut cmd, label, input).await
 }

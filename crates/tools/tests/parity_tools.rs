@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use codewhale_protocol::{ToolKind, ToolOutput, ToolPayload};
 use codewhale_tools::{
-    ToolCall, ToolCallSource, ToolHandler, ToolInvocation, ToolRegistry, ToolSpec,
+    ToolCall, ToolCallSource, ToolDescriptor, ToolHandler, ToolInvocation, ToolRegistry,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -98,7 +98,7 @@ async fn dispatches_function_tool_with_parallel_flag() {
     let mut registry = ToolRegistry::default();
     registry
         .register(
-            ToolSpec {
+            ToolDescriptor {
                 name: "echo".to_string(),
                 input_schema: json!({"type":"object"}),
                 output_schema: json!({"type":"object"}),
@@ -136,7 +136,7 @@ async fn serial_tool_waits_for_running_parallel_tool() {
     let mut registry = ToolRegistry::default();
     registry
         .register(
-            ToolSpec {
+            ToolDescriptor {
                 name: "slow_read".to_string(),
                 input_schema: json!({"type":"object"}),
                 output_schema: json!({"type":"object"}),
@@ -151,7 +151,7 @@ async fn serial_tool_waits_for_running_parallel_tool() {
         .expect("register slow read");
     registry
         .register(
-            ToolSpec {
+            ToolDescriptor {
                 name: "serial".to_string(),
                 input_schema: json!({"type":"object"}),
                 output_schema: json!({"type":"object"}),
@@ -223,7 +223,7 @@ async fn serial_tool_can_reenter_registry_without_deadlock() {
     let mut registry = ToolRegistry::default();
     registry
         .register(
-            ToolSpec {
+            ToolDescriptor {
                 name: "outer".to_string(),
                 input_schema: json!({"type":"object"}),
                 output_schema: json!({"type":"object"}),
@@ -237,7 +237,7 @@ async fn serial_tool_can_reenter_registry_without_deadlock() {
         .expect("register outer");
     registry
         .register(
-            ToolSpec {
+            ToolDescriptor {
                 name: "inner".to_string(),
                 input_schema: json!({"type":"object"}),
                 output_schema: json!({"type":"object"}),

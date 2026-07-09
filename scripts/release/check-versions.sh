@@ -177,6 +177,30 @@ for readme in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-K
   fi
 done
 
+# 9b) Public install/version snippets stay on the current release (#3767).
+# `codewhale --version   # X.Y.Z` verify-your-install lines across README
+# locales and docs/INSTALL.md, plus the docs/INSTALL.md npm-wrapper publish
+# pointer ("published at vX.Y.Z"). These drifted while this gate still passed
+# on a prior lane, so guard them explicitly. Narrowly scoped to those two
+# snippet shapes to avoid flagging unrelated prose.
+for doc in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-KR.md docs/INSTALL.md; do
+  [[ -f "${doc}" ]] || continue
+  stale_version_comments="$(grep -nE -- "codewhale --version[[:space:]]+#[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+" "${doc}" | grep -vE -- "#[[:space:]]*${workspace_version}([^0-9]|$)" || true)"
+  if [[ -n "${stale_version_comments}" ]]; then
+    echo "::error::${doc} has 'codewhale --version # X' snippet(s) not on ${workspace_version}:" >&2
+    echo "${stale_version_comments}" >&2
+    fail=1
+  fi
+done
+
+stale_wrapper_pointer="$(grep -nE -- "wrapper is published at" docs/INSTALL.md | grep -E -- "v[0-9]+\.[0-9]+\.[0-9]+" | grep -v -- "v${workspace_version}" || true)"
+# The publish pointer can wrap onto the next line; also scan the line after the lead-in.
+wrapper_pointer_version="$(grep -A1 -E -- "wrapper is published at" docs/INSTALL.md | grep -oE -- "v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || true)"
+if [[ -n "${wrapper_pointer_version}" && "${wrapper_pointer_version}" != "v${workspace_version}" ]]; then
+  echo "::error::docs/INSTALL.md npm-wrapper publish pointer is ${wrapper_pointer_version}, want v${workspace_version}." >&2
+  fail=1
+fi
+
 # 10) App-server is not a standalone binary.
 app_server_bins="$(
   cargo metadata --locked --format-version 1 --no-deps \

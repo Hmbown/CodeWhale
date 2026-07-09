@@ -651,7 +651,7 @@ pub fn humanize_duration(d: Duration) -> String {
 // *what message* to put in the body. The low-level dispatcher is
 // `notify_done`; everything in this block sits in front of it.
 
-use crate::localization::Locale;
+use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, Message};
 use crate::tui::app::App;
 
@@ -709,7 +709,7 @@ pub fn completed_turn_message(
     turn_cost: Option<crate::pricing::CostEstimate>,
 ) -> String {
     let mut msg = completion_status(
-        notification_turn_complete(app.ui_locale),
+        &tr(app.ui_locale, MessageId::NotificationTurnComplete),
         include_summary,
         turn_elapsed,
         turn_cost.map(|cost| crate::pricing::format_cost_estimate(cost, app.cost_currency)),
@@ -740,7 +740,7 @@ pub fn subagent_completion_message(
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with("<codewhale:subagent.done>"));
     let mut msg = completion_status(
-        notification_subagent_complete(locale),
+        &tr(locale, MessageId::NotificationSubagentComplete),
         include_summary,
         elapsed,
         None,
@@ -770,30 +770,6 @@ fn completion_status(
     match cost {
         Some(cost) => format!("{label} ({human}, {cost})"),
         None => format!("{label} ({human})"),
-    }
-}
-
-fn notification_turn_complete(locale: Locale) -> &'static str {
-    match locale {
-        Locale::En => "Turn complete",
-        Locale::Ja => "ターン完了",
-        Locale::ZhHans => "本轮已完成",
-        Locale::ZhHant => "本輪已完成",
-        Locale::PtBr => "Turno concluído",
-        Locale::Es419 => "Turno completado",
-        Locale::Vi => "Lượt hoàn tất",
-    }
-}
-
-fn notification_subagent_complete(locale: Locale) -> &'static str {
-    match locale {
-        Locale::En => "Sub-agent complete",
-        Locale::Ja => "サブエージェント完了",
-        Locale::ZhHans => "子代理已完成",
-        Locale::ZhHant => "子代理已完成",
-        Locale::PtBr => "Subagente concluído",
-        Locale::Es419 => "Subagente completado",
-        Locale::Vi => "Sub-agent hoàn tất",
     }
 }
 

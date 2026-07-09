@@ -2,11 +2,12 @@ use super::*;
 use crate::config::{
     ApiProvider, CompactionRuntimeConfig, Config, ProviderConfig, ProvidersConfig,
 };
+use crate::settings::Settings;
 use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
 use crate::tools::todo::TodoStatus;
 use crate::tui::clipboard::PastedImage;
-use crate::tui::history::{GenericToolCell, ToolCell, ToolStatus};
+use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus};
 
 fn test_options(yolo: bool) -> TuiOptions {
     TuiOptions {
@@ -42,6 +43,102 @@ fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::
 #[cfg(windows)]
 fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[test]
+fn feature_intro_content_centers_constitution_follow_up() {
+    let content = App::feature_intro_content();
+    assert!(content.contains("Your CodeWhale setup is ready."));
+    assert!(content.contains("Constitution"));
+    assert!(content.contains("/constitution"));
+    assert!(content.contains("/setup"));
+    assert!(content.contains("/provider") && content.contains("/model"));
+    assert!(content.contains("Optional later"));
+    assert!(content.contains("/hotbar") && content.contains("/hotbar off"));
+    assert!(content.contains("Fleet") && content.contains("/fleet setup"));
+}
+
+#[test]
+fn feature_intro_is_silent_while_onboarding_is_in_progress() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::Welcome;
+    let before = app.history.len();
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before,
+        "must not nudge while onboarding is in progress"
+    );
+}
+
+#[test]
+fn feature_intro_is_silent_when_auth_setup_is_incomplete() {
+    // --skip-onboarding with no provider key must not claim setup is ready (#3985).
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::None;
+    app.onboarding_needs_api_key = true;
+    let before = app.history.len();
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before,
+        "must not show 'setup is ready' when API key / auth is missing"
+    );
+}
+
+#[test]
+fn feature_intro_shows_once_persists_then_is_idempotent() {
+    let _env_lock = lock_test_env();
+    let tmp = std::env::temp_dir().join(format!("cw-feature-intro-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let config_path = tmp.join("config.toml");
+    let _env = EnvVarGuard::set(
+        "DEEPSEEK_CONFIG_PATH",
+        config_path.to_string_lossy().as_ref(),
+    );
+    let _ = std::fs::remove_file(tmp.join("settings.toml"));
+
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding = OnboardingState::None;
+    // Isolated config has no key; pin readiness so the ready-tip path is exercised.
+    app.onboarding_needs_api_key = false;
+    let before = app.history.len();
+
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before + 1,
+        "intro should be added on the first call"
+    );
+    let content = match app.history.last() {
+        Some(HistoryCell::System { content }) => content.clone(),
+        other => panic!("expected a System intro cell, got {other:?}"),
+    };
+    assert!(
+        content.contains("Hotbar") && content.contains("/hotbar off"),
+        "intro should explain Hotbar + the disable path: {content:?}"
+    );
+    assert!(
+        content.contains("Fleet") && content.contains("/fleet setup"),
+        "intro should explain Fleet setup: {content:?}"
+    );
+
+    // Persisted flag now set → a second call is a no-op.
+    assert!(
+        Settings::load()
+            .expect("settings should load")
+            .feature_intro_shown,
+        "feature_intro_shown should be persisted"
+    );
+    app.maybe_show_feature_intro();
+    assert_eq!(
+        app.history.len(),
+        before + 1,
+        "intro must not repeat once the flag is persisted"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
@@ -487,6 +584,9 @@ fn sidebar_focus_accepts_pinned_and_maps_legacy_trackers_to_pinned() {
     assert_eq!(SidebarFocus::from_setting("plan"), SidebarFocus::Pinned);
     assert_eq!(SidebarFocus::from_setting("todos"), SidebarFocus::Pinned);
     assert_eq!(SidebarFocus::from_setting("tasks"), SidebarFocus::Tasks);
+    assert_eq!(SidebarFocus::from_setting("activity"), SidebarFocus::Tasks);
+    assert_eq!(SidebarFocus::from_setting("live"), SidebarFocus::Tasks);
+    assert_eq!(SidebarFocus::from_setting("running"), SidebarFocus::Tasks);
     assert_eq!(SidebarFocus::from_setting("agents"), SidebarFocus::Agents);
     assert_eq!(SidebarFocus::from_setting("context"), SidebarFocus::Context);
     assert_eq!(SidebarFocus::from_setting("hidden"), SidebarFocus::Hidden);
@@ -1395,36 +1495,48 @@ fn clear_todos_resets_plan_state() {
 #[test]
 fn app_mode_helpers_centralize_parse_labels_and_cycle_order() {
     assert_eq!(AppMode::parse("agent"), Some(AppMode::Agent));
+    assert_eq!(AppMode::parse("act"), Some(AppMode::Agent));
     assert_eq!(AppMode::parse("2"), Some(AppMode::Plan));
     assert_eq!(AppMode::parse("auto"), Some(AppMode::Agent));
-    assert_eq!(AppMode::parse("3"), None);
+    assert_eq!(AppMode::parse("3"), Some(AppMode::Operate));
+    assert_eq!(AppMode::parse("operate"), Some(AppMode::Operate));
     assert_eq!(AppMode::parse("YOLO"), Some(AppMode::Yolo));
     assert_eq!(AppMode::parse("4"), Some(AppMode::Yolo));
+    assert_eq!(AppMode::parse("multitask"), None);
+    assert_eq!(AppMode::parse("5"), None);
     assert_eq!(AppMode::parse("fast"), None);
+    assert_eq!(AppMode::from_setting("multitask"), AppMode::Operate);
+    assert_eq!(AppMode::from_setting("5"), AppMode::Operate);
 
     assert_eq!(AppMode::Agent.as_setting(), "agent");
-    assert_eq!(AppMode::Auto.as_setting(), "auto");
+    assert_eq!(AppMode::Auto.as_setting(), "agent");
+    assert_eq!(AppMode::Yolo.as_setting(), "agent");
     assert_eq!(AppMode::Plan.display_name(), "Plan");
-    assert_eq!(AppMode::Auto.label(), "AUTO");
-    assert_eq!(AppMode::Yolo.label(), "YOLO");
+    assert_eq!(AppMode::Auto.display_name(), "Act");
+    assert_eq!(AppMode::Auto.label(), "ACT");
+    assert_eq!(AppMode::Yolo.label(), "ACT");
+    assert_eq!(AppMode::Yolo.display_name(), "Act");
     assert_eq!(AppMode::Agent.number(), '1');
-    assert_eq!(AppMode::Auto.number(), '3');
-    assert_eq!(AppMode::Yolo.number(), '4');
+    assert_eq!(AppMode::Auto.number(), '1');
+    assert_eq!(AppMode::Yolo.number(), '1');
+    assert_eq!(AppMode::Operate.number(), '3');
     assert_eq!(
         AppMode::CHOICES,
-        [AppMode::Agent, AppMode::Plan, AppMode::Yolo]
+        [AppMode::Agent, AppMode::Plan, AppMode::Operate]
     );
     assert_eq!(
         AppMode::CYCLE,
-        [AppMode::Plan, AppMode::Agent, AppMode::Yolo]
+        [AppMode::Plan, AppMode::Agent, AppMode::Operate]
     );
 
     assert_eq!(AppMode::Plan.next(), AppMode::Agent);
-    assert_eq!(AppMode::Agent.next(), AppMode::Yolo);
+    assert_eq!(AppMode::Agent.next(), AppMode::Operate);
+    assert_eq!(AppMode::Operate.next(), AppMode::Plan);
     assert_eq!(AppMode::Auto.next(), AppMode::Agent);
-    assert_eq!(AppMode::Yolo.next(), AppMode::Plan);
-    assert_eq!(AppMode::Plan.previous(), AppMode::Yolo);
+    assert_eq!(AppMode::Yolo.next(), AppMode::Agent);
+    assert_eq!(AppMode::Plan.previous(), AppMode::Operate);
     assert_eq!(AppMode::Agent.previous(), AppMode::Plan);
+    assert_eq!(AppMode::Operate.previous(), AppMode::Agent);
     assert_eq!(AppMode::Auto.previous(), AppMode::Agent);
     assert_eq!(AppMode::Yolo.previous(), AppMode::Agent);
 }
@@ -1444,9 +1556,9 @@ fn test_cycle_mode_reverse_transitions() {
 
     app.mode = AppMode::Plan;
     app.cycle_mode_reverse();
-    assert_eq!(app.mode, AppMode::Yolo);
+    assert_eq!(app.mode, AppMode::Operate);
 
-    app.mode = AppMode::Yolo;
+    app.mode = AppMode::Operate;
     app.cycle_mode_reverse();
     assert_eq!(app.mode, AppMode::Agent);
 
@@ -1460,40 +1572,24 @@ fn test_cycle_mode_reverse_transitions() {
 }
 
 #[test]
-fn test_mode_switch_toasts_replace_previous_mode_switch_toast() {
+fn test_mode_switch_does_not_emit_redundant_toast() {
     let mut app = App::new(test_options(false), &Config::default());
     let first_mode = app.mode.next();
     let second_mode = first_mode.next();
-    let third_mode = second_mode.next();
 
     app.set_mode(first_mode);
     app.sync_status_message_to_toasts();
-    assert_eq!(app.status_toasts.len(), 1);
-    assert_eq!(
-        app.status_toasts.back().expect("mode toast").text,
-        format!("Switched to {} mode", first_mode.label())
-    );
+    assert!(app.status_toasts.is_empty());
 
     app.set_mode(second_mode);
     app.sync_status_message_to_toasts();
-    assert_eq!(app.status_toasts.len(), 1);
-    assert_eq!(
-        app.status_toasts.back().expect("mode toast").text,
-        format!("Switched to {} mode", second_mode.label())
-    );
-
-    app.set_mode(third_mode);
-    app.sync_status_message_to_toasts();
-    assert_eq!(app.status_toasts.len(), 1);
-    assert_eq!(
-        app.status_toasts.back().expect("mode toast").text,
-        format!("Switched to {} mode", third_mode.label())
-    );
+    assert!(app.status_toasts.is_empty());
 }
 
 #[test]
 fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
     let mut app = App::new(test_options(false), &Config::default());
+    app.yolo_compat_notified = true;
     app.status_message = Some("Task queued".to_string());
     app.sync_status_message_to_toasts();
 
@@ -1502,16 +1598,11 @@ fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
     app.set_mode(AppMode::Yolo);
     app.sync_status_message_to_toasts();
 
-    assert_eq!(app.status_toasts.len(), 2);
+    assert_eq!(app.status_toasts.len(), 1);
     assert!(
         app.status_toasts
             .iter()
             .any(|toast| toast.text == "Task queued")
-    );
-    assert!(
-        app.status_toasts
-            .iter()
-            .any(|toast| toast.text == "Switched to YOLO mode")
     );
 }
 
@@ -1563,13 +1654,16 @@ fn test_remove_queued_message_invalid_index() {
 #[test]
 fn test_set_mode_updates_state() {
     let mut app = App::new(test_options(false), &Config::default());
-    let initial_mode = app.mode;
+    app.set_mode(AppMode::Plan);
+    assert_eq!(app.mode, AppMode::Plan);
+    // The deprecated YOLO alias remaps to Agent (M6 back-compat shim).
     app.set_mode(AppMode::Yolo);
-    assert_eq!(app.mode, AppMode::Yolo);
-    assert_ne!(app.mode, initial_mode);
-    // Yolo mode should enable trust and shell
+    assert_eq!(app.mode, AppMode::Agent);
+    assert!(app.yolo);
+    // YOLO compat shim should enable trust, shell, and bypass approvals.
     assert!(app.trust_mode);
     assert!(app.allow_shell);
+    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
 }
 
 #[test]
@@ -1636,7 +1730,7 @@ fn set_mode_plan_to_yolo_keeps_yolo_permissions_and_restores_agent_baseline() {
     app.approval_mode = ApprovalMode::Suggest;
 
     app.set_mode(AppMode::Yolo);
-    assert_eq!(app.mode, AppMode::Yolo);
+    assert_eq!(app.mode, AppMode::Agent);
     assert!(app.allow_shell);
     assert!(app.trust_mode);
     assert_eq!(app.approval_mode, ApprovalMode::Bypass);
@@ -1672,12 +1766,16 @@ fn base_policy_for_mode_projects_the_mode_permission_table() {
     assert!(agent.trust_mode);
     assert_eq!(agent.approval_mode, ApprovalMode::Never);
 
-    // Auto: shell-enabled smart review, no trust authority.
+    // Auto: compatibility alias for the durable Agent baseline.
     let auto = base_policy_for_mode(AppMode::Auto, &prefs);
     assert_eq!(auto.mode, AppMode::Auto);
     assert!(auto.allow_shell);
-    assert!(!auto.trust_mode);
-    assert_eq!(auto.approval_mode, ApprovalMode::Auto);
+    assert!(auto.trust_mode);
+    assert_eq!(auto.approval_mode, ApprovalMode::Never);
+
+    // Operate uses the Agent baseline.
+    let operate = base_policy_for_mode(AppMode::Operate, &prefs);
+    assert_eq!(operate.approval_mode, ApprovalMode::Never);
 
     // YOLO: full authority is represented by Bypass, not a separate
     // auto-approve field (#3736).
@@ -1697,6 +1795,46 @@ fn base_policy_for_mode_projects_the_mode_permission_table() {
     assert!(!agent_min.allow_shell);
     assert!(!agent_min.trust_mode);
     assert_eq!(agent_min.approval_mode, ApprovalMode::Suggest);
+}
+
+#[test]
+fn cycle_approval_posture_cycles_suggest_auto_bypass() {
+    let mut options = test_options(false);
+    options.start_in_agent_mode = true;
+    let mut app = App::new(options, &Config::default());
+    app.approval_mode = ApprovalMode::Suggest;
+
+    assert!(app.cycle_approval_posture());
+    assert_eq!(app.approval_mode, ApprovalMode::Auto);
+
+    assert!(app.cycle_approval_posture());
+    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+
+    assert!(app.cycle_approval_posture());
+    assert_eq!(app.approval_mode, ApprovalMode::Suggest);
+}
+
+#[test]
+fn cycle_approval_posture_emits_rebinding_notice_once() {
+    let mut options = test_options(false);
+    options.start_in_agent_mode = true;
+    let mut app = App::new(options, &Config::default());
+
+    assert!(app.cycle_approval_posture());
+    let notices = app
+        .status_toasts
+        .iter()
+        .filter(|toast| toast.text.contains("moved to Ctrl+T"))
+        .count();
+    assert_eq!(notices, 1, "first cycle posts the rebinding notice");
+
+    assert!(app.cycle_approval_posture());
+    let notices = app
+        .status_toasts
+        .iter()
+        .filter(|toast| toast.text.contains("moved to Ctrl+T"))
+        .count();
+    assert_eq!(notices, 1, "notice is one-shot per session");
 }
 
 #[test]
@@ -1792,6 +1930,25 @@ fn set_mode_captures_agent_edits_as_the_durable_baseline() {
 }
 
 #[test]
+fn yolo_start_with_default_config_restores_interactive_agent_shell_baseline() {
+    let mut app = App::new(test_options(true), &Config::default());
+    // --yolo starts in Agent mode with the full-access compat shim (M6).
+    assert_eq!(app.mode, AppMode::Agent);
+    assert!(app.yolo);
+    assert!(app.allow_shell);
+    assert!(app.trust_mode);
+    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+
+    app.set_mode(AppMode::Agent);
+    assert!(
+        app.allow_shell,
+        "default interactive Agent baseline should expose approval-gated shell after YOLO downshift"
+    );
+    assert!(!app.trust_mode);
+    assert_eq!(app.approval_mode, ApprovalMode::Suggest);
+}
+
+#[test]
 fn leaving_yolo_after_startup_restores_baseline_policies() {
     let config = Config {
         allow_shell: Some(false),
@@ -1799,7 +1956,9 @@ fn leaving_yolo_after_startup_restores_baseline_policies() {
     };
 
     let mut app = App::new(test_options(true), &config);
-    assert_eq!(app.mode, AppMode::Yolo);
+    // --yolo starts in Agent mode with the full-access compat shim (M6).
+    assert_eq!(app.mode, AppMode::Agent);
+    assert!(app.yolo);
     assert!(app.allow_shell);
     assert!(app.trust_mode);
     assert_eq!(app.approval_mode, ApprovalMode::Bypass);
@@ -1881,6 +2040,36 @@ fn tool_run_expansion_toggle_opens_and_closes_run() {
     assert!(app.toggle_tool_run_expansion_at(2));
     assert!(!app.expanded_tool_runs.contains(&0));
     assert!(!app.toggle_tool_run_expansion_at(99));
+}
+
+#[test]
+fn tool_run_expansion_toggle_handles_active_run() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.tool_collapse_mode = ToolCollapseMode::Compact;
+    app.tool_collapse_threshold = 3;
+    app.add_message(HistoryCell::User {
+        content: "go".to_string(),
+    });
+
+    let active_start = app.history.len();
+    let active = app.active_cell.get_or_insert_with(ActiveCell::new);
+    for name in ["read_file", "list_dir", "web_search"] {
+        active.push_untracked(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: name.to_string(),
+            status: ToolStatus::Success,
+            input_summary: None,
+            output: Some("ok".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        })));
+    }
+
+    assert!(app.toggle_tool_run_expansion_at(active_start));
+    assert!(app.expanded_tool_runs.contains(&active_start));
+    assert!(app.toggle_tool_run_expansion_at(active_start + 2));
+    assert!(!app.expanded_tool_runs.contains(&active_start));
 }
 
 #[test]
@@ -2647,13 +2836,13 @@ fn submit_disposition_immediate_when_idle_and_online() {
 }
 
 #[test]
-fn submit_disposition_steer_when_busy_and_online_not_streaming() {
-    // v0.8.44: Busy + not streaming → Steer (Enter reaches engine during
-    // sub-agent/shell waits instead of silently queueing).
+fn submit_disposition_queue_when_busy_and_online_not_streaming() {
+    // Busy but not streaming means the model is still waiting, so Enter can
+    // amend the active turn immediately.
     let mut app = App::new(test_options(false), &Config::default());
     app.is_loading = true;
     app.offline_mode = false;
-    // streaming_message_index is None (default) → tool execution phase
+    // streaming_message_index is None (default) → waiting phase
     assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Steer);
 }
 
@@ -2683,6 +2872,51 @@ fn submit_disposition_offline_busy_queues() {
     // Offline mode always queues, even when streaming
     app.streaming_message_index = Some(0);
     assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+}
+
+#[test]
+fn double_enter_detects_steering() {
+    let mut app = App::new(test_options(false), &Config::default());
+    // Simulate a busy engine that is already streaming so the first Enter
+    // queues; the second tap escalates to steer.
+    app.is_loading = true;
+    app.streaming_message_index = Some(0);
+
+    // First Enter → Queue (normal queueing)
+    let first = app.enter_with_double_tap();
+    assert_eq!(first, Some(SubmitDisposition::Queue));
+
+    // Second Enter within 500ms → Steer (double-tap detected)
+    let second = app.enter_with_double_tap();
+    assert_eq!(second, Some(SubmitDisposition::Steer));
+}
+
+#[test]
+fn double_enter_resets_after_timeout() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.is_loading = true;
+    app.streaming_message_index = Some(0);
+
+    // First Enter → Queue
+    let first = app.enter_with_double_tap();
+    assert_eq!(first, Some(SubmitDisposition::Queue));
+
+    // Simulate timeout by clearing last_enter_instant
+    app.last_enter_instant = None;
+
+    // Next Enter → Queue again (not Steer, because window expired)
+    let second = app.enter_with_double_tap();
+    assert_eq!(second, Some(SubmitDisposition::Queue));
+}
+
+#[test]
+fn double_enter_passes_through_when_idle() {
+    let mut app = App::new(test_options(false), &Config::default());
+    // Engine idle → Immediate (not affected by double-tap)
+    let first = app.enter_with_double_tap();
+    assert_eq!(first, Some(SubmitDisposition::Immediate));
+    let second = app.enter_with_double_tap();
+    assert_eq!(second, Some(SubmitDisposition::Immediate));
 }
 
 #[test]
@@ -3279,4 +3513,78 @@ fn advance_fallback_cloud_primary_can_hop_cloud_to_local_to_cloud() {
         !reason.contains("local/private policy"),
         "cloud-primary chains should not trigger local/private blocking: {reason}"
     );
+}
+
+#[test]
+fn status_classifier_does_not_paint_negated_success_green() {
+    use super::StatusToastLevel;
+    // Failures that happen to contain a success keyword ("saved", "found")
+    // must not toast green (#3757 UX review).
+    let (level, _, _) = App::classify_status_text("Custom provider was not saved.");
+    assert_ne!(level, StatusToastLevel::Success);
+    let (level, _, _) = App::classify_status_text("Queued message not found");
+    assert_ne!(level, StatusToastLevel::Success);
+    let (level, _, _) = App::classify_status_text("Could not enable subagents");
+    assert_ne!(level, StatusToastLevel::Success);
+    let (level, _, _) = App::classify_status_text("No sessions found");
+    assert_ne!(level, StatusToastLevel::Success);
+
+    // Genuine successes still classify green.
+    let (level, _, _) = App::classify_status_text("Fleet profile saved: reviewer.toml");
+    assert_eq!(level, StatusToastLevel::Success);
+
+    // Both cancel spellings classify as Warning.
+    let (level, _, _) = App::classify_status_text("Turn canceled");
+    assert_eq!(level, StatusToastLevel::Warning);
+    let (level, _, _) = App::classify_status_text("Turn cancelled");
+    assert_eq!(level, StatusToastLevel::Warning);
+}
+
+#[test]
+fn onboarding_provider_copy_is_provider_neutral_in_en() {
+    use crate::localization::{Locale, MessageId, tr};
+
+    let title = tr(Locale::En, MessageId::OnboardProviderTitle);
+    let blurb = tr(Locale::En, MessageId::OnboardProviderBlurb);
+    let api_title = tr(Locale::En, MessageId::OnboardApiKeyTitle);
+    assert!(!title.to_ascii_lowercase().contains("deepseek"), "{title}");
+    assert!(!blurb.to_ascii_lowercase().contains("deepseek"), "{blurb}");
+    assert!(
+        !api_title.to_ascii_lowercase().contains("deepseek"),
+        "{api_title}"
+    );
+}
+
+#[test]
+fn onboarding_submit_api_key_routes_non_deepseek_provider_table() -> std::io::Result<()> {
+    use crate::config::SavedCredential;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!(
+        "codewhale-app-onboarding-provider-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _home = EnvVarGuard::set("HOME", temp_root.to_string_lossy().as_ref());
+
+    let mut app = App::new(test_options(false), &Config::default());
+    app.onboarding_provider = ApiProvider::Openrouter;
+    app.api_key_input = "onboarding-openrouter-key".to_string();
+    let saved = app
+        .submit_api_key()
+        .expect("openrouter onboarding key should save");
+    let SavedCredential::ConfigFile(path) = saved else {
+        panic!("expected config file save, got {saved:?}");
+    };
+    let contents = fs::read_to_string(path)?;
+    assert!(contents.contains("openrouter"), "{contents}");
+    assert!(contents.contains("onboarding-openrouter-key"));
+    Ok(())
 }

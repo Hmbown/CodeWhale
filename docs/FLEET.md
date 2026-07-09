@@ -12,6 +12,9 @@ Use Fleet rather than short-lived `agent` fanout whenever the work
 needs retry, sleep/restart survival, remote execution, receipts, or a ledgered
 audit trail. The initial CLI surface is:
 
+For a guided start-to-monitor walkthrough that combines Fleet task specs with
+Workflow authoring, see [Fleet + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md).
+
 ```sh
 codewhale fleet init
 codewhale fleet run tasks.json --max-workers 4
@@ -36,46 +39,102 @@ Fleet state is stored under the workspace in `.codewhale/fleet.jsonl`. Worker
 logs and adapter logs are stored under `.codewhale/fleet/` and
 `.codewhale/fleet-host/`.
 
-## Naming: Modes, WhaleFlow, Fleet, and Swarm
+## Authoring agent profiles (`/fleet setup`)
+
+`/fleet setup` (also `/fleet setup edit` / `new`) opens an in-TUI wizard for
+authoring a reusable agent-team profile. Bare `/fleet` and the
+`roster`/`roles`/`profiles`/`party` aliases open the roster (the saved profiles).
+`/fleet status` opens the worker-status view; `/subagents` is a
+compatibility shortcut for that status view.
+
+The wizard is progressive: you make one focused choice at a time — a **role**,
+then a **model** (`inherit`, or a concrete model from *any configured
+provider*, not only the one the parent session is currently using), then a
+**thinking tier** (`inherit`, `off`, `low`, `medium`, `high`, `max`, or `auto`)
+— and then review the full posture (route, thinking, permissions, tools,
+workspace/org scope, and review policy) before doing anything. Picking a
+concrete model pins its provider explicitly: the saved profile records both
+`model` and `provider` fields, so the route it names doesn't depend on
+whichever provider happens to be active when the profile is later loaded.
+Pressing **Enter** ("start") on the review step previews the exact starter
+profile TOML inline on that same screen; nothing is written until you ratify it.
+The `provider` field may be a built-in provider id such as `openrouter` or a
+user-named OpenAI-compatible provider configured under `[providers.<name>]`
+such as `lm-studio`; the launch path preserves that id and fails closed if the
+provider is not configured.
+
+When a provider is configured, the review step also offers model-assisted
+drafting behind a ratify gate:
+
+- Press **`m`** to have your first configured model draft the profile. The
+  draft arrives sanitized and bounded — permissions stay at the **fleet floor**
+  (no shell, no trust, approval required) regardless of what the model
+  proposes.
+- **Drafting is not ratifying.** The exact rendered TOML preview renders
+  inline on the review step (not in a separate scrollable viewer), so nothing
+  is saved until you press **`g`** or **Enter** to ratify (or press `m` again
+  to redraft). Ratifying writes the profile to `.codewhale/agents/<role>`.
+
+## Naming: Modes, Workflow, and Fleet
 
 These names describe different layers, not competing systems. Agent, Plan, and
-YOLO stay the permission/work modes. WhaleFlow is an orchestration overlay that
+YOLO stay the permission/work modes. Workflow is an orchestration overlay that
 can run on top of those modes when the task needs a continuous workflow.
 
-- **WhaleFlow** is the repeatable workflow plan and user-facing orchestration
+- **Workflow** is the repeatable plan and user-facing orchestration
   overlay: a script/IR that decides which phases and agents run next, keeps
   intermediate results out of the main conversation, and can be inspected or
-  rerun. A WhaleFlow run should have a visible progress view and a clear active
+  rerun. A Workflow run should have a visible progress view and a clear active
   header state instead of feeling like a hidden background task.
 - **Fleet** is the durable sub-agent configuration and execution substrate:
   slots, profiles, per-slot models, tool posture, local/SSH hosts, trust
   policy, leases, heartbeats, logs, receipts, and status APIs.
-- **Swarm** is the high-fanout behavior inside WhaleFlow. It is gated in
-  v0.8.61: `/swarm` must not revive prompt-only sub-agent fanout. It should
-  compile into a WhaleFlow-backed fleet run once the durable worker and goal
-  re-dispatch substrate is available.
+- **High fan-out** is a behavior of a Workflow run, not a separate system:
+  when a phase needs many workers at once, Workflow dispatches them as a
+  Fleet-backed run (durable workers, receipts, goal re-dispatch) rather than
+  reviving prompt-only sub-agent fanout.
+- **Fan-in is mandatory:** no fan-out without an owner that waits, aggregates,
+  verifies, and synthesizes one result. The operator should depend on one
+  manager or workflow receipt, not N loose `agent` children scattered across
+  the transcript.
 
-UI guidance: keep the main transcript calm. A WhaleFlow run should appear as a
+UI guidance: keep the main transcript calm. A Workflow run should appear as a
 compact progress card plus Work/Agents sidebar rows with phase names, worker
 counts, receipts, and nested indentation for child workers. Use the whale mark
 sparingly as an active header/status signal; avoid repeating emoji-heavy rows
 for every worker.
 
-## WhaleFlow on Fleet
+## Manager-owned operations
+
+When parallel work must return one combined answer, use a manager-owned
+operation instead of a flat `agent` fan-out:
+
+1. **Cast one manager** (operator or workflow orchestrator).
+2. **Fan out** child tasks through `workflow` (`task()`, `parallel()`,
+   `pipeline()`, `phase()`) or a single manager session that owns the children.
+3. **Wait** for child receipts or completion events.
+4. **Aggregate and verify** load-bearing claims before treating them as facts.
+5. **Synthesize** one result the operator can depend on.
+
+Raw `agent` fan-out is appropriate only for independent, fire-and-forget work
+where no single fan-in result is required. If results must be merged, compared,
+or verified, route through `workflow` so the manager owns fan-in.
+
+## Workflow on Fleet
 
 The intended high-capability path is agent-authored. When the main agent
 decides a task needs more durable coordination than turn-by-turn sub-agent
-calls, it drafts a WhaleFlow script/IR, presents the run plan according to the
+calls, it drafts a Workflow script/IR, presents the run plan according to the
 active permission mode, and the runtime compiles it into typed Fleet work.
 
 Fleet remains the sub-agent config surface. It owns slot count, role profiles,
-model/loadout selection, tool posture, launch concurrency, and the ledger.
-WhaleFlow owns only the orchestration plan: branch, sequence, loop, expand,
+saved route pins or inheritance, tool posture, launch concurrency, and the ledger.
+Workflow owns only the orchestration plan: branch, sequence, loop, expand,
 review, and reduce decisions. The workflow script must not get direct shell,
 filesystem, network, provider-secret, cancellation, or TUI authority; workers
 perform real work as `codewhale exec` processes.
 
-Default WhaleFlow-to-Fleet validation is intentionally bounded:
+Default Workflow-to-Fleet validation is intentionally bounded:
 
 - 100 total worker agents per workflow run;
 - 5 recursive Fleet rings;
@@ -87,6 +146,11 @@ These are population limits, not a demand to launch everything at once. A
 Recommended model layouts, such as a DeepSeek Pro orchestrator with Flash
 workers in the first ring and cheaper workers farther out, are presets only.
 Every slot can inherit the active model or carry an explicit model override.
+Inheritance is literal: the model you select in `/model` is the **operator**
+(the pinned first row in `/fleet roster`), and any worker whose task spec and
+roster profile pin no model runs on that session model. Task-level `model` and
+profile `model` overrides still win; route receipts record which source
+applied (`task.model`, `agent_profile.model`, or `run.model`).
 
 The setup UI should render this as an expanding grid: an orchestrator plus a
 small number of visible sub-agent slots, with Right/Enter drilling into a slot's

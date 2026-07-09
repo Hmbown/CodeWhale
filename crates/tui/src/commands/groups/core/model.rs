@@ -9,7 +9,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "model",
     aliases: &["moxing"],
-    usage: "/model [name]",
+    usage: "/model [name|refresh]",
     description_id: MessageId::CmdModelDescription,
 };
 
