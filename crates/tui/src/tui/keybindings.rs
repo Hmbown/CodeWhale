@@ -85,11 +85,8 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         description_id: crate::localization::MessageId::KbScrollTranscript,
         section: KeybindingSection::Navigation,
     },
-    KeybindingEntry {
-        chord: "Ctrl+↑ / Ctrl+↓",
-        description_id: crate::localization::MessageId::KbNavigateHistory,
-        section: KeybindingSection::Navigation,
-    },
+    // Ctrl+↑ / Ctrl+↓ are not bound distinctly in ui.rs (fall through to plain
+    // arrow handling); do not advertise them in the help catalog.
     KeybindingEntry {
         chord: "Alt+↑ / Alt+↓",
         description_id: crate::localization::MessageId::KbScrollTranscriptAlt,
@@ -110,13 +107,14 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         description_id: crate::localization::MessageId::KbJumpTopBottom,
         section: KeybindingSection::Navigation,
     },
+    // Transcript jump shortcuts require Alt (bare letters are text input).
     KeybindingEntry {
-        chord: "g / G",
+        chord: "Alt+G / Alt+Shift+G",
         description_id: crate::localization::MessageId::KbJumpTopBottomEmpty,
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
-        chord: "[ / ]",
+        chord: "Alt+[ / Alt+]",
         description_id: crate::localization::MessageId::KbJumpToolBlocks,
         section: KeybindingSection::Navigation,
     },
@@ -208,7 +206,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "l",
+        chord: "Alt+L",
         description_id: crate::localization::MessageId::KbLastMessagePager,
         section: KeybindingSection::Submission,
     },
@@ -227,6 +225,8 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         description_id: crate::localization::MessageId::KbLiveTranscript,
         section: KeybindingSection::Submission,
     },
+    // Ctrl+T cycles reasoning effort for the active provider — not agent mode.
+    // Mode cycling is Tab; permissions are Shift+Tab.
     KeybindingEntry {
         chord: "Ctrl+T",
         description_id: crate::localization::MessageId::KbCycleThinking,
@@ -291,8 +291,9 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Clipboard,
     },
     // --- Help ---
+    // Help toggle is Alt+? (bare `?` is text input). F1 and Ctrl+/ also work.
     KeybindingEntry {
-        chord: "?",
+        chord: "Alt+?",
         description_id: crate::localization::MessageId::KbHelpOverlay,
         section: KeybindingSection::Help,
     },
@@ -336,13 +337,70 @@ mod tests {
 
     #[test]
     fn help_section_documents_question_mark() {
-        // The whole point of #93 is that `?` opens this overlay; if the entry
-        // ever disappears the user-facing discoverability promise breaks.
+        // Help toggle is Alt+? (bare `?` is text input). F1 and Ctrl+/ remain.
+        assert!(
+            KEYBINDINGS.iter().any(|entry| {
+                entry.chord == "Alt+?" && entry.section == KeybindingSection::Help
+            }),
+            "`Alt+?` must remain documented as the help-toggle chord"
+        );
         assert!(
             KEYBINDINGS
                 .iter()
-                .any(|entry| entry.chord.contains('?') && entry.section == KeybindingSection::Help),
-            "`?` must remain documented as the help-toggle chord"
+                .all(|entry| entry.chord != "?" && entry.chord != "g / G" && entry.chord != "[ / ]"),
+            "bare letter/punctuation nav chords must not appear in the catalog"
+        );
+    }
+
+    #[test]
+    fn catalog_transcript_nav_chords_require_alt() {
+        // Handlers in ui.rs use alt_nav_modifiers for g/G/[ /]/? / l.
+        // The help catalog must not advertise bare forms that type as text.
+        let jump_top = KEYBINDINGS
+            .iter()
+            .find(|e| e.description_id == crate::localization::MessageId::KbJumpTopBottomEmpty)
+            .expect("jump top/bottom entry");
+        assert_eq!(jump_top.chord, "Alt+G / Alt+Shift+G");
+
+        let tool_jump = KEYBINDINGS
+            .iter()
+            .find(|e| e.description_id == crate::localization::MessageId::KbJumpToolBlocks)
+            .expect("tool jump entry");
+        assert_eq!(tool_jump.chord, "Alt+[ / Alt+]");
+
+        let last_msg = KEYBINDINGS
+            .iter()
+            .find(|e| e.description_id == crate::localization::MessageId::KbLastMessagePager)
+            .expect("last message entry");
+        assert_eq!(last_msg.chord, "Alt+L");
+
+        assert!(
+            KEYBINDINGS
+                .iter()
+                .all(|e| !e.chord.contains("Ctrl+↑") && !e.chord.contains("Ctrl+↓")),
+            "Ctrl+Up/Down must not be advertised — no distinct handler"
+        );
+    }
+
+    #[test]
+    fn ctrl_t_documents_reasoning_effort_not_mode() {
+        let ctrl_t = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.chord == "Ctrl+T")
+            .expect("Ctrl+T keybinding should be documented");
+        assert_eq!(
+            ctrl_t.description_id,
+            crate::localization::MessageId::KbCycleThinking
+        );
+        let copy = crate::localization::tr(crate::localization::Locale::En, ctrl_t.description_id);
+        let lower = copy.to_ascii_lowercase();
+        assert!(
+            lower.contains("reasoning"),
+            "Ctrl+T copy must say reasoning effort, got: {copy}"
+        );
+        assert!(
+            !lower.contains("cycle mode") && !lower.contains("agent mode"),
+            "Ctrl+T must not be described as mode cycling, got: {copy}"
         );
     }
 
