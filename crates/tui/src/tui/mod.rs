@@ -36,6 +36,7 @@ pub mod footer_ui;
 pub mod format_helpers;
 pub mod frame_rate_limiter;
 pub mod history;
+pub mod hit_region;
 pub mod hotbar;
 pub mod key_actions;
 pub mod key_shortcuts;

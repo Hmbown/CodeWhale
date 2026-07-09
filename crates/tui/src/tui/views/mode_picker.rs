@@ -1,6 +1,11 @@
 //! `/mode` picker for Act / Plan / Operate.
+//!
+//! Dual-path list (Lane C start): keyboard ↑/↓/Enter and mouse hover/click
+//! share the same selected row via a small [`HitMap`].
 
-use crossterm::event::{KeyCode, KeyEvent};
+use std::cell::RefCell;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -13,6 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::AppMode;
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
     render_modal_footer, render_modal_surface,
@@ -21,6 +27,8 @@ use crate::tui::views::{
 pub struct ModePickerView {
     cursor: usize,
     locale: Locale,
+    /// Row hit regions from the last paint (shared by hover + click).
+    hit_map: RefCell<HitMap>,
 }
 
 impl ModePickerView {
@@ -30,7 +38,11 @@ impl ModePickerView {
             .iter()
             .position(|mode| *mode == current)
             .unwrap_or(0);
-        Self { cursor, locale }
+        Self {
+            cursor,
+            locale,
+            hit_map: RefCell::new(HitMap::new()),
+        }
     }
 
     fn selected_mode(&self) -> AppMode {
@@ -62,6 +74,18 @@ impl ModePickerView {
             mode: self.selected_mode(),
         }))
     }
+
+    /// Align keyboard focus with the row under the pointer (hover = select).
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index < AppMode::CHOICES.len() && self.cursor != index {
+            self.cursor = index;
+            return true;
+        }
+        index < AppMode::CHOICES.len()
+    }
 }
 
 impl ModalView for ModePickerView {
@@ -88,6 +112,29 @@ impl ModalView for ModePickerView {
                 ViewAction::None
             }
             KeyCode::Char(number) => self.select_by_number(number).unwrap_or(ViewAction::None),
+            _ => ViewAction::None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            // Hover shares keyboard focus: the highlighted row is the same
+            // one Enter would activate.
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+                ViewAction::None
+            }
+            // Click selects the same row Enter would, and activates it
+            // (mode picker is pick-and-close).
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus_row_at(mouse.column, mouse.row) {
+                    ViewAction::EmitAndClose(ViewEvent::ModeSelected {
+                        mode: self.selected_mode(),
+                    })
+                } else {
+                    ViewAction::None
+                }
+            }
             _ => ViewAction::None,
         }
     }
@@ -124,6 +171,7 @@ impl ModalView for ModePickerView {
         );
 
         let mut lines = Vec::with_capacity(AppMode::CHOICES.len());
+        let mut map = HitMap::new();
 
         for (idx, mode) in AppMode::CHOICES.iter().copied().enumerate() {
             let is_cursor = idx == self.cursor;
@@ -148,6 +196,12 @@ impl ModalView for ModePickerView {
             // names keep the hint column aligned.
             let pad = " ".repeat(7usize.saturating_sub(UnicodeWidthStr::width(&*name)));
 
+            // Row y = content origin + line index (one mode per line).
+            let row_y = content.y.saturating_add(u16::try_from(idx).unwrap_or(u16::MAX));
+            if row_y < content.y.saturating_add(content.height) {
+                map.push_row(idx, content.x, row_y, content.width);
+            }
+
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{pointer} {}. {name}{pad}", mode.number()),
@@ -157,6 +211,7 @@ impl ModalView for ModePickerView {
             ]));
         }
 
+        *self.hit_map.borrow_mut() = map;
         Paragraph::new(lines).render(content, buf);
     }
 }
@@ -273,5 +328,79 @@ mod tests {
         let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
         assert!(matches!(action, ViewAction::None));
+    }
+
+    #[test]
+    fn mouse_hover_and_click_share_keyboard_selected_row() {
+        use crate::tui::views::ViewStack;
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
+        // Act is index 0 by default; paint so hit map is populated.
+        view.render(area, &mut buf);
+        assert!(!view.hit_map.borrow().is_empty(), "render must fill hit map");
+        assert_eq!(view.hit_map.borrow().len(), AppMode::CHOICES.len());
+
+        // Grab Plan row (index 1) coordinates from the hit map.
+        let plan_hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|r| matches!(r.target, crate::tui::hit_region::HitTarget::Row { index: 1 }))
+            .copied()
+            .expect("plan row hit region");
+        let col = plan_hit.rect.x + 2;
+        let row = plan_hit.rect.y;
+
+        // Hover moves keyboard focus without activating.
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.cursor, 1, "hover should focus Plan row");
+        assert_eq!(view.selected_mode(), AppMode::Plan);
+
+        // Enter on the hovered row matches keyboard Enter path.
+        let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModeSelected { mode }) => {
+                assert_eq!(mode, AppMode::Plan);
+            }
+            other => panic!("expected ModeSelected Plan via Enter after hover, got {other:?}"),
+        }
+
+        // Fresh view: click activates the row under the pointer (same as Enter).
+        let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
+        view.render(area, &mut buf);
+        let operate_hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|r| matches!(r.target, crate::tui::hit_region::HitTarget::Row { index: 2 }))
+            .copied()
+            .expect("operate row hit region");
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: operate_hit.rect.x + 2,
+            row: operate_hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModeSelected { mode }) => {
+                assert_eq!(mode, AppMode::Operate);
+            }
+            other => panic!("expected ModeSelected Operate via click, got {other:?}"),
+        }
+
+        // Stack still composites without panic when mouse is routed.
+        let mut stack = ViewStack::new();
+        stack.push(ModePickerView::new(AppMode::Plan, Locale::En));
+        stack.render(area, &mut buf);
     }
 }
