@@ -1121,6 +1121,69 @@ fn workflow_panel_mouse_controls_consume_before_transcript_selection() {
     );
 }
 
+#[test]
+fn transcript_tool_summary_row_click_expands_locally_without_opening_raw_detail() {
+    let mut app = create_test_app();
+    app.tool_collapse_mode = crate::tui::app::ToolCollapseMode::Compact;
+    app.tool_collapse_threshold = 3;
+    for (name, summary) in [
+        ("read_file", "src/a.rs"),
+        ("list_dir", "src"),
+        ("web_search", "query"),
+    ] {
+        app.history
+            .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+                name: name.to_string(),
+                status: ToolStatus::Success,
+                input_summary: Some(summary.to_string()),
+                output: Some(format!("full output from {name}")),
+                prompts: None,
+                spillover_path: None,
+                output_summary: None,
+                is_diff: false,
+            })));
+    }
+    app.resync_history_revisions();
+
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 8,
+    };
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let widget = crate::tui::widgets::ChatWidget::new(&mut app, area);
+    widget.render(area, &mut buf);
+
+    assert_eq!(app.collapsed_cell_map, vec![0]);
+    assert!(!app.expanded_tool_runs.contains(&0));
+    let summary_row = area
+        .y
+        .saturating_add(app.viewport.last_transcript_padding_top as u16);
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x.saturating_add(2),
+            row: summary_row,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert!(app.expanded_tool_runs.contains(&0));
+    assert_eq!(app.status_message.as_deref(), Some("Tool group expanded"));
+    assert!(
+        !app.viewport.transcript_selection.dragging,
+        "tool summary row click should toggle local expand, not start text selection"
+    );
+    assert!(
+        app.view_stack.is_empty(),
+        "mouse local expand must not open the raw-detail pager; `v` keeps that job"
+    );
+}
+
 /// Clicking the transcript scrollbar gutter starts a scrollbar drag (not
 /// text selection) so the visible thumb remains interactive for users who
 /// prefer mouse-based navigation.
