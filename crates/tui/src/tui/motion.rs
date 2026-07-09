@@ -5,30 +5,42 @@
 //! - Completion surface: one-shot ~800ms field lighten on working→done,
 //!   gated on `!low_motion && fancy_animations`
 //!
-//! Cadence matches the braille spinner (50ms frames, 2.4s cycle). This module
-//! is intentionally free of App/History coupling so unit tests can drive the
-//! real math without a live TUI.
+//! Product cadence: 50ms frames × 48 ≈ 2.4s (shared with the braille spinner).
+//! This module is intentionally free of App/History coupling so unit tests can
+//! drive the real math without a live TUI.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-/// Shared frame cadence with [`super::spinner::BRAILLE_SPINNER_FRAME_MS`].
+/// Shared product frame cadence (ms). One clock for spinner + motion grammar.
+///
+/// [`super::spinner::BRAILLE_SPINNER_FRAME_MS`] re-exports this value so
+/// every surface advances on the same 50ms tick.
 pub const CADENCE_FRAME_MS: u64 = 50;
 
-/// Receipt settle duration (~1/6 of 2.4s cadence).
-pub const RECEIPT_SETTLE_MS: u64 = 400;
+/// Frames per full product cadence cycle (50ms × 48 = 2.4s).
+pub const PRODUCT_CADENCE_FRAMES: u64 = 48;
+
+/// Full product cadence period in ms (~2.4s). Spinner cycle and phase durations
+/// are multiples/fractions of this value (settle 1/6, surface 1/3).
+pub const PRODUCT_CADENCE_MS: u64 = CADENCE_FRAME_MS * PRODUCT_CADENCE_FRAMES;
+
+/// Receipt settle duration (~1/6 of product cadence).
+pub const RECEIPT_SETTLE_MS: u64 = PRODUCT_CADENCE_MS / 6;
 
 /// Stagger between receipts that land in a burst.
 pub const RECEIPT_STAGGER_MS: u64 = 60;
 
-/// One-shot completion surface duration (~1/3 of cadence).
-pub const COMPLETION_SURFACE_MS: u64 = 800;
+/// One-shot completion surface duration (~1/3 of product cadence).
+pub const COMPLETION_SURFACE_MS: u64 = PRODUCT_CADENCE_MS / 3;
 
 /// Peak brightness multiplier at the midpoint of the completion surface.
 pub const COMPLETION_SURFACE_PEAK: f32 = 0.12;
 
 /// Floor brightness for a settling receipt at t=0 (never fully invisible).
-const SETTLE_DIM_FLOOR: f32 = 0.38;
+/// Slightly lower than v1 so tool receipt cells read a clearer dim→ink settle
+/// against the HTML prototype (opacity 0→1 approximated for terminal).
+const SETTLE_DIM_FLOOR: f32 = 0.32;
 
 /// Ease approximating cubic-bezier(0.32, 0.72, 0, 1) — organic settle curve.
 #[must_use]
@@ -168,10 +180,29 @@ pub fn apply_receipt_settle(lines: &mut [Line<'static>], progress: f32) {
 
 fn dim_style(style: Style, progress: f32) -> Style {
     let mut out = style;
-    if let Some(fg) = style.fg {
-        out = out.fg(settle_color(fg, progress));
-    }
+    // Prefer the span's own fg; if unset, dim a neutral primary so unstyled
+    // tool-rail glyphs still settle visibly (primary target: receipt cells).
+    let fg = style.fg.unwrap_or(Color::Rgb(200, 204, 214));
+    out = out.fg(settle_color(fg, progress));
     out
+}
+
+/// Apply completion-surface lighten to a canvas/field background color.
+///
+/// Returns `base` unchanged when the surface is idle or gated off. Used by
+/// the transcript chat field (and footer) so working→done is felt on the main
+/// canvas, not only the status strip.
+#[must_use]
+pub fn completion_surface_color(
+    base: Color,
+    elapsed_ms: u128,
+    low_motion: bool,
+    fancy_animations: bool,
+) -> Color {
+    match completion_surface_boost(elapsed_ms, low_motion, fancy_animations) {
+        Some(boost) => lighten_color(base, boost),
+        None => base,
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +321,58 @@ mod tests {
             other => panic!("expected RGB, got {other:?}"),
         }
         assert_eq!(lighten_color(base, 0.0), base);
+    }
+
+    #[test]
+    fn product_cadence_matches_spinner_math() {
+        // 50ms × 48 = 2.4s — single product clock (COH-11).
+        assert_eq!(CADENCE_FRAME_MS, 50);
+        assert_eq!(PRODUCT_CADENCE_FRAMES, 48);
+        assert_eq!(PRODUCT_CADENCE_MS, 2400);
+        assert_eq!(RECEIPT_SETTLE_MS, 400);
+        assert_eq!(COMPLETION_SURFACE_MS, 800);
+        // Spinner re-exports the same frame ms (checked at type-use sites).
+        assert_eq!(
+            crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS,
+            CADENCE_FRAME_MS
+        );
+    }
+
+    #[test]
+    fn completion_surface_color_lightens_canvas_then_rests() {
+        let base = Color::Rgb(13, 17, 23);
+        let mid = completion_surface_color(
+            base,
+            u128::from(COMPLETION_SURFACE_MS) / 2,
+            false,
+            true,
+        );
+        match mid {
+            Color::Rgb(r, g, b) => {
+                assert!(r > 13 && g > 17 && b > 23, "mid surface should lighten canvas");
+            }
+            other => panic!("expected RGB, got {other:?}"),
+        }
+        // Finished / gated: base unchanged.
+        assert_eq!(
+            completion_surface_color(base, u128::from(COMPLETION_SURFACE_MS), false, true),
+            base
+        );
+        assert_eq!(completion_surface_color(base, 0, true, true), base);
+        assert_eq!(completion_surface_color(base, 0, false, false), base);
+    }
+
+    #[test]
+    fn apply_receipt_settle_dims_unstyled_tool_receipt_spans() {
+        // Tool rail glyphs sometimes ship without an explicit fg; settle must
+        // still dim them so receipt cells cascade visibly.
+        let mut lines = vec![Line::from(Span::raw("✓ read  history.rs"))];
+        apply_receipt_settle(&mut lines, 0.0);
+        match lines[0].spans[0].style.fg {
+            Some(Color::Rgb(r, g, b)) => {
+                assert!(r < 200 && g < 200 && b < 200, "unstyled span should dim");
+            }
+            other => panic!("expected RGB after settle, got {other:?}"),
+        }
     }
 }

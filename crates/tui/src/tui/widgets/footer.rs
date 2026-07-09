@@ -293,21 +293,9 @@ impl FooterProps {
         // to cross the 60s threshold inside `footer_worked_chip`.
         let worked = footer_worked_chip(app.cumulative_turn_duration, app.ui_locale);
         // Ocean completion surface: one-shot lighten of the footer field
-        // when a turn finishes (working→done). Purely visual; gated by
-        // low_motion / fancy_animations inside the motion helper.
-        let footer_bg = if let Some(started) = app.completion_surface_started_at {
-            if let Some(boost) = crate::tui::motion::completion_surface_boost(
-                started.elapsed().as_millis(),
-                app.low_motion,
-                app.fancy_animations,
-            ) {
-                crate::tui::motion::lighten_color(app.ui_theme.footer_bg, boost)
-            } else {
-                app.ui_theme.footer_bg
-            }
-        } else {
-            app.ui_theme.footer_bg
-        };
+        // when a turn finishes (working→done). Same gate/math as the transcript
+        // canvas via App::completion_surface_field_color.
+        let footer_bg = app.completion_surface_field_color(app.ui_theme.footer_bg);
         Self {
             model: app.model_display_label(),
             mode_label,

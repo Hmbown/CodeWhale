@@ -81,7 +81,9 @@ struct TranscriptScrollbar {
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
-        let background = app.ui_theme.surface_bg;
+        // Ocean completion surface: one-shot lighten of the transcript field
+        // on working→done (gated inside completion_surface_field_color).
+        let background = app.completion_surface_field_color(app.ui_theme.surface_bg);
         let scroll_track = app.ui_theme.border;
         let scroll_thumb = app.ui_theme.status_working;
         let jump_border = app.ui_theme.border;

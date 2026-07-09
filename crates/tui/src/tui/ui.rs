@@ -9521,8 +9521,10 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 fn render(f: &mut Frame, app: &mut App, config: &Config) {
     let size = f.area();
 
-    // Clear entire area with the configured app background.
-    let background = Block::default().style(Style::default().bg(app.ui_theme.surface_bg));
+    // Clear entire area with the configured app background. While the
+    // completion surface is active, lighten the canvas field (one-shot).
+    let surface_bg = app.completion_surface_field_color(app.ui_theme.surface_bg);
+    let background = Block::default().style(Style::default().bg(surface_bg));
     f.render_widget(background, size);
 
     // Show onboarding screen if needed
@@ -9685,8 +9687,10 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         // background before any sub-widgets render, so cells that end up
         // uncovered by layout splits (e.g. after file-tree toggle or
         // resize) don't retain stale content from a previous frame.
+        // Match completion-surface field color used by ChatWidget.
+        let chat_field_bg = app.completion_surface_field_color(app.ui_theme.surface_bg);
         Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .style(Style::default().bg(chat_field_bg))
             .render(body_chunks[0], f.buffer_mut());
 
         let mut sidebar_area = None;

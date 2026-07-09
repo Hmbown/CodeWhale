@@ -3796,6 +3796,25 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// Lighten `base` while the completion surface is active; otherwise return
+    /// `base` unchanged. Used for the transcript canvas field (and can be
+    /// shared with footer) so the one-shot breath is felt on the main surface.
+    #[must_use]
+    pub fn completion_surface_field_color(
+        &self,
+        base: ratatui::style::Color,
+    ) -> ratatui::style::Color {
+        let Some(started) = self.completion_surface_started_at else {
+            return base;
+        };
+        crate::tui::motion::completion_surface_color(
+            base,
+            started.elapsed().as_millis(),
+            self.low_motion,
+            self.fancy_animations,
+        )
+    }
+
     /// Whether any receipt settle or completion surface still needs frames.
     #[must_use]
     pub fn has_pending_motion(&self) -> bool {

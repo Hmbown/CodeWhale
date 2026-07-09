@@ -14,8 +14,10 @@ pub(crate) const BRAILLE_SPINNER_FRAMES: [&str; 12] = [
     "\u{2832}", "\u{2830}", "\u{2820}", "\u{2810}",
 ];
 
-/// Match the live UI repaint cadence so running glyphs advance on every tick.
-pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 50;
+/// Match the product cadence clock so running glyphs advance with settle/surface.
+///
+/// Source of truth: [`crate::tui::motion::CADENCE_FRAME_MS`] (50ms × 48 ≈ 2.4s).
+pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = crate::tui::motion::CADENCE_FRAME_MS;
 
 #[must_use]
 pub(crate) fn braille_spinner_frame_for_elapsed_ms(
