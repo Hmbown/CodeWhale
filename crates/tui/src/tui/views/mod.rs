@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
 };
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -304,6 +304,56 @@ pub(crate) fn render_modal_text_footer(
 ) -> Rect {
     let lines = wrapped_footer_lines(text, inner.width, style);
     place_footer_lines(inner, buf, lines)
+}
+
+/// Geometry returned by the shared modal chrome recipe ([`render_modal_chrome`]).
+///
+/// Callers own only the body paint; surface, title border, and hint footer are
+/// handled by the recipe (COH-05 / TUI-FIX-05 start).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ModalChromeLayout {
+    /// Full centered popup rect (including borders).
+    pub(crate) popup_area: Rect,
+    /// Content rect above the action footer (inside borders + padding).
+    pub(crate) body: Rect,
+}
+
+/// Paint the shared modal chrome recipe in one call:
+/// centered popup · opaque surface + shadow · titled border · action-hint footer.
+///
+/// Returns [`ModalChromeLayout`] so the caller can fill `body` with list/detail
+/// content. This is the smallest vertical slice of TUI-FIX-05 — one recipe, one
+/// consumer proof path (command palette). Do not invent mouse hit-testing here.
+pub(crate) fn render_modal_chrome(
+    frame: Rect,
+    buf: &mut Buffer,
+    title: Line<'static>,
+    preferred_width: u16,
+    preferred_height: u16,
+    min_width: u16,
+    min_height: u16,
+    hints: &[ActionHint],
+) -> ModalChromeLayout {
+    let popup_area = centered_modal_area(
+        frame,
+        preferred_width,
+        preferred_height,
+        min_width,
+        min_height,
+    );
+    render_modal_surface(frame, popup_area, buf);
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::BORDER_COLOR))
+        .style(Style::default().bg(palette::WHALE_BG))
+        .padding(Padding::uniform(1));
+    let inner = block.inner(popup_area);
+    block.render(popup_area, buf);
+
+    let body = render_modal_footer(inner, buf, hints);
+    ModalChromeLayout { popup_area, body }
 }
 
 /// Shared list/detail geometry for modal managers and pickers.
@@ -2908,7 +2958,7 @@ mod tests {
     use super::{
         ActionHint, ConfigListItem, ConfigView, EmptyState, HelpView, ListDetailLayout, ModalKind,
         ModalView, ViewAction, ViewEvent, ViewStack, action_footer_lines, centered_modal_area,
-        render_modal_footer, subagent_view_agents, truncate_view_text,
+        render_modal_chrome, render_modal_footer, subagent_view_agents, truncate_view_text,
     };
     use crate::config::Config;
     use crate::localization::{Locale, MessageId, tr};
@@ -3078,6 +3128,69 @@ mod tests {
         assert_eq!(body.y, inner.y);
         assert_eq!(body.height, inner.height - 1);
         assert_eq!(body.y + body.height, inner.y + inner.height - 1);
+    }
+
+    #[test]
+    fn render_modal_chrome_centers_opaque_surface_with_title_and_footer() {
+        use ratatui::style::{Modifier, Style};
+        use ratatui::text::{Line, Span};
+
+        let frame = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(frame);
+        // Stale transcript glyphs must not show through the popup interior.
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+        let hints = [
+            ActionHint::new("Enter", "run"),
+            ActionHint::new("Esc", "close"),
+        ];
+        let chrome = render_modal_chrome(
+            frame,
+            &mut buf,
+            Line::from(Span::styled(
+                " Commands ",
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            60,
+            16,
+            40,
+            8,
+            &hints,
+        );
+
+        // Centered within frame (with margin room on a 80x24 terminal).
+        assert!(chrome.popup_area.x > 0);
+        assert!(chrome.popup_area.y > 0);
+        assert!(chrome.popup_area.width <= 60);
+        assert!(chrome.popup_area.height <= 16);
+        // Body sits inside the popup and leaves room for the footer.
+        assert!(chrome.body.height < chrome.popup_area.height);
+        assert!(chrome.body.width < chrome.popup_area.width);
+        assert_eq!(chrome.body.x, chrome.popup_area.x + 2); // border + padding
+        assert!(chrome.body.y > chrome.popup_area.y);
+
+        // Opaque WHALE_BG in the body center; no leftover X glyphs there.
+        let cx = chrome.body.x + chrome.body.width / 2;
+        let cy = chrome.body.y + chrome.body.height / 2;
+        assert_eq!(buf[(cx, cy)].bg, palette::WHALE_BG);
+        assert_ne!(buf[(cx, cy)].symbol(), "X");
+
+        // Footer action labels painted.
+        let mut text = String::new();
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("run"), "missing footer run hint: {text}");
+        assert!(text.contains("close"), "missing footer close hint: {text}");
+        assert!(text.contains("Commands"), "missing title: {text}");
     }
 
     #[test]

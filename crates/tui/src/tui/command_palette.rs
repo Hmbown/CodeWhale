@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -24,7 +24,7 @@ use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::views::{
     ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
-    centered_modal_area, render_modal_footer, render_modal_surface,
+    render_modal_chrome,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -436,14 +436,6 @@ fn format_mcp_server_details(
         lines.push(format!("  - {}", prompt.model_name));
     }
     lines.join("\n")
-}
-
-fn modal_block() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::WHALE_BG))
-        .padding(Padding::uniform(1))
 }
 
 fn parse_section_term(term: &str) -> Option<(PaletteSection, String)> {
@@ -877,34 +869,34 @@ impl ModalView for CommandPaletteView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 90, 22, 44, 8);
-        let popup_width = popup_area.width;
-
-        render_modal_surface(area, popup_area, buf);
-
+        // Shared modal chrome (COH-05): centered opaque surface, title, footer.
+        // Body paint (filter + list rows) stays local to this view.
         let title = format!(
             " {} — {} ",
             tr(self.locale, MessageId::CommandPaletteTitle),
             tr(self.locale, MessageId::CommandPaletteSubtitle)
         );
-        let block = modal_block().title(Line::from(Span::styled(
-            title,
-            Style::default()
-                .fg(palette::WHALE_INFO)
-                .add_modifier(Modifier::BOLD),
-        )));
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
+        let chrome = render_modal_chrome(
+            area,
             buf,
+            Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            90,
+            22,
+            44,
+            8,
             &[
                 ActionHint::new("↑/↓/j/k", "move"),
                 ActionHint::new("Enter", "run"),
                 ActionHint::new("Esc", "close"),
             ],
         );
+        let popup_width = chrome.popup_area.width;
+        let content = chrome.body;
 
         let mut lines = Vec::new();
         let query_label = if self.query.is_empty() {
