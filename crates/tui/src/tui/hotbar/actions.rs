@@ -1447,6 +1447,7 @@ mod tests {
     use super::*;
 
     fn test_app_with_paths(workspace: PathBuf, skills_dir: PathBuf) -> App {
+        let skills_dir_config = skills_dir.to_string_lossy().into_owned();
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace,
@@ -1468,7 +1469,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        let mut app = App::new(options, &Config::default());
+        let mut config = Config::default();
+        config.skills_dir = Some(skills_dir_config);
+        let mut app = App::new(options, &config);
         app.ui_locale = crate::localization::Locale::En;
         app
     }

@@ -4976,6 +4976,8 @@ mod tests {
         let mut app = create_test_app();
         let custom = ratatui::style::Color::Rgb(26, 27, 38);
         app.ui_theme = app.ui_theme.with_background_color(custom);
+        app.completion_surface_started_at = None;
+        app.low_motion = true;
         app.add_message(HistoryCell::Assistant {
             content: "ready".to_string(),
             streaming: false,
