@@ -123,12 +123,14 @@ fn config_preset_command(app: &mut App, rest: &str) -> CommandResult {
     let name = tokens.first().copied().unwrap_or("");
     if name.is_empty() || name.starts_with('-') {
         return CommandResult::message(
-            "Usage: /config preset <name> [--save]. Available presets: calm.",
+            "Usage: /config preset <name> [--save]. Available presets: calm, ocean.",
         );
     }
 
     let Some(fields) = crate::settings::preset_fields(name) else {
-        return CommandResult::error(format!("Unknown preset '{name}'. Available presets: calm."));
+        return CommandResult::error(format!(
+            "Unknown preset '{name}'. Available presets: calm, ocean."
+        ));
     };
 
     // Persist the whole bundle atomically when requested (one load/apply/save),

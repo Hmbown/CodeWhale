@@ -83,14 +83,14 @@ fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
         ));
     }
 
-    // Non-YOLO sessions get a confirmation gate. We don't have a true
+    // Non-trusted sessions get a confirmation gate. We don't have a true
     // modal-confirmation path inside slash commands today, so the gate
-    // is "require trust mode" — `/trust on` or YOLO. Users in plain
-    // Agent mode get a clear message explaining how to proceed.
+    // is "require trust mode" — `/trust on` or Full Access (Shift+Tab).
+    // Users in plain Act mode get a clear message explaining how to proceed.
     if !(app.yolo || app.trust_mode) {
         return CommandResult::message(format!(
             "Refusing to restore snapshot #{n} ('{}') outside trusted mode.\n\
-             Run `/trust on` or `/mode yolo` first, then re-run `/restore {n}`.",
+             Run `/trust on` or switch to Full Access permissions (Shift+Tab) first, then re-run `/restore {n}`.",
             snapshots[n - 1].label,
         ));
     }

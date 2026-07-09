@@ -373,11 +373,13 @@ impl Default for Settings {
             // making long-session continuity the default runtime behavior.
             auto_compact: false,
             auto_compact_threshold_percent: 80.0,
-            // #4095: default presentation is compact/calm; verbose detail is opt-in.
+            // Compact transcript density stays on (#4095); Ocean motion defaults
+            // ship with full-motion + fancy chrome so the instrument can breathe.
+            // Multiplexer/VTE/SSH/a11y env still force low_motion at load.
             calm_mode: true,
             tool_collapse_mode: "compact".to_string(),
-            low_motion: true,
-            fancy_animations: false,
+            low_motion: false,
+            fancy_animations: true,
             bracketed_paste: true,
             paste_burst_detection: true,
             mention_menu_limit: 128,
@@ -428,6 +430,14 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
     ("show_tool_details", "false"),
 ];
 
+/// The `ocean` presentation preset: full-motion instrument with fancy chrome.
+/// Presentation only — safety / provider / routing knobs are untouched. Env
+/// auto-forces (tmux, VTE, SSH, NO_ANIMATIONS) still override after load.
+pub const OCEAN_PRESET_FIELDS: &[(&str, &str)] = &[
+    ("low_motion", "false"),
+    ("fancy_animations", "true"),
+];
+
 /// The `(key, value)` fields a named preset applies, or `None` for an unknown
 /// name. Single source of truth shared by [`Settings::apply_preset`] and the
 /// `/config preset` command so the bundle is never defined twice.
@@ -435,6 +445,7 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
 pub fn preset_fields(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
     match name.trim().to_ascii_lowercase().as_str() {
         "calm" => Some(CALM_PRESET_FIELDS),
+        "ocean" => Some(OCEAN_PRESET_FIELDS),
         _ => None,
     }
 }
@@ -889,14 +900,18 @@ impl Settings {
     /// transcript" preset — it quiets motion and verbose tool output while
     /// **keeping evidence reachable**: thinking stays visible and tool runs stay
     /// expandable (only their inline detail is collapsed), so maintainer/release
-    /// work is never blind to failures. Presentation only — no model, provider,
-    /// routing, or safety setting is touched. Reuses [`Settings::set`] so each
-    /// field goes through the same validation as a single-key set.
+    /// work is never blind to failures. `ocean` restores full-motion + fancy
+    /// chrome (the overnight instrument default). Presentation only — no model,
+    /// provider, routing, or safety setting is touched. Reuses [`Settings::set`]
+    /// so each field goes through the same validation as a single-key set.
     ///
     /// Returns the keys changed, or an error for an unknown preset.
     pub fn apply_preset(&mut self, name: &str) -> Result<Vec<&'static str>> {
         let Some(bundle) = preset_fields(name) else {
-            anyhow::bail!("Unknown preset '{}'. Available presets: calm", name.trim());
+            anyhow::bail!(
+                "Unknown preset '{}'. Available presets: calm, ocean",
+                name.trim()
+            );
         };
         let mut changed = Vec::with_capacity(bundle.len());
         for (key, value) in bundle {
@@ -1569,12 +1584,31 @@ mod tests {
         let settings = Settings::default();
         assert!(settings.calm_mode);
         assert!(!settings.show_tool_details);
-        assert!(settings.low_motion);
-        assert!(!settings.fancy_animations);
+        // Ocean motion defaults: full motion + fancy chrome (mux/VTE still force low).
+        assert!(!settings.low_motion);
+        assert!(settings.fancy_animations);
         assert_eq!(settings.transcript_spacing, "compact");
         assert_eq!(settings.tool_collapse_mode, "compact");
         // Thinking stays visible — compact is not "hide evidence".
         assert!(settings.show_thinking);
+    }
+
+    #[test]
+    fn apply_preset_ocean_restores_full_motion() {
+        let mut settings = Settings::default();
+        settings
+            .apply_preset("calm")
+            .expect("calm preset applies");
+        assert!(settings.low_motion);
+        assert!(!settings.fancy_animations);
+
+        let changed = settings
+            .apply_preset("ocean")
+            .expect("ocean preset applies");
+        assert!(changed.contains(&"low_motion"));
+        assert!(changed.contains(&"fancy_animations"));
+        assert!(!settings.low_motion);
+        assert!(settings.fancy_animations);
     }
 
     #[test]
@@ -1583,6 +1617,7 @@ mod tests {
         let err = settings.apply_preset("turbo").expect_err("unknown preset");
         assert!(err.to_string().contains("Unknown preset"));
         assert!(preset_fields("calm").is_some());
+        assert!(preset_fields("ocean").is_some());
         assert!(preset_fields("turbo").is_none());
     }
 
@@ -1621,8 +1656,8 @@ mod tests {
     fn default_settings_show_footer_water_strip() {
         let settings = Settings::default();
         assert!(
-            !settings.fancy_animations,
-            "default presentation is calm (#4095)"
+            settings.fancy_animations,
+            "Ocean default shows fancy chrome / water strip"
         );
     }
 

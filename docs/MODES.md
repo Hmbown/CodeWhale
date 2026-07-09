@@ -1,53 +1,81 @@
 # Modes and Approvals
 
-codewhale has two related concepts:
+codewhale has two related axes:
 
-- **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO).
-- **Approval mode**: how aggressively the UI asks before executing tools.
-- **Workflow overlay**: optional long-running orchestration that can
-  run on top of any TUI mode when a task needs many coordinated workers.
+- **TUI mode** (Tab): the visible interaction posture — **Act / Plan / Operate** only.
+- **Permission posture** (Shift+Tab): how aggressively the UI asks before executing tools — Ask → Auto-Review → Full Access.
+- **Workflow overlay**: optional long-running orchestration that can run on top of any TUI mode when a task needs coordinated workers.
 
 Model selection is separate. `--model auto` and `/model auto` route each turn to
 a concrete model and thinking level; they are not TUI modes and are not part of
-the `Tab` cycle.
+the `Tab` cycle. Press `Ctrl+T` to cycle **reasoning effort** (not mode).
 
 Workflow is also separate from the `Tab` mode cycle. It is the visible
-continuous-work layer for repeatable workflows and fleet workers. High fan-out
+continuous-work layer for repeatable workflows and Fleet workers. High fan-out
 routes through durable Fleet-backed workers instead of prompt-only sub-agent
-fanout. The active mode
-still controls permissions; Workflow controls whether a large task is planned
-into a resumable workflow with its own progress view.
+fanout. The active mode still controls permissions; Workflow controls whether a
+large task is planned into a resumable workflow with its own progress view.
 
 ## TUI Modes
 
 Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
 while a turn is running, or cycle through the visible modes when the composer is
-otherwise idle: **Plan → Act → Multitask → Operate → Plan**.
+otherwise idle: **Plan → Act → Operate → Plan**.
+
 Press `Shift+Tab` to cycle permission posture (Ask → Auto-Review → Full Access).
-Press `Ctrl+T` to cycle reasoning effort.
+
 Run `/mode` to open the mode picker, or switch directly with `/mode act`,
-`/mode plan`, `/mode multitask`, `/mode operate`, `/mode yolo` (deprecated shim),
-`/mode 1`, `/mode 2`, `/mode 3`, `/mode 5`, or `/mode 4`.
+`/mode plan`, `/mode operate`, `/mode 1`, `/mode 2`, or `/mode 3`.
 
-- **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
-- **Act** (Agent): multi-step tool use. In interactive TUI sessions, shell tools (`exec_shell`, `task_shell_start`, `task_shell_wait`) are available by default and approval prompts gate each call. Set top-level `allow_shell = false` to hide shell tools for a workspace/profile. File writes are allowed without a prompt.
-- **Multitask**: lighter delegation posture — spawn background sub-agents in parallel, start workflows non-blocking, and keep the operator turn responsive.
-- **Operate**: conductor posture — prefer Fleet roster + `/workflow` orchestration over solo inline tool chains; delegate by default.
-- **YOLO** (deprecated): maps to Act + Full Access permissions (`Shift+Tab` to Bypass). Use only in trusted repos.
+| Mode | Number | Role |
+|------|--------|------|
+| **Act** | `1` | Solo tool work in the current session — edits and shell under the active permission posture |
+| **Plan** | `2` | Read-only design and research — investigation tools stay available; shell and patch execution stay off |
+| **Operate** | `3` | Fleet + workflow conductor posture — prefer rostered workers and `/workflow` over solo tool spam |
 
-**Act** is accepted as an alias for Agent mode. Saved settings still normalize to `agent` for backward compatibility.
+**Act** is also accepted as the historical **Agent** name. Saved settings still
+normalize to `agent` for backward compatibility; the UI label is **Act**.
+
+### What each mode means
+
+- **Plan**: design-first prompting. Read-only investigation tools stay available;
+  shell and patch execution stay off. Use this when you want to think out loud
+  and produce a plan to hand to a human (yourself later, or a reviewer).
+- **Act**: multi-step tool use in the current session. In interactive TUI
+  sessions, shell tools (`exec_shell`, `task_shell_start`, `task_shell_wait`) are
+  available by default and approval prompts gate each call according to
+  permission posture. Set top-level `allow_shell = false` to hide shell tools for
+  a workspace/profile. File writes are allowed without a prompt when permissions
+  allow.
+- **Operate**: conductor posture — prefer Fleet roster + `/workflow` orchestration
+  over solo inline tool chains; delegate by default. Parallel launch floors are
+  higher so background fan-out is not throttled to a single slot.
+
+### Permissions are not a mode
+
+`Shift+Tab` cycles **Ask → Auto-Review → Full Access**. That axis is independent
+of Act / Plan / Operate. Full Access means tools can run without approval prompts
+while still sitting in **Act** (or another visible mode).
+
+Legacy inputs such as `/mode yolo` or numeric `4` remain supported as an
+**invisible permission shim** (Act + Full Access). They are not shown in the
+mode picker, Tab cycle, footer mode chip, or docs as a taught mode. Prefer
+`Shift+Tab` to Full Access in trusted repos.
+
+Unreleased **Multitask** never shipped as a public mode. Leftover config values
+`multitask` / `multi` / `5` load as **Operate** and are not offered in the picker.
 
 ### Tool availability by mode
 
-| Tool family | Plan | Agent | YOLO |
+| Tool family | Plan | Act | Operate |
 |:---|:---:|:---:|:---:|
 | Read-only file, search, and diagnostic tools | yes | yes | yes |
 | File write and patch tools | no | yes | yes |
-| Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | approval-gated by default, hidden when `allow_shell = false` | yes |
-| Paid or external-service tools | approval-gated | approval-gated | auto-approved |
-| Access outside the workspace root | no | only with trust mode | yes |
+| Shell tools (`exec_shell`, `task_shell_start`, waits, interact, cancel) | no | approval-gated by default, hidden when `allow_shell = false` | approval-gated by default (delegation preferred) |
+| Paid or external-service tools | approval-gated | approval-gated | approval-gated |
+| Access outside the workspace root | no | only with trust mode | only with trust mode |
 
-If a shell tool is missing from the model-visible catalog in Agent mode, check
+If a shell tool is missing from the model-visible catalog in Act mode, check
 for an explicit `allow_shell = false` in the active config/profile or runtime
 session. Durable tasks and automation keep conservative omitted-field defaults;
 they only receive shell access when their task settings explicitly grant it.
@@ -55,9 +83,12 @@ they only receive shell access when their task settings explicitly grant it.
 `exec_shell` commands remain blocked by shell safety validation. For heredocs,
 embedded scripts, or long manual flows, use single-line commands, write a
 script/file first, or run through `task_shell_start`/background shell.
-YOLO turns shell access on together with trust mode and auto-approval.
 
-All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+All action-capable modes have access to persistent RLM sessions through `rlm_open`,
+`rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL,
+`sub_query_batch` fans out 1-16 cheap parallel child calls pinned to
+`deepseek-v4-flash`. The model reaches for it when work is too large or
+repetitive for the parent transcript.
 
 The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
 language. Fin is a seam for routing, summaries, cheap child calls, and
@@ -68,13 +99,13 @@ objectives visible as Work context. `/goal pause` stops goal continuation withou
 changing the objective, `/goal resume` resumes and sends the objective back into
 the turn, `/goal complete` marks it done, `/goal blocked` marks it blocked, and
 `/goal clear` removes it. Goal state does not change the active TUI mode,
-approval mode, or model route. This remains distinct from `--model auto`, which
-only controls model and thinking selection.
+permission posture, or model route. This remains distinct from `--model auto`,
+which only controls model and thinking selection.
 
 Workflow builds on the same separation: a goal can ask the agent to keep
 working, while Workflow supplies the repeatable workflow/progress surface for
 large fanout. In the UI, a Workflow run should be shown as an overlay on the
-main screen, not as a fourth mode next to Agent, Plan, and YOLO.
+main screen, not as a fourth mode next to Act, Plan, and Operate.
 
 App-server clients can persist a thread-scoped goal with `thread/goal/set`, read
 it with `thread/goal/get`, and clear it with `thread/goal/clear`. That persisted
@@ -85,6 +116,9 @@ thread resume semantics.
 ## Compatibility Notes
 
 - Older settings files with `default_mode = "normal"` still load as `agent`; saving rewrites the normalized value.
+- `default_mode = "yolo"` / CLI `--yolo` / `/mode yolo` / `4` map to Act with Full Access permissions (not a taught mode).
+- `default_mode = "multitask"` / `multi` / `5` load as Operate (never a visible mode).
+- Internal label `agent` is the durable setting key for **Act**.
 
 ## Escape Key Behavior
 
@@ -108,8 +142,11 @@ You can override approval behavior at runtime:
 Legacy note: `/set approval_mode ...` was retired in favor of `/config`.
 
 - `suggest` (default): uses the per-mode rules above.
-- `auto`: auto-approves all tools (similar to YOLO approval behavior, but without forcing YOLO mode).
+- `auto`: auto-approves all tools (similar to Full Access permission behavior, without changing TUI mode).
 - `never`: blocks any tool that isn't considered safe/read-only.
+
+Interactive permission cycling via **Shift+Tab** is the preferred user path:
+Ask → Auto-Review → Full Access.
 
 ## Small-Screen Status Behavior
 
@@ -127,7 +164,7 @@ By default, file tools are restricted to the `--workspace` directory. Enable tru
 /trust
 ```
 
-YOLO mode enables trust mode automatically.
+Full Access permission posture enables trust mode as part of its bypass policy.
 
 ## MCP Behavior
 
@@ -146,7 +183,7 @@ Run `codewhale --help` for the canonical list. Common flags:
 - `codewhale fork <ID|PREFIX>` / `codewhale fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
 - `--model <MODEL>`: when using the `codewhale` facade, forward a DeepSeek model override to the TUI
 - `--workspace <DIR>`: workspace root for file tools
-- `--yolo`: start in YOLO mode
+- `--yolo`: start with Act + Full Access (silent permission shim; not a taught mode)
 - `-r, --resume <ID|PREFIX|latest>`: resume a saved session
 - `-c, --continue`: resume the most recent session in this workspace
 - `--max-subagents <N>`: clamp to `1..=128`
@@ -157,7 +194,7 @@ Run `codewhale --help` for the canonical list. Common flags:
 
 ## Branching and Rollback
 
-DeepSeek-TUI has three related but intentionally separate recovery paths:
+CodeWhale has three related but intentionally separate recovery paths:
 
 - `codewhale fork <ID>` creates a new saved session from an existing saved
   conversation and records the source session id. This is the safe way to

@@ -13,7 +13,7 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-C`             | Cancel current turn / dismiss modal / arm-then-confirm quit    |
 | `Ctrl-B`             | Move a supported foreground shell wait into `/jobs` so the turn can continue; use `/jobs` or `exec_shell_wait` to inspect it |
 | `Ctrl-D`             | Quit (only when the composer is empty)                         |
-| `Tab`                | Cycle TUI mode: Plan → Act → Multitask → Operate → Plan                     |
+| `Tab`                | Cycle TUI mode: Plan → Act → Operate → Plan                                  |
 | `Shift-Tab`          | Cycle permission posture: Ask → Auto-Review → Full Access                    |
 | `Ctrl-T`             | Cycle reasoning effort for the active provider. DeepSeek-style providers cycle off → high → max → off; OpenAI Codex cycles low → medium → high → xhigh → low. |
 | `Ctrl-Shift-T`       | Toggle live transcript overlay (sticky-tail auto-scroll)                       |

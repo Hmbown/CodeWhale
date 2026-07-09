@@ -82,7 +82,7 @@ fn events() -> CommandResult {
         ),
         (
             HookEvent::ModeChange,
-            "fires on Plan/Agent/Yolo transitions",
+            "fires on Plan/Act/Operate transitions",
         ),
         (
             HookEvent::OnError,

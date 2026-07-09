@@ -474,7 +474,7 @@
     "SetupRuntimePresetNormalAgentTitle": "Normal agent",
     "SetupRuntimePresetNormalAgentDescription": "Agent by default, approval prompts, shell visible.",
     "SetupRuntimePresetHighTrustTitle": "High-trust local",
-    "SetupRuntimePresetHighTrustDescription": "YOLO by default for trusted local work; no hidden constitution mutation.",
+    "SetupRuntimePresetHighTrustDescription": "Full Access permissions by default for trusted local work; no hidden constitution mutation.",
     "SetupRuntimePresetPreviewTitle": "Runtime Posture Preset Preview",
     "SetupRuntimePresetSafetyFloor": "Safety floor: auth/OAuth failures, blocked policy outcomes, publish-like actions, and hold-for-review gates can still stop the run.",
     "SetupRuntimePresetApplyHint": "Press A to preview this exact diff; press A again after preview to apply it.",
