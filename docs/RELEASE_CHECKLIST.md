@@ -89,6 +89,35 @@ Run, in order, from the repo root:
       can race in parallel. Document confirmed flakes in `Known issues`.)
 - [ ] `./scripts/release/publish-crates.sh dry-run`
 
+## 3b. TUI interaction gate
+
+No new or materially changed TUI list, row, chip, picker, panel, or control
+surface ships without key+mouse+focus+hover parity. This gate applies to
+mode/status/session/model/provider pickers, command/config/help views,
+workflow/Fleet panels, sidebar rows, pending-input chips, transcript receipt
+rows, and any future repeated control surface.
+
+- [ ] Every primary action has a keyboard path, and any new key binding is
+      recorded in [`KEYBINDINGS.md`](KEYBINDINGS.md) or in the command help
+      that owns it.
+- [ ] Mouse hover updates the same focused/selected row or chip that keyboard
+      navigation uses. Left-click dispatches the same command/event path as the
+      keyboard activation, not a mouse-only shortcut.
+- [ ] Focus, hover, and selected states are visible in the row, chip, or panel
+      edge so the target is legible before activation.
+- [ ] Hit regions are rebuilt from the current render pass (`HitMap`, sidebar
+      row actions, panel-local action maps, or an equivalent typed map), so
+      stale coordinates cannot activate after resize, scroll, or redraw.
+- [ ] Wheel/scroll events have exactly one owner. A panel under the pointer
+      consumes the wheel event or routes it to its own scroller; it must not
+      leak into transcript scroll unless the transcript is the active owner.
+- [ ] Tests cover the keyboard path, hover/focus update, mouse click activation,
+      and scroll ownership for scrollable surfaces. Use focused filters such as
+      `hit_region`, `mouse_ui`, `scroll_owner`, or the owning surface's test
+      filter before claiming the release gate.
+- [ ] Static read-only rows are visibly static: no hover affordance, no pointer
+      target, and no copy that implies an unavailable action.
+
 ## 4. npm wrapper smoke
 
 - [ ] `cargo build --release --locked -p codewhale-cli -p codewhale-tui`
