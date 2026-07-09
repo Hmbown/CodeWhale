@@ -22,7 +22,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 use crate::config::Config;
@@ -33,8 +33,8 @@ use crate::palette;
 use crate::tui::app::App;
 use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface, truncate_view_text,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
+    truncate_view_text,
 };
 use crate::worker_profile::{ShellPolicy, WorkerRuntimeProfile};
 
@@ -226,33 +226,26 @@ impl ModalView for FleetRosterView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 100, 30, 60, 16);
-        render_modal_surface(area, popup_area, buf);
-
-        let block = Block::default()
-            .title(Line::from(Span::styled(
-                " Fleet — workers and orchestration ",
+        let hints = self.footer_hints();
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
+                format!(
+                    " Fleet — workers and orchestration · {} members ",
+                    self.members.len()
+                ),
                 Style::default()
                     .fg(palette::WHALE_ACCENT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .title_bottom(
-                Line::from(Span::styled(
-                    format!(" {} members ", self.members.len()),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ))
-                .alignment(ratatui::layout::Alignment::Right),
-            )
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let hints = self.footer_hints();
-        let content = render_modal_footer(inner, buf, &hints);
+            )),
+            100,
+            30,
+            60,
+            16,
+            &hints,
+        );
+        let content = chrome.body;
 
         // Header (framing) above the roster body.
         let chunks = Layout::default()

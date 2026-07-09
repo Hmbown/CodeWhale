@@ -21,7 +21,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 use crate::config::Config;
@@ -29,8 +29,8 @@ use crate::localization::{MessageId, tr};
 use crate::palette;
 use crate::tui::app::App;
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface, truncate_view_text,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
+    truncate_view_text,
 };
 
 const PROFILE_DIR: &str = ".codewhale/agents";
@@ -703,39 +703,29 @@ impl ModalView for FleetSetupView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 96, 30, 60, 16);
-        render_modal_surface(area, popup_area, buf);
-
         let step_no = match self.step {
             Step::Role => 1,
             Step::Model => 2,
             Step::Thinking => 3,
             Step::Review => 4,
         };
-        let block = Block::default()
-            .title(Line::from(Span::styled(
-                " Fleet setup — your agent team ",
+        let hints = self.footer_hints();
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
+                format!(" Fleet setup — your agent team · Step {step_no}/4 "),
                 Style::default()
                     .fg(palette::WHALE_ACCENT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .title_bottom(
-                Line::from(Span::styled(
-                    format!(" Step {step_no}/4 "),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ))
-                .alignment(ratatui::layout::Alignment::Right),
-            )
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let hints = self.footer_hints();
-        let content = render_modal_footer(inner, buf, &hints);
+            )),
+            96,
+            30,
+            60,
+            16,
+            &hints,
+        );
+        let content = chrome.body;
 
         // Header (intro + breadcrumb) above the step body.
         let chunks = Layout::default()
