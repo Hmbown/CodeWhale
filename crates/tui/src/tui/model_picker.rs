@@ -33,8 +33,7 @@ use crate::provider_lake::{
 use crate::tui::app::{App, ReasoningEffort};
 use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
-    ActionHint, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface,
+    ActionHint, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
 };
 
 /// Thinking-effort rows shown for DeepSeek-style providers, in the order
@@ -1257,16 +1256,17 @@ impl ModalView for ModelPickerView {
 impl ModelPickerView {
     fn render_classic(&self, area: Rect, buf: &mut Buffer) {
         let desired_height = (self.model_row_count().max(self.current_efforts().len()) as u16)
-            .saturating_add(4)
-            .clamp(10, 22);
-        let popup_area = centered_modal_area(area, 96, desired_height, 60, 10);
+            .saturating_add(8)
+            .clamp(14, 24);
 
-        render_modal_surface(area, popup_area, buf);
-
-        // Outer chrome with title; the action footer moves into the body so it
-        // wraps instead of clipping at narrow widths (#3732).
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
+        let view_action = match self.view {
+            ModelListView::Configured => "browse all",
+            other => other.next().title_label(),
+        };
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 format!(
                     " Model & thinking · {}{} ",
                     self.view.title_label(),
@@ -1275,23 +1275,11 @@ impl ModelPickerView {
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(popup_area);
-        outer.render(popup_area, buf);
-
-        // Keep the long-standing "browse all" label on Configured so footer
-        // discoverability tests and muscle memory stay intact; other views
-        // preview the next named view (#4115).
-        let view_action = match self.view {
-            ModelListView::Configured => "browse all",
-            other => other.next().title_label(),
-        };
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            96,
+            desired_height,
+            60,
+            10,
             &[
                 ActionHint::new("↑↓", "move"),
                 ActionHint::new("Tab", "switch"),
@@ -1301,6 +1289,7 @@ impl ModelPickerView {
                 ActionHint::new("Esc", "cancel"),
             ],
         );
+        let content = chrome.body;
 
         let layout = ListDetailLayout::split(content, 24);
 

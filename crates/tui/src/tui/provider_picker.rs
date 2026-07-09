@@ -48,7 +48,7 @@ use crate::tui::app::ReasoningEffort;
 use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, EmptyState, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent,
-    centered_modal_area, render_modal_footer, render_modal_surface,
+    render_modal_chrome,
 };
 use codewhale_config::catalog::{CatalogOffering, CatalogSnapshot};
 use codewhale_config::provider::WireFormat;
@@ -1694,55 +1694,48 @@ impl ProviderPickerView {
                 format!(" Provider · all{} ", catalog_freshness_title_suffix())
             }
         };
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
-                title,
-                Style::default()
-                    .fg(palette::WHALE_INFO)
-                    .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(area);
-        outer.render(area, buf);
-
         let view_action = match self.view {
             ProviderListView::Configured => "browse all",
             ProviderListView::Catalog => "configured",
         };
         let search_active = !self.query.trim().is_empty();
-        // The action footer moves into the body so it wraps instead of clipping
-        // at narrow widths (#3732); the provider list renders above it.
-        let content = if search_active {
-            render_modal_footer(
-                inner,
-                buf,
-                &[
-                    ActionHint::new("Esc", "clear"),
-                    ActionHint::new("↑↓", "move"),
-                    ActionHint::new("Enter", enter_action),
-                    ActionHint::new("A", view_action),
-                    ActionHint::new("C", "custom"),
-                    ActionHint::new("Esc", "cancel"),
-                ],
-            )
+        let hints = if search_active {
+            vec![
+                ActionHint::new("Esc", "clear"),
+                ActionHint::new("↑↓", "move"),
+                ActionHint::new("Enter", enter_action),
+                ActionHint::new("A", view_action),
+                ActionHint::new("C", "custom"),
+                ActionHint::new("Esc", "cancel"),
+            ]
         } else {
-            render_modal_footer(
-                inner,
-                buf,
-                &[
-                    ActionHint::new("↑↓", "move"),
-                    ActionHint::new("a-z", "jump"),
-                    ActionHint::new("Enter", enter_action),
-                    ActionHint::new("A", view_action),
-                    ActionHint::new("C", "custom"),
-                    ActionHint::new("R", "edit key"),
-                    ActionHint::new("M", "models"),
-                    ActionHint::new("Esc", "cancel"),
-                ],
-            )
+            vec![
+                ActionHint::new("↑↓", "move"),
+                ActionHint::new("a-z", "jump"),
+                ActionHint::new("Enter", enter_action),
+                ActionHint::new("A", view_action),
+                ActionHint::new("C", "custom"),
+                ActionHint::new("R", "edit key"),
+                ActionHint::new("M", "models"),
+                ActionHint::new("Esc", "cancel"),
+            ]
         };
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            120,
+            (self.rows.len() as u16).saturating_add(6),
+            64,
+            8,
+            &hints,
+        );
+        let content = chrome.body;
 
         let filtered = self.filtered_rows();
         if filtered.is_empty() {
@@ -1933,37 +1926,35 @@ impl ProviderPickerView {
     fn render_key_entry(&self, area: Rect, buf: &mut Buffer) {
         let row = &self.rows[self.selected_idx];
         let codex_oauth = row.provider == ApiProvider::OpenaiCodex;
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
-                if codex_oauth {
-                    format!(" OAuth login — {} ", row.display_name)
-                } else {
-                    format!(" API key — {} ", row.display_name)
-                },
+        let title = if codex_oauth {
+            format!(" OAuth login — {} ", row.display_name)
+        } else {
+            format!(" API key — {} ", row.display_name)
+        };
+        let hints = if codex_oauth {
+            vec![ActionHint::new("Esc", "back")]
+        } else {
+            vec![
+                ActionHint::new("Enter", "continue"),
+                ActionHint::new("Esc", "back"),
+            ]
+        };
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
+                title,
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(area);
-        outer.render(area, buf);
-
-        // The action footer moves into the body so it wraps instead of clipping
-        // at narrow widths (#3732); the key-entry fields render above it.
-        let content = if codex_oauth {
-            render_modal_footer(inner, buf, &[ActionHint::new("Esc", "back")])
-        } else {
-            render_modal_footer(
-                inner,
-                buf,
-                &[
-                    ActionHint::new("Enter", "continue"),
-                    ActionHint::new("Esc", "back"),
-                ],
-            )
-        };
+            )),
+            120,
+            12,
+            64,
+            8,
+            &hints,
+        );
+        let content = chrome.body;
 
         let masked = mask_key(&self.api_key_input);
         let display = if codex_oauth {
@@ -2037,28 +2028,26 @@ impl ProviderPickerView {
 
     fn render_model_pick(&self, area: Rect, buf: &mut Buffer) {
         let provider_name = self.rows[self.selected_idx].display_name.clone();
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 format!(" Default model · {provider_name} "),
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(area);
-        outer.render(area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            120,
+            14,
+            64,
+            8,
             &[
                 ActionHint::new("↑↓", "move"),
                 ActionHint::new("Enter", "continue"),
                 ActionHint::new("Esc", "back"),
             ],
         );
+        let content = chrome.body;
 
         let header = Paragraph::new(Line::from(Span::styled(
             "Key verified. Pick a default model for this provider.",
@@ -2136,27 +2125,25 @@ impl ProviderPickerView {
 
     fn render_confirm(&self, area: Rect, buf: &mut Buffer) {
         let row = &self.rows[self.selected_idx];
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 " Confirm provider setup ",
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(area);
-        outer.render(area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            120,
+            12,
+            64,
+            8,
             &[
                 ActionHint::new("Enter", "save & switch"),
                 ActionHint::new("Esc", "back"),
             ],
         );
+        let content = chrome.body;
 
         let masked = self
             .pending_api_key
@@ -2201,28 +2188,26 @@ impl ProviderPickerView {
     }
 
     fn render_custom_form(&self, area: Rect, buf: &mut Buffer) {
-        let outer = Block::default()
-            .title(Line::from(Span::styled(
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 " Custom provider ",
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG));
-        let inner = outer.inner(area);
-        outer.render(area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            120,
+            14,
+            64,
+            8,
             &[
                 ActionHint::new("Tab/↑↓", "field"),
                 ActionHint::new("Enter", "next/save"),
                 ActionHint::new("Esc", "back"),
             ],
         );
+        let content = chrome.body;
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -2636,23 +2621,12 @@ impl ModalView for ProviderPickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let preferred_height = match self.stage {
-            Stage::List => (self.rows.len() as u16).saturating_add(2),
-            Stage::KeyEntry => 10,
-            Stage::ModelPick => 12,
-            Stage::Confirm => 10,
-            Stage::CustomForm => 12,
-        };
-        let popup_area = centered_modal_area(area, 120, preferred_height, 64, 8);
-
-        render_modal_surface(area, popup_area, buf);
-
         match self.stage {
-            Stage::List => self.render_list(popup_area, buf),
-            Stage::KeyEntry => self.render_key_entry(popup_area, buf),
-            Stage::ModelPick => self.render_model_pick(popup_area, buf),
-            Stage::Confirm => self.render_confirm(popup_area, buf),
-            Stage::CustomForm => self.render_custom_form(popup_area, buf),
+            Stage::List => self.render_list(area, buf),
+            Stage::KeyEntry => self.render_key_entry(area, buf),
+            Stage::ModelPick => self.render_model_pick(area, buf),
+            Stage::Confirm => self.render_confirm(area, buf),
+            Stage::CustomForm => self.render_custom_form(area, buf),
         }
     }
 }
