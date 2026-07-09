@@ -1,11 +1,11 @@
 //! Session resume picker view for the TUI.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -20,6 +20,7 @@ use crate::session_manager::{
     SavedSession, SessionManager, SessionMetadata, extract_title, extract_user_prompt,
     strip_thinking_tags,
 };
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 fn modal_block(title: &str) -> Block<'static> {
@@ -62,6 +63,8 @@ pub struct SessionPickerView {
     rename_mode: bool,
     rename_input: String,
     status: Option<String>,
+    /// Session-list row hit regions from the last paint.
+    list_hit_map: RefCell<HitMap>,
     /// Canonical workspace path used as the per-project scope filter
     /// (#1395). `None` opts out of scoping (e.g. when the caller can't
     /// resolve a workspace).
@@ -99,6 +102,7 @@ impl SessionPickerView {
             rename_mode: false,
             rename_input: String::new(),
             status: None,
+            list_hit_map: RefCell::new(HitMap::new()),
             workspace_scope: Some(canonical_or_self(workspace.to_path_buf())),
             show_all_workspaces: false,
         };
@@ -266,6 +270,21 @@ impl SessionPickerView {
         self.filtered.get(self.selected)
     }
 
+    fn focus_session_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.list_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.filtered.len() {
+            return false;
+        }
+        if self.selected != index {
+            self.selected = index;
+            self.ensure_selected_visible();
+            self.refresh_preview();
+        }
+        true
+    }
+
     fn cycle_sort(&mut self) {
         self.sort_mode = match self.sort_mode {
             SortMode::Recent => SortMode::Name,
@@ -406,6 +425,22 @@ impl ModalView for SessionPickerView {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.move_selection(-1),
             MouseEventKind::ScrollDown => self.move_selection(1),
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left)
+                if !self.search_mode && !self.rename_mode && !self.confirm_delete =>
+            {
+                let _ = self.focus_session_at(mouse.column, mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if !self.search_mode && !self.rename_mode && !self.confirm_delete =>
+            {
+                if self.focus_session_at(mouse.column, mouse.row)
+                    && let Some(session) = self.selected_session()
+                {
+                    return ViewAction::EmitAndClose(ViewEvent::SessionSelected {
+                        session_id: session.id.clone(),
+                    });
+                }
+            }
             _ => {}
         }
         ViewAction::None
@@ -578,6 +613,16 @@ impl ModalView for SessionPickerView {
             .max(1);
         self.update_list_viewport(visible_rows);
         let list_scroll = self.list_scroll.get();
+        let mut list_hit_map = HitMap::new();
+        for index in list_scroll..(list_scroll + visible_rows).min(self.filtered.len()) {
+            let line_y = list_inner
+                .y
+                .saturating_add(u16::try_from(header_rows + index - list_scroll).unwrap_or(0));
+            if line_y < list_inner.y.saturating_add(list_inner.height) {
+                list_hit_map.push_row(index, list_inner.x, line_y, list_inner.width);
+            }
+        }
+        *self.list_hit_map.borrow_mut() = list_hit_map;
 
         let list_lines = build_list_lines(
             &self.filtered,
@@ -954,6 +999,8 @@ mod tests {
     use chrono::Utc;
     use unicode_width::UnicodeWidthStr;
 
+    use crate::tui::hit_region::HitTarget;
+
     fn test_session(idx: usize, title: &str) -> SessionMetadata {
         SessionMetadata {
             id: format!("session-{idx:02}"),
@@ -1021,6 +1068,7 @@ mod tests {
             rename_mode: false,
             rename_input: String::new(),
             status: None,
+            list_hit_map: RefCell::new(HitMap::new()),
             workspace_scope,
             show_all_workspaces: false,
         };
@@ -1189,6 +1237,55 @@ mod tests {
                 .any(|x| buf[(x, y)].bg == palette::WHALE_ACCENT_PRIMARY),
             "selected /sessions row should not use the bright accent background"
         );
+    }
+
+    #[test]
+    fn mouse_hover_focuses_and_click_resumes_session_row() {
+        let mut first = test_session(1, "first mouse fixture");
+        first.id = "alpha-mouse-fixture".to_string();
+        let mut second = test_session(2, "second mouse fixture");
+        second.id = "bravo-mouse-fixture".to_string();
+        let mut view = picker_with(vec![first, second], None);
+        view.current_preview = vec!["preview".to_string()];
+
+        let area = Rect::new(0, 0, 120, 28);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .list_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible non-first session row hit region");
+        let HitTarget::Row { index } = hit.target;
+        let expected_session_id = view.filtered[index].id.clone();
+
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.selected, index);
+
+        view.selected = 0;
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::EmitAndClose(ViewEvent::SessionSelected { session_id }) => {
+                assert_eq!(session_id, expected_session_id);
+            }
+            other => panic!("expected selected session emit, got {other:?}"),
+        }
+        assert_eq!(view.selected, index);
     }
 
     #[test]
@@ -1481,6 +1578,7 @@ mod tests {
             rename_mode: false,
             rename_input: String::new(),
             status: None,
+            list_hit_map: RefCell::new(HitMap::new()),
             workspace_scope: None,
             show_all_workspaces: true,
         };

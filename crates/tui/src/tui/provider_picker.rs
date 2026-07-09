@@ -26,7 +26,7 @@
 //! Pressing Esc backs out one stage at a time; from the list it closes the
 //! modal without changes.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -45,6 +45,7 @@ use crate::models_dev_live::{self, ModelsDevFreshness};
 use crate::palette;
 use crate::provider_lake::catalog_model_count_for_provider;
 use crate::tui::app::ReasoningEffort;
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, EmptyState, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent,
     centered_modal_area, render_modal_footer, render_modal_surface,
@@ -55,7 +56,7 @@ use codewhale_config::route::{
     LogicalModelRef, PricingSku, RequestProtocol, RouteRequest, RouteResolver,
 };
 use serde_json::Value;
-use std::sync::OnceLock;
+use std::{cell::RefCell, sync::OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -108,6 +109,8 @@ pub struct ProviderPickerView {
     custom_provider_base_url: String,
     custom_provider_model: String,
     custom_provider_api_key_env: String,
+    provider_hit_map: RefCell<HitMap>,
+    model_hit_map: RefCell<HitMap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1225,6 +1228,8 @@ impl ProviderPickerView {
             custom_provider_base_url: String::new(),
             custom_provider_model: String::new(),
             custom_provider_api_key_env: String::new(),
+            provider_hit_map: RefCell::new(HitMap::new()),
+            model_hit_map: RefCell::new(HitMap::new()),
         };
         picker.restore_memory(memory);
         picker
@@ -1377,6 +1382,17 @@ impl ProviderPickerView {
         self.move_selection(1);
     }
 
+    fn focus_provider_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.provider_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.rows.len() || !self.row_visible(index) {
+            return false;
+        }
+        self.selected_idx = index;
+        true
+    }
+
     fn selected_provider(&self) -> ApiProvider {
         self.rows[self.selected_idx].provider
     }
@@ -1483,6 +1499,46 @@ impl ProviderPickerView {
         let next = (current + delta).rem_euclid(len as isize) as usize;
         self.model_selected_idx = next;
         self.selected_model = self.model_options.get(next).cloned();
+    }
+
+    fn focus_model_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.model_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.model_options.len() {
+            return false;
+        }
+        self.model_selected_idx = index;
+        self.selected_model = self.model_options.get(index).cloned();
+        true
+    }
+
+    fn activate_selected_provider(&mut self) -> ViewAction {
+        if !self.row_visible(self.selected_idx) {
+            return ViewAction::None;
+        }
+        let provider = self.selected_provider();
+        let provider_id = self.selected_provider_id();
+        if self.selected_has_key() {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
+                provider,
+                provider_id,
+            })
+        } else if provider == ApiProvider::Moonshot && kimi_cli_credentials_present() {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerKimiOAuthEnabled { provider })
+        } else {
+            self.enter_key_entry();
+            ViewAction::None
+        }
+    }
+
+    fn activate_selected_model(&mut self) -> ViewAction {
+        if self.model_options.is_empty() {
+            return ViewAction::None;
+        }
+        self.selected_model = self.model_options.get(self.model_selected_idx).cloned();
+        self.enter_confirm();
+        ViewAction::None
     }
 
     fn build_setup_confirmed_event(&self) -> Option<ViewEvent> {
@@ -1690,6 +1746,7 @@ impl ProviderPickerView {
 
         let filtered = self.filtered_rows();
         if filtered.is_empty() {
+            *self.provider_hit_map.borrow_mut() = HitMap::new();
             if search_active {
                 EmptyState::new(
                     "No providers match",
@@ -1717,12 +1774,18 @@ impl ProviderPickerView {
         let visible_rows = usize::from(layout.list.height);
         let visible_start = Self::visible_start(selected_pos, filtered.len(), visible_rows);
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
+        let mut hit_map = HitMap::new();
         for (pos, (idx, row)) in filtered
             .iter()
             .enumerate()
             .skip(visible_start)
             .take(visible_rows)
         {
+            let line_y = layout
+                .list
+                .y
+                .saturating_add((pos.saturating_sub(visible_start)) as u16);
+            hit_map.push_row(*idx, layout.list.x, line_y, layout.list.width);
             let is_selected = *idx == self.selected_idx;
             debug_assert_eq!(is_selected, pos == selected_pos);
             let is_active = row.is_active;
@@ -1779,6 +1842,7 @@ impl ProviderPickerView {
             }
             lines.push(line);
         }
+        *self.provider_hit_map.borrow_mut() = hit_map;
         Paragraph::new(lines).render(layout.list, buf);
         self.render_provider_detail(layout.detail, buf, &self.rows[self.selected_idx]);
     }
@@ -2014,6 +2078,7 @@ impl ProviderPickerView {
             visible_rows,
         );
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
+        let mut hit_map = HitMap::new();
         for (idx, model) in self
             .model_options
             .iter()
@@ -2021,6 +2086,8 @@ impl ProviderPickerView {
             .skip(visible_start)
             .take(visible_rows)
         {
+            let line_y = list_area.y.saturating_add(lines.len() as u16);
+            hit_map.push_row(idx, list_area.x, line_y, list_area.width);
             let is_selected = idx == self.model_selected_idx;
             let arrow = if is_selected { "▸" } else { " " };
             let label_style = if is_selected {
@@ -2063,6 +2130,7 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         }
+        *self.model_hit_map.borrow_mut() = hit_map;
         Paragraph::new(lines).render(list_area, buf);
     }
 
@@ -2318,21 +2386,7 @@ impl ModalView for ProviderPickerView {
                 // with nothing configured yet shows the empty state and
                 // `selected_idx` doesn't point at anything on screen.
                 KeyCode::Enter if self.row_visible(self.selected_idx) => {
-                    let provider = self.selected_provider();
-                    let provider_id = self.selected_provider_id();
-                    if self.selected_has_key() {
-                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
-                            provider,
-                            provider_id,
-                        })
-                    } else if provider == ApiProvider::Moonshot && kimi_cli_credentials_present() {
-                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerKimiOAuthEnabled {
-                            provider,
-                        })
-                    } else {
-                        self.enter_key_entry();
-                        ViewAction::None
-                    }
+                    self.activate_selected_provider()
                 }
                 KeyCode::Char(c)
                     if key.modifiers.is_empty()
@@ -2475,14 +2529,7 @@ impl ModalView for ProviderPickerView {
                     self.move_model_selection(1);
                     ViewAction::None
                 }
-                KeyCode::Enter => {
-                    if self.model_options.is_empty() {
-                        return ViewAction::None;
-                    }
-                    self.selected_model = self.model_options.get(self.model_selected_idx).cloned();
-                    self.enter_confirm();
-                    ViewAction::None
-                }
+                KeyCode::Enter => self.activate_selected_model(),
                 _ => ViewAction::None,
             },
             Stage::Confirm => match key.code {
@@ -2541,18 +2588,51 @@ impl ModalView for ProviderPickerView {
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
         match self.stage {
             Stage::List => match mouse.kind {
-                MouseEventKind::ScrollUp => self.move_up(),
-                MouseEventKind::ScrollDown => self.move_down(),
-                _ => {}
+                MouseEventKind::ScrollUp => {
+                    self.move_up();
+                    ViewAction::None
+                }
+                MouseEventKind::ScrollDown => {
+                    self.move_down();
+                    ViewAction::None
+                }
+                MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                    let _ = self.focus_provider_at(mouse.column, mouse.row);
+                    ViewAction::None
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if self.focus_provider_at(mouse.column, mouse.row) {
+                        self.activate_selected_provider()
+                    } else {
+                        ViewAction::None
+                    }
+                }
+                _ => ViewAction::None,
             },
             Stage::ModelPick => match mouse.kind {
-                MouseEventKind::ScrollUp => self.move_model_selection(-1),
-                MouseEventKind::ScrollDown => self.move_model_selection(1),
-                _ => {}
+                MouseEventKind::ScrollUp => {
+                    self.move_model_selection(-1);
+                    ViewAction::None
+                }
+                MouseEventKind::ScrollDown => {
+                    self.move_model_selection(1);
+                    ViewAction::None
+                }
+                MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                    let _ = self.focus_model_at(mouse.column, mouse.row);
+                    ViewAction::None
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if self.focus_model_at(mouse.column, mouse.row) {
+                        self.activate_selected_model()
+                    } else {
+                        ViewAction::None
+                    }
+                }
+                _ => ViewAction::None,
             },
-            Stage::KeyEntry | Stage::Confirm | Stage::CustomForm => {}
+            Stage::KeyEntry | Stage::Confirm | Stage::CustomForm => ViewAction::None,
         }
-        ViewAction::None
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -2612,7 +2692,8 @@ fn custom_provider_dashboard_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyModifiers};
+    use crate::tui::hit_region::HitTarget;
+    use crossterm::event::{KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
     use std::env;
     use std::ffi::OsString;
     use std::sync::Mutex;
@@ -2775,6 +2856,64 @@ mod tests {
             picker.selected_idx, before,
             "scroll down should advance the selection"
         );
+    }
+
+    #[test]
+    fn mouse_hover_and_click_apply_provider_row() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Ollama);
+        let target_idx = picker.selected_idx;
+
+        let area = Rect::new(0, 0, 96, 24);
+        let mut buf = Buffer::empty(area);
+        picker.render(area, &mut buf);
+
+        let hit = picker
+            .provider_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .copied()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index == target_idx))
+            .expect("render should record the visible Ollama provider row");
+        let alternate_idx = picker
+            .provider_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find_map(|region| match region.target {
+                HitTarget::Row { index } if index != target_idx => Some(index),
+                _ => None,
+            })
+            .expect("test render should include another visible provider row");
+        picker.selected_idx = alternate_idx;
+
+        let hover = picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x,
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+
+        let click = picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x,
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
+                provider,
+                provider_id,
+            }) => {
+                assert_eq!(provider, ApiProvider::Ollama);
+                assert_eq!(provider_id, None);
+            }
+            other => panic!("expected ProviderPickerApplied, got {other:?}"),
+        }
     }
 
     #[test]
@@ -4031,6 +4170,60 @@ mod tests {
             }
             other => panic!("expected ProviderPickerSetupConfirmed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mouse_hover_and_click_select_model_pick_row() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new_for_model_pick_after_validation(
+            ApiProvider::Deepseek,
+            ApiProvider::Openrouter,
+            &config,
+            None,
+            "sk-validated".to_string(),
+        )
+        .expect("OpenRouter has a picker row");
+
+        let area = Rect::new(0, 0, 96, 24);
+        let mut buf = Buffer::empty(area);
+        picker.render(area, &mut buf);
+
+        let hit = picker
+            .model_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .copied()
+            .find(|region| matches!(region.target, HitTarget::Row { .. }))
+            .expect("render should record model pick rows");
+        let HitTarget::Row { index } = hit.target;
+        let clicked_model = picker.model_options[index].clone();
+
+        let hover = picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x,
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(picker.model_selected_idx, index);
+        assert_eq!(
+            picker.selected_model.as_deref(),
+            Some(clicked_model.as_str())
+        );
+
+        let click = picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x,
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(click, ViewAction::None));
+        assert_eq!(picker.stage, Stage::Confirm);
+        assert_eq!(
+            picker.selected_model.as_deref(),
+            Some(clicked_model.as_str())
+        );
     }
 
     #[test]

@@ -8,7 +8,9 @@
 //! On apply we emit a [`ViewEvent::ModelPickerApplied`] with the resolved
 //! model id and effort tier.
 
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use std::cell::RefCell;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -29,6 +31,7 @@ use crate::provider_lake::{
     all_catalog_models_for_provider, catalog_offering_for_model, configured_providers,
 };
 use crate::tui::app::{App, ReasoningEffort};
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
     render_modal_footer, render_modal_surface,
@@ -147,6 +150,10 @@ pub struct ModelPickerView {
     show_custom_model_row: bool,
     model_rows: Vec<ModelPickerRow>,
     view: ModelListView,
+    /// Model-pane row hit regions from the last paint.
+    model_hit_map: RefCell<HitMap>,
+    /// Effort-pane row hit regions from the last paint.
+    effort_hit_map: RefCell<HitMap>,
     /// Other providers considered "configured" (#3830), shown by default
     /// alongside `initial_provider`'s own rows without requiring the user to
     /// type a search query first. Uses the same definition as the
@@ -220,6 +227,8 @@ impl ModelPickerView {
             show_custom_model_row,
             model_rows,
             view: ModelListView::Configured,
+            model_hit_map: RefCell::new(HitMap::new()),
+            effort_hit_map: RefCell::new(HitMap::new()),
             configured_providers,
         };
         view.restore_memory(app.model_picker_memory.as_ref());
@@ -423,6 +432,40 @@ impl ModelPickerView {
             .unwrap_or_else(|| default_picker_effort_idx(provider, model_is_auto));
     }
 
+    fn focus_model_index(&mut self, index: usize) -> bool {
+        if index >= self.model_row_count() {
+            return false;
+        }
+        let effort = self.resolved_effort();
+        self.focus = Pane::Model;
+        self.selected_model_idx = index;
+        self.select_effort_for_current_model(effort);
+        true
+    }
+
+    fn focus_effort_index(&mut self, index: usize) -> bool {
+        if index >= self.current_efforts().len() {
+            return false;
+        }
+        self.focus = Pane::Effort;
+        self.selected_effort_idx = index;
+        true
+    }
+
+    fn focus_model_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.model_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        self.focus_model_index(index)
+    }
+
+    fn focus_effort_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.effort_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        self.focus_effort_index(index)
+    }
+
     fn move_up(&mut self) -> bool {
         match self.focus {
             Pane::Model => {
@@ -501,7 +544,7 @@ impl ModelPickerView {
         rows: Vec<(String, String)>,
         selected: usize,
         focused: bool,
-    ) {
+    ) -> HitMap {
         let border_style = if focused {
             Style::default().fg(palette::WHALE_INFO)
         } else {
@@ -532,8 +575,13 @@ impl ModelPickerView {
         let inner = block.inner(area);
         block.render(area, buf);
 
+        let mut hit_map = HitMap::new();
         let mut lines = Vec::with_capacity(end.saturating_sub(start));
         for (idx, (label, hint)) in rows.iter().enumerate().skip(start).take(end - start) {
+            let line_y = inner
+                .y
+                .saturating_add(u16::try_from(idx.saturating_sub(start)).unwrap_or(0));
+            hit_map.push_row(idx, inner.x, line_y, inner.width);
             let is_selected = idx == selected;
             let marker = if is_selected { "▸" } else { " " };
             let label_style = if is_selected {
@@ -575,6 +623,7 @@ impl ModelPickerView {
             )));
         }
         Paragraph::new(lines).render(inner, buf);
+        hit_map
     }
 }
 
@@ -1182,6 +1231,20 @@ impl ModalView for ModelPickerView {
                 self.move_down();
                 ViewAction::None
             }
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_model_at(mouse.column, mouse.row)
+                    || self.focus_effort_at(mouse.column, mouse.row);
+                ViewAction::None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus_model_at(mouse.column, mouse.row)
+                    || self.focus_effort_at(mouse.column, mouse.row)
+                {
+                    ViewAction::EmitAndClose(self.build_event())
+                } else {
+                    ViewAction::None
+                }
+            }
             _ => ViewAction::None,
         }
     }
@@ -1269,7 +1332,7 @@ impl ModelPickerView {
         } else {
             format!("Model: {}", self.query.trim())
         };
-        self.render_pane(
+        let model_hit_map = self.render_pane(
             layout.list,
             buf,
             &model_title,
@@ -1277,6 +1340,7 @@ impl ModelPickerView {
             self.selected_model_idx,
             self.focus == Pane::Model,
         );
+        *self.model_hit_map.borrow_mut() = model_hit_map;
 
         let effort_provider = self.resolved_provider().unwrap_or(self.initial_provider);
         let current_efforts = self.current_efforts();
@@ -1306,7 +1370,7 @@ impl ModelPickerView {
                 (label, hint)
             })
             .collect();
-        self.render_pane(
+        let effort_hit_map = self.render_pane(
             layout.detail,
             buf,
             "Thinking",
@@ -1314,6 +1378,7 @@ impl ModelPickerView {
             selected_effort_idx,
             self.focus == Pane::Effort,
         );
+        *self.effort_hit_map.borrow_mut() = effort_hit_map;
     }
 }
 
@@ -1365,6 +1430,7 @@ fn default_picker_effort_idx(provider: ApiProvider, model_is_auto: bool) -> usiz
 mod tests {
     use super::*;
     use crate::tui::app::{App, TuiOptions};
+    use crate::tui::hit_region::HitTarget;
     use std::path::PathBuf;
 
     /// `_lock` bundles the process-wide test-env mutex with a guard that
@@ -2376,6 +2442,98 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
         assert_eq!(view.selected_model_idx, 1);
+    }
+
+    #[test]
+    fn mouse_hover_and_click_apply_model_row() {
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .model_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible non-first model row hit region");
+        let HitTarget::Row { index } = hit.target;
+        let expected_model = view.visible_model_rows()[index].id.clone();
+
+        let hover = view.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.focus, Pane::Model);
+        assert_eq!(view.selected_model_idx, index);
+
+        view.selected_model_idx = 0;
+        let click = view.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied { model, .. }) => {
+                assert_eq!(model, expected_model);
+            }
+            other => panic!("expected model apply event, got {other:?}"),
+        }
+        assert_eq!(view.focus, Pane::Model);
+        assert_eq!(view.selected_model_idx, index);
+    }
+
+    #[test]
+    fn mouse_hover_and_click_apply_effort_row() {
+        let (app, config, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app, &config);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .effort_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible non-first effort row hit region");
+        let HitTarget::Row { index } = hit.target;
+        let expected_effort = view.current_efforts()[index];
+
+        let hover = view.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.focus, Pane::Effort);
+        assert_eq!(view.selected_effort_idx, index);
+
+        view.selected_effort_idx = 0;
+        let click = view.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied { effort, .. }) => {
+                assert_eq!(effort, expected_effort);
+            }
+            other => panic!("expected effort apply event, got {other:?}"),
+        }
+        assert_eq!(view.focus, Pane::Effort);
+        assert_eq!(view.selected_effort_idx, index);
     }
 
     #[test]
