@@ -472,7 +472,7 @@
     "SetupRuntimePresetNormalAgentTitle": "Agente normal",
     "SetupRuntimePresetNormalAgentDescription": "Agent por defecto, prompts de aprobación, shell visible.",
     "SetupRuntimePresetHighTrustTitle": "Local de alta confianza",
-    "SetupRuntimePresetHighTrustDescription": "YOLO por defecto para trabajo local confiable; sin mutación oculta de constitution.",
+    "SetupRuntimePresetHighTrustDescription": "Acceso total por defecto para trabajo local confiable; sin mutación oculta de constitution.",
     "SetupRuntimePresetPreviewTitle": "Previsualización de preset de postura de runtime",
     "SetupRuntimePresetSafetyFloor": "Piso de seguridad: fallos de auth/OAuth, resultados bloqueados por política, acciones tipo publish y gates de revisión aún pueden detener la ejecución.",
     "SetupRuntimePresetApplyHint": "Presiona A para previsualizar este diff exacto; presiona A otra vez después de la previsualización para aplicarlo.",

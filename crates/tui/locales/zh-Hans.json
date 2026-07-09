@@ -472,7 +472,7 @@
     "SetupRuntimePresetNormalAgentTitle": "普通 Agent",
     "SetupRuntimePresetNormalAgentDescription": "默认 Agent，保留批准提示，显示 Shell。",
     "SetupRuntimePresetHighTrustTitle": "本地高信任",
-    "SetupRuntimePresetHighTrustDescription": "可信本地工作默认 YOLO；宪法不会隐式改权限。",
+    "SetupRuntimePresetHighTrustDescription": "可信本地工作默认完全访问权限；宪法不会隐式改权限。",
     "SetupRuntimePresetPreviewTitle": "运行姿态预设预览",
     "SetupRuntimePresetSafetyFloor": "安全底线：认证/OAuth 失败、策略阻止、发布类操作和人工复核仍可拦截运行。",
     "SetupRuntimePresetApplyHint": "按 A 预览此精确差异；预览后再次按 A 应用。",

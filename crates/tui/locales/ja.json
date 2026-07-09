@@ -472,7 +472,7 @@
     "SetupRuntimePresetNormalAgentTitle": "通常エージェント",
     "SetupRuntimePresetNormalAgentDescription": "既定は Agent、承認プロンプトあり、シェル表示。",
     "SetupRuntimePresetHighTrustTitle": "高信頼ローカル",
-    "SetupRuntimePresetHighTrustDescription": "信頼済みローカル作業では既定を YOLO にします。Constitution の隠れた変更はありません。",
+    "SetupRuntimePresetHighTrustDescription": "信頼済みローカル作業では既定をフルアクセス権限にします。Constitution の隠れた変更はありません。",
     "SetupRuntimePresetPreviewTitle": "実行姿勢プリセットのプレビュー",
     "SetupRuntimePresetSafetyFloor": "安全フロア: 認証/OAuth 失敗、ブロックされたポリシー結果、publish 相当の操作、レビュー待ちゲートは引き続き実行を止められます。",
     "SetupRuntimePresetApplyHint": "A でこの正確な差分をプレビューし、プレビュー後にもう一度 A で適用します。",

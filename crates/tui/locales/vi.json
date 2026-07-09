@@ -472,7 +472,7 @@
     "SetupRuntimePresetNormalAgentTitle": "Agent thường",
     "SetupRuntimePresetNormalAgentDescription": "Mặc định là Agent, có nhắc phê duyệt, hiện shell.",
     "SetupRuntimePresetHighTrustTitle": "Local tin cậy cao",
-    "SetupRuntimePresetHighTrustDescription": "Mặc định YOLO cho việc local đáng tin; không âm thầm sửa constitution.",
+    "SetupRuntimePresetHighTrustDescription": "Mặc định toàn quyền cho việc local đáng tin; không âm thầm sửa constitution.",
     "SetupRuntimePresetPreviewTitle": "Xem trước preset tư thế runtime",
     "SetupRuntimePresetSafetyFloor": "Sàn an toàn: lỗi auth/OAuth, kết quả bị chính sách chặn, hành động kiểu publish và cổng chờ review vẫn có thể dừng lượt chạy.",
     "SetupRuntimePresetApplyHint": "Nhấn A để xem trước diff chính xác này; nhấn A lần nữa sau xem trước để áp dụng.",

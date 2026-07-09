@@ -1936,6 +1936,32 @@ mod tests {
     }
 
     #[test]
+    fn high_trust_preset_copy_does_not_teach_yolo_as_mode() {
+        // YOLO is a silent permission shim, not a taught mode. Setup preset
+        // descriptions are user-facing; every shipped locale (incl. zh-Hant)
+        // must describe Full Access permissions instead of "YOLO".
+        let locales = [
+            Locale::En,
+            Locale::Ja,
+            Locale::ZhHans,
+            Locale::ZhHant,
+            Locale::PtBr,
+            Locale::Es419,
+            Locale::Vi,
+        ];
+        for locale in locales {
+            let copy = tr(locale, MessageId::SetupRuntimePresetHighTrustDescription);
+            assert!(!copy.is_empty(), "{} high-trust preset empty", locale.tag());
+            let lower = copy.to_ascii_lowercase();
+            assert!(
+                !lower.contains("yolo"),
+                "{} high-trust preset must not teach YOLO as a mode, got: {copy}",
+                locale.tag()
+            );
+        }
+    }
+
+    #[test]
     fn zh_hant_hotbar_command_and_keybinding_strings_are_native() {
         for id in [
             MessageId::CmdHotbarDescription,

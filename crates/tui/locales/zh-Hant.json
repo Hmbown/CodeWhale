@@ -331,7 +331,7 @@
     "SetupRuntimePresetNormalAgentTitle": "一般 Agent",
     "SetupRuntimePresetNormalAgentDescription": "預設 Agent、顯示核准提示、shell 可見。",
     "SetupRuntimePresetHighTrustTitle": "高信任本機",
-    "SetupRuntimePresetHighTrustDescription": "可信本機工作預設 YOLO；不會隱藏變更 constitution。",
+    "SetupRuntimePresetHighTrustDescription": "可信本機工作預設完全存取權限；不會隱藏變更 constitution。",
     "SetupRuntimePresetPreviewTitle": "執行姿態預設預覽",
     "SetupRuntimePresetSafetyFloor": "安全底線：認證/OAuth 失敗、被政策封鎖的結果、類 publish 操作，以及等待審核閘門仍可停止執行。",
     "SetupRuntimePresetApplyHint": "按 A 預覽這個確切差異；預覽後再按 A 套用。",
