@@ -30,6 +30,10 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
         return false;
     }
 
+    if in_command_context(app) || starts_command_context(app, key) {
+        return false;
+    }
+
     let has_ctrl_alt_or_super = key.modifiers.contains(KeyModifiers::CONTROL)
         || key.modifiers.contains(KeyModifiers::ALT)
         || key.modifiers.contains(KeyModifiers::SUPER);
@@ -132,6 +136,17 @@ fn apply_paste_burst_retro_capture(
 
 fn in_command_context(app: &App) -> bool {
     looks_like_slash_command_input(&app.input)
+}
+
+fn starts_command_context(app: &App, key: &KeyEvent) -> bool {
+    let KeyCode::Char(ch) = key.code else {
+        return false;
+    };
+    if !matches!(ch, '/' | '$') {
+        return false;
+    }
+    let cursor_byte = app.cursor_byte_index();
+    app.input[..cursor_byte].trim().is_empty()
 }
 
 #[cfg(test)]
@@ -343,5 +358,29 @@ mod tests {
         // handler returns false; we only assert the short-circuit
         // contract here).
         assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn raw_fast_slash_command_typing_bypasses_paste_burst() {
+        let mut app = test_app();
+        app.use_paste_burst_detection = true;
+        let t0 = Instant::now();
+
+        for (i, ch) in "/mode".chars().enumerate() {
+            let now = t0 + Duration::from_millis(i as u64);
+            let key = plain(ch);
+            assert!(
+                !handle_paste_burst_key(&mut app, &key, now),
+                "slash command char {ch:?} should stay on the normal composer path"
+            );
+            app.insert_char(ch);
+        }
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(
+            !handle_paste_burst_key(&mut app, &enter, t0 + Duration::from_millis(5)),
+            "Enter on a slash command should stay on the normal command-submit path"
+        );
+        assert_eq!(app.input, "/mode");
     }
 }
