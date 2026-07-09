@@ -1353,6 +1353,11 @@ pub struct ViewportState {
     pub last_sidebar_area: Option<Rect>,
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
+    /// Pending-input preview rect above the composer, with the per-chip action
+    /// map from the last render.
+    pub last_pending_input_area: Option<Rect>,
+    pub pending_input_action_regions: Vec<PendingInputActionRegion>,
+    pub hovered_pending_input_action: Option<PendingInputAction>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
@@ -1383,6 +1388,9 @@ impl Default for ViewportState {
             last_composer_area: None,
             last_sidebar_area: None,
             last_workflow_panel_area: None,
+            last_pending_input_area: None,
+            pending_input_action_regions: Vec::new(),
+            hovered_pending_input_action: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
@@ -1393,6 +1401,20 @@ impl Default for ViewportState {
             last_composer_top_padding: 0,
         }
     }
+}
+
+/// Mouse/keyboard-equivalent actions exposed by the pending-input preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingInputAction {
+    SendQueued { index: usize },
+    CancelQueued { index: usize },
+    SendNextQueued,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingInputActionRegion {
+    pub action: PendingInputAction,
+    pub rect: Rect,
 }
 
 /// Verdict for a hunt (#2092).

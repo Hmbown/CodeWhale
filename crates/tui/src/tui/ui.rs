@@ -9512,6 +9512,7 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
             app.input.clone()
         }
     });
+    preview.hovered_action = app.viewport.hovered_pending_input_action;
     preview
 }
 
@@ -9868,8 +9869,23 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
 
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
+        app.viewport.last_pending_input_area = Some(body_chunks[2]);
         let buf = f.buffer_mut();
         pending_preview.render(body_chunks[2], buf);
+        app.viewport.pending_input_action_regions = pending_preview.action_regions();
+        if let Some(hovered) = app.viewport.hovered_pending_input_action
+            && !app
+                .viewport
+                .pending_input_action_regions
+                .iter()
+                .any(|region| region.action == hovered)
+        {
+            app.viewport.hovered_pending_input_action = None;
+        }
+    } else {
+        app.viewport.last_pending_input_area = None;
+        app.viewport.pending_input_action_regions.clear();
+        app.viewport.hovered_pending_input_action = None;
     }
 
     // Render composer

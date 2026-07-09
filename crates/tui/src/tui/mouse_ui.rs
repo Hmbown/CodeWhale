@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::MessageId;
-use crate::tui::app::{App, SidebarRowAction};
+use crate::tui::app::{App, PendingInputAction, SidebarRowAction};
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
 };
@@ -35,10 +35,18 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     match mouse.kind {
         MouseEventKind::Moved => {
             let over_sidebar = mouse_hits_rect(mouse, app.viewport.last_sidebar_area);
+            let over_pending_input = mouse_hits_rect(mouse, app.viewport.last_pending_input_area);
             let was_over_sidebar = app.last_mouse_pos.is_some_and(|(column, row)| {
                 point_hits_rect(column, row, app.viewport.last_sidebar_area)
             });
-            !(over_sidebar || was_over_sidebar || app.sidebar_hover_tooltip.is_some())
+            let was_over_pending_input = app.last_mouse_pos.is_some_and(|(column, row)| {
+                point_hits_rect(column, row, app.viewport.last_pending_input_area)
+            });
+            !(over_sidebar
+                || was_over_sidebar
+                || over_pending_input
+                || was_over_pending_input
+                || app.sidebar_hover_tooltip.is_some())
         }
         MouseEventKind::Drag(_) => {
             // Sidebar drag-to-resize must stay live during active turns —
@@ -103,6 +111,64 @@ fn handle_sidebar_resize_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+fn pending_input_action_at(app: &App, mouse: MouseEvent) -> Option<PendingInputAction> {
+    app.viewport
+        .pending_input_action_regions
+        .iter()
+        .rev()
+        .find_map(|region| {
+            point_hits_rect(mouse.column, mouse.row, Some(region.rect)).then_some(region.action)
+        })
+}
+
+fn pending_input_command_for_action(action: PendingInputAction) -> String {
+    match action {
+        PendingInputAction::SendQueued { index } => format!("/queue send {}", index + 1),
+        PendingInputAction::CancelQueued { index } => format!("/queue drop {}", index + 1),
+        PendingInputAction::SendNextQueued => "/queue send 1".to_string(),
+    }
+}
+
+fn handle_pending_input_preview_mouse(app: &mut App, mouse: MouseEvent) -> Option<Vec<ViewEvent>> {
+    let over_preview = mouse_hits_rect(mouse, app.viewport.last_pending_input_area);
+    let action = over_preview
+        .then(|| pending_input_action_at(app, mouse))
+        .flatten();
+
+    match mouse.kind {
+        MouseEventKind::Moved => {
+            if app.viewport.hovered_pending_input_action != action {
+                app.viewport.hovered_pending_input_action = action;
+                app.needs_redraw = true;
+            }
+            over_preview.then(Vec::new)
+        }
+        MouseEventKind::Down(MouseButton::Left) if over_preview => {
+            app.viewport.hovered_pending_input_action = action;
+            app.needs_redraw = true;
+            action.map_or_else(
+                || Some(Vec::new()),
+                |action| {
+                    Some(vec![ViewEvent::CommandPaletteSelected {
+                        action: crate::tui::views::CommandPaletteAction::ExecuteCommand {
+                            command: pending_input_command_for_action(action),
+                        },
+                    }])
+                },
+            )
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if over_preview => Some(Vec::new()),
+        _ if over_preview => Some(Vec::new()),
+        _ => {
+            if app.viewport.hovered_pending_input_action.is_some() {
+                app.viewport.hovered_pending_input_action = None;
+                app.needs_redraw = true;
+            }
+            None
+        }
     }
 }
 
@@ -319,6 +385,10 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     // above the input remains clickable.
     if handle_workflow_panel_mouse(app, mouse) {
         return Vec::new();
+    }
+
+    if let Some(events) = handle_pending_input_preview_mouse(app, mouse) {
+        return events;
     }
 
     // Composer mouse events take priority over transcript.
@@ -1211,9 +1281,10 @@ mod tests {
     use super::{build_context_menu_entries, sidebar_click_action};
     use crate::config::Config;
     use crate::tui::app::{
-        App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
+        App, PendingInputAction, PendingInputActionRegion, SidebarHoverRow, SidebarHoverSection,
+        SidebarRowAction, TuiOptions,
     };
-    use crate::tui::views::ContextMenuAction;
+    use crate::tui::views::{CommandPaletteAction, ContextMenuAction, ViewEvent};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;
     use std::path::PathBuf;
@@ -1278,6 +1349,15 @@ mod tests {
             .map(str::to_string)
     }
 
+    fn event_command(events: Vec<ViewEvent>) -> Option<String> {
+        events.into_iter().find_map(|event| match event {
+            ViewEvent::CommandPaletteSelected {
+                action: CommandPaletteAction::ExecuteCommand { command },
+            } => Some(command),
+            _ => None,
+        })
+    }
+
     fn left_click(column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1294,6 +1374,46 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn pending_input_send_chip_click_emits_queue_send_command() {
+        let mut app = create_test_app();
+        app.viewport.last_pending_input_area = Some(Rect::new(0, 10, 80, 3));
+        app.viewport
+            .pending_input_action_regions
+            .push(PendingInputActionRegion {
+                action: PendingInputAction::SendQueued { index: 1 },
+                rect: Rect::new(4, 11, 10, 1),
+            });
+
+        let events = super::handle_mouse_event(&mut app, left_click(5, 11));
+
+        assert_eq!(event_command(events).as_deref(), Some("/queue send 2"));
+        assert!(
+            !app.viewport.transcript_selection.dragging,
+            "pending-input chip click must not start transcript selection"
+        );
+    }
+
+    #[test]
+    fn pending_input_cancel_chip_click_emits_queue_drop_command() {
+        let mut app = create_test_app();
+        app.viewport.last_pending_input_area = Some(Rect::new(0, 10, 80, 3));
+        app.viewport
+            .pending_input_action_regions
+            .push(PendingInputActionRegion {
+                action: PendingInputAction::CancelQueued { index: 0 },
+                rect: Rect::new(15, 11, 8, 1),
+            });
+
+        let events = super::handle_mouse_event(&mut app, left_click(16, 11));
+
+        assert_eq!(event_command(events).as_deref(), Some("/queue drop 1"));
+        assert_eq!(
+            app.viewport.hovered_pending_input_action,
+            Some(PendingInputAction::CancelQueued { index: 0 })
+        );
     }
 
     #[test]

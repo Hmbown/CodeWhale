@@ -12,6 +12,8 @@
 //! Wired into `ui.rs::render` between the chat area and the composer; the user
 //! can see when typed input has been captured for later delivery.
 
+use std::cell::RefCell;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -19,6 +21,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::palette;
+use crate::tui::app::{PendingInputAction, PendingInputActionRegion};
+use crate::tui::ui_text::text_display_width;
 use crate::tui::widgets::Renderable;
 
 /// Per-item line cap before we collapse the rest into a `…` overflow row.
@@ -47,6 +51,8 @@ pub struct PendingInputPreview {
     pub queued_messages: Vec<String>,
     pub editing_queued_message: Option<String>,
     pub edit_binding: EditBinding,
+    pub hovered_action: Option<PendingInputAction>,
+    action_regions: RefCell<Vec<PendingInputActionRegion>>,
 }
 
 /// Compact pre-send context row shown above the composer. `included=false`
@@ -71,7 +77,14 @@ impl PendingInputPreview {
             queued_messages: Vec::new(),
             editing_queued_message: None,
             edit_binding: EditBinding::UP,
+            hovered_action: None,
+            action_regions: RefCell::new(Vec::new()),
         }
+    }
+
+    #[must_use]
+    pub fn action_regions(&self) -> Vec<PendingInputActionRegion> {
+        self.action_regions.borrow().clone()
     }
 
     fn has_pending_inputs(&self) -> bool {
@@ -85,8 +98,16 @@ impl PendingInputPreview {
     /// at `width`. Pulled out so `desired_height` can ask the same renderer
     /// without duplicating wrapping logic.
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines_and_actions(width, None).0
+    }
+
+    fn lines_and_actions(
+        &self,
+        width: u16,
+        origin: Option<(u16, u16)>,
+    ) -> (Vec<Line<'static>>, Vec<PendingInputActionRegion>) {
         if (self.context_items.is_empty() && !self.has_pending_inputs()) || width < 4 {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
 
         let dim = Style::default()
@@ -95,6 +116,7 @@ impl PendingInputPreview {
         let dim_italic = dim.add_modifier(Modifier::ITALIC);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut action_regions = Vec::new();
 
         if !self.context_items.is_empty() {
             push_section_header(
@@ -163,23 +185,30 @@ impl PendingInputPreview {
                     &queued_prefix,
                     &queued_message_indent,
                 );
-                lines.push(Line::from(vec![Span::styled(
-                    format!("    /queue send {row_number} · drop {row_number} · clear"),
+                push_queued_action_chips(
+                    &mut lines,
+                    &mut action_regions,
+                    width,
+                    origin,
+                    idx,
                     dim,
-                )]));
+                    self.hovered_action,
+                );
             }
             if !self.queued_messages.is_empty() {
-                lines.push(Line::from(vec![Span::styled(
-                    format!(
-                        "    Ctrl+S send now · {} edit last queued",
-                        self.edit_binding.label
-                    ),
+                push_send_next_hint(
+                    &mut lines,
+                    &mut action_regions,
+                    width,
+                    origin,
+                    self.edit_binding.label,
                     dim,
-                )]));
+                    self.hovered_action,
+                );
             }
         }
 
-        lines
+        (lines, action_regions)
     }
 }
 
@@ -192,9 +221,11 @@ impl Default for PendingInputPreview {
 impl Renderable for PendingInputPreview {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
+            self.action_regions.borrow_mut().clear();
             return;
         }
-        let lines = self.lines(area.width);
+        let (lines, action_regions) = self.lines_and_actions(area.width, Some((area.x, area.y)));
+        *self.action_regions.borrow_mut() = action_regions;
         if lines.is_empty() {
             return;
         }
@@ -312,6 +343,139 @@ fn push_truncated_item(
     }
 }
 
+fn push_queued_action_chips(
+    lines: &mut Vec<Line<'static>>,
+    action_regions: &mut Vec<PendingInputActionRegion>,
+    width: u16,
+    origin: Option<(u16, u16)>,
+    index: usize,
+    dim: Style,
+    hovered_action: Option<PendingInputAction>,
+) {
+    push_action_chip_line(
+        lines,
+        action_regions,
+        width,
+        origin,
+        dim,
+        hovered_action,
+        &[
+            ("[send now]", PendingInputAction::SendQueued { index }),
+            ("[cancel]", PendingInputAction::CancelQueued { index }),
+        ],
+    );
+}
+
+fn push_send_next_hint(
+    lines: &mut Vec<Line<'static>>,
+    action_regions: &mut Vec<PendingInputActionRegion>,
+    width: u16,
+    origin: Option<(u16, u16)>,
+    edit_label: &str,
+    dim: Style,
+    hovered_action: Option<PendingInputAction>,
+) {
+    let mut spans = Vec::new();
+    let mut col = 0usize;
+    push_plain_span(&mut spans, &mut col, "    Ctrl+S ", dim);
+    push_action_chip(
+        &mut spans,
+        action_regions,
+        origin,
+        lines.len(),
+        &mut col,
+        width,
+        "[send now]",
+        PendingInputAction::SendNextQueued,
+        dim,
+        hovered_action,
+    );
+    push_plain_span(
+        &mut spans,
+        &mut col,
+        &format!(" · {edit_label} edit queued"),
+        dim,
+    );
+    lines.push(Line::from(spans));
+}
+
+fn push_action_chip_line(
+    lines: &mut Vec<Line<'static>>,
+    action_regions: &mut Vec<PendingInputActionRegion>,
+    width: u16,
+    origin: Option<(u16, u16)>,
+    dim: Style,
+    hovered_action: Option<PendingInputAction>,
+    chips: &[(&'static str, PendingInputAction)],
+) {
+    let mut spans = Vec::new();
+    let mut col = 0usize;
+    push_plain_span(&mut spans, &mut col, "    ", dim);
+    for (idx, (label, action)) in chips.iter().enumerate() {
+        if idx > 0 {
+            push_plain_span(&mut spans, &mut col, " ", dim);
+        }
+        push_action_chip(
+            &mut spans,
+            action_regions,
+            origin,
+            lines.len(),
+            &mut col,
+            width,
+            label,
+            *action,
+            dim,
+            hovered_action,
+        );
+    }
+    lines.push(Line::from(spans));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_action_chip(
+    spans: &mut Vec<Span<'static>>,
+    action_regions: &mut Vec<PendingInputActionRegion>,
+    origin: Option<(u16, u16)>,
+    line_index: usize,
+    col: &mut usize,
+    width: u16,
+    label: &'static str,
+    action: PendingInputAction,
+    dim: Style,
+    hovered_action: Option<PendingInputAction>,
+) {
+    let label_width = display_width(label);
+    if let Some((origin_x, origin_y)) = origin {
+        let visible_width = usize::from(width).saturating_sub(*col).min(label_width);
+        if visible_width > 0 {
+            action_regions.push(PendingInputActionRegion {
+                action,
+                rect: Rect {
+                    x: origin_x.saturating_add((*col).min(u16::MAX as usize) as u16),
+                    y: origin_y.saturating_add((line_index).min(u16::MAX as usize) as u16),
+                    width: visible_width.min(u16::MAX as usize) as u16,
+                    height: 1,
+                },
+            });
+        }
+    }
+    let style = if hovered_action == Some(action) {
+        Style::default()
+            .fg(palette::SELECTION_TEXT)
+            .bg(palette::SELECTION_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        dim.add_modifier(Modifier::BOLD)
+    };
+    spans.push(Span::styled(label.to_string(), style));
+    *col = (*col).saturating_add(label_width);
+}
+
+fn push_plain_span(spans: &mut Vec<Span<'static>>, col: &mut usize, text: &str, style: Style) {
+    *col = (*col).saturating_add(display_width(text));
+    spans.push(Span::styled(text.to_string(), style));
+}
+
 /// Naive word-aware wrap that respects unicode display widths. Matches the
 /// behavior expected by snapshot tests in the codex source — long URL-like
 /// tokens that exceed `width` are emitted on their own row instead of being
@@ -356,7 +520,7 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
 // draws. The old local copy used `unwrap_or(0)` and ignored tabs, so preview
 // word-wrap disagreed with the real layout on those inputs (#3924).
 fn display_width(s: &str) -> usize {
-    crate::tui::ui_text::text_display_width(s)
+    text_display_width(s)
 }
 
 #[cfg(test)]
@@ -396,11 +560,42 @@ mod tests {
         assert_eq!(rows.len(), 4, "got rows: {rows:?}");
         assert!(rows[0].contains("Pending inputs"));
         assert!(rows[1].contains("Hello, world!"));
-        assert!(rows[2].contains("/queue send 1"));
-        assert!(rows[2].contains("drop 1"));
-        assert!(rows[2].contains("clear"));
-        assert!(rows[3].contains("Ctrl+S send now"));
-        assert!(rows[3].contains("edit last queued"));
+        assert!(rows[2].contains("[send now]"));
+        assert!(rows[2].contains("[cancel]"));
+        assert!(rows[3].contains("Ctrl+S"));
+        assert!(rows[3].contains("[send now]"));
+        assert!(rows[3].contains("edit queued"));
+    }
+
+    #[test]
+    fn queued_message_records_send_and_cancel_chip_regions() {
+        let mut preview = PendingInputPreview::new();
+        preview.queued_messages.push("Hello, world!".to_string());
+        let height = preview.desired_height(48);
+        let area = Rect::new(10, 4, 48, height);
+        let mut buf = Buffer::empty(area);
+
+        preview.render(area, &mut buf);
+
+        let regions = preview.action_regions();
+        assert!(
+            regions
+                .iter()
+                .any(|region| region.action == PendingInputAction::SendQueued { index: 0 }),
+            "missing row send chip region: {regions:?}"
+        );
+        assert!(
+            regions
+                .iter()
+                .any(|region| region.action == PendingInputAction::CancelQueued { index: 0 }),
+            "missing row cancel chip region: {regions:?}"
+        );
+        assert!(
+            regions
+                .iter()
+                .any(|region| region.action == PendingInputAction::SendNextQueued),
+            "missing footer send-now chip region: {regions:?}"
+        );
     }
 
     #[test]
@@ -577,9 +772,11 @@ mod tests {
         assert!(rows[2].contains("line2"));
         assert!(rows[3].contains("line3"));
         assert!(rows[4].contains("…"));
-        assert!(rows[5].contains("/queue send 1"));
-        assert!(rows[6].contains("Ctrl+S send now"));
-        assert!(rows[6].contains("edit last queued"));
+        assert!(rows[5].contains("[send now]"));
+        assert!(rows[5].contains("[cancel]"));
+        assert!(rows[6].contains("Ctrl+S"));
+        assert!(rows[6].contains("[send now]"));
+        assert!(rows[6].contains("edit queued"));
     }
 
     #[test]
