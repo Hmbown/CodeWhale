@@ -1,0 +1,13 @@
+# cargo-audit configuration for CodeWhale
+# https://github.com/rustsec/rustsec/blob/main/cargo-audit/audit.toml.example
+
+[advisories]
+# Ignore specific advisories if needed (add RUSTSEC-XXXX-XXXXX)
+# ignore = []
+
+[database]
+# Path to a local advisory database (optional)
+# path = ""
+
+# URL to fetch advisory database from
+# url = ""

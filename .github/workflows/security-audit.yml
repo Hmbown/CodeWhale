@@ -1,0 +1,31 @@
+name: Security audit
+
+permissions: {}
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/security-audit.yml'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/audit.toml'
+  push:
+    branches: [main, master]
+  schedule:
+    # Run weekly on Monday at 06:31 UTC
+    - cron: '31 6 * * 1'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  self-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo audit
+        run: cargo audit

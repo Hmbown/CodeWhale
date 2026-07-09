@@ -23,6 +23,8 @@ open an issue — that's how the project grows.
 [简体中文 README](README.zh-CN.md) · [日本語 README](README.ja-JP.md) · [Tiếng Việt README](README.vi.md) · [한국어 README](README.ko-KR.md) · [codewhale.net](https://codewhale.net/) · [Install guide](docs/INSTALL.md) · [Provider registry](docs/PROVIDERS.md) · [Changelog](CHANGELOG.md)
 
 [![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
+[![Security audit](https://github.com/Hmbown/CodeWhale/actions/workflows/security-audit.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/security-audit.yml)
+[![cargo-deny](https://github.com/Hmbown/CodeWhale/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/cargo-deny.yml)
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 [![DeepWiki project index](https://img.shields.io/badge/DeepWiki-project-blue)](https://deepwiki.com/Hmbown/CodeWhale)
