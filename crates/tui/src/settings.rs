@@ -433,10 +433,8 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
 /// The `ocean` presentation preset: full-motion instrument with fancy chrome.
 /// Presentation only — safety / provider / routing knobs are untouched. Env
 /// auto-forces (tmux, VTE, SSH, NO_ANIMATIONS) still override after load.
-pub const OCEAN_PRESET_FIELDS: &[(&str, &str)] = &[
-    ("low_motion", "false"),
-    ("fancy_animations", "true"),
-];
+pub const OCEAN_PRESET_FIELDS: &[(&str, &str)] =
+    &[("low_motion", "false"), ("fancy_animations", "true")];
 
 /// The `(key, value)` fields a named preset applies, or `None` for an unknown
 /// name. Single source of truth shared by [`Settings::apply_preset`] and the
@@ -1596,9 +1594,7 @@ mod tests {
     #[test]
     fn apply_preset_ocean_restores_full_motion() {
         let mut settings = Settings::default();
-        settings
-            .apply_preset("calm")
-            .expect("calm preset applies");
+        settings.apply_preset("calm").expect("calm preset applies");
         assert!(settings.low_motion);
         assert!(!settings.fancy_animations);
 

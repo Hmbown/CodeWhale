@@ -345,9 +345,9 @@ mod tests {
             "`Alt+?` must remain documented as the help-toggle chord"
         );
         assert!(
-            KEYBINDINGS
-                .iter()
-                .all(|entry| entry.chord != "?" && entry.chord != "g / G" && entry.chord != "[ / ]"),
+            KEYBINDINGS.iter().all(|entry| entry.chord != "?"
+                && entry.chord != "g / G"
+                && entry.chord != "[ / ]"),
             "bare letter/punctuation nav chords must not appear in the catalog"
         );
     }

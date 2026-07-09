@@ -21,6 +21,7 @@ use crate::tools::subagent::{SubAgentAssignment, SubAgentResult, SubAgentStatus,
 use crate::tui::app::App;
 use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
+use crate::tui::hit_region::HitMap;
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod fleet_roster;
@@ -1088,7 +1089,7 @@ pub struct ConfigView {
     locale: Locale,
     effective_cost_currency: String,
     last_visible_rows: Cell<usize>,
-    last_row_hitboxes: RefCell<Vec<(u16, usize)>>,
+    hit_map: RefCell<HitMap>,
 }
 
 const CONFIG_MIN_KEY_COLUMN_WIDTH: usize = 19;
@@ -1418,7 +1419,7 @@ impl ConfigView {
             locale: app.ui_locale,
             effective_cost_currency: cost_currency_config_value(app),
             last_visible_rows: Cell::new(0),
-            last_row_hitboxes: RefCell::new(Vec::new()),
+            hit_map: RefCell::new(HitMap::new()),
         }
     }
 
@@ -1429,6 +1430,19 @@ impl ConfigView {
     fn visible_rows_cached(&self) -> usize {
         let cached = self.last_visible_rows.get();
         if cached == 0 { 8 } else { cached }
+    }
+
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(row_idx) = self.hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if row_idx >= self.rows.len() {
+            return false;
+        }
+        self.selected = row_idx;
+        self.status = None;
+        self.adjust_scroll(self.visible_rows_cached());
+        true
     }
 
     fn row_matches_filter(&self, row: &ConfigRow) -> bool {
@@ -2155,19 +2169,13 @@ impl ModalView for ConfigView {
         if self.editing.is_some() {
             return ViewAction::None;
         }
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return ViewAction::None;
-        }
-
-        let selected = self
-            .last_row_hitboxes
-            .borrow()
-            .iter()
-            .find_map(|(y, row_idx)| (*y == mouse.row).then_some(*row_idx));
-        if let Some(row_idx) = selected {
-            self.selected = row_idx;
-            self.status = None;
-            self.adjust_scroll(self.visible_rows_cached());
+        match mouse.kind {
+            MouseEventKind::Moved
+            | MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::Down(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+            }
+            _ => {}
         }
         ViewAction::None
     }
@@ -2302,7 +2310,7 @@ impl ModalView for ConfigView {
                     )
                 )),
             ];
-            let mut row_hitboxes = Vec::new();
+            let mut hit_map = HitMap::new();
 
             for item in items.iter().skip(start).take(visible_rows) {
                 match item {
@@ -2317,7 +2325,7 @@ impl ModalView for ConfigView {
                             continue;
                         };
                         let line_y = inner.y.saturating_add(lines.len() as u16);
-                        row_hitboxes.push((line_y, *idx));
+                        hit_map.push_row(*idx, inner.x, line_y, inner.width);
                         let selected = *idx == self.selected;
                         let style = if selected {
                             Style::default()
@@ -2341,7 +2349,7 @@ impl ModalView for ConfigView {
                     }
                 }
             }
-            *self.last_row_hitboxes.borrow_mut() = row_hitboxes;
+            *self.hit_map.borrow_mut() = hit_map;
 
             if items.is_empty() {
                 let message = if self.filter.is_empty() {
@@ -2969,6 +2977,7 @@ mod tests {
     };
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::history::{HistoryCell, SubAgentCell};
+    use crate::tui::hit_region::HitTarget;
     use crate::tui::views::{CommandPaletteAction, SubAgentsView};
     use crate::tui::widgets::agent_card::{AgentLifecycle, FanoutCard};
     use crossterm::event::{
@@ -3929,12 +3938,15 @@ base_url = "https://api.xiaomimimo.com/v1"
 
         view.render(area, &mut buf);
 
-        let y = view
-            .last_row_hitboxes
+        let hit = view
+            .hit_map
             .borrow()
+            .regions_for_test()
             .iter()
-            .find_map(|(y, idx)| (*idx == view.selected).then_some(*y))
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index == view.selected))
+            .copied()
             .expect("selected config row should have a hitbox");
+        let y = hit.rect.y;
         let highlighted_cells = (area.x..area.x.saturating_add(area.width))
             .filter(|&x| {
                 let cell = &buf[(x, y)];
@@ -4084,36 +4096,46 @@ base_url = "https://api.xiaomimimo.com/v1"
     }
 
     #[test]
-    fn config_view_mouse_click_selects_row() {
+    fn config_view_mouse_hover_and_click_select_row_via_hit_map() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
 
-        let hitboxes = view.last_row_hitboxes.borrow().clone();
-        let (_, row_idx) = hitboxes
+        let hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
             .iter()
-            .find(|(_, idx)| {
+            .find(|region| {
+                let HitTarget::Row { index } = region.target;
                 view.rows
-                    .get(*idx)
+                    .get(index)
                     .is_some_and(|row| row.key == "default_model")
             })
             .copied()
             .expect("default_model row should have a hitbox");
-        let y = hitboxes
-            .iter()
-            .find_map(|(y, idx)| (*idx == row_idx).then_some(*y))
-            .expect("selected row should have a y coordinate");
+        let HitTarget::Row { index: row_idx } = hit.target;
 
-        let action = view.handle_mouse(MouseEvent {
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.selected, row_idx);
+
+        view.selected = 0;
+        let click = view.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 20,
-            row: y,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
             modifiers: KeyModifiers::NONE,
         });
 
-        assert!(matches!(action, ViewAction::None));
+        assert!(matches!(click, ViewAction::None));
         assert_eq!(view.selected, row_idx);
     }
 

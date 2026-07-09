@@ -110,11 +110,7 @@ pub fn completion_surface_boost(
     }
     let t = elapsed_ms as f32 / COMPLETION_SURFACE_MS as f32;
     // Triangle envelope: 0 → 1 → 0 across the duration.
-    let envelope = if t <= 0.5 {
-        t * 2.0
-    } else {
-        (1.0 - t) * 2.0
-    };
+    let envelope = if t <= 0.5 { t * 2.0 } else { (1.0 - t) * 2.0 };
     Some(envelope * COMPLETION_SURFACE_PEAK)
 }
 
@@ -252,14 +248,8 @@ mod tests {
     #[test]
     fn settle_frame_key_advances_then_zeros() {
         assert_eq!(settle_frame_key(0, 0, false), 1);
-        assert_eq!(
-            settle_frame_key(u128::from(CADENCE_FRAME_MS), 0, false),
-            2
-        );
-        assert_eq!(
-            settle_frame_key(u128::from(RECEIPT_SETTLE_MS), 0, false),
-            0
-        );
+        assert_eq!(settle_frame_key(u128::from(CADENCE_FRAME_MS), 0, false), 2);
+        assert_eq!(settle_frame_key(u128::from(RECEIPT_SETTLE_MS), 0, false), 0);
     }
 
     #[test]
@@ -276,9 +266,7 @@ mod tests {
             (mid - COMPLETION_SURFACE_PEAK).abs() < 0.001,
             "peak should hit COMPLETION_SURFACE_PEAK, got {mid}"
         );
-        assert!(
-            completion_surface_boost(u128::from(COMPLETION_SURFACE_MS), false, true).is_none()
-        );
+        assert!(completion_surface_boost(u128::from(COMPLETION_SURFACE_MS), false, true).is_none());
     }
 
     #[test]
@@ -341,15 +329,14 @@ mod tests {
     #[test]
     fn completion_surface_color_lightens_canvas_then_rests() {
         let base = Color::Rgb(13, 17, 23);
-        let mid = completion_surface_color(
-            base,
-            u128::from(COMPLETION_SURFACE_MS) / 2,
-            false,
-            true,
-        );
+        let mid =
+            completion_surface_color(base, u128::from(COMPLETION_SURFACE_MS) / 2, false, true);
         match mid {
             Color::Rgb(r, g, b) => {
-                assert!(r > 13 && g > 17 && b > 23, "mid surface should lighten canvas");
+                assert!(
+                    r > 13 && g > 17 && b > 23,
+                    "mid surface should lighten canvas"
+                );
             }
             other => panic!("expected RGB, got {other:?}"),
         }

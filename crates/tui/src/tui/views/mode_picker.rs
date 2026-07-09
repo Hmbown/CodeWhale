@@ -192,7 +192,9 @@ impl ModalView for ModePickerView {
             let pad = " ".repeat(7usize.saturating_sub(UnicodeWidthStr::width(&*name)));
 
             // Row y = content origin + line index (one mode per line).
-            let row_y = content.y.saturating_add(u16::try_from(idx).unwrap_or(u16::MAX));
+            let row_y = content
+                .y
+                .saturating_add(u16::try_from(idx).unwrap_or(u16::MAX));
             if row_y < content.y.saturating_add(content.height) {
                 map.push_row(idx, content.x, row_y, content.width);
             }
@@ -334,7 +336,10 @@ mod tests {
         let mut view = ModePickerView::new(AppMode::Agent, Locale::En);
         // Act is index 0 by default; paint so hit map is populated.
         view.render(area, &mut buf);
-        assert!(!view.hit_map.borrow().is_empty(), "render must fill hit map");
+        assert!(
+            !view.hit_map.borrow().is_empty(),
+            "render must fill hit map"
+        );
         assert_eq!(view.hit_map.borrow().len(), AppMode::CHOICES.len());
 
         // Grab Plan row (index 1) coordinates from the hit map.
@@ -343,7 +348,12 @@ mod tests {
             .borrow()
             .regions_for_test()
             .iter()
-            .find(|r| matches!(r.target, crate::tui::hit_region::HitTarget::Row { index: 1 }))
+            .find(|r| {
+                matches!(
+                    r.target,
+                    crate::tui::hit_region::HitTarget::Row { index: 1 }
+                )
+            })
             .copied()
             .expect("plan row hit region");
         let col = plan_hit.rect.x + 2;
@@ -377,7 +387,12 @@ mod tests {
             .borrow()
             .regions_for_test()
             .iter()
-            .find(|r| matches!(r.target, crate::tui::hit_region::HitTarget::Row { index: 2 }))
+            .find(|r| {
+                matches!(
+                    r.target,
+                    crate::tui::hit_region::HitTarget::Row { index: 2 }
+                )
+            })
             .copied()
             .expect("operate row hit region");
         let action = view.handle_mouse(MouseEvent {

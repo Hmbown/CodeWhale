@@ -2595,10 +2595,7 @@ async fn run_event_loop(
                         app.is_loading = false;
                         // Ocean completion surface: one-shot field lighten on
                         // working→done (gated inside begin_completion_surface).
-                        if matches!(
-                            status,
-                            crate::core::events::TurnOutcomeStatus::Completed
-                        ) {
+                        if matches!(status, crate::core::events::TurnOutcomeStatus::Completed) {
                             app.begin_completion_surface();
                         }
                         app.dispatch_started_at = None;

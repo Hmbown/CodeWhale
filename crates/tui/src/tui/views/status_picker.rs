@@ -9,7 +9,9 @@
 //! The picker enumerates [`StatusItem::all`] so adding a new variant in
 //! `crates/tui/src/config.rs` automatically surfaces a new row here.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::cell::RefCell;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -21,7 +23,10 @@ use ratatui::{
 use crate::config::{ApiProvider, StatusItem};
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
-use crate::tui::views::{ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome};
+use crate::tui::hit_region::HitMap;
+use crate::tui::views::{
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
+};
 use unicode_width::UnicodeWidthStr;
 
 const STATUS_PICKER_SELECTION_BG: ratatui::style::Color = ratatui::style::Color::Rgb(54, 72, 104);
@@ -40,6 +45,8 @@ pub struct StatusPickerView {
     /// Snapshot of `app.status_items` at open time so Esc reverts cleanly.
     original: Vec<StatusItem>,
     locale: Locale,
+    /// Row hit regions from the last paint (shared by hover + click).
+    hit_map: RefCell<HitMap>,
 }
 
 impl StatusPickerView {
@@ -57,6 +64,7 @@ impl StatusPickerView {
             cursor: 0,
             original: active.to_vec(),
             locale,
+            hit_map: RefCell::new(HitMap::new()),
         }
     }
 
@@ -93,6 +101,17 @@ impl StatusPickerView {
         if let Some(slot) = self.selected.get_mut(self.cursor) {
             *slot = !*slot;
         }
+    }
+
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.rows.len() {
+            return false;
+        }
+        self.cursor = index;
+        true
     }
 
     fn live_preview_event(&self) -> ViewEvent {
@@ -167,6 +186,32 @@ impl ModalView for StatusPickerView {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_up();
+                ViewAction::None
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_down();
+                ViewAction::None
+            }
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+                ViewAction::None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus_row_at(mouse.column, mouse.row) {
+                    self.toggle_current();
+                    ViewAction::Emit(self.live_preview_event())
+                } else {
+                    ViewAction::None
+                }
+            }
+            _ => ViewAction::None,
+        }
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Two header lines + one row per StatusItem + the wrapping action
         // footer. The recipe clamps this to the frame and lets the scroll
@@ -205,6 +250,7 @@ impl ModalView for StatusPickerView {
         let row_start = visible_row_start(self.rows.len(), self.cursor, visible_rows);
 
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + 2);
+        let mut hit_map = HitMap::new();
         lines.push(Line::from(Span::styled(
             tr(self.locale, MessageId::StatusPickerInstruction),
             Style::default().fg(palette::TEXT_MUTED),
@@ -220,6 +266,8 @@ impl ModalView for StatusPickerView {
         {
             let checked = *self.selected.get(idx).unwrap_or(&false);
             let is_cursor = idx == self.cursor;
+            let line_y = content.y.saturating_add(lines.len() as u16);
+            hit_map.push_row(idx, content.x, line_y, content.width);
             let mark = if checked { "[✓]" } else { "[ ]" };
 
             let row_style = if is_cursor {
@@ -269,6 +317,7 @@ impl ModalView for StatusPickerView {
             }
         }
 
+        *self.hit_map.borrow_mut() = hit_map;
         Paragraph::new(lines).render(content, buf);
     }
 }
@@ -299,6 +348,7 @@ fn status_row_text(pointer: &str, mark: &str, item: &StatusItem, width: usize) -
 mod tests {
     use super::*;
     use crate::localization::Locale;
+    use crate::tui::hit_region::HitTarget;
 
     #[test]
     fn opens_with_active_items_pre_selected() {
@@ -384,6 +434,50 @@ mod tests {
         assert_eq!(view.cursor, 1);
         view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(view.cursor, 0);
+    }
+
+    #[test]
+    fn mouse_hover_focuses_and_click_toggles_row() {
+        let mut view = StatusPickerView::new(&[], ApiProvider::Deepseek, Locale::En);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible non-first status row hit region");
+        let HitTarget::Row { index } = hit.target;
+        let clicked_item = view.rows[index];
+
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.cursor, index);
+
+        view.cursor = 0;
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::Emit(ViewEvent::StatusItemsUpdated { items, final_save }) => {
+                assert!(!final_save);
+                assert_eq!(items, vec![clicked_item]);
+            }
+            other => panic!("expected live-preview status update, got {other:?}"),
+        }
+        assert_eq!(view.cursor, index);
     }
 
     #[test]

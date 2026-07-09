@@ -1815,7 +1815,10 @@ mod tests {
         let mut view = sample_palette_view();
         // Default selected = 0 ("/config"). Paint so hit map is populated.
         view.render(area, &mut buf);
-        assert!(!view.hit_map.borrow().is_empty(), "render must fill hit map");
+        assert!(
+            !view.hit_map.borrow().is_empty(),
+            "render must fill hit map"
+        );
 
         // Find the "/model" row (index 1 in filtered) coordinates.
         let model_hit = view

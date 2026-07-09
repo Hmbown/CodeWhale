@@ -76,9 +76,10 @@ impl HitMap {
     #[must_use]
     pub fn hit_test(&self, column: u16, row: u16) -> Option<HitTarget> {
         // Reverse: later regions win (stacked/overlapping content).
-        self.regions.iter().rev().find_map(|region| {
-            contains(region.rect, column, row).then_some(region.target)
-        })
+        self.regions
+            .iter()
+            .rev()
+            .find_map(|region| contains(region.rect, column, row).then_some(region.target))
     }
 
     /// Convenience: row index under the pointer, if the hit is a row.

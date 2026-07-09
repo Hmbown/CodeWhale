@@ -1087,7 +1087,15 @@ mod tests {
 
         // First render: no folding → full content.
         let mut cache = TranscriptViewCache::new();
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
+        cache.ensure_split(
+            &[&cells],
+            &revisions,
+            width,
+            options,
+            &HashSet::new(),
+            None,
+            None,
+        );
         let full_line_count = cache.total_lines();
 
         // Second render: fold the thinking cell → should invalidate and
@@ -1103,7 +1111,15 @@ mod tests {
         );
 
         // Third render: unfold → should restore full content.
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
+        cache.ensure_split(
+            &[&cells],
+            &revisions,
+            width,
+            options,
+            &HashSet::new(),
+            None,
+            None,
+        );
         let restored_line_count = cache.total_lines();
         assert_eq!(
             restored_line_count, full_line_count,
@@ -1137,7 +1153,15 @@ mod tests {
 
         // No collapsing, no folding — baseline.
         let mut cache = TranscriptViewCache::new();
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
+        cache.ensure_split(
+            &[&cells],
+            &revisions,
+            width,
+            options,
+            &HashSet::new(),
+            None,
+            None,
+        );
         let baseline = cache.total_lines();
         assert!(baseline > 0, "baseline render should contain visible lines");
 

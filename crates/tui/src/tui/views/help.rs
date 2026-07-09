@@ -13,8 +13,9 @@
 //! at the call-site (`tui::ui`) also toggles the overlay closed.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -27,6 +28,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::commands;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
+use crate::tui::hit_region::HitMap;
 use crate::tui::keybindings::KEYBINDINGS;
 use crate::tui::views::{ActionHint, ModalKind, ModalView, ViewAction, render_modal_chrome};
 
@@ -83,6 +85,8 @@ pub struct HelpView {
     filtered: Vec<usize>,
     query: String,
     selected: usize,
+    /// Row hit regions from the last paint (shared by hover + click).
+    hit_map: RefCell<HitMap>,
 }
 
 impl Default for HelpView {
@@ -104,6 +108,7 @@ impl HelpView {
             filtered: Vec::new(),
             query: String::new(),
             selected: 0,
+            hit_map: RefCell::new(HitMap::new()),
         };
         view.refilter();
         view
@@ -198,6 +203,17 @@ impl HelpView {
         } else {
             selected_row.saturating_sub(half)
         }
+    }
+
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(slot) = self.hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if slot >= self.filtered.len() {
+            return false;
+        }
+        self.selected = slot;
+        true
     }
 }
 
@@ -297,6 +313,11 @@ impl ModalView for HelpView {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.move_selection(-1),
             MouseEventKind::ScrollDown => self.move_selection(1),
+            MouseEventKind::Moved
+            | MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::Down(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+            }
             _ => {}
         }
         ViewAction::None
@@ -400,6 +421,7 @@ impl ModalView for HelpView {
         let content = chrome.body;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut hit_map = HitMap::new();
 
         let query_label = if self.query.is_empty() {
             self.tr(MessageId::HelpFilterPlaceholder).to_string()
@@ -469,6 +491,8 @@ impl ModalView for HelpView {
                     }
                     HelpRenderRow::Entry { slot, entry_idx } => {
                         let entry = &self.entries[entry_idx];
+                        let line_y = content.y.saturating_add(lines.len() as u16);
+                        hit_map.push_row(slot, content.x, line_y, content.width);
                         let is_selected = slot == self.selected;
                         let style = if is_selected {
                             Style::default()
@@ -488,6 +512,7 @@ impl ModalView for HelpView {
             }
         }
 
+        *self.hit_map.borrow_mut() = hit_map;
         Paragraph::new(lines).render(content, buf);
     }
 }
@@ -495,7 +520,10 @@ impl ModalView for HelpView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::tui::hit_region::HitTarget;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -733,6 +761,43 @@ mod tests {
             found_highlight,
             "selected row should use the semantic selection highlight"
         );
+    }
+
+    #[test]
+    fn mouse_hover_and_click_share_keyboard_selected_row() {
+        let mut view = HelpView::new();
+        let area = Rect::new(0, 0, 96, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible non-first help row hit region");
+        let HitTarget::Row { index } = hit.target;
+
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.selected, index);
+
+        view.selected = 0;
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(click, ViewAction::None));
+        assert_eq!(view.selected, index);
     }
 
     #[test]

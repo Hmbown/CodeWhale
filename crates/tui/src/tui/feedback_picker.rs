@@ -11,7 +11,8 @@ use ratatui::{
 
 use crate::palette;
 use crate::tui::views::{
-    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
+    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
+    render_modal_chrome,
 };
 
 #[derive(Debug, Clone, Copy)]
