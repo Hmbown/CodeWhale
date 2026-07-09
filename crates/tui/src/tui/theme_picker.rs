@@ -15,13 +15,13 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use crate::palette::{SELECTABLE_THEMES, ThemeId, UiTheme};
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer,
+    ActionHint, ModalChromeStyle, ModalKind, ModalView, ViewAction, ViewEvent,
+    render_modal_chrome_with_style,
 };
 
 pub struct ThemePickerView {
@@ -164,42 +164,38 @@ impl ModalView for ThemePickerView {
         // centered_modal_area clamps strictly to `area`, so the modal always
         // fits even on tiny or split-pane terminals.
         let needed_height = (SELECTABLE_THEMES.len() as u16).saturating_add(9);
-        let popup_area = centered_modal_area(area, 78, needed_height, 44, 8);
-
         // The live theme has already been swapped under us via ConfigUpdated,
         // so we pull the *current* preview's UiTheme from the cursor row to
-        // skin the modal chrome. That way the popup itself shifts color as
-        // the cursor moves, matching what the background will look like
-        // after Enter. We keep the live `surface_bg` (not the shared ink) and
-        // the bare `Clear` so the preview backdrop reads as intended.
+        // skin the shared modal chrome. That way the popup itself shifts color
+        // as the cursor moves, matching what the background will look like
+        // after Enter.
         let live = self.ui_theme_for(self.current());
 
-        Clear.render(popup_area, buf);
-
-        let block = Block::default()
-            .title(Line::from(Span::styled(
+        let chrome = render_modal_chrome_with_style(
+            area,
+            buf,
+            Line::from(Span::styled(
                 " Theme ",
                 Style::default()
                     .fg(live.status_working)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(live.border))
-            .style(Style::default().bg(live.surface_bg))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            78,
+            needed_height,
+            44,
+            8,
             &[
                 ActionHint::new("↑/↓", "preview"),
                 ActionHint::new("Enter", "save"),
                 ActionHint::new("Esc", "revert"),
             ],
+            ModalChromeStyle {
+                surface_bg: live.surface_bg,
+                shadow_bg: live.panel_bg,
+                border_style: Style::default().fg(live.border),
+            },
         );
+        let content = chrome.body;
 
         let mut lines: Vec<Line> = Vec::with_capacity(SELECTABLE_THEMES.len() + 5);
         lines.push(Line::from(Span::styled(

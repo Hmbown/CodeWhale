@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
 };
@@ -63,6 +63,22 @@ pub enum ModalKind {
 /// background. This helper makes the popup area explicit and keeps the small
 /// shadow from inheriting stale transcript glyphs.
 pub(crate) fn render_modal_surface(area: Rect, popup_area: Rect, buf: &mut Buffer) {
+    render_modal_surface_with_colors(
+        area,
+        popup_area,
+        buf,
+        palette::WHALE_BG,
+        palette::SURFACE_ELEVATED,
+    );
+}
+
+fn render_modal_surface_with_colors(
+    area: Rect,
+    popup_area: Rect,
+    buf: &mut Buffer,
+    surface_bg: Color,
+    shadow_bg: Color,
+) {
     let shadow_x = popup_area.x.saturating_add(1);
     let shadow_y = popup_area.y.saturating_add(1);
     let shadow_right = area.x.saturating_add(area.width);
@@ -74,7 +90,7 @@ pub(crate) fn render_modal_surface(area: Rect, popup_area: Rect, buf: &mut Buffe
 
     if shadow_width > 0 && shadow_height > 0 {
         Block::default()
-            .style(Style::default().bg(palette::SURFACE_ELEVATED))
+            .style(Style::default().bg(shadow_bg))
             .render(
                 Rect {
                     x: shadow_x,
@@ -88,7 +104,7 @@ pub(crate) fn render_modal_surface(area: Rect, popup_area: Rect, buf: &mut Buffe
 
     Clear.render(popup_area, buf);
     Block::default()
-        .style(Style::default().bg(palette::WHALE_BG))
+        .style(Style::default().bg(surface_bg))
         .render(popup_area, buf);
 }
 
@@ -319,6 +335,25 @@ pub(crate) struct ModalChromeLayout {
     pub(crate) body: Rect,
 }
 
+/// Optional style override for modal chrome consumers that intentionally skin
+/// the popup to match live preview state, such as the theme picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ModalChromeStyle {
+    pub(crate) surface_bg: Color,
+    pub(crate) shadow_bg: Color,
+    pub(crate) border_style: Style,
+}
+
+impl Default for ModalChromeStyle {
+    fn default() -> Self {
+        Self {
+            surface_bg: palette::WHALE_BG,
+            shadow_bg: palette::SURFACE_ELEVATED,
+            border_style: Style::default().fg(palette::BORDER_COLOR),
+        }
+    }
+}
+
 /// Paint the shared modal chrome recipe in one call:
 /// centered popup · opaque surface + shadow · titled border · action-hint footer.
 ///
@@ -335,6 +370,33 @@ pub(crate) fn render_modal_chrome(
     min_height: u16,
     hints: &[ActionHint],
 ) -> ModalChromeLayout {
+    render_modal_chrome_with_style(
+        frame,
+        buf,
+        title,
+        preferred_width,
+        preferred_height,
+        min_width,
+        min_height,
+        hints,
+        ModalChromeStyle::default(),
+    )
+}
+
+/// Paint the shared modal chrome recipe with caller-supplied surface and border
+/// styles. Use this only when the modal's chrome is part of the content
+/// contract; most pickers should use [`render_modal_chrome`].
+pub(crate) fn render_modal_chrome_with_style(
+    frame: Rect,
+    buf: &mut Buffer,
+    title: Line<'static>,
+    preferred_width: u16,
+    preferred_height: u16,
+    min_width: u16,
+    min_height: u16,
+    hints: &[ActionHint],
+    style: ModalChromeStyle,
+) -> ModalChromeLayout {
     let popup_area = centered_modal_area(
         frame,
         preferred_width,
@@ -342,13 +404,13 @@ pub(crate) fn render_modal_chrome(
         min_width,
         min_height,
     );
-    render_modal_surface(frame, popup_area, buf);
+    render_modal_surface_with_colors(frame, popup_area, buf, style.surface_bg, style.shadow_bg);
 
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::WHALE_BG))
+        .border_style(style.border_style)
+        .style(Style::default().bg(style.surface_bg))
         .padding(Padding::uniform(1));
     let inner = block.inner(popup_area);
     block.render(popup_area, buf);
