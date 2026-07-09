@@ -1,7 +1,8 @@
-//! Shared animation frames for running-state UI chrome.
+//! Shared animation frames for primary running-state UI chrome.
 //!
-//! Keep the braille spinner in one place so transcript tool cards, sidebars,
-//! and any future running-job surfaces advance with the same cadence.
+//! Keep the live bubble in one place so transcript tool cards, sidebars, and
+//! any future running-job surfaces advance with the same cadence. Secondary
+//! motion (footer water, ombre field) stays subordinate to this primary pulse.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,10 +21,7 @@ pub(crate) const BRAILLE_SPINNER_FRAMES: [&str; 12] = [
 pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = crate::tui::motion::CADENCE_FRAME_MS;
 
 #[must_use]
-pub(crate) fn braille_spinner_frame_for_elapsed_ms(
-    elapsed_ms: u128,
-    low_motion: bool,
-) -> &'static str {
+pub(crate) fn live_bubble_frame_for_elapsed_ms(elapsed_ms: u128, low_motion: bool) -> &'static str {
     if low_motion {
         return BRAILLE_SPINNER_FRAMES[0];
     }
@@ -34,15 +32,15 @@ pub(crate) fn braille_spinner_frame_for_elapsed_ms(
 }
 
 #[must_use]
-pub(crate) fn braille_spinner_frame_for_duration_ms(
+pub(crate) fn live_bubble_frame_for_duration_ms(
     duration_ms: u64,
     low_motion: bool,
 ) -> &'static str {
-    braille_spinner_frame_for_elapsed_ms(u128::from(duration_ms), low_motion)
+    live_bubble_frame_for_elapsed_ms(u128::from(duration_ms), low_motion)
 }
 
 #[must_use]
-pub(crate) fn braille_spinner_frame(started_at: Option<Instant>, low_motion: bool) -> &'static str {
+pub(crate) fn live_bubble_frame(started_at: Option<Instant>, low_motion: bool) -> &'static str {
     let elapsed_ms = started_at.map_or_else(
         || {
             SystemTime::now()
@@ -51,7 +49,7 @@ pub(crate) fn braille_spinner_frame(started_at: Option<Instant>, low_motion: boo
         },
         |started| started.elapsed().as_millis(),
     );
-    braille_spinner_frame_for_elapsed_ms(elapsed_ms, low_motion)
+    live_bubble_frame_for_elapsed_ms(elapsed_ms, low_motion)
 }
 
 #[cfg(test)]
@@ -59,27 +57,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn braille_spinner_advances_at_shared_cadence() {
+    fn live_bubble_advances_at_shared_cadence() {
         // Assert cadence behavior against the frame table rather than specific
         // glyphs so the whale-spout pattern can be retuned without churn here.
         assert_eq!(
-            braille_spinner_frame_for_elapsed_ms(0, false),
+            live_bubble_frame_for_elapsed_ms(0, false),
             BRAILLE_SPINNER_FRAMES[0]
         );
         assert_eq!(
-            braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) - 1, false),
+            live_bubble_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) - 1, false),
             BRAILLE_SPINNER_FRAMES[0]
         );
         assert_eq!(
-            braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS), false),
+            live_bubble_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS), false),
             BRAILLE_SPINNER_FRAMES[1]
         );
     }
 
     #[test]
-    fn braille_spinner_respects_low_motion() {
+    fn live_bubble_respects_low_motion() {
         assert_eq!(
-            braille_spinner_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) * 3, true),
+            live_bubble_frame_for_elapsed_ms(u128::from(BRAILLE_SPINNER_FRAME_MS) * 3, true),
             BRAILLE_SPINNER_FRAMES[0]
         );
     }

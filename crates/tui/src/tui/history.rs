@@ -1824,7 +1824,7 @@ fn render_cycle_boundary(content: &str, width: u16) -> Vec<Line<'static>> {
 fn status_symbol(started_at: Option<Instant>, status: ToolStatus, low_motion: bool) -> String {
     match status {
         ToolStatus::Running => {
-            crate::tui::spinner::braille_spinner_frame(started_at, low_motion).to_string()
+            crate::tui::spinner::live_bubble_frame(started_at, low_motion).to_string()
         }
         ToolStatus::Success | ToolStatus::Hydrated => TOOL_DONE_SYMBOL.to_string(),
         ToolStatus::Failed => TOOL_FAILED_SYMBOL.to_string(),

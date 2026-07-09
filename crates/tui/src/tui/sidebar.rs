@@ -32,7 +32,7 @@ use super::app::{
     TaskPanelEntry, TaskPanelEntryKind,
 };
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
-use super::spinner::braille_spinner_frame_for_duration_ms;
+use super::spinner::live_bubble_frame_for_duration_ms;
 use super::subagent_routing::active_fanout_counts;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
 
@@ -1759,7 +1759,7 @@ fn background_task_spinner_prefix(task: &TaskPanelEntry) -> Option<&'static str>
     if task.status != "running" {
         return None;
     }
-    Some(braille_spinner_frame_for_duration_ms(
+    Some(live_bubble_frame_for_duration_ms(
         task.duration_ms.unwrap_or_default(),
         false,
     ))
