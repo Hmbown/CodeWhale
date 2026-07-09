@@ -2440,6 +2440,16 @@ pub use help::HelpView;
 pub struct SubAgentsView {
     agents: Vec<SubAgentResult>,
     scroll: usize,
+    selected: usize,
+    row_hit_map: RefCell<HitMap>,
+    stop_hit_map: RefCell<HitMap>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WorkerRowHitSpec {
+    line_index: usize,
+    agent_index: usize,
+    stop_start_col: Option<usize>,
 }
 
 /// Build the agent rows shown by `/subagents`.
@@ -2560,7 +2570,76 @@ fn live_subagent_result(
 
 impl SubAgentsView {
     pub fn new(agents: Vec<SubAgentResult>) -> Self {
-        Self { agents, scroll: 0 }
+        Self {
+            agents,
+            scroll: 0,
+            selected: 0,
+            row_hit_map: RefCell::new(HitMap::new()),
+            stop_hit_map: RefCell::new(HitMap::new()),
+        }
+    }
+
+    fn selected_agent(&self) -> Option<&SubAgentResult> {
+        self.agents
+            .get(self.selected.min(self.agents.len().saturating_sub(1)))
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.agents.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+            return;
+        }
+        let max = self.agents.len().saturating_sub(1);
+        self.selected = self.selected.saturating_add_signed(delta).min(max);
+        // Keep keyboard movement roughly aligned with the selected worker even
+        // though the body also includes group headers and detail ledger rows.
+        self.scroll = self.scroll.min(self.selected.saturating_mul(4));
+    }
+
+    fn focus_worker_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.row_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.agents.len() {
+            return false;
+        }
+        self.selected = index;
+        true
+    }
+
+    fn stop_worker_at(&mut self, column: u16, row: u16) -> Option<String> {
+        let index = self.stop_hit_map.borrow().row_at(column, row)?;
+        if index >= self.agents.len() {
+            return None;
+        }
+        self.selected = index;
+        self.agents
+            .get(index)
+            .filter(|agent| agent_status_is_stoppable(&agent.status))
+            .map(|agent| agent.agent_id.clone())
+    }
+
+    fn open_selected_worker(&self) -> ViewAction {
+        let Some(agent) = self.selected_agent() else {
+            return ViewAction::None;
+        };
+        ViewAction::Emit(ViewEvent::OpenTextPager {
+            title: format!("Fleet worker {}", agent.agent_id),
+            content: fleet_worker_detail_text(agent),
+        })
+    }
+
+    fn stop_selected_worker(&self) -> ViewAction {
+        let Some(agent) = self.selected_agent() else {
+            return ViewAction::None;
+        };
+        if !agent_status_is_stoppable(&agent.status) {
+            return ViewAction::None;
+        }
+        ViewAction::Emit(ViewEvent::SidebarAgentCancel {
+            agent_id: agent.agent_id.clone(),
+        })
     }
 }
 
@@ -2578,7 +2657,11 @@ impl ModalView for SubAgentsView {
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => ViewAction::Close,
-            KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('R') => {
+            KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('O') => self.open_selected_worker(),
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.stop_selected_worker()
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
                 ViewAction::Emit(ViewEvent::SubAgentsRefresh)
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
@@ -2589,20 +2672,53 @@ impl ModalView for SubAgentsView {
                 })
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll = self.scroll.saturating_sub(1);
+                self.move_selection(-1);
                 ViewAction::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll = self.scroll.saturating_add(1);
+                self.move_selection(1);
+                ViewAction::None
+            }
+            KeyCode::PageUp => {
+                self.scroll = self.scroll.saturating_sub(8);
+                ViewAction::None
+            }
+            KeyCode::PageDown => {
+                self.scroll = self.scroll.saturating_add(8);
                 ViewAction::None
             }
             _ => ViewAction::None,
         }
     }
 
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_selection(-1);
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_selection(1);
+            }
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_worker_at(mouse.column, mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(agent_id) = self.stop_worker_at(mouse.column, mouse.row) {
+                    return ViewAction::Emit(ViewEvent::SidebarAgentCancel { agent_id });
+                }
+                if self.focus_worker_at(mouse.column, mouse.row) {
+                    return self.open_selected_worker();
+                }
+            }
+            _ => {}
+        }
+        ViewAction::None
+    }
+
     fn update_subagents(&mut self, agents: &[SubAgentResult]) -> bool {
         self.agents = agents.to_vec();
-        self.scroll = self.scroll.min(self.agents.len().saturating_sub(1));
+        self.selected = self.selected.min(self.agents.len().saturating_sub(1));
+        self.scroll = self.scroll.min(self.agents.len().saturating_mul(4));
         true
     }
 
@@ -2619,6 +2735,7 @@ impl ModalView for SubAgentsView {
         render_modal_surface(area, popup_area, buf);
 
         let mut lines: Vec<Line> = Vec::new();
+        let mut row_hit_specs: Vec<WorkerRowHitSpec> = Vec::new();
         let content_width = popup_area.width.saturating_sub(4) as usize;
 
         if self.agents.is_empty() {
@@ -2637,14 +2754,14 @@ impl ModalView for SubAgentsView {
             let mut failed = Vec::new();
             let mut cancelled = Vec::new();
 
-            for agent in &self.agents {
+            for (idx, agent) in self.agents.iter().enumerate() {
                 match agent.status {
-                    SubAgentStatus::Running => running.push(agent),
-                    SubAgentStatus::Completed => completed.push(agent),
-                    SubAgentStatus::Interrupted(_) => interrupted.push(agent),
-                    SubAgentStatus::Failed(_) => failed.push(agent),
-                    SubAgentStatus::Cancelled => cancelled.push(agent),
-                    SubAgentStatus::BudgetExhausted => failed.push(agent),
+                    SubAgentStatus::Running => running.push(idx),
+                    SubAgentStatus::Completed => completed.push(idx),
+                    SubAgentStatus::Interrupted(_) => interrupted.push(idx),
+                    SubAgentStatus::Failed(_) => failed.push(idx),
+                    SubAgentStatus::Cancelled => cancelled.push(idx),
+                    SubAgentStatus::BudgetExhausted => failed.push(idx),
                 }
             }
 
@@ -2681,66 +2798,71 @@ impl ModalView for SubAgentsView {
                 summary.extend(part);
             }
             lines.push(Line::from(summary));
+
+            if let Some(agent) = self.selected_agent() {
+                append_selected_worker_ledger(&mut lines, agent, content_width);
+            }
+
             lines.push(Line::from(Span::styled(
                 "",
                 Style::default().fg(palette::TEXT_DIM),
             )));
 
-            running.sort_by(|a, b| {
-                let order = agent_type_order(&a.agent_type).cmp(&agent_type_order(&b.agent_type));
-                order.then_with(|| a.agent_id.cmp(&b.agent_id))
-            });
-            completed.sort_by(|a, b| {
-                let order = agent_type_order(&a.agent_type).cmp(&agent_type_order(&b.agent_type));
-                order.then_with(|| a.agent_id.cmp(&b.agent_id))
-            });
-            interrupted.sort_by(|a, b| {
-                let order = agent_type_order(&a.agent_type).cmp(&agent_type_order(&b.agent_type));
-                order.then_with(|| a.agent_id.cmp(&b.agent_id))
-            });
-            failed.sort_by(|a, b| {
-                let order = agent_type_order(&a.agent_type).cmp(&agent_type_order(&b.agent_type));
-                order.then_with(|| a.agent_id.cmp(&b.agent_id))
-            });
-            cancelled.sort_by(|a, b| {
-                let order = agent_type_order(&a.agent_type).cmp(&agent_type_order(&b.agent_type));
-                order.then_with(|| a.agent_id.cmp(&b.agent_id))
-            });
+            sort_agent_indices(&mut running, &self.agents);
+            sort_agent_indices(&mut completed, &self.agents);
+            sort_agent_indices(&mut interrupted, &self.agents);
+            sort_agent_indices(&mut failed, &self.agents);
+            sort_agent_indices(&mut cancelled, &self.agents);
 
             append_subagent_group(
                 &mut lines,
                 "Running",
                 palette::STATUS_WARNING.into(),
                 &running,
+                &self.agents,
                 content_width,
+                self.selected,
+                &mut row_hit_specs,
             );
             append_subagent_group(
                 &mut lines,
                 "Completed",
                 palette::STATUS_SUCCESS.into(),
                 &completed,
+                &self.agents,
                 content_width,
+                self.selected,
+                &mut row_hit_specs,
             );
             append_subagent_group(
                 &mut lines,
                 "Interrupted",
                 palette::STATUS_WARNING.into(),
                 &interrupted,
+                &self.agents,
                 content_width,
+                self.selected,
+                &mut row_hit_specs,
             );
             append_subagent_group(
                 &mut lines,
                 "Failed",
                 palette::WHALE_ERROR.into(),
                 &failed,
+                &self.agents,
                 content_width,
+                self.selected,
+                &mut row_hit_specs,
             );
             append_subagent_group(
                 &mut lines,
                 "Cancelled",
                 palette::TEXT_MUTED.into(),
                 &cancelled,
+                &self.agents,
                 content_width,
+                self.selected,
+                &mut row_hit_specs,
             );
         }
 
@@ -2781,10 +2903,39 @@ impl ModalView for SubAgentsView {
             buf,
             &[
                 ActionHint::new("Esc", "close"),
+                ActionHint::new("↑/↓", "select"),
+                ActionHint::new("Enter/O", "open"),
+                ActionHint::new("x/c", "stop"),
                 ActionHint::new("R", "refresh"),
                 ActionHint::new("F", "setup"),
             ],
         );
+
+        let mut row_hit_map = HitMap::new();
+        let mut stop_hit_map = HitMap::new();
+        for spec in &row_hit_specs {
+            if spec.line_index < scroll || spec.line_index >= scroll.saturating_add(visible_lines) {
+                continue;
+            }
+            let y = content
+                .y
+                .saturating_add((spec.line_index.saturating_sub(scroll)) as u16);
+            row_hit_map.push_row(spec.agent_index, content.x, y, content.width);
+            if let Some(stop_start_col) = spec.stop_start_col {
+                let start = (stop_start_col as u16).min(content.width);
+                let width = 6u16.min(content.width.saturating_sub(start));
+                if width > 0 {
+                    stop_hit_map.push_row(
+                        spec.agent_index,
+                        content.x.saturating_add(start),
+                        y,
+                        width,
+                    );
+                }
+            }
+        }
+        *self.row_hit_map.borrow_mut() = row_hit_map;
+        *self.stop_hit_map.borrow_mut() = stop_hit_map;
 
         Paragraph::new(lines)
             .scroll((scroll as u16, 0))
@@ -2792,58 +2943,188 @@ impl ModalView for SubAgentsView {
     }
 }
 
+fn sort_agent_indices(indices: &mut [usize], agents: &[SubAgentResult]) {
+    indices.sort_by(|a, b| {
+        let Some(left) = agents.get(*a) else {
+            return std::cmp::Ordering::Equal;
+        };
+        let Some(right) = agents.get(*b) else {
+            return std::cmp::Ordering::Equal;
+        };
+        let order = agent_type_order(&left.agent_type).cmp(&agent_type_order(&right.agent_type));
+        order.then_with(|| left.agent_id.cmp(&right.agent_id))
+    });
+}
+
+fn agent_status_is_stoppable(status: &SubAgentStatus) -> bool {
+    matches!(status, SubAgentStatus::Running)
+}
+
+fn fleet_worker_row_line(
+    agent: &SubAgentResult,
+    selected: bool,
+    content_width: usize,
+) -> (Line<'static>, Option<usize>) {
+    let id = truncate_view_text(&agent.agent_id, 11);
+    let display_name = agent
+        .nickname
+        .as_deref()
+        .map(|nick| truncate_view_text(nick, 12))
+        .unwrap_or_else(|| id.clone());
+    let kind = format_agent_type(&agent.agent_type);
+    let (status, status_style, _) = format_agent_status(&agent.status);
+    let actions = if agent_status_is_stoppable(&agent.status) {
+        "[open] [stop]"
+    } else {
+        "[open]"
+    };
+    let prefix = if selected { "> " } else { "  " };
+    let row = format!(
+        "{prefix}{display_name:<12} {status:<10} {actions} {id:<11} {kind:<9} {:>4}✦ {:>6}ms",
+        agent.steps_taken, agent.duration_ms
+    );
+    let width = content_width.max(1);
+    let text = truncate_view_text(&row, width);
+    let stop_start_col = text.find("[stop]");
+    let padded = format!("{text:<width$}");
+    let style = if selected {
+        Style::default()
+            .fg(palette::SELECTION_TEXT)
+            .bg(palette::SELECTION_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        status_style
+    };
+    (Line::from(Span::styled(padded, style)), stop_start_col)
+}
+
+fn append_selected_worker_ledger(
+    lines: &mut Vec<Line<'static>>,
+    agent: &SubAgentResult,
+    content_width: usize,
+) {
+    let (status, status_style, status_detail) = format_agent_status(&agent.status);
+    let title = format!(
+        "Selected worker: {}  {}  {} step(s)",
+        agent.nickname.as_deref().unwrap_or(agent.agent_id.as_str()),
+        status,
+        agent.steps_taken
+    );
+    lines.push(Line::from(Span::styled(
+        truncate_view_text(&title, content_width.max(1)),
+        Style::default().fg(palette::WHALE_INFO).bold(),
+    )));
+
+    let mut detail_parts = Vec::new();
+    if !agent.model.trim().is_empty() {
+        detail_parts.push(format!("model {}", agent.model));
+    }
+    detail_parts.push(format!("role {}", format_agent_type(&agent.agent_type)));
+    detail_parts.push(format!("{}ms", agent.duration_ms));
+    if let Some(role) = agent.assignment.role.as_deref()
+        && !role.trim().is_empty()
+    {
+        detail_parts.push(format!("assignment {role}"));
+    }
+    if let Some(reason) = status_detail {
+        detail_parts.push(format!("reason {reason}"));
+    }
+    lines.push(Line::from(Span::styled(
+        truncate_view_text(&detail_parts.join(" · "), content_width.max(1)),
+        status_style,
+    )));
+
+    let objective = format!(
+        "objective: {}",
+        summarize_tool_output(&agent.assignment.objective)
+    );
+    lines.push(Line::from(Span::styled(
+        truncate_view_text(&objective, content_width.max(1)),
+        Style::default().fg(palette::TEXT_DIM),
+    )));
+
+    if let Some(result) = agent.result.as_ref() {
+        let result = format!("result: {}", summarize_tool_output(result));
+        lines.push(Line::from(Span::styled(
+            truncate_view_text(&result, content_width.max(1)),
+            Style::default().fg(palette::TEXT_DIM),
+        )));
+    }
+}
+
+fn fleet_worker_detail_text(agent: &SubAgentResult) -> String {
+    let (status, _, status_detail) = format_agent_status(&agent.status);
+    let mut lines = vec![
+        format!("worker: {}", agent.agent_id),
+        format!("name: {}", agent.nickname.as_deref().unwrap_or(&agent.name)),
+        format!("role: {}", format_agent_type(&agent.agent_type)),
+        format!("status: {status}"),
+        format!("steps: {}", agent.steps_taken),
+        format!("duration_ms: {}", agent.duration_ms),
+    ];
+    if !agent.model.trim().is_empty() {
+        lines.push(format!("model: {}", agent.model));
+    }
+    if let Some(role) = agent.assignment.role.as_deref()
+        && !role.trim().is_empty()
+    {
+        lines.push(format!("assignment_role: {role}"));
+    }
+    if let Some(reason) = status_detail {
+        lines.push(format!("status_detail: {reason}"));
+    }
+    if let Some(branch) = agent.git_branch.as_deref() {
+        lines.push(format!("git_branch: {branch}"));
+    }
+    lines.push(String::new());
+    lines.push("objective:".to_string());
+    lines.push(summarize_tool_output(&agent.assignment.objective));
+    if let Some(result) = agent.result.as_ref() {
+        lines.push(String::new());
+        lines.push("result:".to_string());
+        lines.push(summarize_tool_output(result));
+    }
+    lines.join("\n")
+}
+
 fn append_subagent_group(
     lines: &mut Vec<ratatui::text::Line<'static>>,
     title: &str,
     section_style: ratatui::style::Style,
-    agents: &[&SubAgentResult],
+    agent_indices: &[usize],
+    agents: &[SubAgentResult],
     content_width: usize,
+    selected_index: usize,
+    row_hit_specs: &mut Vec<WorkerRowHitSpec>,
 ) {
     use ratatui::{
         style::Style,
         text::{Line, Span},
     };
-    if agents.is_empty() {
+    if agent_indices.is_empty() {
         return;
     }
 
     lines.push(Line::from(Span::styled(
-        format!("{title} ({})", agents.len()),
+        format!("{title} ({})", agent_indices.len()),
         section_style.bold(),
     )));
 
-    for agent in agents {
-        let id = truncate_view_text(&agent.agent_id, 11);
-        let display_name = agent
-            .nickname
-            .as_deref()
-            .map(|nick| format!("{nick:<12}"))
-            .unwrap_or_else(|| format!("{id:<12}"));
-        let kind = format_agent_type(&agent.agent_type);
-        let (status, status_style, status_detail) = format_agent_status(&agent.status);
+    for agent_index in agent_indices {
+        let Some(agent) = agents.get(*agent_index) else {
+            continue;
+        };
+        let row_line_index = lines.len();
+        let (row, stop_start_col) =
+            fleet_worker_row_line(agent, *agent_index == selected_index, content_width);
+        lines.push(row);
+        row_hit_specs.push(WorkerRowHitSpec {
+            line_index: row_line_index,
+            agent_index: *agent_index,
+            stop_start_col,
+        });
 
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(display_name, Style::default().fg(palette::TEXT_PRIMARY)),
-            Span::raw(" "),
-            Span::styled(format!("{id:<11}"), Style::default().fg(palette::TEXT_DIM)),
-            Span::styled(
-                format!("{kind:<9}"),
-                Style::default().fg(palette::TEXT_MUTED),
-            ),
-            Span::raw("  "),
-            Span::styled(format!("{status:<10}"), status_style),
-            Span::raw("  "),
-            Span::styled(
-                format!("{:>4}✦", agent.steps_taken),
-                Style::default().fg(palette::TEXT_DIM),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{:>6}ms", agent.duration_ms),
-                Style::default().fg(palette::TEXT_DIM),
-            ),
-        ]));
+        let (_, _, status_detail) = format_agent_status(&agent.status);
 
         if let Some(detail) = status_detail {
             let max_len = content_width.saturating_sub(10);
@@ -3428,6 +3709,120 @@ mod tests {
             }) => assert_eq!(command, "/fleet"),
             other => panic!("expected /fleet jump action, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn fleet_worker_status_keyboard_open_and_stop_are_selected_row_actions() {
+        let mut view = SubAgentsView::new(vec![
+            manager_agent("agent_running", SubAgentStatus::Running),
+            manager_agent("agent_done", SubAgentStatus::Completed),
+        ]);
+
+        match view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+            ViewAction::Emit(ViewEvent::OpenTextPager { title, content }) => {
+                assert!(title.contains("agent_running"), "{title}");
+                assert!(content.contains("read the docs"), "{content}");
+            }
+            other => panic!("expected selected worker detail pager, got {other:?}"),
+        }
+
+        view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(matches!(
+            view.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            ViewAction::None
+        ));
+
+        view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        match view.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)) {
+            ViewAction::Emit(ViewEvent::SidebarAgentCancel { agent_id }) => {
+                assert_eq!(agent_id, "agent_running");
+            }
+            other => panic!("expected selected worker cancel event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_worker_status_mouse_hover_click_and_stop_use_row_hit_regions() {
+        let mut view = SubAgentsView::new(vec![
+            manager_agent("agent_running", SubAgentStatus::Running),
+            manager_agent("agent_done", SubAgentStatus::Completed),
+        ]);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let done_hit = view
+            .row_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index: 1 }))
+            .copied()
+            .expect("completed worker row hit region");
+
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: done_hit.rect.x.saturating_add(2),
+            row: done_hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.selected, 1);
+
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: done_hit.rect.x.saturating_add(2),
+            row: done_hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        match click {
+            ViewAction::Emit(ViewEvent::OpenTextPager { title, .. }) => {
+                assert!(title.contains("agent_done"), "{title}");
+            }
+            other => panic!("expected clicked worker detail pager, got {other:?}"),
+        }
+
+        let stop_hit = view
+            .stop_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index: 0 }))
+            .copied()
+            .expect("running worker stop hit region");
+        let stop_click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: stop_hit.rect.x.saturating_add(1),
+            row: stop_hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        match stop_click {
+            ViewAction::Emit(ViewEvent::SidebarAgentCancel { agent_id }) => {
+                assert_eq!(agent_id, "agent_running");
+            }
+            other => panic!("expected stop hit cancel event, got {other:?}"),
+        }
+        assert_eq!(view.selected, 0);
+    }
+
+    #[test]
+    fn fleet_worker_status_renders_selected_worker_ledger_in_main_view() {
+        let view = SubAgentsView::new(vec![manager_agent("agent_ledger", SubAgentStatus::Running)]);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let text = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Selected worker"), "{text}");
+        assert!(text.contains("read the docs"), "{text}");
+        assert!(text.contains("[open]") && text.contains("[stop]"), "{text}");
     }
 
     fn visible_section_labels(view: &ConfigView) -> Vec<Cow<'static, str>> {
