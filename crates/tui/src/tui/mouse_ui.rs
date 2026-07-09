@@ -207,47 +207,33 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, inner: Rect, rows: isize)
     app.needs_redraw = true;
 }
 
-/// Click the WorkflowPanel header to toggle expand/collapse, or the trailing
-/// cancel affordance while a run is active (#4121).
+/// Delegate WorkflowPanel mouse controls (#4121 / COH-06): header toggles,
+/// cancel emits, phase chips select, and body clicks grant panel focus without
+/// leaking into transcript selection.
 fn handle_workflow_panel_mouse(app: &mut App, mouse: MouseEvent) -> bool {
-    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-        return false;
-    }
     let Some(area) = app.viewport.last_workflow_panel_area else {
         return false;
     };
     if !mouse_hits_rect(mouse, Some(area)) {
         return false;
     }
-    if app.workflow_panel.is_none() {
-        return false;
-    }
-
-    if let Some(panel) = app.workflow_panel.as_mut() {
-        panel.keyboard_focus = true;
-    }
-
-    // Rightmost ~14 columns of the header row act as the cancel control.
-    let on_header_row = mouse.row == area.y;
-    let cancel_zone_start = area.x.saturating_add(area.width.saturating_sub(14));
-    let in_cancel_zone = on_header_row && mouse.column >= cancel_zone_start;
-    let running = app
+    let handled = app
         .workflow_panel
-        .as_ref()
-        .is_some_and(|panel| panel.lifecycle.is_running());
-
-    if in_cancel_zone && running {
-        if let Some(run_id) = app.request_workflow_panel_cancel() {
+        .as_mut()
+        .is_some_and(|panel| panel.handle_mouse(area, mouse));
+    if handled {
+        if let Some(run_id) = app
+            .workflow_panel
+            .as_mut()
+            .and_then(|panel| panel.take_cancel_emit())
+        {
             app.status_message = Some(format!(
                 "Cancelling workflow {run_id}… (dispatch via /workflow cancel {run_id})"
             ));
-            return true;
         }
+        app.needs_redraw = true;
     }
-
-    // Any other click on the panel toggles expand/collapse.
-    app.toggle_workflow_panel();
-    true
+    handled
 }
 
 /// Handle mouse events within the composer area.

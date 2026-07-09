@@ -10,9 +10,11 @@
 //! final result, and failure details. Direct sub-agent cards share helpers
 //! from this module where practical.
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -22,6 +24,7 @@ use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use crate::palette;
+use crate::tui::hit_region::{HitMap, HitTarget};
 use crate::tui::ui_text::truncate_line_to_width;
 use crate::tui::widgets::Renderable;
 
@@ -354,6 +357,9 @@ pub struct WorkflowPanel {
     /// Set when the operator requested cancel from the panel (mouse/key).
     /// Consumed by the host to drive `/workflow cancel`.
     cancel_emit: Option<String>,
+    header_hit_area: RefCell<Option<Rect>>,
+    cancel_hit_area: RefCell<Option<Rect>>,
+    phase_hit_map: RefCell<HitMap>,
 }
 
 /// Extra fields the history card can show that are not part of the live panel
@@ -388,6 +394,9 @@ impl WorkflowPanel {
             source_path: None,
             spillover_path: None,
             cancel_emit: None,
+            header_hit_area: RefCell::new(None),
+            cancel_hit_area: RefCell::new(None),
+            phase_hit_map: RefCell::new(HitMap::new()),
         }
     }
 
@@ -1146,6 +1155,55 @@ impl WorkflowPanel {
         }
     }
 
+    /// Handle mouse input over the workflow panel. Header/cancel/phase controls
+    /// mirror the keyboard surface: `t` toggles, `c` cancels, and `j/k` moves
+    /// between the same selected phase that phase-chip hover/click targets.
+    pub fn handle_mouse(&mut self, area: Rect, mouse: MouseEvent) -> bool {
+        if area.width == 0 || area.height == 0 || !rect_contains(area, mouse.column, mouse.row) {
+            return false;
+        }
+        self.record_hit_regions(area);
+
+        match mouse.kind {
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let phase_hit = self.phase_hit_map.borrow().row_at(mouse.column, mouse.row);
+                if let Some(index) = phase_hit.filter(|index| *index < self.phases.len()) {
+                    if self.selected_phase != index {
+                        self.selected_phase = index;
+                    }
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.keyboard_focus = true;
+                let cancel_hit = self
+                    .cancel_hit_area
+                    .borrow()
+                    .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row));
+                if cancel_hit && self.request_cancel().is_some() {
+                    return true;
+                }
+
+                let phase_hit = self.phase_hit_map.borrow().row_at(mouse.column, mouse.row);
+                if let Some(index) = phase_hit.filter(|index| *index < self.phases.len()) {
+                    self.selected_phase = index;
+                    return true;
+                }
+
+                let header_hit = self
+                    .header_hit_area
+                    .borrow()
+                    .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row));
+                if header_hit {
+                    let _ = self.toggle_expanded();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     #[must_use]
     pub fn done_total(&self) -> (usize, usize) {
         let mut done = 0usize;
@@ -1218,6 +1276,84 @@ impl WorkflowPanel {
         truncate_line_to_width(&raw, width.max(1))
     }
 
+    fn phase_chips(&self) -> Vec<(Option<usize>, String)> {
+        let mut chips = Vec::new();
+        for (idx, phase) in self.phases.iter().take(MAX_PHASE_SUMMARY).enumerate() {
+            let (done, running, failed, cancelled) = phase.counts();
+            let marker = if idx == self.selected_phase { ">" } else { " " };
+            chips.push((
+                Some(idx),
+                format!(
+                    "{marker}{title}[{done}✓ {running}… {failed}! {cancelled}⊘]",
+                    title = short_label(&phase.title, 14),
+                ),
+            ));
+        }
+        if self.phases.len() > MAX_PHASE_SUMMARY {
+            chips.push((None, format!("+{}", self.phases.len() - MAX_PHASE_SUMMARY)));
+        }
+        chips
+    }
+
+    fn record_hit_regions(&self, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            *self.header_hit_area.borrow_mut() = None;
+            *self.cancel_hit_area.borrow_mut() = None;
+            *self.phase_hit_map.borrow_mut() = HitMap::new();
+            return;
+        }
+
+        *self.header_hit_area.borrow_mut() = Some(Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        });
+        let cancel_width = area.width.min(14);
+        *self.cancel_hit_area.borrow_mut() =
+            (self.lifecycle.is_running() && !self.cancel_requested).then_some(Rect {
+                x: area
+                    .x
+                    .saturating_add(area.width.saturating_sub(cancel_width)),
+                y: area.y,
+                width: cancel_width,
+                height: 1,
+            });
+
+        let mut phase_hit_map = HitMap::new();
+        if self.expanded && area.height > 1 && !self.phases.is_empty() {
+            let y = area.y.saturating_add(1);
+            let max_x = area.x.saturating_add(area.width);
+            let mut x = area.x;
+            let chips = self.phase_chips();
+            for (idx, (target, chip)) in chips.iter().enumerate() {
+                if x >= max_x {
+                    break;
+                }
+                let width = chip.as_str().width() as u16;
+                let visible_width = width.min(max_x.saturating_sub(x));
+                if let Some(index) = *target
+                    && visible_width > 0
+                {
+                    phase_hit_map.push(
+                        HitTarget::Row { index },
+                        Rect {
+                            x,
+                            y,
+                            width: visible_width,
+                            height: 1,
+                        },
+                    );
+                }
+                x = x.saturating_add(width);
+                if idx + 1 < chips.len() {
+                    x = x.saturating_add(2);
+                }
+            }
+        }
+        *self.phase_hit_map.borrow_mut() = phase_hit_map;
+    }
+
     #[must_use]
     pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
         let content_width = usize::from(width).max(1);
@@ -1235,18 +1371,11 @@ impl WorkflowPanel {
 
         // Phase summary strip.
         if !self.phases.is_empty() {
-            let mut chips = Vec::new();
-            for (idx, phase) in self.phases.iter().take(MAX_PHASE_SUMMARY).enumerate() {
-                let (done, running, failed, cancelled) = phase.counts();
-                let marker = if idx == self.selected_phase { ">" } else { " " };
-                chips.push(format!(
-                    "{marker}{title}[{done}✓ {running}… {failed}! {cancelled}⊘]",
-                    title = short_label(&phase.title, 14),
-                ));
-            }
-            if self.phases.len() > MAX_PHASE_SUMMARY {
-                chips.push(format!("+{}", self.phases.len() - MAX_PHASE_SUMMARY));
-            }
+            let chips: Vec<String> = self
+                .phase_chips()
+                .into_iter()
+                .map(|(_, chip)| chip)
+                .collect();
             lines.push(Line::from(Span::styled(
                 truncate_line_to_width(&chips.join("  "), content_width),
                 Style::default().fg(palette::TEXT_MUTED),
@@ -1293,7 +1422,7 @@ impl WorkflowPanel {
         if self.keyboard_focus {
             lines.push(Line::from(Span::styled(
                 truncate_line_to_width(
-                    "[t] toggle  [c] cancel  [j/k] phase  click header to toggle",
+                    "[t] toggle  [c] cancel  [j/k] phase  click header/phase",
                     content_width,
                 ),
                 Style::default()
@@ -1360,8 +1489,10 @@ impl WorkflowPanel {
 impl Renderable for WorkflowPanel {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
+            self.record_hit_regions(area);
             return;
         }
+        self.record_hit_regions(area);
         let lines = self.render_lines(area.width);
         let paragraph = Paragraph::new(lines);
         paragraph.render(area, buf);
@@ -1384,6 +1515,13 @@ fn lifecycle_from_status(status: &str) -> WorkflowPanelLifecycle {
         "pending" => WorkflowPanelLifecycle::Pending,
         _ => WorkflowPanelLifecycle::Failed,
     }
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x
+        && column < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }
 
 fn opt_str(value: &Value, key: &str) -> Option<String> {
@@ -1458,6 +1596,7 @@ fn summarize_result_value(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use serde_json::json;
 
     fn started_panel() -> WorkflowPanel {
@@ -1689,6 +1828,89 @@ mod tests {
         assert!(panel.request_cancel().is_none());
         assert_eq!(panel.take_cancel_emit().as_deref(), Some("workflow_abc"));
         assert!(panel.take_cancel_emit().is_none());
+    }
+
+    #[test]
+    fn mouse_hover_and_click_select_phase_chip_and_cancel_header() {
+        let mut panel = started_panel();
+        panel.apply_event(WorkflowPanelEvent::PhaseStarted {
+            title: "Verify".to_string(),
+            at_ms: 2_000,
+        });
+        panel.apply_event(WorkflowPanelEvent::TaskStarted {
+            task_id: "t2".to_string(),
+            label: Some("run tests".to_string()),
+            profile: Some("implementer".to_string()),
+            model: Some("pro".to_string()),
+            strength: None,
+            resolved_model: None,
+            worktree: false,
+            workspace: None,
+            at_ms: 2_100,
+        });
+
+        let area = Rect::new(2, 4, 100, 10);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 24));
+        panel.render(area, &mut buf);
+        let hit = panel
+            .phase_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .copied()
+            .find(|region| matches!(region.target, HitTarget::Row { index: 1 }))
+            .expect("second phase chip hit region");
+
+        panel.selected_phase = 0;
+        let hover = panel.handle_mouse(
+            area,
+            MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: hit.rect.x,
+                row: hit.rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(hover);
+        assert_eq!(panel.selected_phase, 1);
+
+        panel.selected_phase = 0;
+        let click = panel.handle_mouse(
+            area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: hit.rect.x,
+                row: hit.rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(click);
+        assert!(panel.keyboard_focus);
+        assert_eq!(panel.selected_phase, 1);
+
+        let was_expanded = panel.expanded;
+        assert!(panel.handle_mouse(
+            area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        ));
+        assert_eq!(panel.expanded, !was_expanded);
+
+        assert!(panel.handle_mouse(
+            area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: area.x.saturating_add(area.width.saturating_sub(1)),
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        ));
+        assert!(panel.cancel_requested);
+        assert_eq!(panel.take_cancel_emit().as_deref(), Some("workflow_abc"));
     }
 
     #[test]

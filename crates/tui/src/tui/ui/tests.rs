@@ -1027,6 +1027,100 @@ fn jump_to_latest_button_click_scrolls_to_tail() {
     assert!(!app.viewport.transcript_selection.dragging);
 }
 
+#[test]
+fn workflow_panel_mouse_controls_consume_before_transcript_selection() {
+    use crate::tui::widgets::workflow_panel::{
+        WorkflowPanel, WorkflowPanelEvent, WorkflowRowStatus,
+    };
+
+    let mut app = create_test_app();
+    let mut panel = WorkflowPanel::new("workflow_abc", "ship", 1_000);
+    panel.apply_event(WorkflowPanelEvent::PhaseStarted {
+        title: "Analyze".to_string(),
+        at_ms: 1_100,
+    });
+    panel.apply_event(WorkflowPanelEvent::TaskStarted {
+        task_id: "t1".to_string(),
+        label: Some("scout".to_string()),
+        profile: None,
+        model: None,
+        strength: None,
+        resolved_model: None,
+        worktree: false,
+        workspace: None,
+        at_ms: 1_200,
+    });
+    panel.apply_event(WorkflowPanelEvent::PhaseStarted {
+        title: "Verify".to_string(),
+        at_ms: 1_300,
+    });
+    panel.apply_event(WorkflowPanelEvent::TaskCompleted {
+        task_id: "t1".to_string(),
+        status: WorkflowRowStatus::Succeeded,
+        at_ms: 1_400,
+    });
+    panel.selected_phase = 0;
+    app.workflow_panel = Some(panel);
+
+    let area = Rect {
+        x: 2,
+        y: 4,
+        width: 100,
+        height: 10,
+    };
+    app.viewport.last_workflow_panel_area = Some(area);
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 24,
+    });
+    app.viewport.last_transcript_visible = 24;
+    app.viewport.last_transcript_total = 120;
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            // The second phase chip begins after the first summary chip plus
+            // its two-space separator.
+            column: area.x.saturating_add(28),
+            row: area.y.saturating_add(1),
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    let panel = app.workflow_panel.as_ref().expect("panel present");
+    assert_eq!(panel.selected_phase, 1);
+    assert!(panel.keyboard_focus);
+    assert!(
+        !app.viewport.transcript_selection.dragging,
+        "workflow panel click must not start transcript selection"
+    );
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x.saturating_add(area.width.saturating_sub(1)),
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    let panel = app.workflow_panel.as_ref().expect("panel present");
+    assert!(panel.cancel_requested);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Cancelling workflow workflow_abc")),
+        "cancel click should surface dispatch status: {:?}",
+        app.status_message
+    );
+}
+
 /// Clicking the transcript scrollbar gutter starts a scrollbar drag (not
 /// text selection) so the visible thumb remains interactive for users who
 /// prefer mouse-based navigation.

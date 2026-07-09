@@ -4309,26 +4309,6 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// Toggle the workflow panel expand/collapse state. Returns true when a
-    /// panel was present and toggled.
-    pub fn toggle_workflow_panel(&mut self) -> bool {
-        let Some(panel) = self.workflow_panel.as_mut() else {
-            return false;
-        };
-        let _ = panel.toggle_expanded();
-        self.needs_redraw = true;
-        true
-    }
-
-    /// Request cancel from the workflow panel. Returns the run id when the
-    /// host should dispatch `workflow` action=cancel.
-    pub fn request_workflow_panel_cancel(&mut self) -> Option<String> {
-        let panel = self.workflow_panel.as_mut()?;
-        let run_id = panel.request_cancel()?;
-        self.needs_redraw = true;
-        Some(run_id)
-    }
-
     pub fn push_status_toast(
         &mut self,
         text: impl Into<String>,
