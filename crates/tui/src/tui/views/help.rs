@@ -32,9 +32,10 @@ use crate::tui::hit_region::HitMap;
 use crate::tui::keybindings::KEYBINDINGS;
 use crate::tui::views::{ActionHint, ModalKind, ModalView, ViewAction, render_modal_chrome};
 
-/// Two top-level sections rendered in the overlay.
+/// Top-level sections rendered in the overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpSection {
+    Concept,
     Command,
     Keybinding,
 }
@@ -42,18 +43,18 @@ enum HelpSection {
 impl HelpSection {
     fn label(self, locale: Locale) -> Cow<'static, str> {
         match self {
+            Self::Concept => Cow::Borrowed("Concepts"),
             Self::Command => tr(locale, MessageId::HelpSlashCommands),
             Self::Keybinding => tr(locale, MessageId::HelpKeybindings),
         }
     }
 
-    /// Sort key — commands before keybindings keeps the most-used surface up
-    /// top so an unfiltered overlay opens with the user's likely target in
-    /// view without scrolling.
+    /// Sort key: concepts first, then command list, then keybindings.
     fn rank(self) -> u8 {
         match self {
-            Self::Command => 0,
-            Self::Keybinding => 1,
+            Self::Concept => 0,
+            Self::Command => 1,
+            Self::Keybinding => 2,
         }
     }
 }
@@ -71,6 +72,40 @@ struct HelpEntry {
     /// keystroke does not re-allocate per entry.
     haystack: String,
 }
+
+struct HelpConcept {
+    label: &'static str,
+    description: &'static str,
+    search_terms: &'static str,
+}
+
+const HELP_CONCEPTS: &[HelpConcept] = &[
+    HelpConcept {
+        label: "Fleet / workers",
+        description: "Operate-mode roster of model workers; open or stop rows from the control surface.",
+        search_terms: "fleet worker workers operate roster models providers subagents open stop",
+    },
+    HelpConcept {
+        label: "Config / scope",
+        description: "Settings, workspace scope, context panel, sidebar, theme, Hotbar, and setup surfaces.",
+        search_terms: "config settings scope workspace context sidebar theme hotbar setup",
+    },
+    HelpConcept {
+        label: "Models / providers / routing",
+        description: "Model picker, provider routes, automatic routing, effort, fallback, and budget facts.",
+        search_terms: "model provider routing route auto effort fallback budget tokens",
+    },
+    HelpConcept {
+        label: "Permissions / trust",
+        description: "Act, Plan, and Operate stay separate from approval/trust and full-access permissions.",
+        search_terms: "permissions trust approval act plan operate full access yolo bypass",
+    },
+    HelpConcept {
+        label: "Tool calls / receipts",
+        description: "Transcript tool rows, raw detail with v, turn inspector, receipts, and audit trails.",
+        search_terms: "tool calls receipts transcript raw detail v inspector audit",
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpRenderRow {
@@ -219,6 +254,24 @@ impl HelpView {
 
 fn build_entries(locale: Locale) -> Vec<HelpEntry> {
     let mut entries = Vec::new();
+
+    for (idx, concept) in HELP_CONCEPTS.iter().enumerate() {
+        let label = concept.label.to_string();
+        let description = concept.description.to_string();
+        let haystack = format!(
+            "{} {} {}",
+            label.to_ascii_lowercase(),
+            description.to_ascii_lowercase(),
+            concept.search_terms.to_ascii_lowercase()
+        );
+        entries.push(HelpEntry {
+            section: HelpSection::Concept,
+            sub_rank: idx as u8,
+            label,
+            description,
+            haystack,
+        });
+    }
 
     for command in commands::command_infos() {
         let label = format!("/{}", command.name);
@@ -538,10 +591,59 @@ mod tests {
     #[test]
     fn empty_filter_lists_all_entries() {
         let view = HelpView::new();
-        // Total = registered slash commands + catalogued keybindings.
-        let expected = commands::command_infos().len() + KEYBINDINGS.len();
+        // Total = concept pages + registered slash commands + catalogued keybindings.
+        let expected = HELP_CONCEPTS.len() + commands::command_infos().len() + KEYBINDINGS.len();
         assert_eq!(view.filtered.len(), expected);
         assert_eq!(view.entries.len(), expected);
+    }
+
+    #[test]
+    fn concept_reference_entries_cover_required_topics() {
+        let view = HelpView::new();
+        let labels: Vec<&str> = view
+            .entries
+            .iter()
+            .filter(|entry| entry.section == HelpSection::Concept)
+            .map(|entry| entry.label.as_str())
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Fleet / workers",
+                "Config / scope",
+                "Models / providers / routing",
+                "Permissions / trust",
+                "Tool calls / receipts",
+            ]
+        );
+    }
+
+    #[test]
+    fn search_crosses_concepts_commands_and_keybindings() {
+        let mut concepts = HelpView::new();
+        type_filter(&mut concepts, "fleet workers");
+        assert!(
+            concepts.filtered.iter().any(|idx| {
+                let entry = &concepts.entries[*idx];
+                entry.section == HelpSection::Concept && entry.label == "Fleet / workers"
+            }),
+            "fleet worker concept should be searchable"
+        );
+
+        let mut commands = HelpView::new();
+        type_filter(&mut commands, "mode [act");
+        assert!(commands.filtered.iter().any(|idx| {
+            let entry = &commands.entries[*idx];
+            entry.section == HelpSection::Command && entry.label == "/mode"
+        }));
+
+        let mut keybindings = HelpView::new();
+        type_filter(&mut keybindings, "ctrl+r");
+        assert!(keybindings.filtered.iter().any(|idx| {
+            let entry = &keybindings.entries[*idx];
+            entry.section == HelpSection::Keybinding && entry.label.eq_ignore_ascii_case("ctrl+r")
+        }));
     }
 
     #[test]
@@ -817,6 +919,10 @@ mod tests {
         assert!(
             dump.contains("Slash commands"),
             "missing slash-command section heading:\n{dump}"
+        );
+        assert!(
+            dump.contains("Concepts"),
+            "missing concepts section heading:\n{dump}"
         );
         // Footer hint should advertise close key on the bottom border.
         assert!(
