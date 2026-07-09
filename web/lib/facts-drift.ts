@@ -106,6 +106,8 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
     Openmodel: { id: "openmodel", label: "OpenModel", env: "OPENMODEL_API_KEY" },
     Sakana: { id: "sakana", label: "Sakana AI", env: "FUGU_API_KEY / SAKANA_API_KEY" },
     LongCat: { id: "longcat", label: "LongCat", env: "LONGCAT_API_KEY" },
+    Meta: { id: "meta", label: "Meta Model API", env: "META_MODEL_API_KEY / MODEL_API_KEY" },
+    Xai: { id: "xai", label: "xAI", env: "XAI_API_KEY" },
   };
   // Log loudly on unmapped variants so a new provider can never be silently
   // dropped from the drift-derived facts again. DeepseekCN (#1104) and the

@@ -90,6 +90,8 @@ const PROVIDER_LABEL_MAP = {
   Openmodel: { id: "openmodel", label: "OpenModel", env: "OPENMODEL_API_KEY" },
   Sakana: { id: "sakana", label: "Sakana AI", env: "FUGU_API_KEY / SAKANA_API_KEY" },
   LongCat: { id: "longcat", label: "Meituan LongCat", env: "LONGCAT_API_KEY" },
+  Meta: { id: "meta", label: "Meta Model API", env: "META_MODEL_API_KEY / MODEL_API_KEY" },
+  Xai: { id: "xai", label: "xAI", env: "XAI_API_KEY" },
 };
 
 // DeepseekCN: not wired through shared ProviderKind (#1104).
