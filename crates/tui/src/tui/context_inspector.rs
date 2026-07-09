@@ -1,27 +1,37 @@
 //! Compact session context inspector.
 
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::fmt::Write;
+#[cfg(test)]
+use std::{borrow::Cow, collections::HashSet, fmt::Write};
 
+#[cfg(test)]
 use crate::compaction::estimate_input_tokens_conservative;
+#[cfg(test)]
 use crate::localization::{Locale, MessageId, tr};
+#[cfg(test)]
 use crate::models::SystemPrompt;
+#[cfg(test)]
 use crate::session_manager::SessionContextReference;
+#[cfg(test)]
 use crate::tui::app::{App, ToolDetailRecord};
+#[cfg(test)]
 use crate::tui::file_mention::ContextReferenceSource;
+#[cfg(test)]
 use crate::utils::estimate_message_chars;
 
 /// Marker used by per-turn working-set metadata. Replicated here so the
 /// context inspector can distinguish stable prompt blocks from volatile
 /// working-set context without importing engine internals.
+#[cfg(test)]
 const WORKING_SET_MARKER: &str = "## Repo Working Set";
 
 pub(crate) const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 pub(crate) const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
+#[cfg(test)]
 const MAX_REFERENCE_ROWS: usize = 12;
+#[cfg(test)]
 const MAX_TOOL_ROWS: usize = 8;
 
+#[cfg(test)]
 const SYSTEM_LAYER_MARKERS: &[(&str, &str, PromptLayerKind)] = &[
     (
         "Project context",
@@ -64,12 +74,14 @@ const SYSTEM_LAYER_MARKERS: &[(&str, &str, PromptLayerKind)] = &[
     ),
 ];
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PromptLayerKind {
     Static,
     Dynamic,
 }
 
+#[cfg(test)]
 impl PromptLayerKind {
     fn label(self, locale: Locale) -> Cow<'static, str> {
         match self {
@@ -79,6 +91,7 @@ impl PromptLayerKind {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct PromptTextLayer<'a> {
     name: &'static str,
@@ -87,6 +100,7 @@ struct PromptTextLayer<'a> {
 }
 
 #[must_use]
+#[cfg(test)]
 pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let mut out = String::new();
     let usage = context_usage(app);
@@ -153,6 +167,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     out
 }
 
+#[cfg(test)]
 fn context_usage(app: &App) -> (usize, u32, f64) {
     let max = crate::route_budget::route_context_window_tokens(
         app.api_provider,
@@ -167,12 +182,14 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
     (used, max, percent)
 }
 
+#[cfg(test)]
 enum ContextPressure {
     Ok,
     High,
     Critical,
 }
 
+#[cfg(test)]
 fn context_status(percent: f64) -> ContextPressure {
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
         ContextPressure::Critical
@@ -185,6 +202,7 @@ fn context_status(percent: f64) -> ContextPressure {
 
 /// Inspect the system prompt structure, split into cache-friendly stable
 /// prefix blocks and the volatile working-set tail block.
+#[cfg(test)]
 fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
     let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspSystemPrompt));
     let _ = writeln!(out, "-----------------------");
@@ -293,6 +311,7 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
     let _ = writeln!(out, "  {}", tr(locale, MessageId::CtxInspCacheTip));
 }
 
+#[cfg(test)]
 fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
     let mut starts = SYSTEM_LAYER_MARKERS
         .iter()
@@ -329,6 +348,7 @@ fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
     layers
 }
 
+#[cfg(test)]
 fn push_references(out: &mut String, references: &[SessionContextReference], locale: Locale) {
     let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspReferences));
     let _ = writeln!(out, "----------");
@@ -388,6 +408,7 @@ fn push_references(out: &mut String, references: &[SessionContextReference], loc
     }
 }
 
+#[cfg(test)]
 fn push_tools(out: &mut String, app: &App, locale: Locale) {
     let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspRecentTools));
     let _ = writeln!(out, "------------");
@@ -424,6 +445,7 @@ fn push_tools(out: &mut String, app: &App, locale: Locale) {
     }
 }
 
+#[cfg(test)]
 fn push_tool_row(out: &mut String, locale: Locale, location: &str, detail: &ToolDetailRecord) {
     let output_state = if detail.output.as_deref().is_some_and(|out| !out.is_empty()) {
         tr(locale, MessageId::CtxInspOutputCaptured)
@@ -439,6 +461,7 @@ fn push_tool_row(out: &mut String, locale: Locale, location: &str, detail: &Tool
     );
 }
 
+#[cfg(test)]
 fn short_tool_id(id: &str) -> String {
     if id.len() <= 8 {
         id.to_string()

@@ -7,7 +7,9 @@ use crate::config::{
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
-use crate::tui::app::{ReasoningEffort, SidebarHoverRow, SidebarHoverSection, ToolDetailRecord};
+use crate::tui::app::{
+    ReasoningEffort, SidebarFocus, SidebarHoverRow, SidebarHoverSection, ToolDetailRecord,
+};
 use crate::tui::file_mention::{
     apply_mention_menu_selection, find_file_mention_completions, partial_file_mention_at_cursor,
     try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
@@ -8177,6 +8179,24 @@ fn pop_pager_body(app: &mut App) -> String {
         .downcast_mut::<PagerView>()
         .expect("top view should be pager");
     pager.body_text()
+}
+
+#[test]
+fn context_inspector_opens_live_sidebar_panel_not_pager() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Auto;
+    app.context_panel = false;
+
+    open_context_inspector(&mut app);
+
+    assert_eq!(app.sidebar_focus, SidebarFocus::Context);
+    assert!(app.context_panel, "live context panel should be enabled");
+    assert!(app.view_stack.is_empty(), "Alt+C must not push a pager");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Context inspector: live panel")
+    );
+    assert!(app.needs_redraw);
 }
 
 #[test]

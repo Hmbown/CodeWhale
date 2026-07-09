@@ -83,7 +83,6 @@ use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
 };
 use crate::tui::composer_ui::*;
-use crate::tui::context_inspector::build_context_inspector_text;
 use crate::tui::event_broker::EventBroker;
 use crate::tui::file_picker_relevance;
 use crate::tui::footer_ui::{
@@ -4623,7 +4622,7 @@ async fn run_event_loop(
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    app.status_message = Some("Sidebar focus: tasks".to_string());
                     continue;
                 }
                 KeyCode::Char('3')
@@ -4660,7 +4659,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    app.status_message = Some("Sidebar focus: tasks".to_string());
                     continue;
                 }
                 KeyCode::Char('#')
@@ -8061,17 +8060,9 @@ fn open_text_pager(app: &mut App, title: String, content: String) {
 }
 
 pub(crate) fn open_context_inspector(app: &mut App) {
-    let width = app
-        .viewport
-        .last_transcript_area
-        .map(|area| area.width)
-        .unwrap_or(80);
-    let content = build_context_inspector_text(app, app.ui_locale);
-    app.view_stack.push(PagerView::from_text(
-        tr(app.ui_locale, MessageId::CtxInspTitle),
-        &content,
-        width.saturating_sub(2),
-    ));
+    app.context_panel = true;
+    app.set_sidebar_focus(SidebarFocus::Context);
+    app.status_message = Some("Context inspector: live panel".to_string());
 }
 
 // File-picker relevance scoring moved to `tui/file_picker_relevance.rs`.
