@@ -20,13 +20,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use crate::palette;
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
 };
 use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery};
 
@@ -326,42 +325,30 @@ impl ModalView for FilePickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 80, (VISIBLE_ROWS as u16) + 7, 44, 8);
-
-        render_modal_surface(area, popup_area, buf);
-
         let match_count = self.filtered.len();
-        // The match count moves into the title so the footer only carries the
-        // navigation hints, which now wrap inside the body via the shared
-        // helper instead of clipping off the border edge (#3732).
-        let title = Line::from(vec![Span::styled(
-            format!(
-                " File Picker ({match_count} match{}) ",
-                if match_count == 1 { "" } else { "es" },
-            ),
-            Style::default()
-                .fg(palette::WHALE_ACCENT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )]);
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
+        let chrome = render_modal_chrome(
+            area,
             buf,
+            Line::from(vec![Span::styled(
+                format!(
+                    " File Picker ({match_count} match{}) ",
+                    if match_count == 1 { "" } else { "es" },
+                ),
+                Style::default()
+                    .fg(palette::WHALE_ACCENT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            80,
+            (VISIBLE_ROWS as u16) + 7,
+            44,
+            8,
             &[
                 ActionHint::new("↑/↓", "select"),
                 ActionHint::new("Enter", "insert @path"),
                 ActionHint::new("Esc", "close"),
             ],
         );
+        let content = chrome.body;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Query line.

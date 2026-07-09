@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -20,8 +20,7 @@ use crate::palette;
 use crate::tui::app::AppMode;
 use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
 };
 
 pub struct ModePickerView {
@@ -141,34 +140,30 @@ impl ModalView for ModePickerView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_height = u16::try_from(AppMode::CHOICES.len()).unwrap_or(3) + 7;
-        let popup_area = centered_modal_area(area, 68, popup_height, 44, 8);
 
-        render_modal_surface(area, popup_area, buf);
-
-        let block = Block::default()
-            .title(Line::from(Span::styled(
+        // Shared modal chrome recipe (COH-05): centered opaque surface, titled
+        // border, and action-hint footer — one call replaces the hand-rolled
+        // block + surface + footer that lived here before the recipe existed.
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 " Mode ",
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            68,
+            popup_height,
+            44,
+            8,
             &[
                 ActionHint::new("↑/↓", "move"),
                 ActionHint::new("Enter", "select"),
                 ActionHint::new("Esc", "cancel"),
             ],
         );
+        let content = chrome.body;
 
         let mut lines = Vec::with_capacity(AppMode::CHOICES.len());
         let mut map = HitMap::new();

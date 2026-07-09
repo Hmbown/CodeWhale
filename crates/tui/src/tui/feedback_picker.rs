@@ -6,13 +6,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use crate::palette;
 use crate::tui::views::{
-    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent,
-    centered_modal_area, render_modal_footer, render_modal_surface,
+    ActionHint, CommandPaletteAction, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -123,34 +122,26 @@ impl ModalView for FeedbackPickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 78, (OPTIONS.len() as u16) + 7, 44, 8);
-
-        render_modal_surface(area, popup_area, buf);
-
-        let block = Block::default()
-            .title(Line::from(Span::styled(
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 " Feedback ",
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            78,
+            (OPTIONS.len() as u16) + 7,
+            44,
+            8,
             &[
                 ActionHint::new("Up/Down", "move"),
                 ActionHint::new("Enter", "open"),
                 ActionHint::new("Esc", "cancel"),
             ],
         );
+        let content = chrome.body;
 
         let mut lines = Vec::with_capacity(OPTIONS.len() + 2);
         lines.push(Line::from(Span::styled(

@@ -15,16 +15,13 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use crate::config::{ApiProvider, StatusItem};
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
-use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
-    render_modal_footer, render_modal_surface,
-};
+use crate::tui::views::{ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_chrome};
 use unicode_width::UnicodeWidthStr;
 
 const STATUS_PICKER_SELECTION_BG: ratatui::style::Color = ratatui::style::Color::Rgb(54, 72, 104);
@@ -172,32 +169,25 @@ impl ModalView for StatusPickerView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Two header lines + one row per StatusItem + the wrapping action
-        // footer that now lives inside the body (one row more than the old
-        // border footer). centered_modal_area clamps this to the frame and
-        // lets the scroll offset absorb any remaining overflow.
+        // footer. The recipe clamps this to the frame and lets the scroll
+        // offset absorb any remaining overflow.
         let needed_height = (self.rows.len() as u16).saturating_add(5);
-        let popup_area = centered_modal_area(area, 64, needed_height, 40, 8);
 
-        render_modal_surface(area, popup_area, buf);
-
-        let block = Block::default()
-            .title(Line::from(Span::styled(
+        // Shared modal chrome recipe (COH-05): centered opaque surface, titled
+        // border, and action-hint footer in one call.
+        let chrome = render_modal_chrome(
+            area,
+            buf,
+            Line::from(Span::styled(
                 tr(self.locale, MessageId::StatusPickerTitle),
                 Style::default()
                     .fg(palette::WHALE_INFO)
                     .add_modifier(Modifier::BOLD),
-            )))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::WHALE_BG))
-            .padding(Padding::uniform(1));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        let content = render_modal_footer(
-            inner,
-            buf,
+            )),
+            64,
+            needed_height,
+            40,
+            8,
             &[
                 ActionHint::new(
                     "Space",
@@ -209,6 +199,7 @@ impl ModalView for StatusPickerView {
                 ActionHint::new("Esc", tr(self.locale, MessageId::StatusPickerActionCancel)),
             ],
         );
+        let content = chrome.body;
 
         let visible_rows = content.height.saturating_sub(2) as usize;
         let row_start = visible_row_start(self.rows.len(), self.cursor, visible_rows);

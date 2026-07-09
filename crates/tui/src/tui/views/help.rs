@@ -20,7 +20,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -28,10 +28,7 @@ use crate::commands;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::keybindings::KEYBINDINGS;
-use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, centered_modal_area, render_modal_footer,
-    render_modal_surface,
-};
+use crate::tui::views::{ActionHint, ModalKind, ModalView, ViewAction, render_modal_chrome};
 
 /// Two top-level sections rendered in the overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,14 +262,6 @@ fn build_entries(locale: Locale) -> Vec<HelpEntry> {
     entries
 }
 
-fn modal_block() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::WHALE_BG))
-        .padding(Padding::uniform(1))
-}
-
 fn truncate_to_width(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -380,31 +369,27 @@ impl ModalView for HelpView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_area = centered_modal_area(area, 90, 28, 44, 8);
-
-        render_modal_surface(area, popup_area, buf);
-
-        let block = modal_block().title(Line::from(vec![Span::styled(
-            format!(
-                " {} — {} ",
-                self.tr(MessageId::HelpTitle),
-                self.tr(MessageId::HelpSubtitle)
-            ),
-            Style::default()
-                .fg(palette::WHALE_ACCENT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )]));
-
-        let inner = block.inner(popup_area);
-        block.render(popup_area, buf);
-
-        // The action footer wraps inside the modal body (#3732) rather than the
-        // single-line border title that silently clipped hints at narrow
-        // widths; the list renders into the content area above it. Empty hint
-        // keys keep the existing localized footer phrases as plain labels.
-        let content = render_modal_footer(
-            inner,
+        // Shared modal chrome recipe (COH-05): centered opaque surface, titled
+        // border, and action-hint footer in one call.
+        let chrome = render_modal_chrome(
+            area,
             buf,
+            Line::from(vec![Span::styled(
+                format!(
+                    " {} — {} ",
+                    self.tr(MessageId::HelpTitle),
+                    self.tr(MessageId::HelpSubtitle)
+                ),
+                Style::default()
+                    .fg(palette::WHALE_ACCENT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            90,
+            28,
+            44,
+            8,
+            // Empty hint keys keep the existing localized footer phrases as
+            // plain labels (the help footer uses prose, not key/label pairs).
             &[
                 ActionHint::new("", self.tr(MessageId::HelpFooterTypeFilter)),
                 ActionHint::new("", self.tr(MessageId::HelpFooterMove)),
@@ -412,6 +397,7 @@ impl ModalView for HelpView {
                 ActionHint::new("", self.tr(MessageId::HelpFooterClose)),
             ],
         );
+        let content = chrome.body;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
