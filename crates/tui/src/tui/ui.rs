@@ -2593,6 +2593,14 @@ async fn run_event_loop(
                             app.flush_active_cell();
                         }
                         app.is_loading = false;
+                        // Ocean completion surface: one-shot field lighten on
+                        // working→done (gated inside begin_completion_surface).
+                        if matches!(
+                            status,
+                            crate::core::events::TurnOutcomeStatus::Completed
+                        ) {
+                            app.begin_completion_surface();
+                        }
                         app.dispatch_started_at = None;
                         app.pending_provider_switch = None;
                         app.offline_mode = false;
@@ -12625,6 +12633,7 @@ fn should_tick_status_animation(
         || app.is_purging
         || history_has_live_motion
         || active_cell_has_live_motion
+        || app.has_pending_motion()
 }
 
 fn active_cell_has_live_motion(app: &App) -> bool {

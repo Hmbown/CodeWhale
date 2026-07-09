@@ -3015,7 +3015,7 @@ fn runtime_preset_preview_text(
 
 fn runtime_preset_diff_rows(preset: SetupRuntimePreset, facts: &SetupRuntimeFacts) -> Vec<String> {
     let approval_target = preset.approval_policy().map_or_else(
-        || "unchanged; YOLO derives bypass from default_mode".to_string(),
+        || "unchanged; Full Access derives bypass from default_mode".to_string(),
         ToString::to_string,
     );
     let mut rows = vec![
@@ -6020,7 +6020,7 @@ mod tests {
         assert!(content.contains("Runtime Posture Preset Preview"));
         assert!(content.contains("settings.default_mode: agent -> yolo"));
         assert!(content.contains(
-            "config.approval_policy: never -> unchanged; YOLO derives bypass from default_mode"
+            "config.approval_policy: never -> unchanged; Full Access derives bypass from default_mode"
         ));
         assert!(content.contains("config.network.default: deny -> unchanged"));
 

@@ -26,6 +26,7 @@ use ratatui::{
 
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
+use crate::tui::motion::apply_receipt_settle;
 use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::ui_text::CopyLineSeparator;
 
@@ -135,6 +136,7 @@ impl TranscriptViewCache {
             options,
             &HashSet::new(),
             None,
+            None,
         );
     }
 
@@ -157,6 +159,9 @@ impl TranscriptViewCache {
         options: TranscriptRenderOptions,
         folded_cells: &HashSet<usize>,
         original_index_map: Option<&[usize]>,
+        // Per-filtered-index settle progress (`0.0..=1.0`). When provided,
+        // mid-settle cells re-render with dim→full ink (Ocean receipt settle).
+        settle_progress: Option<&[f32]>,
     ) {
         let total_cells: usize = cell_shards.iter().map(|s| s.len()).sum();
 
@@ -226,6 +231,11 @@ impl TranscriptViewCache {
                     lines.push(rendered_line.line);
                     copy_prefix_widths.push(rendered_line.copy_prefix_width);
                     copy_separators.push(rendered_line.copy_separator_after);
+                }
+                // Ocean receipt settle: dim→full on new cells (gated upstream).
+                if let Some(progresses) = settle_progress {
+                    let progress = progresses.get(idx).copied().unwrap_or(1.0);
+                    apply_receipt_settle(&mut lines, progress);
                 }
                 let is_empty = lines.is_empty();
                 new_per_cell.push(CachedCell {
@@ -1077,14 +1087,14 @@ mod tests {
 
         // First render: no folding → full content.
         let mut cache = TranscriptViewCache::new();
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
         let full_line_count = cache.total_lines();
 
         // Second render: fold the thinking cell → should invalidate and
         // produce fewer lines (collapsed summary).
         let mut folded = HashSet::new();
         folded.insert(0usize);
-        cache.ensure_split(&[&cells], &revisions, width, options, &folded, None);
+        cache.ensure_split(&[&cells], &revisions, width, options, &folded, None, None);
         let folded_line_count = cache.total_lines();
 
         assert!(
@@ -1093,7 +1103,7 @@ mod tests {
         );
 
         // Third render: unfold → should restore full content.
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
         let restored_line_count = cache.total_lines();
         assert_eq!(
             restored_line_count, full_line_count,
@@ -1127,7 +1137,7 @@ mod tests {
 
         // No collapsing, no folding — baseline.
         let mut cache = TranscriptViewCache::new();
-        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None);
+        cache.ensure_split(&[&cells], &revisions, width, options, &HashSet::new(), None, None);
         let baseline = cache.total_lines();
         assert!(baseline > 0, "baseline render should contain visible lines");
 
@@ -1148,6 +1158,7 @@ mod tests {
             options,
             &folded,
             Some(&index_map),
+            None,
         );
         let folded_filtered = cache2.total_lines();
 
@@ -1163,6 +1174,7 @@ mod tests {
             options,
             &HashSet::new(),
             Some(&index_map),
+            None,
         );
         let expanded_filtered = cache3.total_lines();
 

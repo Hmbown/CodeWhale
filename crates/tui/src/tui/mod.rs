@@ -44,6 +44,7 @@ pub mod live_transcript;
 pub mod markdown_render;
 mod mcp_routing;
 pub mod model_picker;
+pub mod motion;
 pub mod mouse_ui;
 pub mod notifications;
 pub mod onboarding;

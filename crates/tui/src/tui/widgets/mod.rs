@@ -162,7 +162,15 @@ impl ChatWidget {
         if !has_collapsed {
             let mut cell_revisions: Vec<u64> =
                 Vec::with_capacity(app.history.len() + active_entries.len());
-            cell_revisions.extend_from_slice(&app.history_revisions);
+            let mut settle_progress: Vec<f32> =
+                Vec::with_capacity(app.history.len() + active_entries.len());
+            for (idx, rev) in app.history_revisions.iter().copied().enumerate() {
+                let settle_key = app.settle_frame_key_at(idx);
+                // Bake settle frame into the revision so mid-settle cells
+                // re-render each cadence tick without invalidating settled cells.
+                cell_revisions.push(rev.wrapping_add(settle_key.wrapping_mul(1_000_003)));
+                settle_progress.push(app.receipt_settle_progress_at(idx));
+            }
             if !active_entries.is_empty() {
                 let active_rev = app.active_cell_revision;
                 for i in 0..active_entries.len() {
@@ -172,6 +180,8 @@ impl ChatWidget {
                             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
                             .wrapping_add(salt),
                     );
+                    // Active (in-flight) cells are not settling receipts.
+                    settle_progress.push(1.0);
                 }
             }
             // Build identity mapping: filtered index == original index.
@@ -185,6 +195,7 @@ impl ChatWidget {
                 render_options,
                 &app.folded_thinking,
                 None,
+                Some(&settle_progress),
             );
         } else {
             // Slow path: clone non-collapsed cells into filtered vecs so
@@ -193,6 +204,8 @@ impl ChatWidget {
             let mut filtered_cells: Vec<HistoryCell> =
                 Vec::with_capacity(history_len + active_entries.len());
             let mut filtered_revs: Vec<u64> =
+                Vec::with_capacity(history_len + active_entries.len());
+            let mut filtered_settle: Vec<f32> =
                 Vec::with_capacity(history_len + active_entries.len());
             let mut filtered_to_original: Vec<usize> =
                 Vec::with_capacity(history_len + active_entries.len());
@@ -215,11 +228,16 @@ impl ChatWidget {
                         history_len,
                         app.active_cell_revision,
                     ));
+                    filtered_settle.push(app.receipt_settle_progress_at(idx));
                     filtered_to_original.push(idx);
                     continue;
                 }
                 filtered_cells.push(cell.clone());
-                filtered_revs.push(app.history_revisions[idx]);
+                let settle_key = app.settle_frame_key_at(idx);
+                filtered_revs.push(
+                    app.history_revisions[idx].wrapping_add(settle_key.wrapping_mul(1_000_003)),
+                );
+                filtered_settle.push(app.receipt_settle_progress_at(idx));
                 filtered_to_original.push(idx);
             }
 
@@ -243,12 +261,14 @@ impl ChatWidget {
                             history_len,
                             active_rev,
                         ));
+                        filtered_settle.push(1.0);
                         filtered_to_original.push(original_idx);
                         continue;
                     }
                     filtered_cells.push(cell.clone());
                     let salt = (i as u64).wrapping_add(1);
                     filtered_revs.push(active_entry_revision(active_rev, salt));
+                    filtered_settle.push(1.0);
                     filtered_to_original.push(original_idx);
                 }
             }
@@ -263,6 +283,7 @@ impl ChatWidget {
                 render_options,
                 &app.folded_thinking,
                 Some(&app.collapsed_cell_map),
+                Some(&filtered_settle),
             );
         }
 

@@ -1650,6 +1650,18 @@ pub struct App {
     pub history_version: u64,
     /// Per-cell revision counter, kept in lockstep with `history`.
     pub history_revisions: Vec<u64>,
+    /// When each history cell first appeared — drives receipt-settle motion.
+    /// Parallel to `history` (same length, same push/pop discipline).
+    pub history_appeared_at: Vec<Instant>,
+    /// Burst stagger index for each history cell (0 = first in burst).
+    pub history_settle_stagger: Vec<u32>,
+    /// Last time a history cell was appended (for ~60ms burst stagger).
+    pub last_history_push_at: Option<Instant>,
+    /// Current burst counter; resets when pushes are spaced further than
+    /// [`crate::tui::motion::RECEIPT_SETTLE_MS`] apart.
+    pub settle_burst_index: u32,
+    /// One-shot completion surface start (working→done). `None` when idle.
+    pub completion_surface_started_at: Option<Instant>,
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
@@ -2763,6 +2775,11 @@ impl App {
             history: Vec::new(),
             history_version: 0,
             history_revisions: Vec::new(),
+            history_appeared_at: Vec::new(),
+            history_settle_stagger: Vec::new(),
+            last_history_push_at: None,
+            settle_burst_index: 0,
+            completion_surface_started_at: None,
             next_history_revision: 1,
             api_messages: Vec::new(),
             is_loading: false,
@@ -3346,6 +3363,7 @@ impl App {
         let rev = self.fresh_history_revision();
         self.history.push(msg);
         self.history_revisions.push(rev);
+        self.record_history_appearance();
         self.history_version = self.history_version.wrapping_add(1);
 
         // Bound history length: when the soft cap fires, fold the oldest
@@ -3677,6 +3695,7 @@ impl App {
         } else if self.history_revisions.len() > self.history.len() {
             self.history_revisions.truncate(self.history.len());
         }
+        self.resync_history_motion();
     }
 
     /// Bump the revision counter of a single history cell so the transcript
@@ -3704,6 +3723,7 @@ impl App {
         let rev = self.fresh_history_revision();
         self.history.push(cell);
         self.history_revisions.push(rev);
+        self.record_history_appearance();
         self.history_version = self.history_version.wrapping_add(1);
         self.maybe_fold_history();
         self.needs_redraw = true;
@@ -3718,10 +3738,118 @@ impl App {
             let rev = self.fresh_history_revision();
             self.history.push(cell);
             self.history_revisions.push(rev);
+            self.record_history_appearance();
         }
         self.maybe_fold_history();
         self.history_version = self.history_version.wrapping_add(1);
         self.needs_redraw = true;
+    }
+
+    /// Stamp appear-time + burst stagger for the just-pushed history cell.
+    fn record_history_appearance(&mut self) {
+        let now = Instant::now();
+        let stagger = if let Some(last) = self.last_history_push_at {
+            if now.duration_since(last).as_millis()
+                < u128::from(crate::tui::motion::RECEIPT_SETTLE_MS)
+            {
+                self.settle_burst_index = self.settle_burst_index.saturating_add(1);
+                self.settle_burst_index
+            } else {
+                self.settle_burst_index = 0;
+                0
+            }
+        } else {
+            self.settle_burst_index = 0;
+            0
+        };
+        self.last_history_push_at = Some(now);
+        self.history_appeared_at.push(now);
+        self.history_settle_stagger.push(stagger);
+    }
+
+    /// Resync appear/stagger vectors with `history` length (insert/fold paths).
+    pub fn resync_history_motion(&mut self) {
+        let len = self.history.len();
+        let now = Instant::now();
+        while self.history_appeared_at.len() < len {
+            // Cells without a stamp (restored/folded) are treated as already
+            // settled by using an old appear time.
+            self.history_appeared_at
+                .push(now.checked_sub(Duration::from_secs(60)).unwrap_or(now));
+            self.history_settle_stagger.push(0);
+        }
+        if self.history_appeared_at.len() > len {
+            self.history_appeared_at.truncate(len);
+        }
+        if self.history_settle_stagger.len() > len {
+            self.history_settle_stagger.truncate(len);
+        }
+    }
+
+    /// Start the one-shot completion surface (working → done).
+    pub fn begin_completion_surface(&mut self) {
+        if self.low_motion || !self.fancy_animations {
+            self.completion_surface_started_at = None;
+            return;
+        }
+        self.completion_surface_started_at = Some(Instant::now());
+        self.needs_redraw = true;
+    }
+
+    /// Whether any receipt settle or completion surface still needs frames.
+    #[must_use]
+    pub fn has_pending_motion(&self) -> bool {
+        if self.low_motion {
+            return false;
+        }
+        if let Some(started) = self.completion_surface_started_at
+            && crate::tui::motion::is_completion_surface_active(
+                started.elapsed().as_millis(),
+                self.low_motion,
+                self.fancy_animations,
+            )
+        {
+            return true;
+        }
+        for (i, appeared) in self.history_appeared_at.iter().enumerate() {
+            let stagger = self.history_settle_stagger.get(i).copied().unwrap_or(0);
+            if crate::tui::motion::is_receipt_settling(
+                appeared.elapsed().as_millis(),
+                stagger,
+                self.low_motion,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Settle progress for history index `i` (1.0 = fully settled).
+    #[must_use]
+    pub fn receipt_settle_progress_at(&self, index: usize) -> f32 {
+        let Some(appeared) = self.history_appeared_at.get(index) else {
+            return 1.0;
+        };
+        let stagger = self.history_settle_stagger.get(index).copied().unwrap_or(0);
+        crate::tui::motion::receipt_settle_progress(
+            appeared.elapsed().as_millis(),
+            stagger,
+            self.low_motion,
+        )
+    }
+
+    /// Cache-bust key for settling cell at `index` (0 when settled).
+    #[must_use]
+    pub fn settle_frame_key_at(&self, index: usize) -> u64 {
+        let Some(appeared) = self.history_appeared_at.get(index) else {
+            return 0;
+        };
+        let stagger = self.history_settle_stagger.get(index).copied().unwrap_or(0);
+        crate::tui::motion::settle_frame_key(
+            appeared.elapsed().as_millis(),
+            stagger,
+            self.low_motion,
+        )
     }
 
     /// Clear the history and its session-scoped side indexes. Used by /clear,
@@ -3729,6 +3857,11 @@ impl App {
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.history_revisions.clear();
+        self.history_appeared_at.clear();
+        self.history_settle_stagger.clear();
+        self.last_history_push_at = None;
+        self.settle_burst_index = 0;
+        self.completion_surface_started_at = None;
         self.context_references_by_cell.clear();
         self.session_context_references.clear();
         self.session_artifacts.clear();
@@ -3742,6 +3875,10 @@ impl App {
     /// Pop the trailing history cell, keeping revisions in sync.
     pub fn pop_history(&mut self) -> Option<HistoryCell> {
         let cell = self.history.pop();
+        if cell.is_some() {
+            let _ = self.history_appeared_at.pop();
+            let _ = self.history_settle_stagger.pop();
+        }
         if cell.is_some() {
             self.history_revisions.pop();
             self.context_references_by_cell.remove(&self.history.len());
@@ -3767,6 +3904,12 @@ impl App {
         self.history.truncate(new_len);
         if self.history_revisions.len() > new_len {
             self.history_revisions.truncate(new_len);
+        }
+        if self.history_appeared_at.len() > new_len {
+            self.history_appeared_at.truncate(new_len);
+        }
+        if self.history_settle_stagger.len() > new_len {
+            self.history_settle_stagger.truncate(new_len);
         }
         // Drop any auxiliary maps keyed on history indices that now point
         // past the new tail. We keep the rest intact so unaffected tool
@@ -4073,6 +4216,7 @@ impl App {
             let rev = self.fresh_history_revision();
             self.history.push(cell);
             self.history_revisions.push(rev);
+            self.record_history_appearance();
         }
         self.history_version = self.history_version.wrapping_add(1);
         self.needs_redraw = true;
