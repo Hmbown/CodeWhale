@@ -14,7 +14,9 @@
 //! now (#3167 reworks Fleet UI localization); the command entry
 //! (`CmdFleetDescription`) is already localized.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use std::cell::RefCell;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -29,6 +31,7 @@ use crate::fleet::roster::{FleetRoster, ProfileOrigin};
 use crate::fleet::worker_runtime::roster_member_agent_type;
 use crate::palette;
 use crate::tui::app::App;
+use crate::tui::hit_region::HitMap;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,
     render_modal_footer, render_modal_surface, truncate_view_text,
@@ -68,6 +71,8 @@ pub struct FleetRosterView {
     /// Selected row: 0 is the pinned operator row, members follow at 1..
     selected: usize,
     detail_scroll: usize,
+    /// Roster row hit regions from the most recent paint.
+    list_hit_map: RefCell<HitMap>,
 }
 
 impl FleetRosterView {
@@ -95,6 +100,7 @@ impl FleetRosterView {
                 .collect(),
             selected: 0,
             detail_scroll: 0,
+            list_hit_map: RefCell::new(HitMap::new()),
         }
     }
 
@@ -124,10 +130,37 @@ impl FleetRosterView {
         self.detail_scroll = 0;
     }
 
+    fn focus_row_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.list_hit_map.borrow().row_at(column, row) else {
+            return false;
+        };
+        if index >= self.row_count() {
+            return false;
+        }
+        if self.selected != index {
+            self.selected = index;
+            self.detail_scroll = 0;
+        }
+        true
+    }
+
+    fn open_selected_member(&self) -> ViewAction {
+        if self.operator_selected() {
+            // The operator is not a wizard-authored profile; its route changes
+            // via /model or /provider (the detail pane says so).
+            ViewAction::None
+        } else {
+            // Hand off to the authoring wizard; the roster itself never writes
+            // anything.
+            ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested)
+        }
+    }
+
     fn footer_hints(&self) -> Vec<ActionHint> {
         vec![
             ActionHint::new("↑/↓", "select"),
             ActionHint::new("s/Enter", "setup"),
+            ActionHint::new("click", "open row"),
             ActionHint::new("PgUp/PgDn", "scroll detail"),
             ActionHint::new("Esc", "close"),
         ]
@@ -154,18 +187,7 @@ impl ModalView for FleetRosterView {
                 self.move_down();
                 ViewAction::None
             }
-            KeyCode::Enter | KeyCode::Char('s') => {
-                if self.operator_selected() {
-                    // The operator is not a wizard-authored profile; its
-                    // route changes via /model or /provider (the detail pane
-                    // says so).
-                    ViewAction::None
-                } else {
-                    // Hand off to the authoring wizard; the roster itself
-                    // never writes anything.
-                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested)
-                }
-            }
+            KeyCode::Enter | KeyCode::Char('s') => self.open_selected_member(),
             KeyCode::Home => {
                 self.detail_scroll = 0;
                 ViewAction::None
@@ -180,6 +202,27 @@ impl ModalView for FleetRosterView {
             }
             _ => ViewAction::None,
         }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_up();
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_down();
+            }
+            MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+                let _ = self.focus_row_at(mouse.column, mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus_row_at(mouse.column, mouse.row) {
+                    return self.open_selected_member();
+                }
+            }
+            _ => {}
+        }
+        ViewAction::None
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -272,12 +315,16 @@ impl FleetRosterView {
             );
         let list_width = usize::from(list_area.width);
         let mut list_lines: Vec<Line> = Vec::with_capacity(visible_rows);
-        for idx in first..(first + visible_rows).min(self.row_count()) {
+        let mut hit_map = HitMap::new();
+        for (line_offset, idx) in (first..(first + visible_rows).min(self.row_count())).enumerate()
+        {
+            let y = list_area.y.saturating_add(line_offset as u16);
+            hit_map.push_row(idx, list_area.x, y, list_area.width);
             let is_selected = idx == self.selected;
             let pointer = if is_selected { "> " } else { "  " };
             let (text, base_style) = if idx == 0 {
                 (
-                    format!("{pointer}operator  [session]"),
+                    format!("{pointer}operator  [route]"),
                     Style::default()
                         .fg(palette::WHALE_ACCENT_PRIMARY)
                         .add_modifier(Modifier::BOLD),
@@ -285,7 +332,7 @@ impl FleetRosterView {
             } else {
                 let member = &self.members[idx - 1];
                 (
-                    format!("{pointer}{}  [{}]", member.id, member.origin),
+                    format!("{pointer}{}  [{}]  [open]", member.id, member.origin),
                     Style::default().fg(palette::TEXT_PRIMARY),
                 )
             };
@@ -297,11 +344,11 @@ impl FleetRosterView {
             } else {
                 base_style
             };
-            list_lines.push(Line::from(Span::styled(
-                truncate_view_text(&text, list_width),
-                style,
-            )));
+            let text = truncate_view_text(&text, list_width);
+            let padded = format!("{text:<list_width$}");
+            list_lines.push(Line::from(Span::styled(padded, style)));
         }
+        *self.list_hit_map.borrow_mut() = hit_map;
         Paragraph::new(list_lines).render(list_area, buf);
 
         // Detail pane for the selected row.
@@ -467,8 +514,9 @@ fn member_detail_lines(member: &AgentProfile) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::hit_region::HitTarget;
     use crate::tui::views::ViewStack;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use unicode_width::UnicodeWidthStr;
@@ -512,6 +560,7 @@ mod tests {
             members,
             selected: 0,
             detail_scroll: 0,
+            list_hit_map: RefCell::new(HitMap::new()),
         }
     }
 
@@ -608,6 +657,73 @@ mod tests {
                 "{code:?} should hand off to the setup wizard"
             );
         }
+    }
+
+    #[test]
+    fn mouse_hover_focuses_and_click_opens_member_row() {
+        let mut view = built_in_view();
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .list_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index } if index > 0))
+            .copied()
+            .expect("visible member row hit region");
+        let HitTarget::Row { index } = hit.target;
+
+        let hover = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(hover, ViewAction::None));
+        assert_eq!(view.selected, index);
+
+        view.selected = 0;
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            click,
+            ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested)
+        ));
+        assert_eq!(view.selected, index);
+    }
+
+    #[test]
+    fn mouse_click_on_operator_row_focuses_but_does_not_open_setup() {
+        let mut view = built_in_view();
+        view.selected = 1;
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let hit = view
+            .list_hit_map
+            .borrow()
+            .regions_for_test()
+            .iter()
+            .find(|region| matches!(region.target, HitTarget::Row { index: 0 }))
+            .copied()
+            .expect("operator row hit region");
+
+        let click = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.rect.x.saturating_add(2),
+            row: hit.rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(click, ViewAction::None));
+        assert_eq!(view.selected, 0);
     }
 
     #[test]
