@@ -1640,6 +1640,87 @@ fn mouse_events_do_not_mutate_transcript_behind_modal() {
 }
 
 #[test]
+fn scroll_owner_transcript_wheel_scrolls_only_when_no_panel_claims_pointer() {
+    let mut app = create_test_app();
+    app.viewport.last_transcript_area = Some(Rect::new(0, 0, 80, 12));
+    app.viewport.last_transcript_visible = 12;
+    app.viewport.last_transcript_total = 120;
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert!(
+        app.viewport.pending_scroll_delta > 0,
+        "transcript should own the wheel only when no foreground panel claims it"
+    );
+}
+
+#[test]
+fn scroll_owner_sidebar_wheel_does_not_scroll_transcript() {
+    let mut app = create_test_app();
+    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 65,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn scroll_owner_pending_preview_wheel_does_not_scroll_transcript() {
+    let mut app = create_test_app();
+    app.viewport.last_pending_input_area = Some(Rect::new(0, 10, 80, 3));
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 12,
+            row: 11,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn scroll_owner_workflow_panel_wheel_does_not_scroll_transcript() {
+    let mut app = create_test_app();
+    app.viewport.last_workflow_panel_area = Some(Rect::new(2, 4, 100, 4));
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 8,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
 fn composer_mouse_wheel_scrolls_wrapped_draft_not_transcript() {
     let mut app = create_test_app();
     app.input = "alpha beta gamma delta epsilon".to_string();

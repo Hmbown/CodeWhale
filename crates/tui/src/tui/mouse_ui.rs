@@ -283,6 +283,12 @@ fn handle_workflow_panel_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     if !mouse_hits_rect(mouse, Some(area)) {
         return false;
     }
+    if matches!(
+        mouse.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) {
+        return true;
+    }
     let handled = app
         .workflow_panel
         .as_mut()
