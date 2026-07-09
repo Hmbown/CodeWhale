@@ -673,6 +673,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     summary
 }
 
+#[cfg(test)]
 fn work_panel_lines(
     summary: &SidebarWorkSummary,
     content_width: usize,
@@ -680,29 +681,53 @@ fn work_panel_lines(
     palette_mode: palette::PaletteMode,
     ui_theme: &palette::UiTheme,
 ) -> Vec<Line<'static>> {
+    work_panel_rows(summary, content_width, max_rows, palette_mode, ui_theme).0
+}
+
+fn work_panel_rows(
+    summary: &SidebarWorkSummary,
+    content_width: usize,
+    max_rows: usize,
+    palette_mode: palette::PaletteMode,
+    ui_theme: &palette::UiTheme,
+) -> (Vec<Line<'static>>, Vec<Option<SidebarRowAction>>) {
     let theme = Theme::for_palette_mode(palette_mode);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
+    let mut actions: Vec<Option<SidebarRowAction>> = Vec::with_capacity(max_rows.max(4));
 
     push_work_goal_lines(summary, content_width, max_rows, &mut lines, ui_theme);
+    actions.resize(lines.len(), None);
 
     if summary.state_updating && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
             "Work state updating...",
             Style::default().fg(ui_theme.text_muted),
         )));
+        actions.push(None);
     }
 
-    push_work_checklist_lines(summary, content_width, max_rows, &mut lines, ui_theme);
+    push_work_checklist_rows(
+        summary,
+        content_width,
+        max_rows,
+        &mut lines,
+        &mut actions,
+        ui_theme,
+    );
+    let before_strategy = lines.len();
     push_work_strategy_lines(summary, content_width, max_rows, &mut lines, &theme);
+    actions.resize(lines.len().max(before_strategy), None);
 
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             work_panel_empty_hint(content_width),
             Style::default().fg(ui_theme.text_muted).italic(),
         )));
+        actions.push(None);
     }
 
-    lines
+    actions.resize(lines.len(), None);
+    (lines, actions)
 }
 
 fn work_panel_hover_texts(
@@ -989,11 +1014,12 @@ fn push_work_goal_lines(
     }
 }
 
-fn push_work_checklist_lines(
+fn push_work_checklist_rows(
     summary: &SidebarWorkSummary,
     content_width: usize,
     max_rows: usize,
     lines: &mut Vec<Line<'static>>,
+    actions: &mut Vec<Option<SidebarRowAction>>,
     theme: &palette::UiTheme,
 ) {
     if summary.checklist_items.is_empty() || lines.len() >= max_rows {
@@ -1016,6 +1042,7 @@ fn push_work_checklist_lines(
             Style::default().fg(theme.text_muted),
         ),
     ]));
+    actions.push(None);
 
     let reserve_for_strategy = if has_renderable_strategy(summary) {
         2
@@ -1047,6 +1074,7 @@ fn push_work_checklist_lines(
             truncate_line_to_width(&text, content_width),
             Style::default().fg(color),
         )));
+        actions.push(Some(work_checklist_item_action(item)));
     }
 
     let earlier = start;
@@ -1062,7 +1090,20 @@ fn push_work_checklist_lines(
             label,
             Style::default().fg(theme.text_muted),
         )));
+        actions.push(None);
     }
+}
+
+fn work_checklist_item_action(item: &SidebarWorkChecklistItem) -> SidebarRowAction {
+    let target_status = match item.status {
+        TodoStatus::Pending => "in_progress",
+        TodoStatus::InProgress => "completed",
+        TodoStatus::Completed => "pending",
+    };
+    SidebarRowAction::InsertText(format!(
+        "Update To-do #{} to {target_status}: {}",
+        item.id, item.content
+    ))
 }
 
 fn checklist_window_start(items: &[SidebarWorkChecklistItem], max_items: usize) -> usize {
@@ -1199,7 +1240,7 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
     let content_width = area.width.saturating_sub(4) as usize;
     let usable_rows = area.height.saturating_sub(3) as usize;
     let summary = sidebar_work_summary(app);
-    let lines = work_panel_lines(
+    let (lines, row_actions) = work_panel_rows(
         &summary,
         content_width.max(1),
         usable_rows,
@@ -1208,7 +1249,7 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
     );
 
     let full_texts = work_panel_hover_texts(&summary, content_width.max(1), usable_rows);
-    render_sidebar_section(f, area, "To-do", lines, full_texts, Vec::new(), app);
+    render_sidebar_section(f, area, "To-do", lines, full_texts, row_actions, app);
 }
 
 /// Click actions for one background job row pair (#3028).
@@ -3451,6 +3492,7 @@ fn agent_stop_action_for_click(action: &SidebarRowAction) -> Option<SidebarRowAc
             agent_id: agent_id.clone(),
         }),
         SidebarRowAction::Command(_)
+        | SidebarRowAction::InsertText(_)
         | SidebarRowAction::OpenAgentDetail { .. }
         | SidebarRowAction::CancelAgent { .. } => None,
     }
@@ -3470,7 +3512,7 @@ mod tests {
         sidebar_work_summary, sort_sidebar_agent_rows_as_tree, subagent_output_handle,
         subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
         task_panel_hover_texts, task_panel_lines, task_panel_rows, work_panel_empty_hint,
-        work_panel_hover_texts, work_panel_lines,
+        work_panel_hover_texts, work_panel_lines, work_panel_rows,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -3493,6 +3535,10 @@ mod tests {
 
     fn action_command(action: &Option<SidebarRowAction>) -> Option<&str> {
         action.as_ref().and_then(SidebarRowAction::as_command)
+    }
+
+    fn action_insert_text(action: &Option<SidebarRowAction>) -> Option<&str> {
+        action.as_ref().and_then(SidebarRowAction::as_insert_text)
     }
 
     fn create_test_app() -> App {
@@ -4045,6 +4091,63 @@ mod tests {
                 .any(|line| line.contains("[✓] Simplify sidebar"))
                 && !text.iter().any(|line| line.contains("[ ] Update prompts")),
             "strategy rows must not look like a second checklist when Work checklist exists: {text:?}"
+        );
+    }
+
+    #[test]
+    fn work_panel_checklist_rows_prefill_status_update_actions() {
+        let summary = SidebarWorkSummary {
+            checklist_completion_pct: 33,
+            checklist_items: vec![
+                SidebarWorkChecklistItem {
+                    id: 1,
+                    content: "Plan it out".to_string(),
+                    status: TodoStatus::Completed,
+                },
+                SidebarWorkChecklistItem {
+                    id: 2,
+                    content: "Wire the thing".to_string(),
+                    status: TodoStatus::InProgress,
+                },
+                SidebarWorkChecklistItem {
+                    id: 3,
+                    content: "Run gates".to_string(),
+                    status: TodoStatus::Pending,
+                },
+            ],
+            ..SidebarWorkSummary::default()
+        };
+
+        let (lines, actions) =
+            work_panel_rows(&summary, 80, 8, PaletteMode::Dark, &palette::UI_THEME);
+        let text = lines_to_text(&lines);
+        assert_eq!(lines.len(), actions.len());
+
+        let completed_idx = text
+            .iter()
+            .position(|line| line.contains("#1 Plan it out"))
+            .expect("completed checklist row");
+        assert_eq!(
+            action_insert_text(&actions[completed_idx]),
+            Some("Update To-do #1 to pending: Plan it out")
+        );
+
+        let active_idx = text
+            .iter()
+            .position(|line| line.contains("#2 Wire the thing"))
+            .expect("active checklist row");
+        assert_eq!(
+            action_insert_text(&actions[active_idx]),
+            Some("Update To-do #2 to completed: Wire the thing")
+        );
+
+        let pending_idx = text
+            .iter()
+            .position(|line| line.contains("#3 Run gates"))
+            .expect("pending checklist row");
+        assert_eq!(
+            action_insert_text(&actions[pending_idx]),
+            Some("Update To-do #3 to in_progress: Run gates")
         );
     }
 

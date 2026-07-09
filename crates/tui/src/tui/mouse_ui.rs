@@ -509,6 +509,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                             action: CommandPaletteAction::ExecuteCommand { command },
                         }];
                     }
+                    SidebarRowAction::InsertText(text) => {
+                        use crate::tui::views::CommandPaletteAction;
+                        return vec![ViewEvent::CommandPaletteSelected {
+                            action: CommandPaletteAction::InsertText { text },
+                        }];
+                    }
                     SidebarRowAction::ToggleAgentDetails { agent_id } => {
                         if !app.expanded_sidebar_agents.insert(agent_id.clone()) {
                             app.expanded_sidebar_agents.remove(&agent_id);
@@ -1358,6 +1364,15 @@ mod tests {
         })
     }
 
+    fn event_insert_text(events: Vec<ViewEvent>) -> Option<String> {
+        events.into_iter().find_map(|event| match event {
+            ViewEvent::CommandPaletteSelected {
+                action: CommandPaletteAction::InsertText { text },
+            } => Some(text),
+            _ => None,
+        })
+    }
+
     fn left_click(column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1413,6 +1428,35 @@ mod tests {
         assert_eq!(
             app.viewport.hovered_pending_input_action,
             Some(PendingInputAction::CancelQueued { index: 0 })
+        );
+    }
+
+    #[test]
+    fn sidebar_insert_text_row_click_prefills_composer() {
+        let mut app = create_test_app();
+        app.sidebar_hover.sections.push(SidebarHoverSection {
+            content_area: Rect::new(60, 4, 20, 3),
+            lines: vec!["todo row".to_string()],
+            rows: vec![SidebarHoverRow {
+                row_y: 5,
+                display_text: "todo row".to_string(),
+                full_text: "todo row".to_string(),
+                detail: None,
+                is_truncated: false,
+                click_action: Some(SidebarRowAction::InsertText(
+                    "Update To-do #2 to completed: Wire the thing".to_string(),
+                )),
+                stop_action: None,
+                stop_zone_start_col: None,
+                stop_zone_end_col: None,
+            }],
+        });
+
+        let events = super::handle_mouse_event(&mut app, left_click(62, 5));
+
+        assert_eq!(
+            event_insert_text(events).as_deref(),
+            Some("Update To-do #2 to completed: Wire the thing")
         );
     }
 

@@ -1512,6 +1512,7 @@ pub struct SidebarHoverState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarRowAction {
     Command(String),
+    InsertText(String),
     ToggleAgentDetails {
         agent_id: String,
     },
@@ -1531,7 +1532,20 @@ impl SidebarRowAction {
     pub fn as_command(&self) -> Option<&str> {
         match self {
             Self::Command(command) => Some(command.as_str()),
-            Self::ToggleAgentDetails { .. }
+            Self::InsertText(_)
+            | Self::ToggleAgentDetails { .. }
+            | Self::OpenAgentDetail { .. }
+            | Self::CancelAgent { .. } => None,
+        }
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn as_insert_text(&self) -> Option<&str> {
+        match self {
+            Self::InsertText(text) => Some(text.as_str()),
+            Self::Command(_)
+            | Self::ToggleAgentDetails { .. }
             | Self::OpenAgentDetail { .. }
             | Self::CancelAgent { .. } => None,
         }
@@ -1542,7 +1556,9 @@ impl SidebarRowAction {
         match self {
             Self::Command(command) => command.contains(" cancel "),
             Self::CancelAgent { .. } => true,
-            Self::ToggleAgentDetails { .. } | Self::OpenAgentDetail { .. } => false,
+            Self::InsertText(_)
+            | Self::ToggleAgentDetails { .. }
+            | Self::OpenAgentDetail { .. } => false,
         }
     }
 }
