@@ -29,11 +29,17 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
       - uses: mozilla-actions/sccache-action@v0.0.10
+        id: sccache
+        # A cache bootstrap failure must degrade to an uncached build, never
+        # fail a release gate.
+        continue-on-error: true
       - name: Enable sccache
+        if: steps.sccache.outcome == 'success'
         shell: bash
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
           echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "${GITHUB_ENV}"
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -190,11 +196,17 @@ jobs:
       - name: Install Rust target
         run: rustup target add --toolchain stable ${{ matrix.target }}
       - uses: mozilla-actions/sccache-action@v0.0.10
+        id: sccache
+        # A cache bootstrap failure must degrade to an uncached build, never
+        # fail a release gate.
+        continue-on-error: true
       - name: Enable sccache
+        if: steps.sccache.outcome == 'success'
         shell: bash
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
           echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "${GITHUB_ENV}"
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false

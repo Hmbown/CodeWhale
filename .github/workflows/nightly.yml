@@ -1,8 +1,13 @@
 name: Nightly
 
+# Scheduled nightly artifact build. This used to run on every push to main,
+# rebuilding five release targets per merge; PR CI already builds/tests the
+# same commits on macOS/Windows and CNB covers Linux, so a daily cadence
+# keeps the artifact stream fresh without burning ~28 runner-minutes per
+# merge. Use workflow_dispatch for an on-demand build.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '17 9 * * *'
   workflow_dispatch:
 
 permissions:
@@ -70,11 +75,15 @@ jobs:
       - name: Install Rust target
         run: rustup target add --toolchain stable ${{ matrix.target }}
       - uses: mozilla-actions/sccache-action@v0.0.10
+        id: sccache
+        continue-on-error: true
       - name: Enable sccache
+        if: steps.sccache.outcome == 'success'
         shell: bash
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
           echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "${GITHUB_ENV}"
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
@@ -89,6 +98,12 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Build
         shell: bash
+        # Nightly artifacts are disposable smoke binaries (14-day retention),
+        # so skip fat LTO + codegen-units=1; tagged releases keep the full
+        # optimized profile via the Release workflow.
+        env:
+          CARGO_PROFILE_RELEASE_LTO: 'off'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
         run: |
           for attempt in 1 2 3; do
             if cargo build --release --locked --target ${{ matrix.target }} -p codewhale-cli -p codewhale-tui; then
@@ -124,6 +139,7 @@ jobs:
           ref=${GITHUB_REF_NAME}
           commit=${GITHUB_SHA}
           artifact=${artifact}
+          profile=release-nightly-no-lto
           INFO
           }
 
