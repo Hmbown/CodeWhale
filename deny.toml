@@ -11,9 +11,10 @@ unmaintained = "all"
 unsound = "all"
 # Ignore specific advisories (known issues in dependencies)
 ignore = [
-    "RUSTSEC-2026-0187",  # lopdf stack overflow - no safe upgrade
     "RUSTSEC-2024-0436",  # paste unmaintained - no safe upgrade
     "RUSTSEC-2026-0192",  # ttf-parser unmaintained - no safe upgrade
+    "RUSTSEC-2024-0388",  # derivative unmaintained - transitive via starlark
+    "RUSTSEC-2025-0057",  # fxhash unmaintained - transitive via starlark
 ]
 
 [bans]
