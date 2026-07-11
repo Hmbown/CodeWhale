@@ -21,5 +21,11 @@ tokio.workspace = true
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { workspace = true, features = ["bindgen"] }
 
+# rquickjs does not ship pre-generated bindings for NetBSD. Generate them
+# against the NDK sysroot so the advertised Termux/Android release target can
+# compile instead of trying to include a nonexistent bindings file.
+[target.'cfg(target_os = "netbsd")'.dependencies]
+rquickjs = { workspace = true, features = ["bindgen"] }
+
 [dev-dependencies]
 serde_json.workspace = true
