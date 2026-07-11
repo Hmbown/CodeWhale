@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{ContentBlock, MessageRequest, MessageResponse, StreamEvent, Usage};
+use crate::tools::schema_sanitize;
 
 use super::{DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text};
 
@@ -80,10 +81,23 @@ impl DeepSeekClient {
                 tools
                     .iter()
                     .map(|tool| {
+                        // Sanitize the tool's input_schema the same way the
+                        // OpenAI Responses adapter does: strip top-level
+                        // oneOf/anyOf/allOf (which Anthropic rejects), merge
+                        // alternative properties into the root, and surface
+                        // the dropped constraint as a description note so the
+                        // model still knows which parameters are expected.
+                        let mut schema = tool.input_schema.clone();
+                        let constraint_note = schema_sanitize::sanitize_for_responses(&mut schema);
+                        let description = match constraint_note {
+                            Some(note) if tool.description.trim().is_empty() => note,
+                            Some(note) => format!("{}\n\n{}", tool.description.trim(), note),
+                            None => tool.description.clone(),
+                        };
                         let mut value = json!({
                             "name": tool.name,
-                            "description": tool.description,
-                            "input_schema": tool.input_schema,
+                            "description": description,
+                            "input_schema": schema,
                         });
                         if let Some(strict) = tool.strict {
                             value["strict"] = json!(strict);
